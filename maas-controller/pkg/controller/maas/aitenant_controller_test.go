@@ -34,6 +34,21 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+func existingAITenantGateway(name string) *gatewayapiv1.Gateway {
+	return &gatewayapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: "openshift-ingress",
+			Labels: map[string]string{
+				"platform.opendatahub.io/owner": "gateway-controller",
+			},
+		},
+		Spec: gatewayapiv1.GatewaySpec{
+			GatewayClassName: gatewayapiv1.ObjectName("openshift-default"),
+		},
+	}
+}
+
 func reconcileAITenantTwice(t *testing.T, r *AITenantReconciler, key types.NamespacedName) {
 	t.Helper()
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
@@ -56,9 +71,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-a-maas"},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{
-				GatewayClassName: "openshift-default",
-			},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
 				IssuerURL: "https://issuer.example.com/realms/team-a",
 				ClientID:  "team-a-client",
@@ -74,7 +87,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, existingAITenantGateway("team-a")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -102,10 +115,9 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	var gateway gatewayapiv1.Gateway
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-a", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
 	g.Expect(gateway.Spec.GatewayClassName).To(Equal(gatewayapiv1.ObjectName("openshift-default")))
-	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
-	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPProtocolType))
-	g.Expect(gateway.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "team-a"))
-	g.Expect(gateway.Labels).To(HaveKeyWithValue("maas.opendatahub.io/tenant-name", "team-a"))
+	g.Expect(gateway.Labels).To(HaveKeyWithValue("platform.opendatahub.io/owner", "gateway-controller"))
+	g.Expect(gateway.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
+	g.Expect(gateway.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
 
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "team-a-maas"}, &tenant)).To(Succeed())
@@ -176,14 +188,14 @@ func TestAITenantReconcile_PreExistingNamespaceWithCreateFalse(t *testing.T) {
 				Name:   "team-b-maas",
 				Create: &create,
 			},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway: &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "team-b-maas"}}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns).
+		WithObjects(aitenant, ns, existingAITenantGateway("team-b")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -218,7 +230,7 @@ func TestAITenantReconcile_CreateFalseMissingNamespaceSetsPending(t *testing.T) 
 				Name:   "team-c-maas",
 				Create: &create,
 			},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway: &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	cl := fake.NewClientBuilder().
@@ -267,7 +279,7 @@ func TestAITenantReconcile_RejectsProtectedNamespace(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-d-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	cl := fake.NewClientBuilder().
@@ -312,7 +324,7 @@ func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *tes
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "models-as-a-service"},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{
 				Name: "maas-default-gateway",
 			},
 		},
@@ -320,7 +332,7 @@ func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *tes
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, existingAITenantGateway("maas-default-gateway")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -353,7 +365,6 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
 
-	cleanup := true
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "team-del",
@@ -362,10 +373,9 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{
-				Name:            "team-del-maas",
-				CleanupOnDelete: &cleanup,
+				Name: "team-del-maas",
 			},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway: &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	ns := &corev1.Namespace{
@@ -377,16 +387,6 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 				aitenantCreatedAnnotation:   "true",
 			},
 			Labels: map[string]string{aitenantManagedLabel: "true"},
-		},
-	}
-	gw := &gatewayapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-del",
-			Namespace: "openshift-ingress",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-gateway-system",
-			},
 		},
 	}
 	tenant := &maasv1alpha1.Tenant{
@@ -445,7 +445,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, gw, tenant, role, binding, objRole, objBinding).
+		WithObjects(aitenant, ns, existingAITenantGateway("team-del"), tenant, role, binding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -463,18 +463,18 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res).To(Equal(ctrl.Result{}))
 
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "openshift-ingress", Name: "team-del"}, &gatewayapiv1.Gateway{}))).To(BeTrue())
+	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "openshift-ingress", Name: "team-del"}, &gatewayapiv1.Gateway{})).To(Succeed())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: maasv1alpha1.TenantInstanceName}, &maasv1alpha1.Tenant{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: tenantAdminRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-gateway-system", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-gateway-system", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Name: "team-del-maas"}, &corev1.Namespace{}))).To(BeTrue())
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "team-del-maas"}, &corev1.Namespace{})).To(Succeed())
 
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, &maasv1alpha1.AITenant{}))).To(BeTrue())
 }
 
-func TestAITenantReconcile_DeletionSkipsNamespaceWhenCleanupDisabled(t *testing.T) {
+func TestAITenantReconcile_DeletionLeavesNamespace(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -487,7 +487,7 @@ func TestAITenantReconcile_DeletionSkipsNamespaceWhenCleanupDisabled(t *testing.
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-noclean-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	ns := &corev1.Namespace{
@@ -524,60 +524,7 @@ func TestAITenantReconcile_DeletionSkipsNamespaceWhenCleanupDisabled(t *testing.
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "team-noclean-maas"}, &surviving)).To(Succeed())
 }
 
-func TestAITenantReconcile_DeletionSkipsNamespaceNotCreatedByController(t *testing.T) {
-	g := NewWithT(t)
-	s := aitenantTestScheme(t)
-	ctx := context.Background()
-
-	cleanup := true
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "team-preexist",
-			Namespace:  "ai-gateway-system",
-			Finalizers: []string{aitenantFinalizer},
-		},
-		Spec: maasv1alpha1.AITenantSpec{
-			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{
-				Name:            "team-preexist-maas",
-				CleanupOnDelete: &cleanup,
-			},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{},
-		},
-	}
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "team-preexist-maas",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-preexist",
-				aitenantNamespaceAnnotation: "ai-gateway-system",
-			},
-		},
-	}
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns).
-		Build()
-	r := &AITenantReconciler{
-		Client:           cl,
-		Scheme:           s,
-		APIReader:        cl,
-		AppNamespace:     "opendatahub",
-		TenantNamespace:  "models-as-a-service",
-		GatewayNamespace: "openshift-ingress",
-	}
-
-	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
-
-	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
-	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-
-	var surviving corev1.Namespace
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "team-preexist-maas"}, &surviving)).To(Succeed())
-}
-
-func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
+func TestAITenantReconcile_ReferencesPreExistingGatewayWithoutMutation(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
@@ -588,7 +535,7 @@ func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-adopt-maas"},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{
 				Name: "existing-gw",
 			},
 		},
@@ -621,7 +568,7 @@ func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
 
 	var gateway gatewayapiv1.Gateway
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "existing-gw", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
-	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-adopt"))
+	g.Expect(gateway.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
@@ -640,7 +587,7 @@ func TestAITenantReconcile_AdoptsPreExistingTenant(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-adoptcfg-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
 				IssuerURL: "https://issuer.example.com/realms/adoptcfg",
 				ClientID:  "adoptcfg-client",
@@ -663,7 +610,7 @@ func TestAITenantReconcile_AdoptsPreExistingTenant(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, preExistingTenant).
+		WithObjects(aitenant, ns, preExistingTenant, existingAITenantGateway("team-adoptcfg")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -696,7 +643,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "shared-ns"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	ns := &corev1.Namespace{
@@ -740,36 +687,26 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	g.Expect(ready.Message).To(ContainSubstring("another AITenant"))
 }
 
-func TestAITenantReconcile_RejectsGatewayOwnedByAnotherAITenant(t *testing.T) {
+func TestAITenantReconcile_MissingGatewaySetsFailed(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-gwclash",
+			Name:      "team-missing-gw",
 			Namespace: "ai-gateway-system",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
-			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-gwclash-maas"},
-			Gateway: &maasv1alpha1.AITenantGatewayTemplate{
-				Name: "contested-gw",
-			},
-		},
-	}
-	contestedGW := &gatewayapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "contested-gw",
-			Namespace: "openshift-ingress",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "other-aitenant",
-				aitenantNamespaceAnnotation: "ai-gateway-system",
+			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-missing-gw-maas"},
+			Gateway: &maasv1alpha1.AITenantGatewayRef{
+				Name: "missing-gw",
 			},
 		},
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, contestedGW).
+		WithObjects(aitenant).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -794,8 +731,9 @@ func TestAITenantReconcile_RejectsGatewayOwnedByAnotherAITenant(t *testing.T) {
 	g.Expect(updated.Status.Phase).To(Equal("Failed"))
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
 	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Reason).To(Equal("GatewayReconcileFailed"))
-	g.Expect(ready.Message).To(ContainSubstring("another AITenant"))
+	g.Expect(ready.Reason).To(Equal("GatewayNotReady"))
+	g.Expect(ready.Message).To(ContainSubstring("missing-gw"))
+	g.Expect(ready.Message).To(ContainSubstring("not found"))
 }
 
 func TestAITenantReconcile_IdempotentOnSecondRun(t *testing.T) {
@@ -810,13 +748,13 @@ func TestAITenantReconcile_IdempotentOnSecondRun(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-idem-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, existingAITenantGateway("team-idem")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -855,7 +793,7 @@ func TestAITenantReconcile_OIDCFullMirror(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-oidc-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
 				IssuerURL: "https://sso.corp.example.com/realms/ai",
 				ClientID:  "ai-platform",
@@ -866,7 +804,7 @@ func TestAITenantReconcile_OIDCFullMirror(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, existingAITenantGateway("team-oidc")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -899,13 +837,13 @@ func TestAITenantReconcile_NoOIDCSetsTenantOIDCNil(t *testing.T) {
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-nooidc-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, existingAITenantGateway("team-nooidc")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -922,97 +860,6 @@ func TestAITenantReconcile_NoOIDCSetsTenantOIDCNil(t *testing.T) {
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "team-nooidc-maas"}, &tenant)).To(Succeed())
 	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
-}
-
-func TestAITenantReconcile_DomainCreatesHTTPListenerWithHostname(t *testing.T) {
-	g := NewWithT(t)
-	s := aitenantTestScheme(t)
-
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-domain",
-			Namespace: "ai-gateway-system",
-		},
-		Spec: maasv1alpha1.AITenantSpec{
-			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-domain-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
-			Domain:          "team-domain.ai-gateway.apps.example.com",
-		},
-	}
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
-		Build()
-	r := &AITenantReconciler{
-		Client:           cl,
-		Scheme:           s,
-		APIReader:        cl,
-		AppNamespace:     "opendatahub",
-		TenantNamespace:  "models-as-a-service",
-		GatewayNamespace: "openshift-ingress",
-	}
-
-	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
-	reconcileAITenantTwice(t, r, key)
-
-	var gateway gatewayapiv1.Gateway
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-domain", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
-	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
-	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("http")))
-	g.Expect(gateway.Spec.Listeners[0].Port).To(Equal(gatewayapiv1.PortNumber(80)))
-	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPProtocolType))
-	g.Expect(gateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
-	g.Expect(string(*gateway.Spec.Listeners[0].Hostname)).To(Equal("team-domain.ai-gateway.apps.example.com"))
-	g.Expect(gateway.Spec.Listeners[0].TLS).To(BeNil())
-}
-
-func TestAITenantReconcile_DomainWithTLSCreatesHTTPSListener(t *testing.T) {
-	g := NewWithT(t)
-	s := aitenantTestScheme(t)
-
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-tls",
-			Namespace: "ai-gateway-system",
-		},
-		Spec: maasv1alpha1.AITenantSpec{
-			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-tls-maas"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
-			Domain:          "team-tls.ai-gateway.apps.example.com",
-			TLS: &maasv1alpha1.AITenantTLS{
-				CertificateRef: maasv1alpha1.AITenantCertificateRef{Name: "team-tls-cert"},
-			},
-		},
-	}
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
-		Build()
-	r := &AITenantReconciler{
-		Client:           cl,
-		Scheme:           s,
-		APIReader:        cl,
-		AppNamespace:     "opendatahub",
-		TenantNamespace:  "models-as-a-service",
-		GatewayNamespace: "openshift-ingress",
-	}
-
-	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
-	reconcileAITenantTwice(t, r, key)
-
-	var gateway gatewayapiv1.Gateway
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-tls", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
-	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
-	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("https")))
-	g.Expect(gateway.Spec.Listeners[0].Port).To(Equal(gatewayapiv1.PortNumber(443)))
-	g.Expect(gateway.Spec.Listeners[0].Protocol).To(Equal(gatewayapiv1.HTTPSProtocolType))
-	g.Expect(gateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
-	g.Expect(string(*gateway.Spec.Listeners[0].Hostname)).To(Equal("team-tls.ai-gateway.apps.example.com"))
-	g.Expect(gateway.Spec.Listeners[0].TLS).NotTo(BeNil())
-	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs).To(HaveLen(1))
-	g.Expect(gateway.Spec.Listeners[0].TLS.CertificateRefs[0].Name).To(Equal(gatewayapiv1.ObjectName("team-tls-cert")))
 }
 
 func TestAITenantChildName_Truncation(t *testing.T) {
@@ -1042,7 +889,7 @@ func TestAITenantReconcile_RejectsTenantNamespaceEqualToAITenantNamespace(t *tes
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "ai-gateway-system"},
-			Gateway:         &maasv1alpha1.AITenantGatewayTemplate{},
+			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
 	cl := fake.NewClientBuilder().

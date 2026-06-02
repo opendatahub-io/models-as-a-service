@@ -1,0 +1,100 @@
+# AITenant
+
+Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, creates the temporary `Tenant/default-tenant` MaaS config object, grants tenant-admin RBAC, and records the existing Gateway used by the tenant.
+
+`AITenant` does not create, update, label, or delete Gateway API `Gateway` resources. The referenced Gateway must already exist.
+
+---
+
+## Spec
+
+### AITenantSpec
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| tenantNamespace | AITenantTenantNamespace | Yes | Tenant namespace where tenant administrators manage MaaS objects. |
+| gateway | AITenantGatewayRef | No | Existing Gateway to use. If omitted, the Gateway name defaults to the `AITenant` name. |
+| oidc | TenantExternalOIDCConfig | No | OIDC settings mirrored into the temporary `Tenant/default-tenant` config object for current platform rendering. |
+| rbac | AITenantRBACConfig | No | Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this `AITenant`. |
+
+---
+
+## AITenantTenantNamespace
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| name | string | Yes | — | Namespace for tenant-scoped MaaS objects. Immutable after creation. |
+| create | bool | No | `true` | Whether the controller creates the namespace if it does not exist. |
+
+The controller does not delete the tenant namespace when an `AITenant` is deleted.
+
+---
+
+## AITenantGatewayRef
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| name | string | No | `metadata.name` | Name of an existing Gateway in the controller-configured Gateway namespace. |
+
+The Gateway namespace is controller configuration, not an `AITenant` spec field. The resolved reference is reported in `status.gatewayRef`.
+
+---
+
+## AITenantRBACConfig
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| admins | []AITenantRBACSubject | No | Subjects granted tenant-admin RBAC. Max 128 entries. |
+
+### AITenantRBACSubject
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| kind | string | Yes | One of `User`, `Group`, or `ServiceAccount`. |
+| name | string | Yes | Subject name. |
+| namespace | string | No | Required only for `ServiceAccount` subjects. |
+
+---
+
+## Status
+
+### AITenantStatus
+
+| Field | Type | Description |
+|-------|------|-------------|
+| phase | string | High-level lifecycle phase. One of `Pending`, `Active`, `Degraded`, or `Failed`. |
+| tenantNamespace | string | Reconciled tenant namespace. |
+| gatewayRef | TenantGatewayRef | Resolved reference to the existing Gateway. |
+| conditions | []Condition | Latest observations. |
+
+---
+
+## Example
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: red-team
+  namespace: ai-tenants
+spec:
+  tenantNamespace:
+    name: red-team-maas
+  gateway:
+    name: red-team
+  oidc:
+    issuerUrl: "https://keycloak.example.com/realms/red-team"
+    clientId: red-team-maas
+  rbac:
+    admins:
+      - kind: Group
+        name: red-team-admins
+```
+
+---
+
+## Related Documentation
+
+- [Tenant CRD](tenant.md) - Temporary MaaS runtime config object
+- [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
+- [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting

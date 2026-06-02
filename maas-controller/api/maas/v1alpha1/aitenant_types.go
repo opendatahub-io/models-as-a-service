@@ -32,14 +32,13 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=ait
 // +kubebuilder:validation:XValidation:rule="self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name",message="spec.tenantNamespace.name is immutable"
-// +kubebuilder:validation:XValidation:rule="!has(self.spec.tls) || self.spec.domain != ''",message="spec.tls requires spec.domain to be set"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.tenantNamespace`,description="Tenant namespace"
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// AITenant bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
-// the MaaS tenant config object, and tenant-admin RBAC.
+// AITenant bootstraps one tenant slice: a tenant namespace, the MaaS tenant
+// config object, tenant-admin RBAC, and a reference to an existing Gateway.
 type AITenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -53,22 +52,9 @@ type AITenantSpec struct {
 	// TenantNamespace identifies the namespace where tenant administrators manage MaaS objects.
 	TenantNamespace AITenantTenantNamespace `json:"tenantNamespace"`
 
-	// Gateway is the Gateway API template reconciled for this tenant.
+	// Gateway identifies the existing Gateway API Gateway used for this tenant.
 	// +kubebuilder:validation:Optional
-	Gateway *AITenantGatewayTemplate `json:"gateway,omitempty"`
-
-	// Domain is the tenant hostname used for data-plane routing.
-	// When set together with TLS, the controller creates an HTTPS listener on port 443.
-	// When set without TLS, the controller creates an HTTP listener on port 80.
-	// When omitted, the controller creates a default HTTP listener on port 80 without a hostname.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=253
-	Domain string `json:"domain,omitempty"`
-
-	// TLS configures the TLS certificate for the tenant Gateway HTTPS listener.
-	// Only effective when Domain is also set.
-	// +kubebuilder:validation:Optional
-	TLS *AITenantTLS `json:"tls,omitempty"`
+	Gateway *AITenantGatewayRef `json:"gateway,omitempty"`
 
 	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
 	// The current controller mirrors this into the temporary Tenant config object
@@ -93,42 +79,16 @@ type AITenantTenantNamespace struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=true
 	Create *bool `json:"create,omitempty"`
-
-	// CleanupOnDelete deletes the namespace during AITenant deletion only when
-	// the namespace is controller-created and still labeled for this AITenant.
-	// Defaults to false to avoid deleting tenant data by surprise.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=false
-	CleanupOnDelete *bool `json:"cleanupOnDelete,omitempty"`
 }
 
-// AITenantGatewayTemplate describes the Gateway API resource to create.
-type AITenantGatewayTemplate struct {
-	// Name is the Gateway name. If omitted, the AITenant name is used.
+// AITenantGatewayRef identifies the existing Gateway API Gateway to use.
+type AITenantGatewayRef struct {
+	// Name is the Gateway name. If omitted, the AITenant name is used. The
+	// namespace comes from controller configuration and is reported in status.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	Name string `json:"name,omitempty"`
-
-	// GatewayClassName is the GatewayClass used by the tenant Gateway.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default="openshift-default"
-	// +kubebuilder:validation:MaxLength=253
-	GatewayClassName string `json:"gatewayClassName,omitempty"`
-}
-
-// AITenantTLS configures the TLS certificate for the tenant Gateway.
-type AITenantTLS struct {
-	// CertificateRef names a Secret containing the TLS certificate.
-	CertificateRef AITenantCertificateRef `json:"certificateRef"`
-}
-
-// AITenantCertificateRef references a TLS Secret.
-type AITenantCertificateRef struct {
-	// Name is the Secret name.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name"`
 }
 
 // AITenantRBACConfig defines tenant-admin subjects.

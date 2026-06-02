@@ -36,8 +36,8 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          AITenant bootstraps one tenant slice: a dedicated Gateway, a tenant namespace,
-          the MaaS tenant config object, and tenant-admin RBAC.
+          AITenant bootstraps one tenant slice: a tenant namespace, the MaaS tenant
+          config object, tenant-admin RBAC, and a reference to an existing Gateway.
         properties:
           apiVersion:
             description: |-
@@ -59,27 +59,14 @@ spec:
           spec:
             description: AITenantSpec defines the tenant bootstrap contract.
             properties:
-              domain:
-                description: |-
-                  Domain is the tenant hostname used for data-plane routing.
-                  When set together with TLS, the controller creates an HTTPS listener on port 443.
-                  When set without TLS, the controller creates an HTTP listener on port 80.
-                  When omitted, the controller creates a default HTTP listener on port 80 without a hostname.
-                maxLength: 253
-                type: string
               gateway:
-                description: Gateway is the Gateway API template reconciled for this
-                  tenant.
+                description: Gateway identifies the existing Gateway API Gateway used
+                  for this tenant.
                 properties:
-                  gatewayClassName:
-                    default: openshift-default
-                    description: GatewayClassName is the GatewayClass used by the
-                      tenant Gateway.
-                    maxLength: 253
-                    type: string
                   name:
-                    description: Name is the Gateway name. If omitted, the AITenant
-                      name is used.
+                    description: |-
+                      Name is the Gateway name. If omitted, the AITenant name is used. The
+                      namespace comes from controller configuration and is reported in status.
                     maxLength: 63
                     pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                     type: string
@@ -150,13 +137,6 @@ spec:
                 description: TenantNamespace identifies the namespace where tenant
                   administrators manage MaaS objects.
                 properties:
-                  cleanupOnDelete:
-                    default: false
-                    description: |-
-                      CleanupOnDelete deletes the namespace during AITenant deletion only when
-                      the namespace is controller-created and still labeled for this AITenant.
-                      Defaults to false to avoid deleting tenant data by surprise.
-                    type: boolean
                   create:
                     default: true
                     description: Create controls whether the controller creates the
@@ -171,26 +151,6 @@ spec:
                     type: string
                 required:
                 - name
-                type: object
-              tls:
-                description: |-
-                  TLS configures the TLS certificate for the tenant Gateway HTTPS listener.
-                  Only effective when Domain is also set.
-                properties:
-                  certificateRef:
-                    description: CertificateRef names a Secret containing the TLS
-                      certificate.
-                    properties:
-                      name:
-                        description: Name is the Secret name.
-                        maxLength: 253
-                        minLength: 1
-                        type: string
-                    required:
-                    - name
-                    type: object
-                required:
-                - certificateRef
                 type: object
             required:
             - tenantNamespace
@@ -286,8 +246,6 @@ spec:
         x-kubernetes-validations:
         - message: spec.tenantNamespace.name is immutable
           rule: self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name
-        - message: spec.tls requires spec.domain to be set
-          rule: '!has(self.spec.tls) || self.spec.domain != '''''
     served: true
     storage: true
     subresources:
