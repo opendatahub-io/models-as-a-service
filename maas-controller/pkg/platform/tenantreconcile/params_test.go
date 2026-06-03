@@ -133,9 +133,17 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 
 	payloadDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadDestinationRule.GetNamespace())
+	payloadHost, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, payloadHost, "."+params.GatewayNamespace+".")
 
 	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
+	preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, preProcessingHost, "."+params.GatewayNamespace+".")
 
 	payloadService := requireResource(t, resources, GVKService, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())

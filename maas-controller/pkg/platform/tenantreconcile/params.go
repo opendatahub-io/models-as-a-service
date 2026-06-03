@@ -91,17 +91,16 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 				return err
 			}
 		case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
-			r.SetNamespace(params.GatewayNamespace)
+			if err := patchPayloadDestinationRule(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
 			if err := patchPayloadProcessingEnvoyFilter(log, r, params); err != nil {
 				return err
 			}
 		case gvk == GVKDeployment && name == PayloadPreProcessingName:
-			r.SetNamespace(params.GatewayNamespace)
-			if params.PayloadProcessingImage != "" {
-				if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
-					log.Error(err, "failed to patch payload-pre-processing image", "image", params.PayloadProcessingImage)
-				}
+			if err := patchPreProcessingDeployment(r, params); err != nil {
+				return err
 			}
 		case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
 			r.SetNamespace(params.GatewayNamespace)
@@ -140,6 +139,16 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
+	}
+	return nil
+}
+
+func patchPreProcessingDeployment(r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	if params.PayloadProcessingImage != "" {
+		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
+			return fmt.Errorf("patch payload-pre-processing image: %w", err)
+		}
 	}
 	return nil
 }
@@ -223,6 +232,23 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 		log.V(4).Info("Patching maas-api DestinationRule host", "old", host, "new", newHost)
 		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
 			return fmt.Errorf("write maas-api DestinationRule host: %w", err)
+		}
+	}
+	return nil
+}
+
+func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	name := r.GetName()
+	r.SetNamespace(params.GatewayNamespace)
+	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
+	if err != nil {
+		return fmt.Errorf("read %s DestinationRule host: %w", name, err)
+	}
+	if found && host != "" {
+		newHost := replaceHostNamespace(host, params.GatewayNamespace)
+		log.V(4).Info("Patching payload DestinationRule host", "name", name, "old", host, "new", newHost)
+		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
+			return fmt.Errorf("write %s DestinationRule host: %w", name, err)
 		}
 	}
 	return nil
