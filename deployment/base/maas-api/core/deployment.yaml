@@ -31,8 +31,6 @@ spec:
           value: "models-as-a-service"
         - name: METRICS_PORT
           value: "9090"
-        - name: CLEANUP_INTERVAL_MINUTES
-          value: "15"
         resources:
           requests:
             memory: "64Mi"

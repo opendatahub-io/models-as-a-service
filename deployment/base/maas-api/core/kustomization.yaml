@@ -4,6 +4,8 @@ kind: Kustomization
 resources:
   - deployment.yaml
   - service.yaml
+  - cronjob-cleanup.yaml
+  - networkpolicy-cleanup.yaml
 
 images:
   - name: maas-api
