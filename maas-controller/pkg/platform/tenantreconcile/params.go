@@ -90,13 +90,19 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 			if err := patchMaaSAPIDestinationRule(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKDestinationRule && name == PayloadProcessingName:
-			r.SetNamespace(params.GatewayNamespace)
+		case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
+			if err := patchPayloadDestinationRule(log, r, params); err != nil {
+				return err
+			}
 		case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
 			if err := patchPayloadProcessingEnvoyFilter(log, r, params); err != nil {
 				return err
 			}
-		case gvk == GVKService && name == PayloadProcessingName:
+		case gvk == GVKDeployment && name == PayloadPreProcessingName:
+			if err := patchPreProcessingDeployment(r, params); err != nil {
+				return err
+			}
+		case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
 			r.SetNamespace(params.GatewayNamespace)
 		case gvk == GVKServiceAccount && name == PayloadProcessingName:
 			r.SetNamespace(params.GatewayNamespace)
@@ -133,6 +139,16 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
+	}
+	return nil
+}
+
+func patchPreProcessingDeployment(r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	if params.PayloadProcessingImage != "" {
+		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
+			return fmt.Errorf("patch payload-pre-processing image: %w", err)
+		}
 	}
 	return nil
 }
@@ -221,6 +237,31 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 	return nil
 }
 
+func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	name := r.GetName()
+	r.SetNamespace(params.GatewayNamespace)
+	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
+	if err != nil {
+		return fmt.Errorf("read %s DestinationRule host: %w", name, err)
+	}
+	if found && host != "" {
+		newHost := replaceHostNamespace(host, params.GatewayNamespace)
+		log.V(4).Info("Patching payload DestinationRule host", "name", name, "old", host, "new", newHost)
+		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
+			return fmt.Errorf("write %s DestinationRule host: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
+	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
+}
+
+func grpcClusterName(service, namespace string, port int) string {
+	return fmt.Sprintf("outbound|%d||%s.%s.svc.cluster.local", port, service, namespace)
+}
+
 func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 
@@ -239,6 +280,43 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	targetRefs[0] = ref
 	if err := unstructured.SetNestedSlice(r.Object, targetRefs, "spec", "targetRefs"); err != nil {
 		return fmt.Errorf("write EnvoyFilter targetRefs: %w", err)
+	}
+
+	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	beforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
+	afterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
+
+	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
+	}
+	if !found || len(configPatches) < 2 {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least 2 entries, got %d", len(configPatches))
+	}
+
+	clusterByIndex := []string{beforeCluster, afterCluster}
+
+	for i, clusterName := range clusterByIndex {
+		patch, ok := configPatches[i].(map[string]any)
+		if !ok {
+			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+		}
+
+		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+		if err := unstructured.SetNestedField(patch, anchorName, subFilterPath...); err != nil {
+			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+		}
+
+		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+		if err := unstructured.SetNestedField(patch, clusterName, clusterPath...); err != nil {
+			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+		}
+
+		configPatches[i] = patch
+	}
+
+	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {
+		return fmt.Errorf("write EnvoyFilter configPatches: %w", err)
 	}
 	return nil
 }

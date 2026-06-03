@@ -53,6 +53,7 @@ const (
 	IstioTelemetryName                            = "latency-per-subscription"
 	MaaSAPIDeploymentName                         = "maas-api"
 	PayloadProcessingName                         = "payload-processing"
+	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
