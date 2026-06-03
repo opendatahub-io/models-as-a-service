@@ -2,7 +2,7 @@
 
 Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, creates the tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
-`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 ---
 
@@ -39,7 +39,7 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 | name | string | No | `metadata.name` | Name of the Gateway in the controller-configured Gateway namespace. |
 | gatewayClassName | string | No | `openshift-default` | GatewayClass used by the tenant Gateway. |
 
-The Gateway namespace is controller configuration, not an `AITenant` spec field. The controller creates or adopts the Gateway, labels it with `ai-gateway.opendatahub.io/tenant`, and reports the resolved reference in `status.gatewayRef`. Gateways created by the controller are marked with `maas.opendatahub.io/created-by-aitenant=true`; adopted Gateways are not.
+The Gateway namespace is controller configuration, not an `AITenant` spec field. The controller creates or adopts the Gateway, labels it with `ai-gateway.opendatahub.io/tenant`, and reports the resolved reference in `status.gatewayRef`. Gateways created by the controller are marked with `maas.opendatahub.io/created-by-aitenant=true`; adopted Gateways are not. For adopted pre-existing Gateways, the controller preserves the existing Gateway spec and applies only AITenant metadata.
 
 ---
 
@@ -94,7 +94,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: red-team
-  namespace: ai-tenants
+  namespace: redhat-ai-gateway-infra
 spec:
   tenantNamespace:
     name: red-team-maas
@@ -105,7 +105,7 @@ spec:
   tls:
     certificateRef:
       name: red-team-gateway-tls
-      namespace: ai-tenants
+      namespace: redhat-ai-gateway-infra
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/red-team"
     clientId: red-team-maas

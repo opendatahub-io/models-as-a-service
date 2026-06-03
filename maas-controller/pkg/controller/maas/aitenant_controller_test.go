@@ -103,7 +103,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-a",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-a-maas"},
@@ -114,7 +114,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 			TLS: &maasv1alpha1.AITenantTLSConfig{
 				CertificateRef: maasv1alpha1.AITenantTLSCertificateRef{
 					Name:      "team-a-cert",
-					Namespace: "ai-tenants",
+					Namespace: "redhat-ai-gateway-infra",
 				},
 			},
 			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
@@ -162,7 +162,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	g.Expect(gateway.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "team-a"))
 	g.Expect(gateway.Labels).To(HaveKeyWithValue(aitenantManagedLabel, "true"))
 	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-a"))
-	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNamespaceAnnotation, "ai-tenants"))
+	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNamespaceAnnotation, "redhat-ai-gateway-infra"))
 	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantCreatedAnnotation, "true"))
 	g.Expect(gateway.Spec.Listeners).To(HaveLen(2))
 	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("http")))
@@ -175,7 +175,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	g.Expect(gateway.Spec.Listeners[1].TLS.CertificateRefs).To(HaveLen(1))
 	g.Expect(gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Name).To(Equal(gatewayapiv1.ObjectName("team-a-cert")))
 	g.Expect(gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Namespace).NotTo(BeNil())
-	g.Expect(*gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Namespace).To(Equal(gatewayapiv1.Namespace("ai-tenants")))
+	g.Expect(*gateway.Spec.Listeners[1].TLS.CertificateRefs[0].Namespace).To(Equal(gatewayapiv1.Namespace("redhat-ai-gateway-infra")))
 
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "team-a-maas"}, &tenant)).To(Succeed())
@@ -208,7 +208,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	}))
 
 	var aitenantRole rbacv1.Role
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: "ai-tenants"}, &aitenantRole)).To(Succeed())
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: "redhat-ai-gateway-infra"}, &aitenantRole)).To(Succeed())
 	g.Expect(aitenantRole.Rules).NotTo(BeEmpty())
 	for _, rule := range aitenantRole.Rules {
 		g.Expect(rule.Verbs).NotTo(ContainElement("*"))
@@ -219,7 +219,7 @@ func TestAITenantReconcile_CreatesBootstrapResources(t *testing.T) {
 	}
 
 	var aitenantBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: "ai-tenants"}, &aitenantBinding)).To(Succeed())
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: "redhat-ai-gateway-infra"}, &aitenantBinding)).To(Succeed())
 	g.Expect(aitenantBinding.RoleRef.Name).To(Equal(aitenantAccessRoleName(aitenant)))
 
 	var updated maasv1alpha1.AITenant
@@ -237,7 +237,7 @@ func TestAITenantGatewaySpec_DefaultsTLSCertificateRefNamespaceToGatewayNamespac
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-tls",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-tls-maas"},
@@ -275,7 +275,7 @@ func TestAITenantReconcile_PreExistingNamespaceWithCreateFalse(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-b",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{
@@ -317,7 +317,7 @@ func TestAITenantReconcile_CreateFalseMissingNamespaceSetsPending(t *testing.T) 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-c",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{
@@ -485,7 +485,7 @@ func TestAITenantReconcile_RejectsWrongInfraNamespace(t *testing.T) {
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("InvalidPlacement"))
-	g.Expect(ready.Message).To(ContainSubstring(`configured AITenant infrastructure namespace "ai-tenants"`))
+	g.Expect(ready.Message).To(ContainSubstring(`configured AITenant infrastructure namespace "redhat-ai-gateway-infra"`))
 	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: "team-wrong-infra-maas"}, &corev1.Namespace{}))).To(BeTrue())
 }
 
@@ -496,7 +496,7 @@ func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *tes
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "models-as-a-service",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "models-as-a-service"},
@@ -549,7 +549,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "team-del",
-			Namespace:  "ai-tenants",
+			Namespace:  "redhat-ai-gateway-infra",
 			Finalizers: []string{aitenantFinalizer},
 		},
 		Spec: maasv1alpha1.AITenantSpec{
@@ -564,7 +564,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 			Name: "team-del-maas",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 				aitenantCreatedAnnotation:   "true",
 			},
 			Labels: map[string]string{aitenantManagedLabel: "true"},
@@ -576,7 +576,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 			Namespace: "team-del-maas",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 	}
@@ -586,7 +586,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 			Namespace: "team-del-maas",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 	}
@@ -596,7 +596,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 			Namespace: "team-del-maas",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: tenantAdminRoleName(aitenant)},
@@ -604,20 +604,20 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	objRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      aitenantAccessRoleName(aitenant),
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 	}
 	objBinding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      aitenantAccessRoleName(aitenant),
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: aitenantAccessRoleName(aitenant)},
@@ -626,7 +626,7 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, createdAITenantGateway("team-del", "team-del", "ai-tenants"), tenant, role, binding, objRole, objBinding).
+		WithObjects(aitenant, ns, createdAITenantGateway("team-del", "team-del", "redhat-ai-gateway-infra"), tenant, role, binding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -648,8 +648,8 @@ func TestAITenantReconcile_DeletionCleansUpChildren(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: maasv1alpha1.TenantInstanceName}, &maasv1alpha1.Tenant{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: tenantAdminRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "team-del-maas", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenants", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenants", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "redhat-ai-gateway-infra", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "redhat-ai-gateway-infra", Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	var surviving corev1.Namespace
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "team-del-maas"}, &surviving)).To(Succeed())
 	g.Expect(surviving.Labels).NotTo(HaveKey(aitenantManagedLabel))
@@ -670,7 +670,7 @@ func TestAITenantReconcile_DeletionLeavesNamespace(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:       "team-noclean",
-			Namespace:  "ai-tenants",
+			Namespace:  "redhat-ai-gateway-infra",
 			Finalizers: []string{aitenantFinalizer},
 		},
 		Spec: maasv1alpha1.AITenantSpec{
@@ -683,7 +683,7 @@ func TestAITenantReconcile_DeletionLeavesNamespace(t *testing.T) {
 			Name: "team-noclean-maas",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "team-noclean",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 				aitenantCreatedAnnotation:   "true",
 			},
 			Labels: map[string]string{
@@ -729,7 +729,7 @@ func TestAITenantReconcile_DeletionPreservesAdoptedGateway(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:              "team-adopt-del",
-			Namespace:         "ai-tenants",
+			Namespace:         "redhat-ai-gateway-infra",
 			Finalizers:        []string{aitenantFinalizer},
 			DeletionTimestamp: &now,
 		},
@@ -738,7 +738,7 @@ func TestAITenantReconcile_DeletionPreservesAdoptedGateway(t *testing.T) {
 			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
-	gateway := ownedAITenantGateway("team-adopt-del", "team-adopt-del", "ai-tenants")
+	gateway := ownedAITenantGateway("team-adopt-del", "team-adopt-del", "redhat-ai-gateway-infra")
 	applyAITenantMetadata(gateway, aitenant)
 
 	cl := fake.NewClientBuilder().
@@ -776,7 +776,7 @@ func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-adopt",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-adopt-maas"},
@@ -794,6 +794,7 @@ func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
 			GatewayClassName: "openshift-default",
 		},
 	}
+	expectedGatewaySpec := preExistingGW.Spec
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -815,15 +816,55 @@ func TestAITenantReconcile_AdoptsPreExistingGateway(t *testing.T) {
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "existing-gw", Namespace: "openshift-ingress"}, &gateway)).To(Succeed())
 	g.Expect(gateway.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "team-adopt"))
 	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-adopt"))
-	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNamespaceAnnotation, "ai-tenants"))
+	g.Expect(gateway.Annotations).To(HaveKeyWithValue(aitenantNamespaceAnnotation, "redhat-ai-gateway-infra"))
 	g.Expect(gateway.Annotations).NotTo(HaveKey(aitenantCreatedAnnotation))
-	g.Expect(gateway.Spec.Listeners).To(HaveLen(1))
-	g.Expect(gateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("http")))
+	g.Expect(gateway.Spec).To(Equal(expectedGatewaySpec))
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal("Active"))
 	g.Expect(updated.Status.GatewayRef.Name).To(Equal("existing-gw"))
+}
+
+func TestAITenantReconcile_ReconcilesControllerCreatedGateway(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-owned-gw",
+			Namespace: "redhat-ai-gateway-infra",
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-owned-gw-maas"},
+			Domain:          "owned.example.com",
+		},
+	}
+	gateway := createdAITenantGateway("team-owned-gw", "team-owned-gw", "redhat-ai-gateway-infra")
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantTwice(t, r, key)
+
+	var updatedGateway gatewayapiv1.Gateway
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-owned-gw", Namespace: "openshift-ingress"}, &updatedGateway)).To(Succeed())
+	g.Expect(updatedGateway.Annotations).To(HaveKeyWithValue(aitenantCreatedAnnotation, "true"))
+	g.Expect(updatedGateway.Spec.Listeners).To(HaveLen(1))
+	g.Expect(updatedGateway.Spec.Listeners[0].Name).To(Equal(gatewayapiv1.SectionName("http")))
+	g.Expect(updatedGateway.Spec.Listeners[0].Hostname).NotTo(BeNil())
+	g.Expect(*updatedGateway.Spec.Listeners[0].Hostname).To(Equal(gatewayapiv1.Hostname("team-owned-gw.owned.example.com")))
 }
 
 func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
@@ -833,7 +874,7 @@ func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-race",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-race-maas"},
@@ -896,7 +937,7 @@ func TestAITenantReconcile_AdoptsPreExistingTenant(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-adoptcfg",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-adoptcfg-maas"},
@@ -952,7 +993,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-clash",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "shared-ns"},
@@ -964,7 +1005,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 			Name: "shared-ns",
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      "other-aitenant",
-				aitenantNamespaceAnnotation: "ai-tenants",
+				aitenantNamespaceAnnotation: "redhat-ai-gateway-infra",
 			},
 		},
 	}
@@ -1007,14 +1048,14 @@ func TestAITenantReconcile_RejectsGatewayOwnedByAnotherAITenant(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-gw-clash",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-gw-clash-maas"},
 			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}
-	gateway := ownedAITenantGateway("team-gw-clash", "other-aitenant", "ai-tenants")
+	gateway := ownedAITenantGateway("team-gw-clash", "other-aitenant", "redhat-ai-gateway-infra")
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -1054,7 +1095,7 @@ func TestAITenantReconcile_CreatesCustomNamedGatewayWhenMissing(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-missing-gw",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-missing-gw-maas"},
@@ -1104,7 +1145,7 @@ func TestAITenantReconcile_IdempotentOnSecondRun(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-idem",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-idem-maas"},
@@ -1149,7 +1190,7 @@ func TestAITenantReconcile_OIDCFullMirror(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-oidc",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-oidc-maas"},
@@ -1193,7 +1234,7 @@ func TestAITenantReconcile_NoOIDCSetsTenantOIDCNil(t *testing.T) {
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-nooidc",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "team-nooidc-maas"},
@@ -1245,10 +1286,10 @@ func TestAITenantReconcile_RejectsTenantNamespaceEqualToAITenantNamespace(t *tes
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-samens",
-			Namespace: "ai-tenants",
+			Namespace: "redhat-ai-gateway-infra",
 		},
 		Spec: maasv1alpha1.AITenantSpec{
-			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "ai-tenants"},
+			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "redhat-ai-gateway-infra"},
 			Gateway:         &maasv1alpha1.AITenantGatewayRef{},
 		},
 	}

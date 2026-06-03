@@ -45,7 +45,7 @@ import (
 
 const (
 	// DefaultAITenantNamespace is the default infrastructure namespace for AITenant CRs.
-	DefaultAITenantNamespace = "ai-tenants"
+	DefaultAITenantNamespace = "redhat-ai-gateway-infra"
 	// DefaultAITenantGatewayClassName is the default GatewayClass for AITenant Gateways.
 	DefaultAITenantGatewayClassName = "openshift-default"
 
@@ -273,16 +273,42 @@ func (r *AITenantReconciler) ensureTenantGateway(ctx context.Context, aitenant *
 			Namespace: ref.Namespace,
 		},
 	}
-	if err := r.upsertWithCreate(ctx, gateway, aitenant, func(obj client.Object) error {
-		gw, ok := obj.(*gatewayapiv1.Gateway)
-		if !ok {
-			return fmt.Errorf("expected Gateway, got %T", obj)
+	key := client.ObjectKeyFromObject(gateway)
+	current := gateway.DeepCopy()
+	err := r.get(ctx, key, current)
+	if err != nil {
+		if !isNotFoundError(err) {
+			return ref, fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
 		}
-		applyAITenantMetadata(gw, aitenant)
-		gw.Spec = r.gatewaySpecFor(aitenant)
-		return nil
-	}, markCreatedByAITenant); err != nil {
-		return ref, err
+		applyAITenantMetadata(gateway, aitenant)
+		if err := markCreatedByAITenant(gateway); err != nil {
+			return ref, err
+		}
+		gateway.Spec = r.gatewaySpecFor(aitenant)
+		if createErr := r.Create(ctx, gateway); createErr != nil {
+			if !isAlreadyExistsError(createErr) {
+				return ref, fmt.Errorf("create Gateway %s/%s: %w", key.Namespace, key.Name, createErr)
+			}
+			if err := r.get(ctx, key, current); err != nil {
+				return ref, fmt.Errorf("get Gateway %s/%s after create conflict: %w", key.Namespace, key.Name, err)
+			}
+		} else {
+			return ref, nil
+		}
+	}
+	if hasAITenantOwnerAnnotations(current) && !ownedByAITenant(current, aitenant) {
+		return ref, fmt.Errorf("gateway %s/%s is managed by another AITenant", key.Namespace, key.Name)
+	}
+	reconcileSpec := createdByAITenant(current, aitenant)
+	base := current.DeepCopy()
+	applyAITenantMetadata(current, aitenant)
+	if reconcileSpec {
+		current.Spec = r.gatewaySpecFor(aitenant)
+	}
+	if !equality.Semantic.DeepEqual(base, current) {
+		if err := r.Patch(ctx, current, client.MergeFrom(base)); err != nil {
+			return ref, fmt.Errorf("patch Gateway %s/%s: %w", key.Namespace, key.Name, err)
+		}
 	}
 	return ref, nil
 }
