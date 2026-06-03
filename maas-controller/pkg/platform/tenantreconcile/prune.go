@@ -14,7 +14,7 @@ import (
 )
 
 // PruneLegacyCleanupResources removes ephemeral-key cleanup operands dropped from the
-// platform overlay in #934. ApplyRendered is SSA-only and does not prune resources
+// platform overlay in PR934. ApplyRendered is SSA-only and does not prune resources
 // removed from manifests; this runs after apply so upgrades converge automatically.
 func PruneLegacyCleanupResources(ctx context.Context, log logr.Logger, c client.Client, appNs string) error {
 	legacy := []struct {
@@ -40,16 +40,16 @@ func deleteLegacyResourceIfExists(ctx context.Context, log logr.Logger, c client
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("get legacy %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("get legacy %s/%s in namespace %s: %w", kind, name, namespace, err)
 	}
 	if !isManagedForPrune(obj) {
-		log.V(1).Info("Skipping legacy resource prune: opted out of management",
+		log.V(1).Info("Skipping legacy resource prune: annotation "+AnnotationManaged+":false",
 			"kind", kind, "name", name, "namespace", namespace)
 		return nil
 	}
 	log.Info("Deleting legacy platform resource", "kind", kind, "name", name, "namespace", namespace)
 	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete legacy %s %s/%s: %w", kind, namespace, name, err)
+		return fmt.Errorf("delete legacy %s/%s in namespace %s: %w", kind, name, namespace, err)
 	}
 	return nil
 }

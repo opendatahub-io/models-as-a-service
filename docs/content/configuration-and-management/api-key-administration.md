@@ -83,6 +83,8 @@ oc get deploy maas-api -n <namespace> -o jsonpath='{.spec.template.spec.containe
 oc logs deploy/maas-api -n <namespace> | grep -i cleanup
 ```
 
+When keys are deleted (`Ephemeral key cleanup completed` with `deletedCount`) or when a tick fails (`Failed to cleanup expired ephemeral keys`), it should be shown in the logs.
+
 **Manually trigger cleanup** (from an allowed pod or via oc exec):
 
 ```bash
