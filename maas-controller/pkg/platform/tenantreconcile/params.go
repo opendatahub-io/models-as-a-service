@@ -137,6 +137,16 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	return nil
 }
 
+func patchPreProcessingDeployment(r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	if params.PayloadProcessingImage != "" {
+		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
+			return fmt.Errorf("patch payload-pre-processing image: %w", err)
+		}
+	}
+	return nil
+}
+
 func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	log.V(4).Info("Patching HTTPRoute parentRefs", "namespace", params.GatewayNamespace, "name", params.GatewayName)
 	parentRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "parentRefs")
