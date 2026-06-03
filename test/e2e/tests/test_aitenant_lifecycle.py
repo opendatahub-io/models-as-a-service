@@ -14,7 +14,8 @@ AITENANT_KIND = "aitenant"
 TENANT_NAME = "default-tenant"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
-GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
+AITENANT_DOMAIN = os.environ.get("AITENANT_DOMAIN", "apps.example.com")
+AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 
@@ -39,15 +40,6 @@ def _oc_run(args, *, input_text=None, timeout=None):
 def _oc_output_not_found(result):
     combined = (result.stderr or "") + (result.stdout or "")
     return "(NotFound)" in combined or "not found" in combined.lower()
-
-
-def _oc_json(args):
-    result = _oc_run(args)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"`oc {' '.join(args)}` failed: {((result.stderr or '') + (result.stdout or '')).strip()}"
-        )
-    return json.loads(result.stdout)
 
 
 def _apply(obj):
@@ -116,16 +108,6 @@ def _aitenant_ready(obj):
     )
 
 
-def _metadata_values(obj, keys):
-    meta = obj.get("metadata") or {}
-    labels = meta.get("labels") or {}
-    annotations = meta.get("annotations") or {}
-    return {
-        "labels": {key: labels.get(key) for key in keys},
-        "annotations": {key: annotations.get(key) for key in keys},
-    }
-
-
 @pytest.fixture(scope="module", autouse=True)
 def require_aitenant_crd():
     result = _oc_run(["get", "crd", AITENANT_CRD])
@@ -133,22 +115,6 @@ def require_aitenant_crd():
         if _oc_output_not_found(result):
             pytest.skip(f"Missing CRD {AITENANT_CRD}; AITenant lifecycle test is not applicable")
         pytest.fail(f"`oc get crd {AITENANT_CRD}` failed: {result.stderr.strip() or result.stdout.strip()}")
-
-
-@pytest.fixture(scope="module", autouse=True)
-def require_existing_gateway():
-    result = _oc_run(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE])
-    if result.returncode != 0:
-        if _oc_output_not_found(result):
-            pytest.skip(
-                f"Gateway {GATEWAY_NAMESPACE}/{GATEWAY_NAME} does not exist; "
-                "AITenant requires a pre-existing Gateway"
-            )
-        pytest.fail(
-            f"`oc get gateway {GATEWAY_NAME} -n {GATEWAY_NAMESPACE}` failed: "
-            f"{result.stderr.strip() or result.stdout.strip()}"
-        )
-
 
 @pytest.fixture(scope="module", autouse=True)
 def require_aitenant_namespace():
@@ -161,6 +127,8 @@ def _new_aitenant_case():
     return {
         "tenant_ns": f"e2e-aitenant-{suffix}",
         "aitenant_name": aitenant_name,
+        "gateway_name": aitenant_name,
+        "tls_secret": f"{aitenant_name}-tls",
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
         "object_admin_role": f"aitenant-{aitenant_name}-object-admin",
     }
@@ -187,7 +155,14 @@ def _apply_aitenant(case):
                     "name": case["tenant_ns"],
                 },
                 "gateway": {
-                    "name": GATEWAY_NAME,
+                    "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
+                },
+                "domain": AITENANT_DOMAIN,
+                "tls": {
+                    "certificateRef": {
+                        "name": case["tls_secret"],
+                        "namespace": GATEWAY_NAMESPACE,
+                    },
                 },
                 "rbac": {
                     "admins": [
@@ -212,8 +187,27 @@ def _assert_aitenant_bootstrap_resources(case):
     assert aitenant["status"]["tenantNamespace"] == case["tenant_ns"]
     assert aitenant["status"]["gatewayRef"] == {
         "namespace": GATEWAY_NAMESPACE,
-        "name": GATEWAY_NAME,
+        "name": case["gateway_name"],
     }
+
+    gateway = _wait_for_json("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+    assert gateway["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
+    assert gateway["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
+    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/aitenant-name"] == case["aitenant_name"]
+    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/aitenant-namespace"] == AITENANT_NAMESPACE
+    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/created-by-aitenant"] == "true"
+    assert gateway["spec"]["gatewayClassName"] == AITENANT_GATEWAY_CLASS_NAME
+    listeners = {listener["name"]: listener for listener in gateway["spec"]["listeners"]}
+    assert listeners["http"]["hostname"] == f"{case['aitenant_name']}.{AITENANT_DOMAIN}"
+    assert listeners["https"]["hostname"] == f"{case['aitenant_name']}.{AITENANT_DOMAIN}"
+    assert listeners["https"]["tls"]["certificateRefs"] == [
+        {
+            "group": "",
+            "kind": "Secret",
+            "name": case["tls_secret"],
+            "namespace": GATEWAY_NAMESPACE,
+        }
+    ]
 
     namespace = _wait_for_json("namespace", case["tenant_ns"])
     assert namespace["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
@@ -222,7 +216,7 @@ def _assert_aitenant_bootstrap_resources(case):
     tenant = _wait_for_json("tenant", TENANT_NAME, case["tenant_ns"])
     assert tenant["spec"]["gatewayRef"] == {
         "namespace": GATEWAY_NAMESPACE,
-        "name": GATEWAY_NAME,
+        "name": case["gateway_name"],
     }
     assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
 
@@ -242,40 +236,17 @@ class TestAITenantLifecycle:
     # work end-to-end in a newly created AITenant tenant namespace.
     def test_aitenant_create_bootstrap_resources(self):
         case = _new_aitenant_case()
-        watched_metadata_keys = [
-            "ai-gateway.opendatahub.io/tenant",
-            "maas.opendatahub.io/aitenant-name",
-            "maas.opendatahub.io/aitenant-namespace",
-        ]
-        gateway_before = _metadata_values(
-            _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
-            watched_metadata_keys,
-        )
 
         try:
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
-
-            gateway_after_create = _metadata_values(
-                _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
-                watched_metadata_keys,
-            )
-            assert gateway_after_create == gateway_before, "AITenant must not mutate Gateway metadata"
         finally:
             _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
     def test_aitenant_delete_cleans_up_bootstrap_resources(self):
         case = _new_aitenant_case()
-        watched_metadata_keys = [
-            "ai-gateway.opendatahub.io/tenant",
-            "maas.opendatahub.io/aitenant-name",
-            "maas.opendatahub.io/aitenant-namespace",
-        ]
-        gateway_before = _metadata_values(
-            _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
-            watched_metadata_keys,
-        )
 
         try:
             _apply_aitenant(case)
@@ -296,13 +267,8 @@ class TestAITenantLifecycle:
             assert labels.get("ai-gateway.opendatahub.io/tenant") is None
             assert annotations.get("maas.opendatahub.io/aitenant-name") is None
             assert annotations.get("maas.opendatahub.io/aitenant-namespace") is None
-            assert _get_json_or_none("gateway", GATEWAY_NAME, GATEWAY_NAMESPACE) is not None
-
-            gateway_after_delete = _metadata_values(
-                _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
-                watched_metadata_keys,
-            )
-            assert gateway_after_delete == gateway_before, "AITenant deletion must not mutate Gateway metadata"
+            _wait_for_not_found("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
         finally:
             _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")

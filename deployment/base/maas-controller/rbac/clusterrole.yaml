@@ -134,13 +134,6 @@ rules:
   - gateway.networking.k8s.io
   resources:
   - gateways
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - gateway.networking.k8s.io
-  resources:
   - httproutes
   verbs:
   - create
