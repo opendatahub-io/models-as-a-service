@@ -44,11 +44,13 @@ import (
 )
 
 const (
+	// DefaultAITenantNamespace is the default infrastructure namespace for AITenant CRs.
+	DefaultAITenantNamespace = "ai-tenants"
+
 	aitenantFinalizer = "maas.opendatahub.io/aitenant-cleanup"
 
-	aitenantManagedLabel        = "maas.opendatahub.io/managed-by-aitenant"
-	legacyAIGatewayManagedLabel = "maas.opendatahub.io/managed-by-aigateway"
-	aiGatewayTenantLabel        = "ai-gateway.opendatahub.io/tenant"
+	aitenantManagedLabel = "maas.opendatahub.io/managed-by-aitenant"
+	aiGatewayTenantLabel = "ai-gateway.opendatahub.io/tenant"
 
 	aitenantNameAnnotation      = "maas.opendatahub.io/aitenant-name"
 	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
@@ -71,6 +73,8 @@ type AITenantReconciler struct {
 	// TenantNamespace is the default MaaS tenant namespace. AITenant objects
 	// must stay in a separate infra namespace, but they may target this namespace.
 	TenantNamespace string
+	// AITenantNamespace is the infrastructure namespace where AITenant CRs are accepted.
+	AITenantNamespace string
 	// GatewayNamespace is where tenant Gateway resources are looked up.
 	GatewayNamespace string
 }
@@ -80,7 +84,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
@@ -173,11 +177,15 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 	if aitenant.Namespace == "" {
 		return fmt.Errorf("AITenant %q must be namespaced", aitenant.Name)
 	}
+	aitenantNamespace := r.aitenantNamespace()
 	if r.AppNamespace != "" && aitenant.Namespace == r.AppNamespace {
 		return fmt.Errorf("AITenant %s/%s must not be created in the protected application namespace %q", aitenant.Namespace, aitenant.Name, r.AppNamespace)
 	}
 	if r.TenantNamespace != "" && aitenant.Namespace == r.TenantNamespace {
 		return fmt.Errorf("AITenant %s/%s must be created in a separate infra namespace, not the tenant namespace %q", aitenant.Namespace, aitenant.Name, r.TenantNamespace)
+	}
+	if aitenant.Namespace != aitenantNamespace {
+		return fmt.Errorf("AITenant %s/%s must be created in the configured AITenant infrastructure namespace %q", aitenant.Namespace, aitenant.Name, aitenantNamespace)
 	}
 	if aitenant.Spec.TenantNamespace.Name == "" {
 		return errors.New("spec.tenantNamespace.name is required")
@@ -189,6 +197,13 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 		return fmt.Errorf("spec.tenantNamespace.name must not be the protected application namespace %q", r.AppNamespace)
 	}
 	return nil
+}
+
+func (r *AITenantReconciler) aitenantNamespace() string {
+	if r.AITenantNamespace == "" {
+		return DefaultAITenantNamespace
+	}
+	return r.AITenantNamespace
 }
 
 var errTenantNamespaceMissing = errors.New("tenant namespace missing")
@@ -462,6 +477,38 @@ func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenan
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
 		return err
 	}
+	return r.cleanupTenantNamespaceMetadata(ctx, aitenant)
+}
+
+func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	if aitenant.Spec.TenantNamespace.Name == "" {
+		return nil
+	}
+	var ns corev1.Namespace
+	key := client.ObjectKey{Name: aitenant.Spec.TenantNamespace.Name}
+	if err := r.get(ctx, key, &ns); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !ownedByAITenant(&ns, aitenant) {
+		return nil
+	}
+	base := ns.DeepCopy()
+	removeMapValueIfEqual(&ns.Labels, "app.kubernetes.io/managed-by", "maas-controller")
+	removeMapValueIfEqual(&ns.Labels, "app.kubernetes.io/part-of", tenantreconcile.ComponentName)
+	removeMapValueIfEqual(&ns.Labels, "opendatahub.io/generated-namespace", "true")
+	removeMapValueIfEqual(&ns.Labels, aitenantManagedLabel, "true")
+	removeMapValueIfEqual(&ns.Labels, aiGatewayTenantLabel, aitenant.Name)
+	removeMapValueIfEqual(&ns.Labels, tenantreconcile.LabelTenantName, aitenant.Name)
+	removeMapValueIfEqual(&ns.Labels, tenantreconcile.LabelTenantNamespace, aitenant.Spec.TenantNamespace.Name)
+	removeMapValueIfEqual(&ns.Annotations, aitenantNameAnnotation, aitenant.Name)
+	removeMapValueIfEqual(&ns.Annotations, aitenantNamespaceAnnotation, aitenant.Namespace)
+	removeMapValueIfEqual(&ns.Annotations, aitenantCreatedAnnotation, "true")
+	if equality.Semantic.DeepEqual(base, &ns) {
+		return nil
+	}
+	if err := r.Patch(ctx, &ns, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("cleanup tenant namespace %q metadata: %w", key.Name, err)
+	}
 	return nil
 }
 
@@ -558,7 +605,6 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
 	labels["app.kubernetes.io/managed-by"] = "maas-controller"
 	labels["app.kubernetes.io/part-of"] = tenantreconcile.ComponentName
 	labels[aitenantManagedLabel] = "true"
-	labels[legacyAIGatewayManagedLabel] = "true"
 	labels[aiGatewayTenantLabel] = aitenant.Name
 	labels[tenantreconcile.LabelTenantName] = aitenant.Name
 	labels[tenantreconcile.LabelTenantNamespace] = aitenant.Spec.TenantNamespace.Name
@@ -599,6 +645,18 @@ func setMapValue(m *map[string]string, key, value string) {
 		*m = map[string]string{}
 	}
 	(*m)[key] = value
+}
+
+func removeMapValueIfEqual(m *map[string]string, key, value string) {
+	if *m == nil {
+		return
+	}
+	if (*m)[key] == value {
+		delete(*m, key)
+	}
+	if len(*m) == 0 {
+		*m = nil
+	}
 }
 
 func boolDefault(v *bool, def bool) bool {

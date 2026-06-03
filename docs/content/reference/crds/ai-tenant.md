@@ -4,6 +4,8 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 `AITenant` does not create, update, label, or delete Gateway API `Gateway` resources. The referenced Gateway must already exist.
 
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+
 ---
 
 ## Spec
@@ -26,7 +28,7 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 | name | string | Yes | — | Namespace for tenant-scoped MaaS objects. Immutable after creation. |
 | create | bool | No | `true` | Whether the controller creates the namespace if it does not exist. |
 
-The controller does not delete the tenant namespace when an `AITenant` is deleted.
+The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace.
 
 ---
 

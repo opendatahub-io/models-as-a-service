@@ -12,6 +12,7 @@ import pytest
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
 TENANT_NAME = "default-tenant"
+AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
@@ -69,12 +70,6 @@ def _delete_best_effort(kind, name, namespace=None, *, timeout="60s"):
         _delete(kind, name, namespace, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - cleanup must not mask the test failure
         print(f"[cleanup] failed to delete {kind}/{name}: {exc}")
-
-
-def _create_namespace(name):
-    result = _oc_run(["create", "namespace", name])
-    if result.returncode != 0 and "already exists" not in (result.stderr or ""):
-        raise RuntimeError(f"create namespace {name}: {result.stderr.strip() or result.stdout.strip()}")
 
 
 def _get_json_or_none(kind, name, namespace=None):
@@ -155,18 +150,98 @@ def require_existing_gateway():
         )
 
 
+@pytest.fixture(scope="module", autouse=True)
+def require_aitenant_namespace():
+    _wait_for_json("namespace", AITENANT_NAMESPACE, timeout=180, interval=5)
+
+
+def _new_aitenant_case():
+    suffix = uuid.uuid4().hex[:8]
+    aitenant_name = f"e2e-ait-{suffix}"
+    return {
+        "tenant_ns": f"e2e-aitenant-{suffix}",
+        "aitenant_name": aitenant_name,
+        "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
+        "object_admin_role": f"aitenant-{aitenant_name}-object-admin",
+    }
+
+
+def _admin_subject():
+    whoami = _oc_run(["whoami"])
+    if whoami.returncode == 0 and whoami.stdout.strip():
+        return whoami.stdout.strip()
+    return "system:authenticated"
+
+
+def _apply_aitenant(case):
+    _apply(
+        {
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "AITenant",
+            "metadata": {
+                "name": case["aitenant_name"],
+                "namespace": AITENANT_NAMESPACE,
+            },
+            "spec": {
+                "tenantNamespace": {
+                    "name": case["tenant_ns"],
+                },
+                "gateway": {
+                    "name": GATEWAY_NAME,
+                },
+                "rbac": {
+                    "admins": [
+                        {
+                            "kind": "User",
+                            "name": _admin_subject(),
+                        }
+                    ]
+                },
+            },
+        }
+    )
+
+
+def _assert_aitenant_bootstrap_resources(case):
+    aitenant = _wait_for_json(
+        AITENANT_KIND,
+        case["aitenant_name"],
+        AITENANT_NAMESPACE,
+        predicate=_aitenant_ready,
+    )
+    assert aitenant["status"]["tenantNamespace"] == case["tenant_ns"]
+    assert aitenant["status"]["gatewayRef"] == {
+        "namespace": GATEWAY_NAMESPACE,
+        "name": GATEWAY_NAME,
+    }
+
+    namespace = _wait_for_json("namespace", case["tenant_ns"])
+    assert namespace["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
+    assert namespace["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
+
+    tenant = _wait_for_json("tenant", TENANT_NAME, case["tenant_ns"])
+    assert tenant["spec"]["gatewayRef"] == {
+        "namespace": GATEWAY_NAMESPACE,
+        "name": GATEWAY_NAME,
+    }
+    assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
+
+    assert _get_json_or_none("role", case["tenant_admin_role"], case["tenant_ns"]) is not None
+    assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is not None
+    assert _get_json_or_none("role", case["object_admin_role"], AITENANT_NAMESPACE) is not None
+    assert _get_json_or_none("rolebinding", case["object_admin_role"], AITENANT_NAMESPACE) is not None
+
+
+def _delete_aitenant(case):
+    _delete(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+    _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+
+
 class TestAITenantLifecycle:
-    def test_aitenant_create_delete_bootstrap_resources(self):
-        suffix = uuid.uuid4().hex[:8]
-        infra_ns = f"e2e-aitenant-infra-{suffix}"
-        tenant_ns = f"e2e-aitenant-{suffix}"
-        aitenant_name = f"e2e-ait-{suffix}"
-        tenant_admin_role = f"aitenant-{aitenant_name}-tenant-admin"
-        object_admin_role = f"aitenant-{aitenant_name}-object-admin"
-
-        whoami = _oc_run(["whoami"])
-        admin_subject = whoami.stdout.strip() if whoami.returncode == 0 and whoami.stdout.strip() else "system:authenticated"
-
+    # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
+    # work end-to-end in a newly created AITenant tenant namespace.
+    def test_aitenant_create_bootstrap_resources(self):
+        case = _new_aitenant_case()
         watched_metadata_keys = [
             "ai-gateway.opendatahub.io/tenant",
             "maas.opendatahub.io/aitenant-name",
@@ -178,73 +253,49 @@ class TestAITenantLifecycle:
         )
 
         try:
-            _create_namespace(infra_ns)
-
-            _apply(
-                {
-                    "apiVersion": "maas.opendatahub.io/v1alpha1",
-                    "kind": "AITenant",
-                    "metadata": {
-                        "name": aitenant_name,
-                        "namespace": infra_ns,
-                    },
-                    "spec": {
-                        "tenantNamespace": {
-                            "name": tenant_ns,
-                        },
-                        "gateway": {
-                            "name": GATEWAY_NAME,
-                        },
-                        "rbac": {
-                            "admins": [
-                                {
-                                    "kind": "User",
-                                    "name": admin_subject,
-                                }
-                            ]
-                        },
-                    },
-                }
-            )
-
-            aitenant = _wait_for_json(AITENANT_KIND, aitenant_name, infra_ns, predicate=_aitenant_ready)
-            assert aitenant["status"]["tenantNamespace"] == tenant_ns
-            assert aitenant["status"]["gatewayRef"] == {
-                "namespace": GATEWAY_NAMESPACE,
-                "name": GATEWAY_NAME,
-            }
-
-            namespace = _wait_for_json("namespace", tenant_ns)
-            assert namespace["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
-            assert namespace["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == aitenant_name
-
-            tenant = _wait_for_json("tenant", TENANT_NAME, tenant_ns)
-            assert tenant["spec"]["gatewayRef"] == {
-                "namespace": GATEWAY_NAMESPACE,
-                "name": GATEWAY_NAME,
-            }
-            assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
-
-            assert _get_json_or_none("role", tenant_admin_role, tenant_ns) is not None
-            assert _get_json_or_none("rolebinding", tenant_admin_role, tenant_ns) is not None
-            assert _get_json_or_none("role", object_admin_role, infra_ns) is not None
-            assert _get_json_or_none("rolebinding", object_admin_role, infra_ns) is not None
+            _apply_aitenant(case)
+            _assert_aitenant_bootstrap_resources(case)
 
             gateway_after_create = _metadata_values(
                 _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
                 watched_metadata_keys,
             )
             assert gateway_after_create == gateway_before, "AITenant must not mutate Gateway metadata"
+        finally:
+            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
-            _delete(AITENANT_KIND, aitenant_name, infra_ns)
-            _wait_for_not_found(AITENANT_KIND, aitenant_name, infra_ns)
-            _wait_for_not_found("tenant", TENANT_NAME, tenant_ns)
-            _wait_for_not_found("role", tenant_admin_role, tenant_ns)
-            _wait_for_not_found("rolebinding", tenant_admin_role, tenant_ns)
-            _wait_for_not_found("role", object_admin_role, infra_ns)
-            _wait_for_not_found("rolebinding", object_admin_role, infra_ns)
+    def test_aitenant_delete_cleans_up_bootstrap_resources(self):
+        case = _new_aitenant_case()
+        watched_metadata_keys = [
+            "ai-gateway.opendatahub.io/tenant",
+            "maas.opendatahub.io/aitenant-name",
+            "maas.opendatahub.io/aitenant-namespace",
+        ]
+        gateway_before = _metadata_values(
+            _oc_json(["get", "gateway", GATEWAY_NAME, "-n", GATEWAY_NAMESPACE, "-o", "json"]),
+            watched_metadata_keys,
+        )
 
-            assert _get_json_or_none("namespace", tenant_ns) is not None
+        try:
+            _apply_aitenant(case)
+            _assert_aitenant_bootstrap_resources(case)
+
+            _delete_aitenant(case)
+            _wait_for_not_found("tenant", TENANT_NAME, case["tenant_ns"])
+            _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
+            _wait_for_not_found("rolebinding", case["tenant_admin_role"], case["tenant_ns"])
+            _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
+            _wait_for_not_found("rolebinding", case["object_admin_role"], AITENANT_NAMESPACE)
+
+            namespace = _get_json_or_none("namespace", case["tenant_ns"])
+            assert namespace is not None
+            labels = namespace["metadata"].get("labels") or {}
+            annotations = namespace["metadata"].get("annotations") or {}
+            assert labels.get("maas.opendatahub.io/managed-by-aitenant") is None
+            assert labels.get("ai-gateway.opendatahub.io/tenant") is None
+            assert annotations.get("maas.opendatahub.io/aitenant-name") is None
+            assert annotations.get("maas.opendatahub.io/aitenant-namespace") is None
             assert _get_json_or_none("gateway", GATEWAY_NAME, GATEWAY_NAMESPACE) is not None
 
             gateway_after_delete = _metadata_values(
@@ -253,6 +304,5 @@ class TestAITenantLifecycle:
             )
             assert gateway_after_delete == gateway_before, "AITenant deletion must not mutate Gateway metadata"
         finally:
-            _delete_best_effort(AITENANT_KIND, aitenant_name, infra_ns)
-            _delete_best_effort("namespace", tenant_ns, timeout="90s")
-            _delete_best_effort("namespace", infra_ns, timeout="90s")
+            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")

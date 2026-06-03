@@ -289,7 +289,7 @@ func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) st
 func tenantManagedByAITenant(tenant *maasv1alpha1.Tenant) bool {
 	labels := tenant.GetLabels()
 	if labels != nil {
-		if labels[aitenantManagedLabel] == "true" || labels[legacyAIGatewayManagedLabel] == "true" || labels[aiGatewayTenantLabel] != "" {
+		if labels[aitenantManagedLabel] == "true" || labels[aiGatewayTenantLabel] != "" {
 			return true
 		}
 	}
