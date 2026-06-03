@@ -293,44 +293,9 @@ Observability is optional but recommended. Without it, metrics, dashboards, and 
 
     If you choose to defer, you can return to this section later to enable observability.
 
-### Prerequisites for Observability
+### Prerequisites and Setup
 
-1. **User Workload Monitoring** must be enabled on the cluster for Prometheus to scrape metrics from MaaS components:
-
-    ```bash
-    kubectl apply -f - <<EOF
-    apiVersion: v1
-    kind: ConfigMap
-    metadata:
-      name: cluster-monitoring-config
-      namespace: openshift-monitoring
-    data:
-      config.yaml: |
-        enableUserWorkload: true
-    EOF
-
-    # Verify prometheus-user-workload pods are running
-    kubectl get pods -n openshift-user-workload-monitoring
-    ```
-
-2. **Kuadrant Observability** must be enabled for rate-limiting and usage metrics (`authorized_calls`, `limited_calls`):
-
-    ```bash
-    kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
-      -p '{"spec":{"observability":{"enable":true}}}'
-
-    # Verify PodMonitor was created
-    kubectl get podmonitor -n kuadrant-system kuadrant-limitador-monitor
-    ```
-
-3. **Telemetry** is enabled by default on the Tenant CR (`spec.telemetry.enabled: true`). Verify or enable it:
-
-    ```bash
-    kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
-      -p '{"spec":{"telemetry":{"enabled":true}}}'
-    ```
-
-For the full setup guide including Grafana dashboards, the `install-observability.sh` script, and RHOAI Dashboard integration, see [Observability Setup](../observability/setup.md).
+Observability requires **User Workload Monitoring** on the cluster, **Kuadrant observability** enabled, and **Tenant telemetry** turned on. For step-by-step instructions, ConfigMap configuration, and verification commands, see the [Observability Setup](../observability/setup.md) guide. That page also covers Grafana dashboards, the `install-observability.sh` script, and RHOAI Dashboard integration.
 
 For RHOAI-specific observability configuration, see [Managing observability in RHOAI](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
 
