@@ -298,9 +298,10 @@ func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstru
 				refs[i].Description = annotations[constant.AnnotationDescription]
 			}
 			kind, _, _ := unstructured.NestedString(u.Object, "spec", "modelRef", "kind")
-			if kind == "ExternalModel" {
+			switch kind {
+			case "ExternalModel":
 				refs[i].Source = "external"
-			} else if kind != "" {
+			case "LLMInferenceService":
 				refs[i].Source = "internal"
 			}
 		}
