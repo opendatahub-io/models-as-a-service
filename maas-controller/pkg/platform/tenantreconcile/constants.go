@@ -171,6 +171,10 @@ func MaaSAPIRouteName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIRouteName, tenantID)
 }
 
+func LegacyMaaSAPIKeyCleanupCronJobNameForTenant(tenantID string) string {
+	return resourceNameForTenant(LegacyMaaSAPIKeyCleanupCronJobName, tenantID)
+}
+
 func GatewayDestinationRuleName(tenantID string) string {
 	return resourceNameForTenant(baseGatewayDestinationRuleName, tenantID)
 }
