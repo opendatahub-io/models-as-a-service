@@ -297,6 +297,12 @@ func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstru
 				refs[i].DisplayName = annotations[constant.AnnotationDisplayName]
 				refs[i].Description = annotations[constant.AnnotationDescription]
 			}
+			kind, _, _ := unstructured.NestedString(u.Object, "spec", "modelRef", "kind")
+			if kind == "ExternalModel" {
+				refs[i].Source = "external"
+			} else if kind != "" {
+				refs[i].Source = "internal"
+			}
 		}
 	}
 }
