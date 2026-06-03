@@ -884,11 +884,12 @@ class TestAPIKeyRevocationE2E:
 
 
 class TestEphemeralKeyCleanup:
-    """Tests for ephemeral API key cleanup (in-process + internal endpoint).
+    """Tests for ephemeral API key cleanup via the internal endpoint.
 
     Validates that:
     - Ephemeral keys can be created with short expiration
-    - maas-api is configured with CLEANUP_INTERVAL_MINUTES
+    - maas-api is configured with CLEANUP_INTERVAL_MINUTES (the in-process cleanup
+      loop is only validated by config presence here, not by observing it run)
     - Triggering cleanup does not delete active (non-expired) ephemeral keys
     - Cleanup returns a well-formed response with deletedCount
 
@@ -1026,8 +1027,8 @@ class TestEphemeralKeyCleanup:
         key_id = r.json()["id"]
         print(f"[cleanup] Created ephemeral key for survival test: id={key_id}")
 
-        # Trigger cleanup via oc exec into maas-api pod
-        # This calls the internal endpoint directly, same as in-process cleanup does
+        # Trigger cleanup via oc exec into maas-api pod, calling the internal endpoint.
+        # Note: the in-process loop deletes via the store directly and does not use this endpoint.
         get_pod = sp.run(
             ["oc", "get", "pods", "-n", deployment_namespace,
              "-l", "app.kubernetes.io/name=maas-api",
