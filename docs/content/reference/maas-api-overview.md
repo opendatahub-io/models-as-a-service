@@ -49,7 +49,7 @@ These endpoints are registered under `/internal/v1/` and are **not exposed** on 
 | Method | Path | Called By | Description |
 |--------|------|-----------|-------------|
 | POST | `/internal/v1/api-keys/validate` | Authorino | Validate an API key (hash lookup, status/expiry check). Returns user identity and subscription for the gateway. |
-| POST | `/internal/v1/api-keys/cleanup` | maas-api background cleanup (manual trigger via `oc exec` also supported) | Delete expired ephemeral keys (30-minute grace period). Returns `{"deletedCount": N, "message": "..."}`. |
+| POST | `/internal/v1/api-keys/cleanup` | maas-api background cleanup (manual trigger from inside pod is also supported) | Delete ephemeral keys that have been expired for more than 30 minutes. Returns `{"deletedCount": N, "message": "..."}`. |
 | POST | `/internal/v1/subscriptions/select` | Authorino | Select the appropriate subscription for a request based on user groups and optional explicit selection. |
 
 ---

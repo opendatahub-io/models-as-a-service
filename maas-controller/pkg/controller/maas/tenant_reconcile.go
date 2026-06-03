@@ -635,7 +635,7 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		},
 		{
 			gvk:       tenantreconcile.GVKCronJob,
-			name:      tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
+			name:      tenantreconcile.LegacyMaaSAPIKeyCleanupCronJobNameForTenant(tenantID),
 			namespace: appNs,
 		},
 	}
