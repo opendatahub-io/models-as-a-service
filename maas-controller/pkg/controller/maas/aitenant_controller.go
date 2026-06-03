@@ -226,9 +226,9 @@ func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant
 		applyAITenantMetadata(toCreate, aitenant)
 		setMapValue(&toCreate.Labels, "opendatahub.io/generated-namespace", "true")
 		setMapValue(&toCreate.Annotations, aitenantCreatedAnnotation, "true")
-		if err := r.Create(ctx, toCreate); err != nil {
-			if !isAlreadyExistsError(err) {
-				return fmt.Errorf("create tenant namespace %q: %w", name, err)
+		if createErr := r.Create(ctx, toCreate); createErr != nil {
+			if !isAlreadyExistsError(createErr) {
+				return fmt.Errorf("create tenant namespace %q: %w", name, createErr)
 			}
 			if err := r.get(ctx, client.ObjectKey{Name: name}, &ns); err != nil {
 				return fmt.Errorf("get tenant namespace %q after create conflict: %w", name, err)
@@ -675,14 +675,13 @@ func (r *AITenantReconciler) upsertWithCreate(ctx context.Context, obj client.Ob
 				return err
 			}
 		}
-		if err := r.Create(ctx, obj); err != nil {
-			if !isAlreadyExistsError(err) {
-				return fmt.Errorf("create %s %s/%s: %w", objectKind(obj), key.Namespace, key.Name, err)
+		if createErr := r.Create(ctx, obj); createErr != nil {
+			if !isAlreadyExistsError(createErr) {
+				return fmt.Errorf("create %s %s/%s: %w", objectKind(obj), key.Namespace, key.Name, createErr)
 			}
 			if err := r.get(ctx, key, current); err != nil {
 				return fmt.Errorf("get %s %s/%s after create conflict: %w", objectKind(obj), key.Namespace, key.Name, err)
 			}
-			err = nil
 		} else {
 			return nil
 		}
