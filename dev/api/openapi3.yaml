@@ -835,10 +835,6 @@ components:
                     type: string
                     description: Name of the MaaSModelRef
                     example: free-model-ref
-                namespace:
-                    type: string
-                    description: Namespace where the MaaSModelRef lives
-                    example: llm
                 display_name:
                     type: string
                     description: Human-readable display name from the openshift.io/display-name annotation on the MaaSModelRef
