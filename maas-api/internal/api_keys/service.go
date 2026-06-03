@@ -28,6 +28,13 @@ type Service struct {
 	subSelector SubscriptionSelector
 }
 
+func (s *Service) GetMaxExpirationDays() int {
+	if s.config.APIKeyMaxExpirationDays > 0 {
+		return s.config.APIKeyMaxExpirationDays
+	}
+	return constant.DefaultAPIKeyMaxExpirationDays
+}
+
 func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelector) *Service {
 	return NewServiceWithLogger(store, cfg, sub, logger.Production())
 }

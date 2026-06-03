@@ -35,6 +35,13 @@ type Handler struct {
 	adminChecker AdminChecker
 }
 
+func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"max_expiration_days":      h.service.GetMaxExpirationDays(),
+		"ephemeral_max_expiration": "1h",
+	})
+}
+
 func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
 	if log == nil {
 		log = logger.Production()

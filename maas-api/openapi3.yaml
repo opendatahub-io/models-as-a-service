@@ -465,6 +465,32 @@ paths:
                                 error:
                                     message: "Access denied: you can only bulk revoke your own API keys"
                                     type: forbidden
+    /v1/api-keys/config:
+        get:
+            tags:
+                - api-keys-v2
+            summary: Get API key configuration limits
+            description: |
+                Returns the API key limits that apply when creating keys.
+                Useful for clients (e.g. Dashboard) that need to display valid ranges
+                for expiration without requiring admin access to the Tenant CR.
+            operationId: api-keys#get-config
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ApiKeyConfig'
+                            example:
+                                max_expiration_days: 90
+                                ephemeral_max_expiration: "1h"
+                "401":
+                    description: Unauthorized. Missing or invalid Authorization header.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
     /v1/api-keys/{id}:
         get:
             tags:
@@ -879,6 +905,22 @@ components:
                         - per_token
             required:
                 - name
+
+        # API Key configuration limits
+        ApiKeyConfig:
+            type: object
+            properties:
+                max_expiration_days:
+                    type: integer
+                    description: Maximum expiration in days for regular API keys
+                    example: 90
+                ephemeral_max_expiration:
+                    type: string
+                    description: Maximum expiration for ephemeral API keys
+                    example: "1h"
+            required:
+                - max_expiration_days
+                - ephemeral_max_expiration
 
         # API Key metadata
         ApiKey:
