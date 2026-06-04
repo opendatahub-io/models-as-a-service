@@ -29,8 +29,8 @@ sequenceDiagram
 When TLS is enabled:
 
 - External API traffic is encrypted from client to backend
-- Internal authentication traffic (Authorino → `maas-api`) is encrypted
-- All certificate validation uses a trusted CA bundle
+- Internal authentication traffic (Authorino → `maas-api`) is encrypted and certificate-verified via the service-CA bundle
+- Gateway → `maas-api` traffic is encrypted but uses `insecureSkipVerify` (see the DestinationRule section below)
 
 ## Prerequisites
 
@@ -106,6 +106,57 @@ Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TL
 
 !!! info "Future consideration"
     Once Gateway API v1.4+ with BackendTLSPolicy is supported by the Istio Gateway provider, the DestinationRule can be replaced with a standard Gateway API resource.
+
+## Cluster TLS Security Profile
+
+On OpenShift clusters, both `maas-controller` and `maas-api` automatically read the
+cluster-wide TLS security profile from the `APIServer` resource
+(`config.openshift.io/v1`, name `cluster`). This ensures the components honor
+the admin's choice of TLS version and cipher suites.
+
+### How it works
+
+At startup, each component fetches `spec.tlsSecurityProfile` from the `APIServer` CR:
+
+- **maas-api**: Applies the profile's `minTLSVersion` and `ciphers` to the API server
+  on port 8443. The profile overrides the `--tls-min-version` flag and sets explicit
+  cipher suites instead of relying on Go defaults.
+- **maas-controller**: Fetches and watches the profile for change detection. The
+  controller currently has no HTTPS server endpoints (metrics is HTTP, no admission
+  webhooks), so the profile is not applied to a listener. When secure metrics or
+  webhooks are added, the profile will be applied to those endpoints.
+
+Both components watch the `APIServer` resource for changes. When the TLS profile is
+updated, the component performs a graceful shutdown so the Pod restarts with the new
+TLS settings.
+
+### Supported profiles
+
+| Profile | Min TLS Version | Description |
+|---------|----------------|-------------|
+| **Intermediate** (default) | TLS 1.2 | Recommended for most deployments |
+| **Modern** | TLS 1.3 | TLS 1.3 only — maximum security |
+| **Old** | TLS 1.0 | Legacy compatibility — use as last resort |
+| **Custom** | Configurable | Admin-defined cipher suites and min version |
+
+When the `APIServer` resource has no `tlsSecurityProfile` set (or on non-OpenShift
+clusters), the **Intermediate** profile is used as the default.
+
+### Fallback behavior
+
+On non-OpenShift clusters (e.g., Kind for development), the `APIServer` resource does
+not exist. In this case:
+
+- **maas-controller** falls back to the Intermediate profile defaults
+- **maas-api** falls back to its flag-based `--tls-min-version` setting (default: TLS 1.2)
+
+### Known limitations
+
+The `DestinationRule` for gateway → maas-api TLS origination uses `insecureSkipVerify: true`
+(see the Gateway → maas-api TLS DestinationRule section above). This is a
+deliberate trade-off: the gateway pod does not mount the OpenShift service-CA bundle, so
+it cannot verify the backend certificate. Traffic is still encrypted. This will be resolved
+when `BackendTLSPolicy` (Gateway API v1.4+) replaces the `DestinationRule`.
 
 ## Custom maas-api TLS Configuration
 

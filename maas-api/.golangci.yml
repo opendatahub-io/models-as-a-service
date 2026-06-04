@@ -64,6 +64,7 @@ linters:
         - empty
         - stdlib
         - generic
+        - github.com/opendatahub-io/models-as-a-service/maas-api
     lll:
       line-length: 180
     nolintlint:
