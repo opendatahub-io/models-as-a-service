@@ -1,7 +1,5 @@
 # ODH - Models as a Service with Policy Management
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
-
 Our goal is to create a comprehensive platform for **Models as a Service** with real-time policy management.
 
 > [!IMPORTANT]
@@ -162,6 +160,8 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 - [Authorino Caching Configuration](docs/content/configuration-and-management/authorino-caching.md) - Cache tuning for metadata and authorization
 
 Online Documentation: [https://opendatahub-io.github.io/models-as-a-service/](https://opendatahub-io.github.io/models-as-a-service/)
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
 
 ## 🤝 Contributing
 
