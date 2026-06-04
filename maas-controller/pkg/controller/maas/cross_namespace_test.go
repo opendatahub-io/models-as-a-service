@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -578,6 +579,65 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	// Verify both limit entries exist (no overwrite/collision)
 	if len(limitsMap) < 2 {
 		t.Errorf("Expected at least 2 limit entries (one per subscription), got %d: %v", len(limitsMap), getMapKeys(limitsMap))
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation verifies that
+// same-named MaaSAuthPolicies in different namespaces are tracked with
+// namespace-qualified names on the generated AuthPolicy.
+func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		modelNamespace = "models"
+		policyName     = "access"
+		namespaceA     = "tenant-a"
+		namespaceB     = "tenant-b"
+	)
+
+	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
+	route := newHTTPRoute(modelName, modelNamespace)
+	policyA := newMaaSAuthPolicy(policyName, namespaceA, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+	policyB := newMaaSAuthPolicy(policyName, namespaceB, "team-b",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policyA, policyB).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "opendatahub"}
+	for _, ns := range []string{namespaceA, namespaceB} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: ns}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile MaaSAuthPolicy %s/%s: %v", ns, policyName, err)
+		}
+	}
+
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + modelName, Namespace: modelNamespace}, authPolicy); err != nil {
+		t.Fatalf("Get generated AuthPolicy: %v", err)
+	}
+
+	got := authPolicy.GetAnnotations()["maas.opendatahub.io/auth-policies"]
+	want := map[string]bool{
+		namespaceA + "/" + policyName: true,
+		namespaceB + "/" + policyName: true,
+	}
+	gotSet := make(map[string]bool)
+	for item := range strings.SplitSeq(got, ",") {
+		gotSet[strings.TrimSpace(item)] = true
+	}
+	if len(gotSet) != len(want) {
+		t.Fatalf("generated AuthPolicy annotation = %q, want %v", got, want)
+	}
+	for item := range want {
+		if !gotSet[item] {
+			t.Errorf("generated AuthPolicy annotation missing %q, got %q", item, got)
+		}
 	}
 }
 

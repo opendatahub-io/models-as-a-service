@@ -63,6 +63,13 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
+		log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
+			"tenantNamespace", tenant.Namespace,
+			"configuredTenantNamespace", r.TenantNamespace)
+		return ctrl.Result{}, nil
+	}
+
 	if tenant.Name != maasv1alpha1.TenantInstanceName {
 		return ctrl.Result{}, nil
 	}
@@ -150,7 +157,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	setDependenciesCondition(&tenant, true, "")
 
-	appNs := r.appNamespaceForTenant(&tenant)
+	appNs := r.AppNamespace
 	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
 	setPrerequisiteConditionsFromReport(&tenant, rep)
 	if len(rep.Blocking) > 0 {
@@ -274,13 +281,6 @@ func (r *TenantReconciler) operatorNamespace() string {
 		return ns
 	}
 	return os.Getenv("WATCH_NAMESPACE")
-}
-
-func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) string {
-	if r.AppNamespace != "" {
-		return r.AppNamespace
-	}
-	return tenant.Namespace
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

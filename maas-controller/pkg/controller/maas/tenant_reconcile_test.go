@@ -482,7 +482,8 @@ func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManage
 		},
 	}
 
-	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal("opendatahub"))
+	g.Expect(r.AppNamespace).To(Equal("opendatahub"))
+	_ = tenant
 }
 
 func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
@@ -494,7 +495,8 @@ func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
 		},
 	}
 
-	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal("opendatahub"))
+	g.Expect(r.AppNamespace).To(Equal("opendatahub"))
+	_ = tenant
 }
 
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {

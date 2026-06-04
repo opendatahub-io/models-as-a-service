@@ -492,6 +492,7 @@ The controller accepts the following command-line flags:
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
 | `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
 | `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
+| `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile tenant namespaces labeled `maas.opendatahub.io/managed-by-aitenant=true`. |
 
 ### Other Configuration
 
