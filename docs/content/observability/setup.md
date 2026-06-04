@@ -129,7 +129,7 @@ kustomize build deployment/base/observability | kubectl apply -f -
 
 | Path | Contents |
 |------|----------|
-| `deployment/base/observability/` | TelemetryPolicy + Istio Telemetry |
+| `deployment/base/observability/` | TelemetryPolicy, Istio Telemetry, metadata-evaluator PrometheusRule |
 | `deployment/components/observability/grafana/` | GrafanaDashboard CRs |
 | `deployment/components/observability/prometheus/` | Standalone Prometheus (dev/test) |
 

@@ -1,4 +1,5 @@
 import os
+import socket
 import subprocess
 import pytest
 import requests
@@ -30,6 +31,24 @@ def gateway_host() -> str:
         return url
     
     raise RuntimeError("GATEWAY_HOST or MAAS_API_BASE_URL env var is required")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _verify_gateway_dns(gateway_host: str):
+    """Verify the gateway hostname resolves before running any tests.
+
+    If DNS resolution fails, all tests are skipped. This catches CI
+    infrastructure issues (e.g. cluster teardown, network isolation)
+    early instead of producing cryptic ConnectionError stack traces
+    in every test.
+    """
+    try:
+        socket.getaddrinfo(gateway_host, None)
+    except socket.gaierror:
+        pytest.skip(
+            f"Gateway hostname '{gateway_host}' does not resolve "
+            f"— CI infrastructure issue, skipping all tests"
+        )
 
 
 @pytest.fixture(scope="session")

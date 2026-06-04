@@ -133,6 +133,17 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 
 	payloadDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadDestinationRule.GetNamespace())
+	payloadHost, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, payloadHost, "."+params.GatewayNamespace+".")
+
+	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
+	preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, preProcessingHost, "."+params.GatewayNamespace+".")
 
 	payloadService := requireResource(t, resources, GVKService, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
@@ -152,6 +163,40 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	firstTargetRef, ok := targetRefs[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
+
+	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER.
+	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 2, "expected two configPatches (INSERT_BEFORE + INSERT_AFTER)")
+
+	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
+	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
+	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
+	wantClusters := []string{wantBeforeCluster, wantAfterCluster}
+
+	for i, raw := range configPatches {
+		cp, ok := raw.(map[string]any)
+		require.True(t, ok, "configPatches[%d] should be a map", i)
+
+		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
+		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
+
+		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
+		assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
+
+		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
+	}
+
+	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
+	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeDeployment.GetNamespace())
+	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
+
+	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
 
 	payloadClusterRoleBinding := requireResource(t, resources, GVKClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingName)
 	subjects, found, err := unstructured.NestedSlice(payloadClusterRoleBinding.Object, "subjects")
