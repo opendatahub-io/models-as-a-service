@@ -277,24 +277,10 @@ func (r *TenantReconciler) operatorNamespace() string {
 }
 
 func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) string {
-	if tenantManagedByAITenant(tenant) {
-		return tenant.Namespace
-	}
 	if r.AppNamespace != "" {
 		return r.AppNamespace
 	}
 	return tenant.Namespace
-}
-
-func tenantManagedByAITenant(tenant *maasv1alpha1.Tenant) bool {
-	labels := tenant.GetLabels()
-	if labels != nil {
-		if labels[aitenantManagedLabel] == "true" || labels[aiGatewayTenantLabel] != "" {
-			return true
-		}
-	}
-	annotations := tenant.GetAnnotations()
-	return annotations != nil && annotations[aitenantNameAnnotation] != ""
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

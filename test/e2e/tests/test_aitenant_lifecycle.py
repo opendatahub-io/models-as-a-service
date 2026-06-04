@@ -14,7 +14,6 @@ AITENANT_KIND = "aitenant"
 TENANT_NAME = "default-tenant"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "redhat-ai-gateway-infra")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
-AITENANT_DOMAIN = os.environ.get("AITENANT_DOMAIN", "apps.example.com")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
@@ -128,7 +127,6 @@ def _new_aitenant_case():
         "tenant_ns": f"e2e-aitenant-{suffix}",
         "aitenant_name": aitenant_name,
         "gateway_name": aitenant_name,
-        "tls_secret": f"{aitenant_name}-tls",
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
         "object_admin_role": f"aitenant-{aitenant_name}-object-admin",
     }
@@ -139,6 +137,32 @@ def _admin_subject():
     if whoami.returncode == 0 and whoami.stdout.strip():
         return whoami.stdout.strip()
     return "system:authenticated"
+
+
+def _apply_gateway_fixture(case):
+    _apply(
+        {
+            "apiVersion": "gateway.networking.k8s.io/v1",
+            "kind": "Gateway",
+            "metadata": {
+                "name": case["gateway_name"],
+                "namespace": GATEWAY_NAMESPACE,
+                "labels": {
+                    "e2e.maas.opendatahub.io/fixture": case["aitenant_name"],
+                },
+            },
+            "spec": {
+                "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
+                "listeners": [
+                    {
+                        "name": "http",
+                        "port": 80,
+                        "protocol": "HTTP",
+                    }
+                ],
+            },
+        }
+    )
 
 
 def _apply_aitenant(case):
@@ -153,16 +177,6 @@ def _apply_aitenant(case):
             "spec": {
                 "tenantNamespace": {
                     "name": case["tenant_ns"],
-                },
-                "gateway": {
-                    "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
-                },
-                "domain": AITENANT_DOMAIN,
-                "tls": {
-                    "certificateRef": {
-                        "name": case["tls_secret"],
-                        "namespace": GATEWAY_NAMESPACE,
-                    },
                 },
                 "rbac": {
                     "admins": [
@@ -191,23 +205,12 @@ def _assert_aitenant_bootstrap_resources(case):
     }
 
     gateway = _wait_for_json("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
-    assert gateway["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
-    assert gateway["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
-    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/aitenant-name"] == case["aitenant_name"]
-    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/aitenant-namespace"] == AITENANT_NAMESPACE
-    assert gateway["metadata"]["annotations"]["maas.opendatahub.io/created-by-aitenant"] == "true"
+    assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
+    assert gateway["metadata"]["labels"].get("ai-gateway.opendatahub.io/tenant") is None
+    assert gateway["metadata"]["labels"].get("maas.opendatahub.io/managed-by-aitenant") is None
+    assert (gateway["metadata"].get("annotations") or {}).get("maas.opendatahub.io/aitenant-name") is None
+    assert (gateway["metadata"].get("annotations") or {}).get("maas.opendatahub.io/aitenant-namespace") is None
     assert gateway["spec"]["gatewayClassName"] == AITENANT_GATEWAY_CLASS_NAME
-    listeners = {listener["name"]: listener for listener in gateway["spec"]["listeners"]}
-    assert listeners["http"]["hostname"] == f"{case['aitenant_name']}.{AITENANT_DOMAIN}"
-    assert listeners["https"]["hostname"] == f"{case['aitenant_name']}.{AITENANT_DOMAIN}"
-    assert listeners["https"]["tls"]["certificateRefs"] == [
-        {
-            "group": "",
-            "kind": "Secret",
-            "name": case["tls_secret"],
-            "namespace": GATEWAY_NAMESPACE,
-        }
-    ]
 
     namespace = _wait_for_json("namespace", case["tenant_ns"])
     assert namespace["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
@@ -238,6 +241,7 @@ class TestAITenantLifecycle:
         case = _new_aitenant_case()
 
         try:
+            _apply_gateway_fixture(case)
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
         finally:
@@ -249,6 +253,7 @@ class TestAITenantLifecycle:
         case = _new_aitenant_case()
 
         try:
+            _apply_gateway_fixture(case)
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
 
@@ -267,7 +272,9 @@ class TestAITenantLifecycle:
             assert labels.get("ai-gateway.opendatahub.io/tenant") is None
             assert annotations.get("maas.opendatahub.io/aitenant-name") is None
             assert annotations.get("maas.opendatahub.io/aitenant-namespace") is None
-            _wait_for_not_found("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+            gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+            assert gateway is not None
+            assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
         finally:
             _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)

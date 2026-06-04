@@ -46,8 +46,6 @@ import (
 const (
 	// DefaultAITenantNamespace is the default infrastructure namespace for AITenant CRs.
 	DefaultAITenantNamespace = "redhat-ai-gateway-infra"
-	// DefaultAITenantGatewayClassName is the default GatewayClass for AITenant Gateways.
-	DefaultAITenantGatewayClassName = "openshift-default"
 
 	aitenantFinalizer = "maas.opendatahub.io/aitenant-cleanup"
 
@@ -77,7 +75,7 @@ type AITenantReconciler struct {
 	TenantNamespace string
 	// AITenantNamespace is the infrastructure namespace where AITenant CRs are accepted.
 	AITenantNamespace string
-	// GatewayNamespace is where tenant Gateway resources are created and reconciled.
+	// GatewayNamespace is where tenant Gateway resources are expected to exist.
 	GatewayNamespace string
 }
 
@@ -85,7 +83,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
 
@@ -118,6 +116,16 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 	aitenant.Status.TenantNamespace = aitenant.Spec.TenantNamespace.Name
 
+	gatewayRef, err := r.validateTenantGateway(ctx, &aitenant)
+	aitenant.Status.GatewayRef = gatewayRef
+	if err != nil {
+		setAITenantPhase(&aitenant, "Failed", "GatewayCheckFailed", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	if err := r.ensureTenantNamespace(ctx, &aitenant); err != nil {
 		if errors.Is(err, errTenantNamespaceMissing) {
 			setAITenantPhase(&aitenant, "Pending", "TenantNamespaceMissing", err.Error())
@@ -127,16 +135,6 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		setAITenantPhase(&aitenant, "Failed", "TenantNamespaceFailed", err.Error())
-		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
-			return ctrl.Result{}, err2
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	gatewayRef, err := r.ensureTenantGateway(ctx, &aitenant)
-	aitenant.Status.GatewayRef = gatewayRef
-	if err != nil {
-		setAITenantPhase(&aitenant, "Failed", "GatewayCreationFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
@@ -258,7 +256,7 @@ func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant
 	return nil
 }
 
-func (r *AITenantReconciler) ensureTenantGateway(ctx context.Context, aitenant *maasv1alpha1.AITenant) (maasv1alpha1.TenantGatewayRef, error) {
+func (r *AITenantReconciler) validateTenantGateway(ctx context.Context, aitenant *maasv1alpha1.AITenant) (maasv1alpha1.TenantGatewayRef, error) {
 	ref := r.gatewayRefFor(aitenant)
 	if ref.Namespace == "" {
 		return ref, errors.New("gateway namespace is required; set --gateway-namespace")
@@ -267,48 +265,13 @@ func (r *AITenantReconciler) ensureTenantGateway(ctx context.Context, aitenant *
 		return ref, errors.New("spec.gateway.name is required when AITenant name is empty")
 	}
 
-	gateway := &gatewayapiv1.Gateway{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      ref.Name,
-			Namespace: ref.Namespace,
-		},
-	}
-	key := client.ObjectKeyFromObject(gateway)
-	current := gateway.DeepCopy()
-	err := r.get(ctx, key, current)
-	if err != nil {
-		if !isNotFoundError(err) {
-			return ref, fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
+	var gateway gatewayapiv1.Gateway
+	key := client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}
+	if err := r.get(ctx, key, &gateway); err != nil {
+		if isNotFoundError(err) {
+			return ref, fmt.Errorf("gateway %s/%s not found: the Gateway must be created by a network or cluster administrator before AITenant can be provisioned", key.Namespace, key.Name)
 		}
-		applyAITenantMetadata(gateway, aitenant)
-		if err := markCreatedByAITenant(gateway); err != nil {
-			return ref, err
-		}
-		gateway.Spec = r.gatewaySpecFor(aitenant)
-		if createErr := r.Create(ctx, gateway); createErr != nil {
-			if !isAlreadyExistsError(createErr) {
-				return ref, fmt.Errorf("create Gateway %s/%s: %w", key.Namespace, key.Name, createErr)
-			}
-			if err := r.get(ctx, key, current); err != nil {
-				return ref, fmt.Errorf("get Gateway %s/%s after create conflict: %w", key.Namespace, key.Name, err)
-			}
-		} else {
-			return ref, nil
-		}
-	}
-	if hasAITenantOwnerAnnotations(current) && !ownedByAITenant(current, aitenant) {
-		return ref, fmt.Errorf("gateway %s/%s is managed by another AITenant", key.Namespace, key.Name)
-	}
-	reconcileSpec := createdByAITenant(current, aitenant)
-	base := current.DeepCopy()
-	applyAITenantMetadata(current, aitenant)
-	if reconcileSpec {
-		current.Spec = r.gatewaySpecFor(aitenant)
-	}
-	if !equality.Semantic.DeepEqual(base, current) {
-		if err := r.Patch(ctx, current, client.MergeFrom(base)); err != nil {
-			return ref, fmt.Errorf("patch Gateway %s/%s: %w", key.Namespace, key.Name, err)
-		}
+		return ref, fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
 	}
 	return ref, nil
 }
@@ -324,80 +287,6 @@ func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maas
 		}
 	}
 	return ref
-}
-
-func (r *AITenantReconciler) gatewaySpecFor(aitenant *maasv1alpha1.AITenant) gatewayapiv1.GatewaySpec {
-	className := DefaultAITenantGatewayClassName
-	if aitenant.Spec.Gateway != nil && aitenant.Spec.Gateway.GatewayClassName != "" {
-		className = aitenant.Spec.Gateway.GatewayClassName
-	}
-
-	listeners := []gatewayapiv1.Listener{
-		{
-			Name:          gatewayapiv1.SectionName("http"),
-			Hostname:      tenantGatewayHostname(aitenant),
-			Port:          gatewayapiv1.PortNumber(80),
-			Protocol:      gatewayapiv1.HTTPProtocolType,
-			AllowedRoutes: allNamespacesAllowedRoutes(),
-		},
-	}
-
-	if cert := aitenant.Spec.TLS; cert != nil && cert.CertificateRef.Name != "" {
-		listeners = append(listeners, gatewayapiv1.Listener{
-			Name:          gatewayapiv1.SectionName("https"),
-			Hostname:      tenantGatewayHostname(aitenant),
-			Port:          gatewayapiv1.PortNumber(443),
-			Protocol:      gatewayapiv1.HTTPSProtocolType,
-			TLS:           r.gatewayTLSConfig(cert.CertificateRef),
-			AllowedRoutes: allNamespacesAllowedRoutes(),
-		})
-	}
-
-	return gatewayapiv1.GatewaySpec{
-		GatewayClassName: gatewayapiv1.ObjectName(className),
-		Listeners:        listeners,
-	}
-}
-
-func tenantGatewayHostname(aitenant *maasv1alpha1.AITenant) *gatewayapiv1.Hostname {
-	domain := strings.Trim(strings.TrimSpace(aitenant.Spec.Domain), ".")
-	if domain == "" {
-		return nil
-	}
-	hostname := gatewayapiv1.Hostname(aitenant.Name + "." + domain)
-	return &hostname
-}
-
-func allNamespacesAllowedRoutes() *gatewayapiv1.AllowedRoutes {
-	from := gatewayapiv1.NamespacesFromAll
-	return &gatewayapiv1.AllowedRoutes{
-		Namespaces: &gatewayapiv1.RouteNamespaces{
-			From: &from,
-		},
-	}
-}
-
-func (r *AITenantReconciler) gatewayTLSConfig(cert maasv1alpha1.AITenantTLSCertificateRef) *gatewayapiv1.GatewayTLSConfig {
-	group := gatewayapiv1.Group("")
-	kind := gatewayapiv1.Kind("Secret")
-	mode := gatewayapiv1.TLSModeTerminate
-	ref := gatewayapiv1.SecretObjectReference{
-		Group: &group,
-		Kind:  &kind,
-		Name:  gatewayapiv1.ObjectName(cert.Name),
-	}
-	namespaceName := cert.Namespace
-	if namespaceName == "" {
-		namespaceName = r.GatewayNamespace
-	}
-	if namespaceName != "" {
-		namespace := gatewayapiv1.Namespace(namespaceName)
-		ref.Namespace = &namespace
-	}
-	return &gatewayapiv1.GatewayTLSConfig{
-		Mode:            &mode,
-		CertificateRefs: []gatewayapiv1.SecretObjectReference{ref},
-	}
 }
 
 func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
@@ -580,9 +469,6 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 }
 
 func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	if err := r.cleanupTenantGateway(ctx, aitenant); err != nil {
-		return err
-	}
 	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: aitenant.Spec.TenantNamespace.Name, Name: maasv1alpha1.TenantInstanceName}); err != nil {
 		return err
 	}
@@ -599,35 +485,6 @@ func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenan
 		return err
 	}
 	return r.cleanupTenantNamespaceMetadata(ctx, aitenant)
-}
-
-func (r *AITenantReconciler) cleanupTenantGateway(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	gatewayRef := r.gatewayRefFor(aitenant)
-	if gatewayRef.Name == "" {
-		return nil
-	}
-
-	var gateway gatewayapiv1.Gateway
-	key := client.ObjectKey{Namespace: gatewayRef.Namespace, Name: gatewayRef.Name}
-	if err := r.get(ctx, key, &gateway); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	if !ownedByAITenant(&gateway, aitenant) {
-		return nil
-	}
-	if createdByAITenant(&gateway, aitenant) {
-		return client.IgnoreNotFound(r.Delete(ctx, &gateway))
-	}
-
-	base := gateway.DeepCopy()
-	removeAITenantMetadata(&gateway, aitenant)
-	if equality.Semantic.DeepEqual(base, &gateway) {
-		return nil
-	}
-	if err := r.Patch(ctx, &gateway, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("cleanup Gateway %s/%s metadata: %w", key.Namespace, key.Name, err)
-	}
-	return nil
 }
 
 func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -776,13 +633,6 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
 	obj.SetAnnotations(annotations)
 }
 
-func markCreatedByAITenant(obj client.Object) error {
-	annotations := obj.GetAnnotations()
-	setMapValue(&annotations, aitenantCreatedAnnotation, "true")
-	obj.SetAnnotations(annotations)
-	return nil
-}
-
 func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
 	labels := obj.GetLabels()
 	removeMapValueIfEqual(&labels, "app.kubernetes.io/managed-by", "maas-controller")
@@ -810,11 +660,6 @@ func ownedByAITenant(obj client.Object, aitenant *maasv1alpha1.AITenant) bool {
 	}
 	return annotations[aitenantNameAnnotation] == aitenant.Name &&
 		annotations[aitenantNamespaceAnnotation] == aitenant.Namespace
-}
-
-func createdByAITenant(obj client.Object, aitenant *maasv1alpha1.AITenant) bool {
-	annotations := obj.GetAnnotations()
-	return ownedByAITenant(obj, aitenant) && annotations != nil && annotations[aitenantCreatedAnnotation] == "true"
 }
 
 func isNotFoundError(err error) bool {

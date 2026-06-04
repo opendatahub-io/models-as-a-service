@@ -36,8 +36,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          AITenant bootstraps one tenant slice: a tenant namespace, Gateway, the MaaS
-          tenant config object, and tenant-admin RBAC.
+          AITenant bootstraps one tenant slice: a tenant namespace, an existing
+          network-admin-provisioned Gateway reference, the MaaS tenant config object,
+          and tenant-admin RBAC.
         properties:
           apiVersion:
             description: |-
@@ -59,25 +60,10 @@ spec:
           spec:
             description: AITenantSpec defines the tenant bootstrap contract.
             properties:
-              domain:
-                description: |-
-                  Domain is the base DNS domain used to derive the tenant Gateway hostname
-                  as "<aitenant-name>.<domain>". If omitted, the Gateway listeners accept
-                  all hostnames.
-                maxLength: 253
-                pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                type: string
               gateway:
-                description: Gateway configures the Gateway API Gateway created for
-                  this tenant.
+                description: Gateway references the network-admin-provisioned Gateway
+                  API Gateway for this tenant.
                 properties:
-                  gatewayClassName:
-                    description: |-
-                      GatewayClassName is the GatewayClass used by the tenant Gateway. If
-                      omitted, the controller defaults to openshift-default.
-                    maxLength: 253
-                    pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                    type: string
                   name:
                     description: |-
                       Name is the Gateway name. If omitted, the AITenant name is used. The
@@ -89,8 +75,8 @@ spec:
               oidc:
                 description: |-
                   OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
-                  The current controller mirrors this into the temporary Tenant config object
-                  until the MaaS config CR rename lands.
+                  The controller mirrors this into the temporary Tenant config object until
+                  the MaaS config CR rename lands.
                 properties:
                   clientId:
                     description: ClientID is the OAuth2 client ID.
@@ -167,33 +153,6 @@ spec:
                 required:
                 - name
                 type: object
-              tls:
-                description: TLS configures HTTPS listener TLS for the tenant Gateway.
-                properties:
-                  certificateRef:
-                    description: |-
-                      CertificateRef references a Kubernetes TLS Secret for Gateway TLS
-                      termination. The Secret is resolved in the Gateway namespace when
-                      namespace is omitted.
-                    properties:
-                      name:
-                        description: Name is the Secret name.
-                        maxLength: 253
-                        minLength: 1
-                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
-                        type: string
-                      namespace:
-                        description: Namespace is the Secret namespace. If omitted,
-                          the Gateway namespace is used.
-                        maxLength: 63
-                        pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
-                        type: string
-                    required:
-                    - name
-                    type: object
-                required:
-                - certificateRef
-                type: object
             required:
             - tenantNamespace
             type: object
@@ -258,7 +217,7 @@ spec:
                   type: object
                 type: array
               gatewayRef:
-                description: GatewayRef is the reconciled Gateway reference.
+                description: GatewayRef is the resolved existing Gateway reference.
                 properties:
                   name:
                     default: maas-default-gateway

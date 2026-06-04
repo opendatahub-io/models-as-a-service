@@ -1,6 +1,6 @@
 # AITenant
 
-Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, creates the tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
+Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
 `AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
@@ -13,10 +13,8 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | tenantNamespace | AITenantTenantNamespace | Yes | Tenant namespace where tenant administrators manage MaaS objects. |
-| gateway | AITenantGatewayRef | No | Gateway to create or adopt. If omitted, the Gateway name defaults to the `AITenant` name. |
-| domain | string | No | Base DNS domain used to derive the Gateway listener hostname as `<aitenant-name>.<domain>`. If omitted, listeners accept all hostnames. |
-| tls | AITenantTLSConfig | No | TLS settings for the tenant Gateway HTTPS listener. |
-| oidc | TenantExternalOIDCConfig | No | OIDC settings mirrored into the temporary `Tenant/default-tenant` config object for current platform rendering. |
+| gateway | AITenantGatewayRef | No | Existing Gateway to reference. If omitted, the Gateway name defaults to the `AITenant` name. |
+| oidc | TenantExternalOIDCConfig | No | OIDC settings mirrored into the temporary `Tenant/default-tenant` config object while the MaaS config CR rename is pending. |
 | rbac | AITenantRBACConfig | No | Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this `AITenant`. |
 
 ---
@@ -28,7 +26,7 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 | name | string | Yes | — | Namespace for tenant-scoped MaaS objects. Immutable after creation. |
 | create | bool | No | `true` | Whether the controller creates the namespace if it does not exist. |
 
-The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Controller-created Gateways are deleted. Pre-existing Gateways that were adopted for migration are preserved, with AITenant labels and annotations removed.
+The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
 
 ---
 
@@ -37,24 +35,8 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | name | string | No | `metadata.name` | Name of the Gateway in the controller-configured Gateway namespace. |
-| gatewayClassName | string | No | `openshift-default` | GatewayClass used by the tenant Gateway. |
 
-The Gateway namespace is controller configuration, not an `AITenant` spec field. The controller creates or adopts the Gateway, labels it with `ai-gateway.opendatahub.io/tenant`, and reports the resolved reference in `status.gatewayRef`. Gateways created by the controller are marked with `maas.opendatahub.io/created-by-aitenant=true`; adopted Gateways are not. For adopted pre-existing Gateways, the controller preserves the existing Gateway spec and applies only AITenant metadata.
-
----
-
-## AITenantTLSConfig
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| certificateRef | AITenantTLSCertificateRef | Yes | Kubernetes TLS Secret reference for Gateway TLS termination. |
-
-### AITenantTLSCertificateRef
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| name | string | Yes | Secret name. |
-| namespace | string | No | Secret namespace. Defaults to the Gateway namespace. |
+The Gateway namespace is controller configuration, not an `AITenant` spec field. The Gateway must already exist, normally after network or cluster administrator approval. The controller only reads the Gateway and reports the resolved reference in `status.gatewayRef`; it does not create, label, annotate, reconcile, adopt, or delete Gateway resources.
 
 ---
 
@@ -100,12 +82,6 @@ spec:
     name: red-team-maas
   gateway:
     name: red-team
-    gatewayClassName: openshift-default
-  domain: apps.example.com
-  tls:
-    certificateRef:
-      name: red-team-gateway-tls
-      namespace: redhat-ai-gateway-infra
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/red-team"
     clientId: red-team-maas

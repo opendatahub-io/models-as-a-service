@@ -470,7 +470,7 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
 }
 
-func TestTenantReconcile_AppNamespaceForAITenantManagedTenant(t *testing.T) {
+func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManagedTenant(t *testing.T) {
 	g := NewWithT(t)
 	r := &TenantReconciler{AppNamespace: "opendatahub"}
 	tenant := &maasv1alpha1.Tenant{
@@ -482,7 +482,7 @@ func TestTenantReconcile_AppNamespaceForAITenantManagedTenant(t *testing.T) {
 		},
 	}
 
-	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal("tenant-a"))
+	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal("opendatahub"))
 }
 
 func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {

@@ -37,8 +37,9 @@ const (
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// AITenant bootstraps one tenant slice: a tenant namespace, Gateway, the MaaS
-// tenant config object, and tenant-admin RBAC.
+// AITenant bootstraps one tenant slice: a tenant namespace, an existing
+// network-admin-provisioned Gateway reference, the MaaS tenant config object,
+// and tenant-admin RBAC.
 type AITenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -52,25 +53,13 @@ type AITenantSpec struct {
 	// TenantNamespace identifies the namespace where tenant administrators manage MaaS objects.
 	TenantNamespace AITenantTenantNamespace `json:"tenantNamespace"`
 
-	// Gateway configures the Gateway API Gateway created for this tenant.
+	// Gateway references the network-admin-provisioned Gateway API Gateway for this tenant.
 	// +kubebuilder:validation:Optional
 	Gateway *AITenantGatewayRef `json:"gateway,omitempty"`
 
-	// Domain is the base DNS domain used to derive the tenant Gateway hostname
-	// as "<aitenant-name>.<domain>". If omitted, the Gateway listeners accept
-	// all hostnames.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	Domain string `json:"domain,omitempty"`
-
-	// TLS configures HTTPS listener TLS for the tenant Gateway.
-	// +kubebuilder:validation:Optional
-	TLS *AITenantTLSConfig `json:"tls,omitempty"`
-
 	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
-	// The current controller mirrors this into the temporary Tenant config object
-	// until the MaaS config CR rename lands.
+	// The controller mirrors this into the temporary Tenant config object until
+	// the MaaS config CR rename lands.
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
 
@@ -93,7 +82,7 @@ type AITenantTenantNamespace struct {
 	Create *bool `json:"create,omitempty"`
 }
 
-// AITenantGatewayRef configures the Gateway API Gateway to create for this tenant.
+// AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
 type AITenantGatewayRef struct {
 	// Name is the Gateway name. If omitted, the AITenant name is used. The
 	// namespace comes from controller configuration and is reported in status.
@@ -101,36 +90,6 @@ type AITenantGatewayRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	Name string `json:"name,omitempty"`
-
-	// GatewayClassName is the GatewayClass used by the tenant Gateway. If
-	// omitted, the controller defaults to openshift-default.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	GatewayClassName string `json:"gatewayClassName,omitempty"`
-}
-
-// AITenantTLSConfig defines HTTPS listener TLS for the tenant Gateway.
-type AITenantTLSConfig struct {
-	// CertificateRef references a Kubernetes TLS Secret for Gateway TLS
-	// termination. The Secret is resolved in the Gateway namespace when
-	// namespace is omitted.
-	CertificateRef AITenantTLSCertificateRef `json:"certificateRef"`
-}
-
-// AITenantTLSCertificateRef references a Kubernetes Secret containing a TLS certificate.
-type AITenantTLSCertificateRef struct {
-	// Name is the Secret name.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
-	Name string `json:"name"`
-
-	// Namespace is the Secret namespace. If omitted, the Gateway namespace is used.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // AITenantRBACConfig defines tenant-admin subjects.
@@ -169,7 +128,7 @@ type AITenantStatus struct {
 	// +kubebuilder:validation:Optional
 	TenantNamespace string `json:"tenantNamespace,omitempty"`
 
-	// GatewayRef is the reconciled Gateway reference.
+	// GatewayRef is the resolved existing Gateway reference.
 	// +kubebuilder:validation:Optional
 	GatewayRef TenantGatewayRef `json:"gatewayRef,omitempty"`
 
