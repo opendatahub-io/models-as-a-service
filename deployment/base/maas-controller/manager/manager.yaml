@@ -32,6 +32,7 @@ spec:
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
+          - --aitenant-namespace=$(AITENANT_NAMESPACE)
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
         env:
@@ -45,6 +46,8 @@ spec:
                 fieldPath: metadata.namespace
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
+          - name: AITENANT_NAMESPACE
+            value: "redhat-ai-gateway-infra"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
