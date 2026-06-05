@@ -8,13 +8,13 @@
       
       
       
-        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/maas-model-ref/">
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/reference/crds/ai-tenant/">
       
       
-        <link rel="prev" href="../../api-reference/">
+        <link rel="prev" href="../maas-subscription/">
       
       
-        <link rel="next" href="../external-model/">
+        <link rel="next" href="../tenant/">
       
       
         
@@ -25,7 +25,7 @@
     
     
       
-        <title>MaaSModelRef - ODH Models-as-a-Service Documentation</title>
+        <title>AITenant - ODH Models-as-a-Service Documentation</title>
       
     
     
@@ -76,7 +76,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#maasmodelref" class="md-skip">
+        <a href="#aitenant" class="md-skip">
           Skip to content
         </a>
       
@@ -113,7 +113,7 @@
         <div class="md-header__topic" data-md-component="header-topic">
           <span class="md-ellipsis">
             
-              MaaSModelRef
+              AITenant
             
           </span>
         </div>
@@ -2624,37 +2624,10 @@
                 
   
   
-    
   
   
-  
-    <li class="md-nav__item md-nav__item--active">
-      
-      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
-      
-      
-        
-      
-      
-        <label class="md-nav__link md-nav__link--active" for="__toc">
-          
-  
-  
-  <span class="md-ellipsis">
-    
-  
-    MaaSModelRef
-  
-
-    
-  </span>
-  
-  
-
-          <span class="md-nav__icon md-icon"></span>
-        </label>
-      
-      <a href="./" class="md-nav__link md-nav__link--active">
+    <li class="md-nav__item">
+      <a href="../maas-model-ref/" class="md-nav__link">
         
   
   
@@ -2670,193 +2643,6 @@
   
 
       </a>
-      
-        
-
-<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
-  
-  
-  
-    
-  
-  
-    <label class="md-nav__title" for="__toc">
-      <span class="md-nav__icon md-icon"></span>
-      Table of contents
-    </label>
-    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
-      
-        <li class="md-nav__item">
-  <a href="#spec" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Spec
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Spec">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#maasmodelrefspec" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaSModelRefSpec
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#modelreference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ModelReference
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#supported-kinds" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Supported Kinds
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Supported Kinds">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#llminferenceservice" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        LLMInferenceService
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#externalmodel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ExternalModel
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoint-override" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoint Override
-      
-    </span>
-  </a>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#status" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Status
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Status">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#maasmodelrefstatus" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        MaaSModelRefStatus
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#annotations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Annotations
-      
-    </span>
-  </a>
-  
-    <nav class="md-nav" aria-label="Annotations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#example-with-annotations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example with annotations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-response" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API response
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#related-documentation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Related Documentation
-      
-    </span>
-  </a>
-  
-</li>
-      
-    </ul>
-  
-</nav>
-      
     </li>
   
 
@@ -2950,10 +2736,37 @@
                 
   
   
+    
   
   
-    <li class="md-nav__item">
-      <a href="../ai-tenant/" class="md-nav__link">
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AITenant
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
         
   
   
@@ -2969,6 +2782,154 @@
   
 
       </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#spec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Spec
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Spec">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aitenantspec" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantSpec
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aitenanttenantnamespace" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantTenantNamespace
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aitenantgatewayref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantGatewayRef
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aitenantrbacconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantRBACConfig
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AITenantRBACConfig">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aitenantrbacsubject" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantRBACSubject
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#status" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Status
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Status">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#aitenantstatus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantStatus
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#related-documentation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Related Documentation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
     </li>
   
 
@@ -3056,21 +3017,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#maasmodelrefspec" class="md-nav__link">
+  <a href="#aitenantspec" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaSModelRefSpec
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#modelreference" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ModelReference
+        AITenantSpec
       
     </span>
   </a>
@@ -3083,33 +3033,44 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#supported-kinds" class="md-nav__link">
+  <a href="#aitenanttenantnamespace" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Supported Kinds
+        AITenantTenantNamespace
       
     </span>
   </a>
   
-    <nav class="md-nav" aria-label="Supported Kinds">
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aitenantgatewayref" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantGatewayRef
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#aitenantrbacconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        AITenantRBACConfig
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="AITenantRBACConfig">
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#llminferenceservice" class="md-nav__link">
+  <a href="#aitenantrbacsubject" class="md-nav__link">
     <span class="md-ellipsis">
       
-        LLMInferenceService
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#externalmodel" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        ExternalModel
+        AITenantRBACSubject
       
     </span>
   </a>
@@ -3118,17 +3079,6 @@
         
       </ul>
     </nav>
-  
-</li>
-      
-        <li class="md-nav__item">
-  <a href="#endpoint-override" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Endpoint Override
-      
-    </span>
-  </a>
   
 </li>
       
@@ -3145,10 +3095,10 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#maasmodelrefstatus" class="md-nav__link">
+  <a href="#aitenantstatus" class="md-nav__link">
     <span class="md-ellipsis">
       
-        MaaSModelRefStatus
+        AITenantStatus
       
     </span>
   </a>
@@ -3161,41 +3111,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#annotations" class="md-nav__link">
+  <a href="#example" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Annotations
+        Example
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Annotations">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#example-with-annotations" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Example with annotations
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#api-response" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        API response
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3230,11 +3152,12 @@
   
 
 
-<h1 id="maasmodelref">MaaSModelRef</h1>
-<p>Identifies an AI/ML model for the MaaS platform. The backend may be on-cluster (<code>LLMInferenceService</code>) or external (<code>ExternalModel</code> for providers like OpenAI, Anthropic, Azure OpenAI that run outside the cluster). Create MaaSModelRef in the <strong>same namespace</strong> as the backend resource.</p>
+<h1 id="aitenant">AITenant</h1>
+<p>Bootstraps a MaaS tenant from an infrastructure namespace. <code>AITenant</code> creates or labels the tenant namespace, validates an existing tenant Gateway, creates the temporary <code>Tenant/default-tenant</code> MaaS config object, and grants tenant-admin RBAC.</p>
+<p><code>AITenant</code> resources must be created in the controller-configured infrastructure namespace, which defaults to <code>redhat-ai-gateway-infra</code>. The controller creates this namespace if it does not already exist. Set the controller <code>--aitenant-namespace</code> flag to use a different infrastructure namespace.</p>
 <hr />
 <h2 id="spec">Spec</h2>
-<h3 id="maasmodelrefspec">MaaSModelRefSpec</h3>
+<h3 id="aitenantspec">AITenantSpec</h3>
 <table>
 <thead>
 <tr>
@@ -3246,21 +3169,105 @@
 </thead>
 <tbody>
 <tr>
-<td>modelRef</td>
-<td>ModelReference</td>
+<td>tenantNamespace</td>
+<td>AITenantTenantNamespace</td>
 <td>Yes</td>
-<td>Reference to the model backend (kind and name)</td>
+<td>Tenant namespace where tenant administrators manage MaaS objects.</td>
 </tr>
 <tr>
-<td>endpointOverride</td>
-<td>string</td>
+<td>gateway</td>
+<td>AITenantGatewayRef</td>
 <td>No</td>
-<td>Optional override for the endpoint URL. See <a href="#endpoint-override">Endpoint Override</a> below.</td>
+<td>Existing Gateway to reference. If omitted, the Gateway name defaults to the <code>AITenant</code> name.</td>
+</tr>
+<tr>
+<td>oidc</td>
+<td>TenantExternalOIDCConfig</td>
+<td>No</td>
+<td>OIDC settings mirrored into the temporary <code>Tenant/default-tenant</code> config object while the MaaS config CR rename is pending.</td>
+</tr>
+<tr>
+<td>rbac</td>
+<td>AITenantRBACConfig</td>
+<td>No</td>
+<td>Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this <code>AITenant</code>.</td>
 </tr>
 </tbody>
 </table>
-<h3 id="modelreference">ModelReference</h3>
-<p><code>spec.modelRef</code> identifies the backend resource that serves the model—similar to <a href="https://gateway-api.sigs.k8s.io/reference/spec/#backendref">Gateway API BackendRef</a>:</p>
+<hr />
+<h2 id="aitenanttenantnamespace">AITenantTenantNamespace</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>string</td>
+<td>Yes</td>
+<td>—</td>
+<td>Namespace for tenant-scoped MaaS objects. Immutable after creation.</td>
+</tr>
+<tr>
+<td>create</td>
+<td>bool</td>
+<td>No</td>
+<td><code>true</code></td>
+<td>Whether the controller creates the namespace if it does not exist.</td>
+</tr>
+</tbody>
+</table>
+<p>The controller does not delete the tenant namespace when an <code>AITenant</code> is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by <code>AITenant</code> reconciliation.</p>
+<hr />
+<h2 id="aitenantgatewayref">AITenantGatewayRef</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name</td>
+<td>string</td>
+<td>No</td>
+<td><code>metadata.name</code></td>
+<td>Name of the Gateway in the controller-configured Gateway namespace.</td>
+</tr>
+</tbody>
+</table>
+<p>The Gateway namespace is controller configuration, not an <code>AITenant</code> spec field. The Gateway must already exist, normally after network or cluster administrator approval. The controller only reads the Gateway and reports the resolved reference in <code>status.gatewayRef</code>; it does not create, label, annotate, reconcile, adopt, or delete Gateway resources.</p>
+<hr />
+<h2 id="aitenantrbacconfig">AITenantRBACConfig</h2>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>admins</td>
+<td>[]AITenantRBACSubject</td>
+<td>No</td>
+<td>Subjects granted tenant-admin RBAC. Max 128 entries.</td>
+</tr>
+</tbody>
+</table>
+<h3 id="aitenantrbacsubject">AITenantRBACSubject</h3>
 <table>
 <thead>
 <tr>
@@ -3275,78 +3282,25 @@
 <td>kind</td>
 <td>string</td>
 <td>Yes</td>
-<td>Backend type. One of: <code>LLMInferenceService</code>, <code>ExternalModel</code>. See <a href="#supported-kinds">Supported Kinds</a> below.</td>
+<td>One of <code>User</code>, <code>Group</code>, or <code>ServiceAccount</code>.</td>
 </tr>
 <tr>
 <td>name</td>
 <td>string</td>
 <td>Yes</td>
-<td>Name of the backend resource. Must be in the same namespace as the MaaSModelRef. Max length: 253 characters.</td>
+<td>Subject name.</td>
+</tr>
+<tr>
+<td>namespace</td>
+<td>string</td>
+<td>No</td>
+<td>Required only for <code>ServiceAccount</code> subjects.</td>
 </tr>
 </tbody>
 </table>
 <hr />
-<h2 id="supported-kinds">Supported Kinds</h2>
-<h3 id="llminferenceservice">LLMInferenceService</h3>
-<p>References models deployed on the cluster via the LLMInferenceService CRD (e.g., vLLM, TGI via KServe).</p>
-<p>The controller:
-- Sets <code>status.endpoint</code> from the LLMInferenceService status
-- Sets <code>status.phase</code> based on LLMInferenceService readiness</p>
-<p><strong>Example:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
-<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">granite-7b</span>
-<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models</span>
-<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">granite-7b-instruct</span>
-</code></pre></div></p>
-<p>For complete setup instructions, see <a href="../../../configuration-and-management/model-setup/">Model Setup</a>.</p>
-<h3 id="externalmodel">ExternalModel</h3>
-<p>References external AI/ML providers (e.g., OpenAI, Anthropic, Azure OpenAI).</p>
-<p>The controller:
-- Fetches the ExternalModel CR from the same namespace
-- Validates the user-supplied HTTPRoute references the correct gateway
-- Derives <code>status.endpoint</code> from HTTPRoute hostnames or gateway addresses
-- Sets <code>status.phase</code> based on HTTPRoute acceptance</p>
-<p><strong>Example:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gpt-4</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">external</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ExternalModel</span>
-<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openai-gpt4</span>
-</code></pre></div></p>
-<p>For complete setup instructions, see <a href="../../../install/external-model-setup/">External Model Setup</a>.</p>
-<hr />
-<h2 id="endpoint-override">Endpoint Override</h2>
-<p>By default, the controller discovers the endpoint URL from the backend (LLMInferenceService status, Gateway, or HTTPRoute hostnames). Use <code>spec.endpointOverride</code> to specify a custom URL when:</p>
-<ul>
-<li>The controller picks the wrong gateway or hostname</li>
-<li>Your environment requires a specific URL</li>
-<li>You need to point the model at a custom proxy or load balancer</li>
-</ul>
-<p><strong>Example:</strong>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-model</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">my-model</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="nt">endpointOverride</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://correct-hostname.example.com/my-model&quot;</span>
-</code></pre></div></p>
-<p>The override does not bypass backend validation. The controller still checks that the backend is ready (HTTPRoute accepted, LLMInferenceService ready, etc.). The override only determines the final value written to <code>status.endpoint</code> <strong>after</strong> the backend becomes ready. While the backend is not ready, the controller clears <code>status.endpoint</code> (sets it to empty string) and sets <code>status.phase</code> to <code>Pending</code>, regardless of the override value.</p>
-<hr />
 <h2 id="status">Status</h2>
-<h3 id="maasmodelrefstatus">MaaSModelRefStatus</h3>
+<h3 id="aitenantstatus">AITenantStatus</h3>
 <table>
 <thead>
 <tr>
@@ -3359,124 +3313,51 @@
 <tr>
 <td>phase</td>
 <td>string</td>
-<td>One of: <code>Pending</code>, <code>Ready</code>, <code>Failed</code></td>
+<td>High-level lifecycle phase. One of <code>Pending</code>, <code>Active</code>, or <code>Failed</code>.</td>
 </tr>
 <tr>
-<td>endpoint</td>
+<td>tenantNamespace</td>
 <td>string</td>
-<td>Endpoint URL for the model (auto-discovered or from <code>endpointOverride</code>)</td>
+<td>Reconciled tenant namespace.</td>
 </tr>
 <tr>
-<td>httpRouteName</td>
-<td>string</td>
-<td>Name of the HTTPRoute associated with this model</td>
-</tr>
-<tr>
-<td>httpRouteNamespace</td>
-<td>string</td>
-<td>Namespace of the HTTPRoute</td>
-</tr>
-<tr>
-<td>httpRouteGatewayName</td>
-<td>string</td>
-<td>Name of the Gateway that the HTTPRoute references</td>
-</tr>
-<tr>
-<td>httpRouteGatewayNamespace</td>
-<td>string</td>
-<td>Namespace of the Gateway that the HTTPRoute references</td>
-</tr>
-<tr>
-<td>httpRouteHostnames</td>
-<td>[]string</td>
-<td>Hostnames configured on the HTTPRoute</td>
+<td>gatewayRef</td>
+<td>TenantGatewayRef</td>
+<td>Resolved reference to the tenant Gateway.</td>
 </tr>
 <tr>
 <td>conditions</td>
 <td>[]Condition</td>
-<td>Latest observations of the model's state</td>
+<td>Latest observations.</td>
 </tr>
 </tbody>
 </table>
 <hr />
-<h2 id="annotations">Annotations</h2>
-<p>MaaSModelRef supports standard Kubernetes and OpenShift annotations. The MaaS API reads these annotations and returns them in the <code>modelDetails</code> field of the <code>GET /v1/models</code> response.</p>
-<table>
-<thead>
-<tr>
-<th>Annotation</th>
-<th>Description</th>
-<th>Returned in API</th>
-<th>Example</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><code>openshift.io/display-name</code></td>
-<td>Human-readable model name</td>
-<td><code>modelDetails.displayName</code></td>
-<td><code>"Llama 2 7B Chat"</code></td>
-</tr>
-<tr>
-<td><code>openshift.io/description</code></td>
-<td>Model description</td>
-<td><code>modelDetails.description</code></td>
-<td><code>"A large language model optimized for chat"</code></td>
-</tr>
-<tr>
-<td><code>opendatahub.io/genai-use-case</code></td>
-<td>GenAI use case category</td>
-<td><code>modelDetails.genaiUseCase</code></td>
-<td><code>"chat"</code></td>
-</tr>
-<tr>
-<td><code>opendatahub.io/context-window</code></td>
-<td>Context window size</td>
-<td><code>modelDetails.contextWindow</code></td>
-<td><code>"4096"</code></td>
-</tr>
-</tbody>
-</table>
-<h3 id="example-with-annotations">Example with annotations</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaaSModelRef</span>
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llama-2-7b-chat</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">opendatahub</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="w">  </span><span class="nt">annotations</span><span class="p">:</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">    </span><span class="nt">openshift.io/display-name</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;Llama</span><span class="nv"> </span><span class="s">2</span><span class="nv"> </span><span class="s">7B</span><span class="nv"> </span><span class="s">Chat&quot;</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">openshift.io/description</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;A</span><span class="nv"> </span><span class="s">large</span><span class="nv"> </span><span class="s">language</span><span class="nv"> </span><span class="s">model</span><span class="nv"> </span><span class="s">optimized</span><span class="nv"> </span><span class="s">for</span><span class="nv"> </span><span class="s">chat</span><span class="nv"> </span><span class="s">use</span><span class="nv"> </span><span class="s">cases&quot;</span>
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">opendatahub.io/genai-use-case</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;chat&quot;</span>
-<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">    </span><span class="nt">opendatahub.io/context-window</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;4096&quot;</span>
-<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">  </span><span class="nt">modelRef</span><span class="p">:</span>
-<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LLMInferenceService</span>
-<a id="__codelineno-3-14" name="__codelineno-3-14" href="#__codelineno-3-14"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llama-2-7b-chat</span>
+<h2 id="example">Example</h2>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AITenant</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">red-team</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redhat-ai-gateway-infra</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="w">  </span><span class="nt">tenantNamespace</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">red-team-maas</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">gateway</span><span class="p">:</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">red-team</span>
+<a id="__codelineno-0-11" name="__codelineno-0-11" href="#__codelineno-0-11"></a><span class="w">  </span><span class="nt">oidc</span><span class="p">:</span>
+<a id="__codelineno-0-12" name="__codelineno-0-12" href="#__codelineno-0-12"></a><span class="w">    </span><span class="nt">issuerUrl</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;https://keycloak.example.com/realms/red-team&quot;</span>
+<a id="__codelineno-0-13" name="__codelineno-0-13" href="#__codelineno-0-13"></a><span class="w">    </span><span class="nt">clientId</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">red-team-maas</span>
+<a id="__codelineno-0-14" name="__codelineno-0-14" href="#__codelineno-0-14"></a><span class="w">  </span><span class="nt">rbac</span><span class="p">:</span>
+<a id="__codelineno-0-15" name="__codelineno-0-15" href="#__codelineno-0-15"></a><span class="w">    </span><span class="nt">admins</span><span class="p">:</span>
+<a id="__codelineno-0-16" name="__codelineno-0-16" href="#__codelineno-0-16"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Group</span>
+<a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a><span class="w">        </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">red-team-admins</span>
 </code></pre></div>
-<h3 id="api-response">API response</h3>
-<p>When annotations are set, the <code>GET /v1/models</code> response includes a <code>modelDetails</code> object:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="p">{</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span><span class="nt">&quot;id&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;llama-2-7b-chat&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a><span class="w">  </span><span class="nt">&quot;object&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;model&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="w">  </span><span class="nt">&quot;created&quot;</span><span class="p">:</span><span class="w"> </span><span class="mi">1672531200</span><span class="p">,</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a><span class="w">  </span><span class="nt">&quot;owned_by&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;opendatahub&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span><span class="nt">&quot;ready&quot;</span><span class="p">:</span><span class="w"> </span><span class="kc">true</span><span class="p">,</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="w">  </span><span class="nt">&quot;url&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;https://...&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="w">  </span><span class="nt">&quot;modelDetails&quot;</span><span class="p">:</span><span class="w"> </span><span class="p">{</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a><span class="w">    </span><span class="nt">&quot;displayName&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;Llama 2 7B Chat&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="w">    </span><span class="nt">&quot;description&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;A large language model optimized for chat use cases&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a><span class="w">    </span><span class="nt">&quot;genaiUseCase&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;chat&quot;</span><span class="p">,</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="w">    </span><span class="nt">&quot;contextWindow&quot;</span><span class="p">:</span><span class="w"> </span><span class="s2">&quot;4096&quot;</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">  </span><span class="p">}</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="p">}</span>
-</code></pre></div>
-<p>When no annotations are set (or all values are empty), <code>modelDetails</code> is omitted from the response.</p>
 <hr />
 <h2 id="related-documentation">Related Documentation</h2>
 <ul>
-<li><a href="../external-model/">ExternalModel CRD</a> - External provider configuration</li>
-<li><a href="../../../configuration-and-management/model-setup/">Model Setup</a> - LLMInferenceService deployment</li>
-<li><a href="../../../install/external-model-setup/">External Model Setup</a> - External provider integration</li>
+<li><a href="../tenant/">Tenant CRD</a> - Temporary MaaS runtime config object</li>
+<li><a href="../maas-auth-policy/">MaaSAuthPolicy CRD</a> - Access control policies</li>
+<li><a href="../maas-subscription/">MaaSSubscription CRD</a> - Subscription and rate limiting</li>
 </ul>
 
 
@@ -3500,7 +3381,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 1, 2026 20:21:15 UTC">May 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 5, 2026 12:02:56 UTC">June 5, 2026</span>
   </span>
 
     
@@ -3510,7 +3391,7 @@
     <span class="md-icon" title="Created">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="March 18, 2026 15:47:11 UTC">March 18, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 5, 2026 12:02:56 UTC">June 5, 2026</span>
   </span>
 
     
