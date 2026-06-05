@@ -1061,8 +1061,8 @@ func TestListSubscriptions_MultipleAccessible(t *testing.T) {
 		found[s.SubscriptionIDHeader] = s.SubscriptionDescription
 	}
 
-	if desc, ok := found["free-sub"]; !ok || desc != "Free Tier" {
-		t.Errorf("expected free-sub with description 'Free Tier' (fallback from display-name), got %q", desc)
+	if desc, ok := found["free-sub"]; !ok || desc != "" {
+		t.Errorf("expected free-sub with empty description (no fallback), got %q", desc)
 	}
 	if desc, ok := found["premium-sub"]; !ok || desc != "High limits for production" {
 		t.Errorf("expected premium-sub with description 'High limits for production', got %q", desc)
@@ -1201,16 +1201,16 @@ func TestListSubscriptions_DescriptionFallback(t *testing.T) {
 	if byID["with-description-only"].SubscriptionDescription != "Description Only" {
 		t.Errorf("expected description 'Description Only', got %q", byID["with-description-only"].SubscriptionDescription)
 	}
-	// Display-name falls back to subscription_description when no description
-	if byID["with-display-name-only"].SubscriptionDescription != "Display Name Only" {
-		t.Errorf("expected description fallback to display-name, got %q", byID["with-display-name-only"].SubscriptionDescription)
+	// Display-name only: description should be empty (no fallback)
+	if byID["with-display-name-only"].SubscriptionDescription != "" {
+		t.Errorf("expected empty description (no fallback), got %q", byID["with-display-name-only"].SubscriptionDescription)
 	}
 	if byID["with-display-name-only"].DisplayName != "Display Name Only" {
 		t.Errorf("expected display_name 'Display Name Only', got %q", byID["with-display-name-only"].DisplayName)
 	}
-	// No annotations: falls back to name
-	if byID["no-annotations"].SubscriptionDescription != "no-annotations" {
-		t.Errorf("expected name fallback, got %q", byID["no-annotations"].SubscriptionDescription)
+	// No annotations: description should be empty (no fallback)
+	if byID["no-annotations"].SubscriptionDescription != "" {
+		t.Errorf("expected empty description (no fallback), got %q", byID["no-annotations"].SubscriptionDescription)
 	}
 }
 
