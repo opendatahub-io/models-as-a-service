@@ -16,6 +16,17 @@ spec:
         - name: maas-api
           port: 8080
           weight: 100
+    # Block external access to internal endpoints.
+    # These endpoints (api-keys/validate, api-keys/cleanup,
+    # subscriptions/select) must only be reachable via the cluster-local
+    # Service by in-cluster callers (Authorino, cleanup CronJob).
+    # A rule with no backendRefs causes the gateway to return a non-2xx
+    # response (typically 404 or 500), preventing external traffic from
+    # reaching internal handlers.
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /maas-api/internal
     # All other maas-api endpoints remain under /maas-api prefix
     - matches:
         - path:

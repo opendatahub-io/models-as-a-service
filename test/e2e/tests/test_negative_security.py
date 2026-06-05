@@ -26,6 +26,7 @@ import logging
 import ssl
 import time
 import uuid
+from typing import ClassVar
 from urllib.parse import urlparse
 
 import pytest
@@ -428,4 +429,49 @@ class TestHeaderAbuse:
             # If the platform processes the header, it should return 403, not 500.
             assert r.status_code != 500, (
                 f"Server error with injection payload '{payload}': {r.text[:500]}"
+            )
+
+
+# ============================================================================
+# P0: Internal Endpoint Isolation
+# ============================================================================
+
+class TestInternalEndpointIsolation:
+    """Verify that /internal/v1/* endpoints are unreachable from the external route.
+
+    The HTTPRoute blocks /maas-api/internal/* at the gateway level so that
+    requests never reach the maas-api backend. In-cluster callers (Authorino,
+    cleanup CronJob) access these endpoints directly via the cluster-local
+    Service, bypassing the gateway.
+    """
+
+    _INTERNAL_PATHS: ClassVar[list[str]] = [
+        "/internal/v1/api-keys/validate",
+        "/internal/v1/api-keys/cleanup",
+        "/internal/v1/subscriptions/select",
+    ]
+
+    def test_internal_endpoints_blocked_via_gateway(self):
+        """External requests to /maas-api/internal/v1/* must return non-2xx.
+
+        The HTTPRoute has a rule matching /maas-api/internal with no
+        backendRefs, so the gateway returns a non-2xx status (typically
+        404 or 500) before the request ever reaches the maas-api pod.
+        """
+        for path in self._INTERNAL_PATHS:
+            url = f"{_maas_api_url()}{path}"
+            r = requests.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {_get_cluster_token()}",
+                    "Content-Type": "application/json",
+                },
+                json={},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            log.info("External %s -> %s", path, r.status_code)
+            assert r.status_code >= 400, (
+                f"Internal endpoint {path} should be blocked externally, "
+                f"got {r.status_code}: {r.text[:500]}"
             )

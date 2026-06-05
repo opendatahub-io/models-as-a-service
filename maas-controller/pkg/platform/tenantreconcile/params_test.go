@@ -209,6 +209,44 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
 }
 
+func TestHTTPRouteBlocksInternalEndpoints(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+
+	httpRoute := requireResource(t, resources, GVKHTTPRoute, MaaSAPIRouteName)
+	rules, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "rules")
+	require.NoError(t, err)
+	require.True(t, found, "HTTPRoute must have spec.rules")
+
+	// Find the rule matching /maas-api/internal and verify it has no backendRefs.
+	var foundBlockingRule bool
+	for _, rule := range rules {
+		ruleMap, ok := rule.(map[string]any)
+		if !ok {
+			continue
+		}
+		matches, _ := ruleMap["matches"].([]any)
+		for _, m := range matches {
+			matchMap, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			pathMap, ok := matchMap["path"].(map[string]any)
+			if !ok {
+				continue
+			}
+			if pathMap["value"] == "/maas-api/internal" {
+				foundBlockingRule = true
+				// The rule must have no backendRefs to block traffic
+				backendRefs, hasBackendRefs, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
+				assert.False(t, hasBackendRefs && len(backendRefs) > 0,
+					"The /maas-api/internal rule must have no backendRefs to block external access")
+			}
+		}
+	}
+	assert.True(t, foundBlockingRule,
+		"HTTPRoute must contain a rule matching /maas-api/internal to block external access to internal endpoints")
+}
+
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 

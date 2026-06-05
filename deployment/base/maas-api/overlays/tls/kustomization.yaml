@@ -16,13 +16,14 @@ patches:
       kind: HTTPRoute
       name: maas-api-route
     patch: |-
-      # Patches both HTTPRoute rules to use HTTPS port 8443
-      # Rule 0: /maas-api/* paths, Rule 1: /v1/models paths
+      # Patches HTTPRoute rules with backendRefs to use HTTPS port 8443.
+      # Rule 0: /v1/models, Rule 1: /maas-api/internal (no backendRefs,
+      # blocks external access), Rule 2: /maas-api/* catch-all.
       - op: replace
         path: /spec/rules/0/backendRefs/0/port
         value: 8443
       - op: replace
-        path: /spec/rules/1/backendRefs/0/port
+        path: /spec/rules/2/backendRefs/0/port
         value: 8443
   # Fix NetworkPolicy ingress podSelector - the labels transformer in 'default'
   # incorrectly adds MaaS labels to the Authorino podSelector. Authorino pods

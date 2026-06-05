@@ -44,7 +44,7 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 
 ### Internal Endpoints (Cluster-Only)
 
-These endpoints are registered under `/internal/v1/` and are **not exposed** on the external Service or Route. They are called by internal components (Authorino, CronJob) and protected by NetworkPolicy.
+These endpoints are registered under `/internal/v1/` and are **not reachable** from the external gateway route. The HTTPRoute contains a rule that matches `/maas-api/internal` with no backend, so the gateway returns a non-2xx response before the request reaches the maas-api pod. In-cluster callers (Authorino, CronJob) access these endpoints directly via the cluster-local Service, bypassing the gateway. NetworkPolicy further restricts which pods can reach the Service.
 
 | Method | Path | Called By | Description |
 |--------|------|-----------|-------------|

@@ -22,11 +22,9 @@ import json
 import logging
 import os
 import subprocess
-import time
 import uuid
 from typing import Optional
 
-import pytest
 import requests
 
 from test_helper import (
@@ -39,7 +37,6 @@ from test_helper import (
     _get_cr,
     _maas_api_url,
     _ns,
-    _revoke_api_key,
     _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
@@ -57,41 +54,6 @@ def _get_token():
     if not token:
         raise RuntimeError("Could not get token via `oc whoami -t`")
     return token
-
-
-def _create_ns_api_key(name: str = None) -> tuple[str, str]:
-    """Create an API key and return (key_id, plaintext_key).
-
-    Retries on empty 403 from gateway propagation delay (Envoy may not have
-    loaded the AuthPolicy yet).
-    """
-    token = _get_token()
-    url = f"{_maas_api_url()}/v1/api-keys"
-    key_name = name or f"e2e-ns-test-{uuid.uuid4().hex[:8]}"
-
-    retries = 6
-    delay = 5
-    for attempt in range(1, retries + 1):
-        r = requests.post(
-            url,
-            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-            json={"name": key_name},
-            timeout=TIMEOUT,
-            verify=TLS_VERIFY,
-        )
-        if r.status_code == 403 and not r.text.strip():
-            if attempt < retries:
-                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
-                         attempt, retries, delay)
-                time.sleep(delay)
-                continue
-        break
-
-    if r.status_code not in (200, 201):
-        raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
-
-    data = r.json()
-    return data.get("id"), data.get("key")
 
 
 def _create_external_model(name: str,
@@ -134,20 +96,23 @@ def _delete_namespace(name: str):
     )
 
 
-def _call_subscriptions_select(api_key: str, username: str, groups: list, requested_subscription: str = "") -> requests.Response:
-    """Call MaaS API POST /v1/subscriptions/select. Returns the response (always 200 with body)."""
-    url = f"{_maas_api_url()}/internal/v1/subscriptions/select"
-    headers = {"Authorization": f"Bearer {api_key}"}
-    payload = {"username": username, "groups": groups}
-    if requested_subscription:
-        payload["requestedSubscription"] = requested_subscription
-    return requests.post(
+def _list_subscriptions(token: str) -> list:
+    """List subscriptions visible to the authenticated user via GET /v1/subscriptions.
+
+    Uses the public API endpoint (not the internal /internal/v1/* endpoint which
+    is blocked at the routing level for external callers).
+    """
+    url = f"{_maas_api_url()}/v1/subscriptions"
+    headers = {"Authorization": f"Bearer {token}"}
+    r = requests.get(
         url,
         headers=headers,
-        json=payload,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
+    if r.status_code != 200:
+        raise RuntimeError(f"GET /v1/subscriptions failed: {r.status_code} {r.text}")
+    return r.json()
 
 
 def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
@@ -164,27 +129,17 @@ def _get_cr_annotation(kind: str, name: str, namespace: str, key: str):
     return annotations.get(key, "") or ""
 
 
-@pytest.fixture(scope="module")
-def api_key():
-    """Create an API key for tests."""
-    key_id, key = _create_ns_api_key("e2e-ns-scoping-key")
-    try:
-        yield key
-    finally:
-        if key_id:
-            _revoke_api_key(_get_token(), key_id)
-
-
 class TestMaaSAPIWatchNamespace:
     """Test that MaaS API only gets MaaSSubscription from the subscription namespace (MAAS_SUBSCRIPTION_NAMESPACE)."""
 
-    def test_subscription_in_subscription_namespace_visible_to_api(self, api_key):
+    def test_subscription_in_subscription_namespace_visible_to_api(self):
         """
         MaaSSubscription in the subscription namespace should be visible to the API.
-        POST /v1/subscriptions/select with that subscription name should succeed.
+        GET /v1/subscriptions should include the subscription.
         """
         sub_name = f"e2e-api-visible-{uuid.uuid4().hex[:6]}"
         ns = _ns()
+        token = _get_token()
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -197,27 +152,24 @@ class TestMaaSAPIWatchNamespace:
             })
             _wait_for_maas_subscription_phase(sub_name, "Active", namespace=ns)
 
-            r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
-            assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
-            data = r.json()
-            assert data.get("error") != "not_found", (
-                f"Subscription {sub_name} in subscription namespace should be visible to API, got: {data}"
+            subs = _list_subscriptions(token)
+            names = [s.get("subscription_id_header") for s in subs]
+            assert sub_name in names, (
+                f"Subscription {sub_name} in subscription namespace should be visible via GET /v1/subscriptions, got: {names}"
             )
-            assert data.get("name") == sub_name, (
-                f"Expected name={sub_name}, got: {data}"
-            )
-            log.info(f"✓ Subscription {sub_name} in {ns} is visible to MaaS API")
+            log.info(f"Subscription {sub_name} in {ns} is visible to MaaS API")
         finally:
             _delete_cr("MaaSSubscription", sub_name, ns)
             _wait_reconcile()
 
-    def test_subscription_in_another_namespace_not_visible_to_api(self, api_key):
+    def test_subscription_in_another_namespace_not_visible_to_api(self):
         """
         MaaSSubscription in a namespace other than the subscription namespace should NOT be visible to the API.
-        POST /v1/subscriptions/select with that subscription name should return not_found.
+        GET /v1/subscriptions should not include the subscription.
         """
         sub_name = f"e2e-api-hidden-{uuid.uuid4().hex[:6]}"
         other_ns = "e2e-api-unwatched-ns"
+        token = _get_token()
         _create_namespace(other_ns)
         try:
             _apply_cr({
@@ -231,13 +183,12 @@ class TestMaaSAPIWatchNamespace:
             })
             _wait_reconcile()
 
-            r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
-            assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
-            data = r.json()
-            assert data.get("error") == "not_found", (
-                f"Subscription {sub_name} in {other_ns} should NOT be visible to API (expected not_found), got: {data}"
+            subs = _list_subscriptions(token)
+            names = [s.get("subscription_id_header") for s in subs]
+            assert sub_name not in names, (
+                f"Subscription {sub_name} in {other_ns} should NOT be visible via GET /v1/subscriptions, got: {names}"
             )
-            log.info(f"✓ Subscription {sub_name} in {other_ns} is correctly not visible to MaaS API")
+            log.info(f"Subscription {sub_name} in {other_ns} is correctly not visible to MaaS API")
         finally:
             _delete_cr("MaaSSubscription", sub_name, other_ns)
             _delete_namespace(other_ns)
