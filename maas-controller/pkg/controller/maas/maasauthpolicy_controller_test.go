@@ -540,10 +540,19 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		},
 	}
 
+	// Pre-create gateway-default-auth (deployed by Tenant reconciler in real clusters)
+	gwDefaultAuth := &unstructured.Unstructured{}
+	gwDefaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	gwDefaultAuth.SetName(gatewayDefaultAuthPolicyName)
+	gwDefaultAuth.SetNamespace(gatewayNS)
+	gwDefaultAuth.SetLabels(map[string]string{
+		"app.kubernetes.io/managed-by": "maas-controller",
+	})
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policy1, policy2).
+		WithObjects(model, route, policy1, policy2, gwDefaultAuth).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -553,6 +562,13 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		MaaSAPINamespace: "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
+	}
+
+	// Verify gateway-default-auth exists before reconciliation
+	defaultAuth := &unstructured.Unstructured{}
+	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); err != nil {
+		t.Fatalf("gateway-default-auth should exist before reconciliation: %v", err)
 	}
 
 	// Reconcile both policies to create the aggregated AuthPolicy
@@ -570,6 +586,13 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy); err != nil {
 		t.Fatalf("gateway AuthPolicy not found before deletion: %v", err)
+	}
+
+	// Verify gateway-default-auth was DELETED (superseded by maas-gateway-auth)
+	defaultAuth = &unstructured.Unstructured{}
+	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); !apierrors.IsNotFound(err) {
+		t.Errorf("gateway-default-auth should be deleted when maas-gateway-auth exists, got: %v", err)
 	}
 
 	// Delete policy1 (but policy2 still exists)
@@ -598,6 +621,13 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("gateway AuthPolicy should be deleted after deleting last parent policy, but got: %v", err)
+	}
+
+	// gateway-default-auth should be RECREATED (deny-all restored for unconfigured models)
+	defaultAuth = &unstructured.Unstructured{}
+	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); err != nil {
+		t.Errorf("gateway-default-auth should be recreated after last MaaSAuthPolicy is deleted: %v", err)
 	}
 }
 
@@ -903,20 +933,20 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		}
 	})
 
-	// Test 3: auth-valid cache key must distinguish API keys from K8s tokens (gateway policy)
-	t.Run("auth-valid distinguishes API keys and K8s tokens", func(t *testing.T) {
+	// Test 3: auth-valid cache key must include API key identity and model (gateway policy)
+	t.Run("auth-valid includes API key identity and model", func(t *testing.T) {
 		key := assertCacheKeyContains(t, gwPolicy,
 			nil,
 			"spec", "defaults", "rules", "authorization", "auth-valid", "cache", "key", "selector",
 		)
-		if !contains(key, "api-key") && !contains(key, "k8s-token") {
-			t.Errorf("auth-valid cache key must distinguish auth types (api-key vs k8s-token), got: %s", key)
+		if !contains(key, "api-key") {
+			t.Errorf("auth-valid cache key must include api-key prefix, got: %s", key)
 		}
 		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
 			t.Errorf("auth-valid cache key must include dynamic model identity (header or path), got: %s", key)
 		}
-		if !contains(key, "username") && !contains(key, "authorization") {
-			t.Errorf("auth-valid cache key must include identity, got: %s", key)
+		if !contains(key, "authorization") {
+			t.Errorf("auth-valid cache key must include authorization header for key identity, got: %s", key)
 		}
 	})
 
@@ -1048,15 +1078,14 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	})
 }
 
-// TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
-// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
-// to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
-// for Istio Telemetry (per-subscription latency tracking).
-// All identity information remains available to TRLP and telemetry via filters.identity.
+// TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream verifies that identity headers
+// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Subscription) are injected into requests forwarded
+// to upstream workloads for the consolidated gateway-level auth policy.
+// All identity information is also available to TRLP and telemetry via filters.identity.
 //
 // After the gateway-level refactor, response shaping lives in the singleton gateway policy
 // under spec.defaults.rules.response.
-func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
+func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
@@ -1098,25 +1127,29 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
-	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
+	// Test 1: Verify identity headers are forwarded upstream for consolidated gateway auth
+	t.Run("identity headers forwarded to upstream", func(t *testing.T) {
 		headers, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
 		if err != nil {
 			t.Fatalf("Error checking headers: %v", err)
 		}
 		if !found {
-			t.Fatalf("response.success.headers should exist (X-MaaS-Subscription for Istio)")
+			t.Fatalf("response.success.headers should exist")
 		}
 
-		if _, exists := headers["X-MaaS-Subscription"]; !exists {
-			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
+		requiredHeaders := []string{
+			"X-MaaS-Username", "X-MaaS-Username-Token",
+			"X-MaaS-Group", "X-MaaS-Group-Token",
+			"X-MaaS-Subscription",
 		}
-
-		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
-		for _, header := range forbiddenHeaders {
-			if _, exists := headers[header]; exists {
-				t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)
+		for _, header := range requiredHeaders {
+			if _, exists := headers[header]; !exists {
+				t.Errorf("Identity header %q should be present in gateway response headers", header)
 			}
+		}
+
+		if _, exists := headers["Authorization"]; exists {
+			t.Errorf("Authorization header should NOT be stripped (needed by FilterModelsByAccess)")
 		}
 	})
 
@@ -1176,6 +1209,121 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		}
 		if !metricsEnabled {
 			t.Error("filters.identity.metrics must be true for telemetry to access identity data")
+		}
+	})
+}
+
+func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "gateway-ns",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	gwSpecToUnstructured := func(t *testing.T, spec map[string]any) *unstructured.Unstructured {
+		t.Helper()
+		obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+		return obj
+	}
+
+	t.Run("without OIDC", func(t *testing.T) {
+		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		obj := gwSpecToUnstructured(t, spec)
+
+		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
+		if err != nil || !found {
+			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+		}
+		if _, exists := auth["api-keys"]; !exists {
+			t.Error("api-keys authentication should always be present")
+		}
+		if _, exists := auth["openshift-identities"]; !exists {
+			t.Error("openshift-identities should always be present")
+		}
+		if _, exists := auth["oidc-identities"]; exists {
+			t.Error("oidc-identities should NOT be present when OIDC config is nil")
+		}
+	})
+
+	t.Run("with OIDC", func(t *testing.T) {
+		oidc := &oidcConfig{
+			IssuerURL: "https://keycloak.example.com/realms/test",
+			ClientID:  "maas-client",
+		}
+		spec := r.buildGatewayAuthPolicySpec("{}", oidc)
+		obj := gwSpecToUnstructured(t, spec)
+
+		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
+		if err != nil || !found {
+			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+		}
+		if _, exists := auth["oidc-identities"]; !exists {
+			t.Fatal("oidc-identities should be present when OIDC config is provided")
+		}
+		issuer, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
+		if err != nil || !found {
+			t.Fatalf("oidc issuerUrl missing: found=%v err=%v", found, err)
+		}
+		if issuer != oidc.IssuerURL {
+			t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+		}
+	})
+
+	t.Run("subscription-info has path-scoped when condition", func(t *testing.T) {
+		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		obj := gwSpecToUnstructured(t, spec)
+
+		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
+		if err != nil || !found || len(when) == 0 {
+			t.Fatalf("subscription-info when condition missing: found=%v err=%v", found, err)
+		}
+		firstWhen, ok := when[0].(map[string]any)
+		if !ok {
+			t.Fatalf("subscription-info when[0] is not a map: %T", when[0])
+		}
+		pred, ok := firstWhen["predicate"].(string)
+		if !ok {
+			t.Fatal("subscription-info when[0] has no predicate string")
+		}
+		if !contains(pred, "/llm/") {
+			t.Errorf("subscription-info when should scope to /llm/ paths, got: %s", pred)
+		}
+	})
+
+	t.Run("subscription-valid has path-scoped when condition", func(t *testing.T) {
+		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		obj := gwSpecToUnstructured(t, spec)
+
+		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
+		if err != nil || !found || len(when) == 0 {
+			t.Fatalf("subscription-valid when condition missing: found=%v err=%v", found, err)
+		}
+		firstWhen, ok := when[0].(map[string]any)
+		if !ok {
+			t.Fatalf("subscription-valid when[0] is not a map: %T", when[0])
+		}
+		pred, ok := firstWhen["predicate"].(string)
+		if !ok {
+			t.Fatal("subscription-valid when[0] has no predicate string")
+		}
+		if !contains(pred, "/llm/") {
+			t.Errorf("subscription-valid when should scope to /llm/ paths, got: %s", pred)
+		}
+	})
+
+	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
+		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		obj := gwSpecToUnstructured(t, spec)
+
+		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("auth-valid rego missing: found=%v err=%v", found, err)
+		}
+		if !contains(rego, "not input.auth.metadata.apiKeyValidation") {
+			t.Errorf("auth-valid rego should allow non-API-key tokens, got: %s", rego)
 		}
 	})
 }

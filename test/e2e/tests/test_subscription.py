@@ -943,15 +943,15 @@ class TestCascadeDeletion:
             f"this test validates gateway-level deny-by-default"
         )
 
-        # Precondition: gateway-default-auth is in place and accepted
-        gw_auth = _get_cr("authpolicy", "gateway-default-auth", namespace="openshift-ingress")
+        # Precondition: maas-gateway-auth is in place and accepted
+        gw_auth = _get_cr("authpolicy", "maas-gateway-auth", namespace="openshift-ingress")
         assert gw_auth is not None, (
-            "gateway-default-auth AuthPolicy must exist in openshift-ingress"
+            "maas-gateway-auth AuthPolicy must exist in openshift-ingress"
         )
         conditions = gw_auth.get("status", {}).get("conditions", [])
         accepted = [c for c in conditions if c.get("type") == "Accepted"]
         assert accepted and accepted[0].get("status") == "True", (
-            f"gateway-default-auth must be Accepted, got: {accepted}"
+            f"maas-gateway-auth must be Accepted, got: {accepted}"
         )
 
         # Verify deny-by-default: inference to unconfigured model should be denied

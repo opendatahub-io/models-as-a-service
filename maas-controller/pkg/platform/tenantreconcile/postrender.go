@@ -115,7 +115,8 @@ func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resourc
 			return patchAuthPolicyWithOIDC(log, resource, oidc)
 		}
 	}
-	return fmt.Errorf("rendered resources are missing AuthPolicy %q while spec.externalOIDC is configured — refusing to deploy without OIDC rules", MaaSAPIAuthPolicyName)
+	log.Info("AuthPolicy not found in rendered resources; OIDC is handled by gateway-level policy", "name", MaaSAPIAuthPolicyName)
+	return nil
 }
 
 func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructured, oidc *maasv1alpha1.TenantExternalOIDCConfig) error {

@@ -430,12 +430,12 @@ wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
+    # Always include the gateway namespace where maas-gateway-auth lives.
+    # Also include any namespaces that contain LLMInferenceServices.
+    local llm_namespaces
+    llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
     local namespaces
-    namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
-    if [[ -z "$namespaces" ]]; then
-        echo "  No LLMInferenceService namespaces found, skipping AuthPolicy wait"
-        return 0
-    fi
+    namespaces=$(printf '%s\n%s\n' "${GATEWAY_NAMESPACE:-openshift-ingress}" "$llm_namespaces" | sort -u | xargs)
 
     local deadline=$((SECONDS + timeout))
     while [[ $SECONDS -lt $deadline ]]; do
