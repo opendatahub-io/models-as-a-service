@@ -53,6 +53,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/webhook"
 )
 
 var (
@@ -635,6 +636,29 @@ func main() {
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
+		os.Exit(1)
+	}
+
+	// Setup validating webhooks for MaaSSubscription and MaaSAuthPolicy to ensure they are only
+	// created in tenant-enabled namespaces. This prevents users from creating resources in
+	// random namespaces where they will be silently ignored.
+	tenantValidator := &webhook.TenantNamespaceValidator{
+		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
+	}
+
+	if err := (&webhook.MaaSSubscriptionValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSSubscription")
+		os.Exit(1)
+	}
+
+	if err := (&webhook.MaaSAuthPolicyValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSAuthPolicy")
 		os.Exit(1)
 	}
 
