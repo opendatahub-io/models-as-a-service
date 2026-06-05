@@ -9,6 +9,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -40,6 +41,16 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		if isLiveResourceUnmanaged(ctx, c, u) {
 			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
 				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
+			continue
+		}
+
+		// Skip resources whose live cluster copy is already owned by a different
+		// controller (e.g. ODH operator's ModelsAsService component). SSA-applying
+		// over them would fail on immutable fields like spec.selector and produce
+		// conflicting controller:true ownerReferences.
+		if isOwnedByExternalController(ctx, c, u, mcfg.UID) {
+			ctrl.LoggerFrom(ctx).Info("Skipping SSA: resource owned by external controller",
+				"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName())
 			continue
 		}
 
@@ -117,6 +128,30 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 	}
 	ann := live.GetAnnotations()
 	return ann != nil && ann[AnnotationManaged] == "false"
+}
+
+// isOwnedByExternalController returns true when the live cluster copy of the
+// rendered resource has a controller:true ownerReference whose UID differs from
+// the given Config UID. This prevents the Tenant reconciler from SSA-applying
+// over resources the ODH operator's ModelsAsService component already owns,
+// which would fail on immutable fields (spec.selector) and produce conflicting
+// controller ownerReferences.
+func isOwnedByExternalController(ctx context.Context, c client.Client, rendered *unstructured.Unstructured, configUID types.UID) bool {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(rendered.GroupVersionKind())
+	key := client.ObjectKeyFromObject(rendered)
+	if key.Name == "" {
+		return false
+	}
+	if err := c.Get(ctx, key, live); err != nil {
+		return false
+	}
+	for _, ref := range live.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
+			return true
+		}
+	}
+	return false
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {

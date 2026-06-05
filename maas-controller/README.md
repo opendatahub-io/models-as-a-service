@@ -485,16 +485,18 @@ The controller accepts the following command-line flags:
 | `--health-probe-bind-address` | `:8081` | The address the probe endpoint binds to. |
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
-| `--gateway-namespace` | `openshift-ingress` | The namespace of the Gateway resource. |
+| `--gateway-namespace` | `openshift-ingress` | The namespace of the default Gateway resource and existing Gateways referenced by AITenant resources. |
 | `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
 | `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and Tenant CRs. |
+| `--aitenant-namespace` | `redhat-ai-gateway-infra` | The infrastructure namespace where AITenant CRs are accepted. |
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
 | `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
-| `--subscription-namespace-maintain-interval` | `30s` | How often to re-check the subscription namespace while the manager is running. |
+| `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
 
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **MaaS subscription namespace**: Default is `models-as-a-service`. Override via the `--maas-subscription-namespace` flag.
+- **AITenant infrastructure namespace**: Default is `redhat-ai-gateway-infra`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
-- **Gateway name/namespace**: Configured via the Tenant CR `spec.gatewayRef`. Defaults are applied automatically by the controller.
+- **Gateway name/namespace**: Legacy/default Tenant routing uses `spec.gatewayRef` with controller defaults. `AITenant` validates an existing tenant Gateway in `--gateway-namespace`; `spec.gateway.name` defaults to the `AITenant` name.

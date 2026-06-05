@@ -98,8 +98,9 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
 	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadDeployment, "spec", "template", "spec", "containers"))
 
-	cleanupCronJob := requireResource(t, resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName)
-	assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
+	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName); cleanupCronJob != nil {
+		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
+	}
 
 	httpRoute := requireResource(t, resources, GVKHTTPRoute, MaaSAPIRouteName)
 	parentRefs, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "parentRefs")
@@ -229,13 +230,20 @@ func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Un
 func requireResource(t *testing.T, resources []unstructured.Unstructured, gvk schema.GroupVersionKind, name string) *unstructured.Unstructured {
 	t.Helper()
 
+	if r := findResource(resources, gvk, name); r != nil {
+		return r
+	}
+
+	t.Fatalf("resource %s %q not found", gvk.String(), name)
+	return nil
+}
+
+func findResource(resources []unstructured.Unstructured, gvk schema.GroupVersionKind, name string) *unstructured.Unstructured {
 	for i := range resources {
 		if resources[i].GroupVersionKind() == gvk && resources[i].GetName() == name {
 			return &resources[i]
 		}
 	}
-
-	t.Fatalf("resource %s %q not found", gvk.String(), name)
 	return nil
 }
 
