@@ -46,6 +46,7 @@ from test_helper import (
     MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
+    _apply_cr,
     _create_api_key,
     _create_api_key_raw,
     _create_sa_token,
@@ -1343,25 +1344,47 @@ class TestAPIKeySubscriptionPhases:
         """
         API key creation is rejected for unreconciled subscription (empty phase).
 
-        This test scales down the controller to ensure deterministic behavior.
+        Note: Temporarily sets webhook failurePolicy to Ignore to allow creating
+        resources while controller is down, then restores to Fail.
         """
         ns = _ns()
         subscription_name = "e2e-apikey-unreconciled-sub"
         auth_name = "e2e-apikey-unreconciled-auth"
         sa_name = "e2e-apikey-unreconciled-sa"
+        webhook_name = "maas-validating-webhook-configuration"
 
         try:
-            # Scale down controller to prevent reconciliation
-            _scale_controller_down()
-
+            # Create service account and get token
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
+            # Temporarily set webhook failurePolicy to Ignore
+            # This allows creates to succeed when controller/webhook is unavailable
+            # Find webhook indices dynamically by name to avoid brittleness
+            result = subprocess.run(
+                ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                capture_output=True, text=True, check=True
+            )
+            webhook_config = json.loads(result.stdout)
+            patch_ops = []
+            for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                    patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Ignore"})
+
+            subprocess.run(
+                ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                 "--type=json", "-p", json.dumps(patch_ops)],
+                capture_output=True, text=True, check=True
+            )
+
+            # Scale down controller to prevent reconciliation
+            _scale_controller_down()
+
+            # Create resources (webhook unavailable but Ignore policy allows creates)
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            # Create subscription (won't reconcile with controller scaled down)
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
-            # Verify subscription is unreconciled
+            # Verify subscription is unreconciled (empty phase)
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase", "")
             assert phase == "", f"Expected empty phase, got: {phase}"
@@ -1390,12 +1413,57 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key creation rejected for unreconciled subscription")
 
         finally:
-            # Scale controller back up
+            # Restore webhook failurePolicy to Fail
+            # Wrap in try/except to guarantee controller scale-up and cleanup happen
+            webhook_restore_error = None
+            try:
+                result = subprocess.run(
+                    ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to get webhook configuration {webhook_name} for restoration: {result.stderr}"
+                    )
+
+                webhook_config = json.loads(result.stdout)
+                patch_ops = []
+                for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                    if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                        patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
+
+                if not patch_ops:
+                    raise RuntimeError(
+                        f"No matching webhooks found to restore in {webhook_name}. "
+                        f"Expected vmaassubscription.kb.io and vmaasauthpolicy.kb.io. "
+                        f"Found: {[w.get('name') for w in webhook_config.get('webhooks', [])]}"
+                    )
+
+                restore_result = subprocess.run(
+                    ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                     "--type=json", "-p", json.dumps(patch_ops)],
+                    capture_output=True, text=True
+                )
+                if restore_result.returncode != 0:
+                    raise RuntimeError(
+                        f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
+                        f"with patch_ops {patch_ops}: {restore_result.stderr}"
+                    )
+            except Exception as e:
+                webhook_restore_error = e
+                log.error(f"Exception during webhook restoration: {e}")
+
+            # Always scale controller back up and cleanup, even if webhook restore failed
             _scale_controller_up()
+
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
+
+            # Only raise webhook restore error after cleanup is complete
+            if webhook_restore_error:
+                raise webhook_restore_error
 
 
 class TestAPIKeySubscriptionFilter:

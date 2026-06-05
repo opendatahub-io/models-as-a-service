@@ -96,6 +96,30 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
 11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
 
+12. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+
+      MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
+
+      - [ ] Check controller pod status:
+
+      ```bash
+      kubectl get pods -n models-as-a-service -l control-plane=maas-controller
+      ```
+
+      - [ ] Check webhook service endpoints:
+
+      ```bash
+      kubectl get endpoints maas-controller-webhook-service -n models-as-a-service
+      ```
+
+      - [ ] Check controller logs for errors:
+
+      ```bash
+      kubectl logs -n models-as-a-service deployment/maas-controller
+      ```
+
+      Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
+
 ## Conflicting AuthPolicy Detection
 
 MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.
