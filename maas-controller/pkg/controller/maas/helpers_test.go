@@ -22,12 +22,14 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 func TestDeletionTimestampSet(t *testing.T) {
@@ -241,6 +243,73 @@ func TestValidateCELValue(t *testing.T) {
 				t.Errorf("validateCELValue() error = %v, wantErr %v", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestTenantNamespaceAllowedAcceptsAIGatewayTenantLabel(t *testing.T) {
+	s := tenantTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "tenant-a",
+				Labels: map[string]string{
+					tenantreconcile.LabelAIGatewayTenant: "team-a",
+				},
+			},
+		}).
+		Build()
+
+	ok, err := tenantNamespaceAllowed(context.Background(), c, "tenant-a", "models-as-a-service", true)
+	if err != nil {
+		t.Fatalf("tenantNamespaceAllowed returned error: %v", err)
+	}
+	if !ok {
+		t.Fatalf("tenantNamespaceAllowed = false, want true")
+	}
+}
+
+func TestTenantMaaSAPIEndpointUsesTenantScopedService(t *testing.T) {
+	s := tenantTestScheme(t)
+	c := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(
+			&corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "team-a-maas",
+					Labels: map[string]string{
+						tenantreconcile.LabelAIGatewayTenant: "team-a",
+					},
+				},
+			},
+			&maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      maasv1alpha1.TenantInstanceName,
+					Namespace: "team-a-maas",
+					Labels: map[string]string{
+						tenantreconcile.LabelAIGatewayTenant: "team-a",
+					},
+				},
+			},
+		).
+		Build()
+
+	serviceName, serviceNamespace, err := tenantMaaSAPIEndpoint(
+		context.Background(),
+		c,
+		"team-a-maas",
+		"models-as-a-service",
+		"redhat-ai-gateway-infra",
+		true,
+	)
+	if err != nil {
+		t.Fatalf("tenantMaaSAPIEndpoint returned error: %v", err)
+	}
+	if serviceName != "maas-api-team-a" {
+		t.Fatalf("serviceName = %q, want maas-api-team-a", serviceName)
+	}
+	if serviceNamespace != "redhat-ai-gateway-infra" {
+		t.Fatalf("serviceNamespace = %q, want redhat-ai-gateway-infra", serviceNamespace)
 	}
 }
 

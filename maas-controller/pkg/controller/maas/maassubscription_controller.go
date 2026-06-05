@@ -48,7 +48,6 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
-	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // MaaSSubscriptionReconciler reconciles a MaaSSubscription object
@@ -1130,7 +1129,7 @@ func duplicatePriorityScanPredicate() predicate.Predicate {
 // namespace when that namespace's labels change (e.g. AITenant label added).
 func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
 	ns := obj.GetName()
-	if ns != r.DefaultTenantNamespace && (!r.TenantNamespaceDiscoveryEnabled || obj.GetLabels()[tenantreconcile.LabelManagedByAITenant] != "true") {
+	if ns != r.DefaultTenantNamespace && (!r.TenantNamespaceDiscoveryEnabled || !hasTenantDiscoveryLabel(obj)) {
 		return nil
 	}
 	subList := &maasv1alpha1.MaaSSubscriptionList{}

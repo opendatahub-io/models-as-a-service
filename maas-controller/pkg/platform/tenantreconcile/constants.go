@@ -37,6 +37,8 @@ const (
 	LabelK8sPartOf       = "app.kubernetes.io/part-of"
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
+	// LabelAIGatewayTenant is the ADR-defined tenant marker on tenant admin namespaces.
+	LabelAIGatewayTenant = "ai-gateway.opendatahub.io/tenant"
 
 	// LabelManagedByAITenant is set to "true" on namespaces created/adopted
 	// by the AITenant reconciler. The subscription/auth-policy controllers use
@@ -53,6 +55,12 @@ const (
 	MaaSAPIAuthPolicyName                         = "maas-api-auth-policy"
 	MaaSAPIRouteName                              = "maas-api-route"
 	MaaSAPIKeyCleanupCronJobName                  = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	MaaSAPIServiceCertSecretName                  = "maas-api-serving-cert"
+	MaaSAPIAllowMonitoringNetworkPolicyName       = "maas-api-allow-monitoring"
+	MaaSAPIAllowAuthorinoNetworkPolicyName        = "maas-authorino-allow"
+	MaaSAPICleanupNetworkPolicyName               = "maas-api-cleanup-restrict"
+	MaaSAPIPodMonitorName                         = "maas-api-metrics"
+	MaaSAPISupplementalName                       = "maas-api-supplemental"
 	GatewayDestinationRuleName                    = "maas-api-backend-tls"
 	TelemetryPolicyName                           = "maas-telemetry"
 	IstioTelemetryName                            = "latency-per-subscription"
@@ -93,6 +101,8 @@ var (
 	GVKService              = schema.GroupVersionKind{Version: "v1", Kind: "Service"}
 	GVKServiceAccount       = schema.GroupVersionKind{Version: "v1", Kind: "ServiceAccount"}
 	GVKConfigMap            = schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	GVKNetworkPolicy        = schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}
+	GVKPodMonitor           = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "PodMonitor"}
 	GVKClusterRoleBinding   = schema.GroupVersionKind{Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding"}
 	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}

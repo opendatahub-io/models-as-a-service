@@ -47,10 +47,14 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default opendatahub).
+	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default redhat-ai-gateway-infra).
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
+	// AITenantNamespace is the namespace where AITenant CRs are accepted (--aitenant-namespace, default ai-tenants).
+	AITenantNamespace string
+	// TenantNamespaceDiscoveryEnabled enables AITenant-labeled tenant namespaces.
+	TenantNamespaceDiscoveryEnabled bool
 	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
 	GatewayName string
 	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
@@ -153,7 +157,7 @@ func secretNamedMaaSDB() predicate.Predicate {
 func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		ns := o.GetNamespace()
-		return ns == r.AppNamespace || ns == r.operatorNamespace()
+		return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.operatorNamespace()
 	})
 }
 

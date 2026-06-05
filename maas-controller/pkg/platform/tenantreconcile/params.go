@@ -1,6 +1,8 @@
 package tenantreconcile
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -16,9 +18,23 @@ import (
 // PlatformParams holds resolved runtime values for PostRender patching.
 type PlatformParams struct {
 	AppNamespace     string
+	TenantNamespace  string
+	TenantName       string
+	DedicatedMaaSAPI bool
 	GatewayNamespace string
 	GatewayName      string
 	ClusterAudience  string
+
+	MaaSAPIName                      string
+	MaaSAPIRouteName                 string
+	MaaSAPIAuthPolicyName            string
+	MaaSAPIKeyCleanupCronJobName     string
+	MaaSAPIServiceCertSecretName     string
+	MaaSAPIAllowMonitoringPolicyName string
+	MaaSAPIAllowAuthorinoPolicyName  string
+	MaaSAPICleanupPolicyName         string
+	MaaSAPIPodMonitorName            string
+	MaaSAPISupplementalName          string
 
 	MaaSAPIImage           string
 	PayloadProcessingImage string
@@ -30,16 +46,90 @@ type PlatformParams struct {
 // BuildPlatformParams resolves all runtime parameters from the Tenant CR,
 // cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
 func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) PlatformParams {
+	tenantName := tenantNameForParams(tenant)
+	dedicatedMaaSAPI := tenant.Namespace != "" && tenant.Namespace != "models-as-a-service" && tenantName != ""
 	return PlatformParams{
-		AppNamespace:            appNamespace,
-		GatewayNamespace:        tenant.Spec.GatewayRef.Namespace,
-		GatewayName:             tenant.Spec.GatewayRef.Name,
-		ClusterAudience:         clusterAudience,
-		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
-		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
-		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
-		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
+		AppNamespace:                     appNamespace,
+		TenantNamespace:                  tenant.Namespace,
+		TenantName:                       tenantName,
+		DedicatedMaaSAPI:                 dedicatedMaaSAPI,
+		GatewayNamespace:                 tenant.Spec.GatewayRef.Namespace,
+		GatewayName:                      tenant.Spec.GatewayRef.Name,
+		ClusterAudience:                  clusterAudience,
+		MaaSAPIName:                      tenantScopedName(MaaSAPIDeploymentName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIRouteName:                 tenantScopedName(MaaSAPIRouteName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIAuthPolicyName:            tenantScopedName(MaaSAPIAuthPolicyName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIKeyCleanupCronJobName:     tenantScopedName(MaaSAPIKeyCleanupCronJobName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIServiceCertSecretName:     tenantScopedName(MaaSAPIServiceCertSecretName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIAllowMonitoringPolicyName: tenantScopedName(MaaSAPIAllowMonitoringNetworkPolicyName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIAllowAuthorinoPolicyName:  tenantScopedName(MaaSAPIAllowAuthorinoNetworkPolicyName, tenantName, dedicatedMaaSAPI),
+		MaaSAPICleanupPolicyName:         tenantScopedName(MaaSAPICleanupNetworkPolicyName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIPodMonitorName:            tenantScopedName(MaaSAPIPodMonitorName, tenantName, dedicatedMaaSAPI),
+		MaaSAPISupplementalName:          tenantScopedName(MaaSAPISupplementalName, tenantName, dedicatedMaaSAPI),
+		MaaSAPIImage:                     firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
+		PayloadProcessingImage:           firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
+		MaaSAPIKeyCleanupImage:           firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
+		APIKeyMaxExpirationDays:          resolveAPIKeyMaxExpirationDays(tenant),
 	}
+}
+
+func tenantNameForParams(tenant *maasv1alpha1.Tenant) string {
+	if tenant.Labels != nil {
+		if name := strings.TrimSpace(tenant.Labels[LabelAIGatewayTenant]); name != "" {
+			return name
+		}
+		if name := strings.TrimSpace(tenant.Labels[LabelTenantName]); name != "" {
+			return name
+		}
+	}
+	if tenant.Namespace != "" {
+		return tenant.Namespace
+	}
+	return tenant.Name
+}
+
+func tenantScopedName(base, tenantName string, dedicated bool) string {
+	if !dedicated {
+		return base
+	}
+	tenantName = dns1123LabelFragment(tenantName)
+	if tenantName == "" {
+		tenantName = "tenant"
+	}
+	raw := base + "-" + tenantName
+	if len(raw) <= 63 {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(raw))
+	hash := hex.EncodeToString(sum[:])[:8]
+	budget := 63 - len(hash) - 1
+	prefix := strings.Trim(raw[:budget], "-")
+	if prefix == "" {
+		prefix = base
+	}
+	return prefix + "-" + hash
+}
+
+func dns1123LabelFragment(value string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(value) {
+		valid := r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z')
+		if !valid {
+			r = '-'
+		}
+		if r == '-' {
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			lastDash = true
+			b.WriteByte('-')
+			continue
+		}
+		lastDash = false
+		b.WriteRune(r)
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func firstNonEmpty(values ...string) string {
@@ -113,6 +203,116 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 				return err
 			}
 		}
+		if err := scopeMaaSAPIResource(r, params); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func scopeMaaSAPIResource(r *unstructured.Unstructured, params PlatformParams) error {
+	if !params.DedicatedMaaSAPI {
+		return nil
+	}
+	gvk := r.GroupVersionKind()
+	name := r.GetName()
+
+	switch {
+	case gvk == GVKDeployment && name == MaaSAPIDeploymentName:
+		r.SetName(params.MaaSAPIName)
+		if err := addTenantSelectorLabels(r, params, "spec", "selector", "matchLabels"); err != nil {
+			return fmt.Errorf("scope maas-api deployment selector: %w", err)
+		}
+		if err := addTenantSelectorLabels(r, params, "spec", "template", "metadata", "labels"); err != nil {
+			return fmt.Errorf("scope maas-api deployment pod labels: %w", err)
+		}
+		if err := unstructured.SetNestedField(r.Object, params.MaaSAPIName, "spec", "template", "spec", "serviceAccountName"); err != nil {
+			return fmt.Errorf("scope maas-api deployment service account: %w", err)
+		}
+		if err := patchDeploymentSecretVolume(r, "maas-api-tls", params.MaaSAPIServiceCertSecretName); err != nil {
+			return fmt.Errorf("scope maas-api serving cert: %w", err)
+		}
+	case gvk == GVKService && name == MaaSAPIDeploymentName:
+		r.SetName(params.MaaSAPIName)
+		if err := addTenantSelectorLabels(r, params, "spec", "selector"); err != nil {
+			return fmt.Errorf("scope maas-api service selector: %w", err)
+		}
+		annotations := r.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations["service.beta.openshift.io/serving-cert-secret-name"] = params.MaaSAPIServiceCertSecretName
+		r.SetAnnotations(annotations)
+	case gvk == GVKServiceAccount && name == MaaSAPIDeploymentName:
+		r.SetName(params.MaaSAPIName)
+	case gvk == GVKHTTPRoute && name == MaaSAPIRouteName:
+		r.SetName(params.MaaSAPIRouteName)
+		if err := patchHTTPRouteBackendRefs(r, params.MaaSAPIName); err != nil {
+			return err
+		}
+	case gvk == GVKAuthPolicy && name == MaaSAPIAuthPolicyName:
+		r.SetName(params.MaaSAPIAuthPolicyName)
+		if err := unstructured.SetNestedField(r.Object, params.MaaSAPIRouteName, "spec", "targetRef", "name"); err != nil {
+			return fmt.Errorf("scope maas-api AuthPolicy targetRef: %w", err)
+		}
+		if err := patchMaaSAPIAuthPolicyURL(r, params); err != nil {
+			return err
+		}
+	case gvk == GVKDestinationRule && name == GatewayDestinationRuleName:
+		r.SetName(tenantScopedName(GatewayDestinationRuleName, params.TenantName, true))
+		host, found, err := unstructured.NestedString(r.Object, "spec", "host")
+		if err != nil {
+			return fmt.Errorf("read scoped maas-api DestinationRule host: %w", err)
+		}
+		if found && host != "" {
+			if err := unstructured.SetNestedField(r.Object, replaceHostServiceAndNamespace(host, params.MaaSAPIName, params.AppNamespace), "spec", "host"); err != nil {
+				return fmt.Errorf("write scoped maas-api DestinationRule host: %w", err)
+			}
+		}
+	case gvk == GVKCronJob && name == MaaSAPIKeyCleanupCronJobName:
+		r.SetName(params.MaaSAPIKeyCleanupCronJobName)
+		if err := unstructured.SetNestedField(r.Object, params.MaaSAPIName, "spec", "jobTemplate", "spec", "template", "spec", "serviceAccountName"); err != nil {
+			return fmt.Errorf("scope maas-api cleanup service account: %w", err)
+		}
+		if err := addTenantSelectorLabels(r, params, "spec", "jobTemplate", "spec", "template", "metadata", "labels"); err != nil {
+			return fmt.Errorf("scope maas-api cleanup pod labels: %w", err)
+		}
+		if err := patchCleanupCronJobCommand(r, params.MaaSAPIName); err != nil {
+			return err
+		}
+	case gvk == GVKNetworkPolicy && name == MaaSAPIAllowMonitoringNetworkPolicyName:
+		r.SetName(params.MaaSAPIAllowMonitoringPolicyName)
+		if err := addTenantSelectorLabels(r, params, "spec", "podSelector", "matchLabels"); err != nil {
+			return fmt.Errorf("scope maas-api monitoring NetworkPolicy selector: %w", err)
+		}
+	case gvk == GVKNetworkPolicy && name == MaaSAPIAllowAuthorinoNetworkPolicyName:
+		r.SetName(params.MaaSAPIAllowAuthorinoPolicyName)
+		if err := addTenantSelectorLabels(r, params, "spec", "podSelector", "matchLabels"); err != nil {
+			return fmt.Errorf("scope maas-api authorino NetworkPolicy selector: %w", err)
+		}
+	case gvk == GVKNetworkPolicy && name == MaaSAPICleanupNetworkPolicyName:
+		r.SetName(params.MaaSAPICleanupPolicyName)
+		if err := addTenantSelectorLabels(r, params, "spec", "podSelector", "matchLabels"); err != nil {
+			return fmt.Errorf("scope maas-api cleanup NetworkPolicy selector: %w", err)
+		}
+		if err := patchCleanupNetworkPolicyEgress(r, params); err != nil {
+			return err
+		}
+	case gvk == GVKPodMonitor && name == MaaSAPIPodMonitorName:
+		r.SetName(params.MaaSAPIPodMonitorName)
+		if err := addTenantSelectorLabels(r, params, "spec", "selector", "matchLabels"); err != nil {
+			return fmt.Errorf("scope maas-api PodMonitor selector: %w", err)
+		}
+	case gvk == GVKClusterRoleBinding && name == MaaSAPIDeploymentName:
+		r.SetName(params.MaaSAPIName)
+		if err := patchClusterRoleBindingSubject(r, params.MaaSAPIName, params.AppNamespace); err != nil {
+			return err
+		}
+	case gvk == GVKClusterRoleBinding && name == MaaSAPISupplementalName:
+		r.SetName(params.MaaSAPISupplementalName)
+		if err := patchClusterRoleBindingSubject(r, params.MaaSAPIName, params.AppNamespace); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -130,6 +330,12 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "maas-api", "MAAS_SUBSCRIPTION_NAMESPACE", params.TenantNamespace); err != nil {
+		return fmt.Errorf("patch MAAS_SUBSCRIPTION_NAMESPACE: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "maas-api", "TENANT_NAME", params.TenantName); err != nil {
+		return fmt.Errorf("patch TENANT_NAME: %w", err)
 	}
 	return nil
 }
@@ -341,6 +547,27 @@ func patchClusterRoleBindingSubjectNS(r *unstructured.Unstructured, ns string) e
 	return nil
 }
 
+func patchClusterRoleBindingSubject(r *unstructured.Unstructured, name, ns string) error {
+	subjects, found, err := unstructured.NestedSlice(r.Object, "subjects")
+	if err != nil {
+		return fmt.Errorf("read ClusterRoleBinding subjects: %w", err)
+	}
+	if !found || len(subjects) == 0 {
+		return errors.New("ClusterRoleBinding subjects not found")
+	}
+	subj, ok := subjects[0].(map[string]any)
+	if !ok {
+		return errors.New("ClusterRoleBinding subjects[0] is not an object")
+	}
+	subj["name"] = name
+	subj["namespace"] = ns
+	subjects[0] = subj
+	if err := unstructured.SetNestedSlice(r.Object, subjects, "subjects"); err != nil {
+		return fmt.Errorf("write ClusterRoleBinding subjects: %w", err)
+	}
+	return nil
+}
+
 // replaceHostNamespace replaces the second segment of a dot-separated FQDN.
 // e.g. "maas-api.maas-api.svc.cluster.local" → "maas-api.opendatahub.svc.cluster.local"
 func replaceHostNamespace(host, ns string) string {
@@ -350,6 +577,164 @@ func replaceHostNamespace(host, ns string) string {
 		return strings.Join(parts, ".")
 	}
 	return host
+}
+
+func replaceHostServiceAndNamespace(host, service, ns string) string {
+	parts := strings.SplitN(host, ".", 3)
+	if len(parts) >= 2 {
+		parts[0] = service
+		parts[1] = ns
+		return strings.Join(parts, ".")
+	}
+	return host
+}
+
+func addTenantSelectorLabels(r *unstructured.Unstructured, params PlatformParams, fields ...string) error {
+	labels, found, err := unstructured.NestedStringMap(r.Object, fields...)
+	if err != nil {
+		return err
+	}
+	if !found {
+		labels = map[string]string{}
+	}
+	labels[LabelTenantName] = params.TenantName
+	labels[LabelTenantNamespace] = params.TenantNamespace
+	return unstructured.SetNestedStringMap(r.Object, labels, fields...)
+}
+
+func patchDeploymentSecretVolume(r *unstructured.Unstructured, volumeName, secretName string) error {
+	volumes, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("read deployment volumes: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	for i, raw := range volumes {
+		volume, ok := raw.(map[string]any)
+		if !ok || volume["name"] != volumeName {
+			continue
+		}
+		secret, ok := volume["secret"].(map[string]any)
+		if !ok {
+			secret = map[string]any{}
+		}
+		secret["secretName"] = secretName
+		volume["secret"] = secret
+		volumes[i] = volume
+		return unstructured.SetNestedSlice(r.Object, volumes, "spec", "template", "spec", "volumes")
+	}
+	return nil
+}
+
+func patchHTTPRouteBackendRefs(r *unstructured.Unstructured, serviceName string) error {
+	rules, found, err := unstructured.NestedSlice(r.Object, "spec", "rules")
+	if err != nil {
+		return fmt.Errorf("read HTTPRoute rules: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	for i, rawRule := range rules {
+		rule, ok := rawRule.(map[string]any)
+		if !ok {
+			return fmt.Errorf("HTTPRoute rules[%d] is not an object", i)
+		}
+		backendRefs, _ := rule["backendRefs"].([]any)
+		for j, rawRef := range backendRefs {
+			ref, ok := rawRef.(map[string]any)
+			if !ok {
+				return fmt.Errorf("HTTPRoute rules[%d].backendRefs[%d] is not an object", i, j)
+			}
+			ref["name"] = serviceName
+			backendRefs[j] = ref
+		}
+		if backendRefs != nil {
+			rule["backendRefs"] = backendRefs
+		}
+		rules[i] = rule
+	}
+	return unstructured.SetNestedSlice(r.Object, rules, "spec", "rules")
+}
+
+func patchMaaSAPIAuthPolicyURL(r *unstructured.Unstructured, params PlatformParams) error {
+	url, found, err := unstructured.NestedString(r.Object, "spec", "rules", "metadata", "apiKeyValidation", "http", "url")
+	if err != nil {
+		return fmt.Errorf("read scoped AuthPolicy validation URL: %w", err)
+	}
+	if !found || url == "" {
+		return nil
+	}
+	url = strings.Replace(url, "https://"+MaaSAPIDeploymentName+".", "https://"+params.MaaSAPIName+".", 1)
+	if err := unstructured.SetNestedField(r.Object, url, "spec", "rules", "metadata", "apiKeyValidation", "http", "url"); err != nil {
+		return fmt.Errorf("write scoped AuthPolicy validation URL: %w", err)
+	}
+	return nil
+}
+
+func patchCleanupCronJobCommand(r *unstructured.Unstructured, serviceName string) error {
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("cleanup containers not found")
+	}
+	for i, raw := range containers {
+		container, ok := raw.(map[string]any)
+		if !ok || container["name"] != "cleanup" {
+			continue
+		}
+		command, _ := container["command"].([]any)
+		for j, rawArg := range command {
+			arg, ok := rawArg.(string)
+			if !ok {
+				continue
+			}
+			arg = strings.ReplaceAll(arg, "https://"+MaaSAPIDeploymentName+":8443", "https://"+serviceName+":8443")
+			arg = strings.ReplaceAll(arg, "http://"+MaaSAPIDeploymentName+":8080", "http://"+serviceName+":8080")
+			command[j] = arg
+		}
+		container["command"] = command
+		containers[i] = container
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "jobTemplate", "spec", "template", "spec", "containers")
+	}
+	return nil
+}
+
+func patchCleanupNetworkPolicyEgress(r *unstructured.Unstructured, params PlatformParams) error {
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read cleanup NetworkPolicy egress: %w", err)
+	}
+	if !found || len(egress) == 0 {
+		return nil
+	}
+	first, ok := egress[0].(map[string]any)
+	if !ok {
+		return errors.New("cleanup NetworkPolicy egress[0] is not an object")
+	}
+	to, _ := first["to"].([]any)
+	if len(to) == 0 {
+		return nil
+	}
+	target, ok := to[0].(map[string]any)
+	if !ok {
+		return errors.New("cleanup NetworkPolicy egress[0].to[0] is not an object")
+	}
+	podSelector, ok := target["podSelector"].(map[string]any)
+	if !ok {
+		podSelector = map[string]any{}
+	}
+	matchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	if !ok {
+		matchLabels = map[string]any{}
+	}
+	matchLabels[LabelTenantName] = params.TenantName
+	matchLabels[LabelTenantNamespace] = params.TenantNamespace
+	podSelector["matchLabels"] = matchLabels
+	target["podSelector"] = podSelector
+	to[0] = target
+	first["to"] = to
+	egress[0] = first
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 }
 
 func setContainerImage(r *unstructured.Unstructured, containerName, image string) error {

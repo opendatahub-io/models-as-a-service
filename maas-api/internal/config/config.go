@@ -29,6 +29,7 @@ type Config struct {
 	GatewayNamespace string
 
 	MaaSSubscriptionNamespace string
+	TenantName                string
 
 	// Server configuration
 	Address string // Listen address for HTTPS (host:port)
@@ -78,6 +79,7 @@ func Load() *Config {
 		GatewayName:               gatewayName,
 		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
 		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                env.GetString("TENANT_NAME", constant.DefaultMaaSSubscriptionNamespace),
 		Address:                   env.GetString("ADDRESS", ""),
 		Secure:                    secure,
 		TLS:                       loadTLSConfig(),
@@ -103,6 +105,7 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.GatewayName, "gateway-name", c.GatewayName, "Name of the Gateway that has MaaS capabilities")
 	fs.StringVar(&c.GatewayNamespace, "gateway-namespace", c.GatewayNamespace, "Namespace where MaaS-enabled Gateway is deployed")
 	fs.StringVar(&c.MaaSSubscriptionNamespace, "maas-subscription-namespace", c.MaaSSubscriptionNamespace, "Namespace where MaaSSubscription CRs are located")
+	fs.StringVar(&c.TenantName, "tenant-name", c.TenantName, "Tenant identifier for tenant-scoped data records")
 
 	fs.StringVar(&c.Address, "address", c.Address, "HTTPS listen address (default :8443)")
 	fs.BoolVar(&c.Secure, "secure", c.Secure, "Use HTTPS (default: false)")
@@ -152,6 +155,12 @@ func (c *Config) Validate() error {
 	}
 	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
 		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
+	}
+	if strings.TrimSpace(c.TenantName) == "" {
+		c.TenantName = c.MaaSSubscriptionNamespace
+	}
+	if errs := validation.IsDNS1123Label(c.TenantName); len(errs) > 0 {
+		return fmt.Errorf("TENANT_NAME %q is invalid: %v", c.TenantName, errs)
 	}
 
 	// Validate API key max expiration days

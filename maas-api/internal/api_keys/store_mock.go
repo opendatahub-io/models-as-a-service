@@ -8,6 +8,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
 // MockStore implements MetadataStore for testing purposes.
@@ -41,7 +43,7 @@ var _ MetadataStore = (*MockStore)(nil)
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (m *MockStore) AddKey(
-	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
@@ -51,6 +53,9 @@ func (m *MockStore) AddKey(
 	}
 	if subscription == "" {
 		return errors.New("subscription is required")
+	}
+	if tenant == "" {
+		tenant = constant.DefaultMaaSSubscriptionNamespace
 	}
 
 	m.mu.Lock()
@@ -68,6 +73,7 @@ func (m *MockStore) AddKey(
 			Name:         name,
 			Description:  description,
 			Subscription: subscription,
+			Tenant:       tenant,
 			Groups:       userGroups,
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),

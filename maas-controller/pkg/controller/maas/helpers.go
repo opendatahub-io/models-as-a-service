@@ -2,6 +2,8 @@ package maas
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
@@ -126,7 +128,8 @@ func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTen
 		}
 		return false, fmt.Errorf("failed to read namespace %s for tenant discovery: %w", ns, err)
 	}
-	return namespace.Labels[tenantreconcile.LabelManagedByAITenant] == "true", nil
+	return namespace.Labels[tenantreconcile.LabelAIGatewayTenant] != "" ||
+		namespace.Labels[tenantreconcile.LabelManagedByAITenant] == "true", nil
 }
 
 // fetchTenantForNamespace returns the Tenant CR co-located in the given namespace.
@@ -177,6 +180,102 @@ func qualifiedName(namespace, name string) string {
 		return name
 	}
 	return namespace + "/" + name
+}
+
+func tenantMaaSAPIEndpoint(
+	ctx context.Context,
+	c client.Reader,
+	tenantNamespace string,
+	defaultTenantNamespace string,
+	maasAPINamespace string,
+	discoveryEnabled bool,
+) (serviceName, serviceNamespace string, err error) {
+	if maasAPINamespace == "" {
+		maasAPINamespace = tenantreconcile.MaaSAPIDeploymentName
+	}
+	if tenantNamespace == defaultTenantNamespace || !discoveryEnabled {
+		return tenantreconcile.MaaSAPIDeploymentName, maasAPINamespace, nil
+	}
+
+	tenantName := ""
+	tenant, tenantErr := fetchTenantForNamespace(ctx, c, tenantNamespace)
+	if tenantErr == nil {
+		tenantName = tenantNameFromLabels(tenant.Labels, tenantNamespace)
+	} else if !apierrors.IsNotFound(tenantErr) {
+		return "", "", fmt.Errorf("read tenant %s/%s for maas-api endpoint: %w", tenantNamespace, maasv1alpha1.TenantInstanceName, tenantErr)
+	}
+
+	if tenantName == "" {
+		var ns corev1.Namespace
+		if err := c.Get(ctx, client.ObjectKey{Name: tenantNamespace}, &ns); err != nil {
+			if apierrors.IsNotFound(err) {
+				return "", "", fmt.Errorf("tenant namespace %q not found for maas-api endpoint", tenantNamespace)
+			}
+			return "", "", fmt.Errorf("read namespace %q for maas-api endpoint: %w", tenantNamespace, err)
+		}
+		tenantName = tenantNameFromLabels(ns.Labels, tenantNamespace)
+	}
+
+	return tenantScopedResourceName(tenantreconcile.MaaSAPIDeploymentName, tenantName), maasAPINamespace, nil
+}
+
+func tenantNameFromLabels(labels map[string]string, fallback string) string {
+	if labels != nil {
+		if tenantName := strings.TrimSpace(labels[tenantreconcile.LabelAIGatewayTenant]); tenantName != "" {
+			return tenantName
+		}
+		if tenantName := strings.TrimSpace(labels[tenantreconcile.LabelTenantName]); tenantName != "" {
+			return tenantName
+		}
+	}
+	return fallback
+}
+
+func hasTenantDiscoveryLabel(obj client.Object) bool {
+	labels := obj.GetLabels()
+	return labels[tenantreconcile.LabelAIGatewayTenant] != "" ||
+		labels[tenantreconcile.LabelManagedByAITenant] == "true"
+}
+
+func tenantScopedResourceName(base, tenantName string) string {
+	tenantName = dns1123LabelFragment(tenantName)
+	if tenantName == "" {
+		tenantName = "tenant"
+	}
+	raw := base + "-" + tenantName
+	if len(raw) <= 63 {
+		return raw
+	}
+	sum := sha256.Sum256([]byte(raw))
+	hash := hex.EncodeToString(sum[:])[:8]
+	budget := 63 - len(hash) - 1
+	prefix := strings.Trim(raw[:budget], "-")
+	if prefix == "" {
+		prefix = base
+	}
+	return prefix + "-" + hash
+}
+
+func dns1123LabelFragment(value string) string {
+	var b strings.Builder
+	lastDash := false
+	for _, r := range strings.ToLower(value) {
+		valid := r == '-' || (r >= '0' && r <= '9') || (r >= 'a' && r <= 'z')
+		if !valid {
+			r = '-'
+		}
+		if r == '-' {
+			if b.Len() == 0 || lastDash {
+				continue
+			}
+			lastDash = true
+			b.WriteByte('-')
+			continue
+		}
+		lastDash = false
+		b.WriteRune(r)
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 func annotationListContains(value, want string) bool {
@@ -239,9 +338,9 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 	if err := c.Get(ctx, client.ObjectKey{Name: routeName, Namespace: routeNamespace}, route); err != nil {
 		return fmt.Errorf("failed to get HTTPRoute %s/%s for gateway validation: %w", routeNamespace, routeName, err)
 	}
-	if len(route.Spec.ParentRefs) > maxHTTPRouteParentRefs {
-		return fmt.Errorf("HTTPRoute %s/%s has %d parentRefs, exceeding supported maximum %d",
-			routeNamespace, routeName, len(route.Spec.ParentRefs), maxHTTPRouteParentRefs)
+	if len(route.Spec.ParentRefs) != 1 {
+		return fmt.Errorf("HTTPRoute %s/%s must reference exactly one Gateway, got %d parentRefs",
+			routeNamespace, routeName, len(route.Spec.ParentRefs))
 	}
 	for _, parentRef := range route.Spec.ParentRefs {
 		parentNamespace := routeNamespace
@@ -254,5 +353,3 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 	}
 	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
 }
-
-const maxHTTPRouteParentRefs = 32
