@@ -315,24 +315,14 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		configPatches[i] = patch
 	}
 
-	// Patches 2 and 3 disable ext_proc on non-inference routes (maas-api-route rules 0 and 1).
+	// Patches 2 and 3 disable ext_proc on non-inference routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
 	for i := 2; i < 4; i++ {
-		patch, ok := configPatches[i].(map[string]any)
-		if !ok {
-			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+		if err := unstructured.SetNestedField(configPatches[i].(map[string]any),
+			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName, i-2),
+			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
+			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
 		}
-
-		routeNamePath := []string{"match", "routeConfiguration", "vhost", "route", "name"}
-		routeName, _, _ := unstructured.NestedString(patch, routeNamePath...)
-		if routeName != "" && strings.Contains(routeName, "PLACEHOLDER.") {
-			newRouteName := strings.Replace(routeName, "PLACEHOLDER.", params.AppNamespace+".", 1)
-			if err := unstructured.SetNestedField(patch, newRouteName, routeNamePath...); err != nil {
-				return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
-			}
-		}
-
-		configPatches[i] = patch
 	}
 
 	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {

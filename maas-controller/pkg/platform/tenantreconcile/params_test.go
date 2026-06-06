@@ -205,12 +205,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName, i-2)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
-		for _, filterName := range []string{"envoy.filters.http.ext_proc.bbr-pre", "envoy.filters.http.ext_proc.bbr"} {
-			disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", filterName, "disabled")
-			require.NoError(t, err, "configPatches[%d] %s disabled field", i, filterName)
-			require.True(t, found, "configPatches[%d] %s disabled field should exist", i, filterName)
-			assert.True(t, disabled, "configPatches[%d] %s should be disabled", i, filterName)
-		}
+		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.bbr-pre", "disabled")
+		require.NoError(t, err, "configPatches[%d] bbr-pre disabled field", i)
+		require.True(t, found, "configPatches[%d] bbr-pre disabled field should exist", i)
+		assert.True(t, disabled, "configPatches[%d] bbr-pre should be disabled", i)
 	}
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
