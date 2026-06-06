@@ -254,6 +254,9 @@ spec:
         - message: AITenant name must be at most 41 characters (required for per-tenant
             resource naming with 63-character Kubernetes limit)
           rule: self.metadata.name.size() <= 41
+        - message: AITenant name must be a valid DNS-1123 label (lowercase alphanumeric
+            and hyphens, starting and ending with alphanumeric)
+          rule: self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
     served: true
     storage: true
     subresources:

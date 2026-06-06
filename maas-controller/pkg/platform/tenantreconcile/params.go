@@ -74,8 +74,6 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 }
 
 // patchResource applies tenant-specific patches to a single resource.
-//
-//nolint:gocyclo // High cyclomatic complexity is acceptable for resource type dispatch
 func patchResource(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	gvk := r.GroupVersionKind()
 	name := r.GetName()

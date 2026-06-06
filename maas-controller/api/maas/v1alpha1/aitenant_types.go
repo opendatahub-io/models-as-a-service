@@ -33,6 +33,7 @@ const (
 // +kubebuilder:resource:scope=Namespaced,shortName=ait
 // +kubebuilder:validation:XValidation:rule="self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name",message="spec.tenantNamespace.name is immutable"
 // +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 41",message="AITenant name must be at most 41 characters (required for per-tenant resource naming with 63-character Kubernetes limit)"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="AITenant name must be a valid DNS-1123 label (lowercase alphanumeric and hyphens, starting and ending with alphanumeric)"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.tenantNamespace`,description="Tenant namespace"
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
