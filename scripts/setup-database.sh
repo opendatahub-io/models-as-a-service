@@ -55,14 +55,20 @@ resolve_postgres_image() {
   fi
 }
 
-# Detect upgrade vs fresh install by checking for existing postgres in legacy namespaces
+# Detect upgrade vs fresh install by checking for existing postgres in legacy namespaces or infrastructure namespace
 EXISTING_POSTGRES_NS=""
-for ns in "${LEGACY_NAMESPACES[@]}"; do
-  if kubectl get deployment postgres -n "$ns" &>/dev/null 2>&1; then
-    EXISTING_POSTGRES_NS="$ns"
-    break
-  fi
-done
+# Check infrastructure namespace first (current location)
+if kubectl get deployment postgres -n "$INFRA_NAMESPACE" &>/dev/null 2>&1; then
+  EXISTING_POSTGRES_NS="$INFRA_NAMESPACE"
+else
+  # Fall back to checking legacy namespaces for upgrade scenario
+  for ns in "${LEGACY_NAMESPACES[@]}"; do
+    if kubectl get deployment postgres -n "$ns" &>/dev/null 2>&1; then
+      EXISTING_POSTGRES_NS="$ns"
+      break
+    fi
+  done
+fi
 
 if [[ -n "$EXISTING_POSTGRES_NS" ]]; then
   # UPGRADE PATH: postgres exists in legacy namespace
@@ -122,10 +128,16 @@ fi
 POSTGRES_USER="${POSTGRES_USER:-maas}"
 POSTGRES_DB="${POSTGRES_DB:-maas}"
 
-# Generate random password if not provided
+# Generate random password if not provided and secret doesn't already exist
 if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
-  POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
-  echo "  Generated random PostgreSQL password (stored in secret postgres-creds)"
+  # Check if postgres-creds secret already exists (from previous run)
+  if kubectl get secret postgres-creds -n "$INFRA_NAMESPACE" &>/dev/null; then
+    echo "  Using existing postgres-creds secret (password preserved from previous deployment)"
+    POSTGRES_PASSWORD="$(kubectl get secret postgres-creds -n "$INFRA_NAMESPACE" -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
+  else
+    POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+    echo "  Generated random PostgreSQL password (stored in secret postgres-creds)"
+  fi
 fi
 
 echo "  Creating PostgreSQL deployment..."
