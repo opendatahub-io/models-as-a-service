@@ -13,7 +13,8 @@ import time
 import pytest
 
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
-INFRA_NAMESPACE = "redhat-ai-gateway-infra"
+AITENANT_NAMESPACE = "ai-tenants"  # Where AITenant CRs live
+MAAS_API_NAMESPACE = "redhat-ai-gateway-infra"  # Where maas-api workloads run
 TEST_TENANT_NAME = "test-e2e"
 GATEWAY_NAMESPACE = "openshift-ingress"
 
@@ -130,7 +131,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: {TEST_TENANT_NAME}
-  namespace: {INFRA_NAMESPACE}
+  namespace: {AITENANT_NAMESPACE}
 spec:
   tenantNamespace:
     name: ai-tenant-{TEST_TENANT_NAME}
@@ -155,7 +156,7 @@ spec:
     yield TEST_TENANT_NAME
 
     # Cleanup
-    _oc_run(["delete", "aitenant", TEST_TENANT_NAME, "-n", INFRA_NAMESPACE], timeout=120)
+    _oc_run(["delete", "aitenant", TEST_TENANT_NAME, "-n", AITENANT_NAMESPACE], timeout=120)
     _oc_run(["delete", "tenant", "default-tenant", "-n", f"ai-tenant-{TEST_TENANT_NAME}"], timeout=120)
     _oc_run(["delete", "namespace", f"ai-tenant-{TEST_TENANT_NAME}"], timeout=120)
 
@@ -167,24 +168,24 @@ class TestMultiTenantDeployment:
         """AC1: Verify maas-api-{tenant} deployment is created."""
         expected_name = f"maas-api-{test_aitenant}"
 
-        assert _wait_deployment_ready(expected_name, INFRA_NAMESPACE, timeout=180), (
-            f"Deployment {expected_name} not ready in {INFRA_NAMESPACE}"
+        assert _wait_deployment_ready(expected_name, MAAS_API_NAMESPACE, timeout=180), (
+            f"Deployment {expected_name} not ready in {MAAS_API_NAMESPACE}"
         )
 
     def test_tenant_maas_api_service_created(self, test_aitenant):
         """AC1: Verify Service maas-api-{tenant} is created."""
         expected_name = f"maas-api-{test_aitenant}"
 
-        assert _resource_exists("service", expected_name, INFRA_NAMESPACE), (
-            f"Service {expected_name} not found in {INFRA_NAMESPACE}"
+        assert _resource_exists("service", expected_name, MAAS_API_NAMESPACE), (
+            f"Service {expected_name} not found in {MAAS_API_NAMESPACE}"
         )
 
     def test_tenant_httproute_created(self, test_aitenant):
         """AC4: Verify HTTPRoute is created for the tenant."""
         expected_name = f"maas-api-route-{test_aitenant}"
 
-        assert _resource_exists("httproute", expected_name, INFRA_NAMESPACE), (
-            f"HTTPRoute {expected_name} not found in {INFRA_NAMESPACE}"
+        assert _resource_exists("httproute", expected_name, MAAS_API_NAMESPACE), (
+            f"HTTPRoute {expected_name} not found in {MAAS_API_NAMESPACE}"
         )
 
     def test_tenant_httproute_backend_refs(self, test_aitenant):
@@ -192,7 +193,7 @@ class TestMultiTenantDeployment:
         route_name = f"maas-api-route-{test_aitenant}"
         service_name = f"maas-api-{test_aitenant}"
 
-        route = _oc_json(["get", "httproute", route_name, "-n", INFRA_NAMESPACE, "-o", "json"])
+        route = _oc_json(["get", "httproute", route_name, "-n", MAAS_API_NAMESPACE, "-o", "json"])
 
         # All rules should point to the correct Service
         for rule in route.get("spec", {}).get("rules", []):
@@ -205,7 +206,7 @@ class TestMultiTenantDeployment:
         """AC2: Verify TENANT_NAME environment variable is set."""
         deployment_name = f"maas-api-{test_aitenant}"
 
-        dep = _oc_json(["get", "deployment", deployment_name, "-n", INFRA_NAMESPACE, "-o", "json"])
+        dep = _oc_json(["get", "deployment", deployment_name, "-n", MAAS_API_NAMESPACE, "-o", "json"])
 
         containers = dep.get("spec", {}).get("template", {}).get("spec", {}).get("containers", [])
         assert containers, "Deployment has no containers"
@@ -221,11 +222,11 @@ class TestMultiTenantDeployment:
     def test_default_and_tenant_coexist(self, test_aitenant):
         """AC3: Verify multiple tenants can coexist without collision."""
         # Check default maas-api exists
-        default_exists = _resource_exists("deployment", "maas-api", INFRA_NAMESPACE)
+        default_exists = _resource_exists("deployment", "maas-api", MAAS_API_NAMESPACE)
 
         # Check tenant maas-api exists
         tenant_deployment = f"maas-api-{test_aitenant}"
-        tenant_exists = _resource_exists("deployment", tenant_deployment, INFRA_NAMESPACE)
+        tenant_exists = _resource_exists("deployment", tenant_deployment, MAAS_API_NAMESPACE)
 
         if not default_exists:
             pytest.skip("Default maas-api not deployed - single tenant test only")
@@ -233,8 +234,8 @@ class TestMultiTenantDeployment:
         assert tenant_exists, f"Tenant deployment {tenant_deployment} not found"
 
         # Verify both are ready simultaneously
-        default_ready = _wait_deployment_ready("maas-api", INFRA_NAMESPACE, timeout=30)
-        tenant_ready = _wait_deployment_ready(tenant_deployment, INFRA_NAMESPACE, timeout=30)
+        default_ready = _wait_deployment_ready("maas-api", MAAS_API_NAMESPACE, timeout=30)
+        tenant_ready = _wait_deployment_ready(tenant_deployment, MAAS_API_NAMESPACE, timeout=30)
 
         assert default_ready and tenant_ready, (
             "Both default and tenant maas-api should be ready simultaneously"

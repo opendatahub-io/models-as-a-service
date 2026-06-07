@@ -41,6 +41,12 @@ const (
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 	LabelAITenantManaged = "maas.opendatahub.io/managed-by-aitenant"
 
+	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
+	DefaultAITenantNamespace = "ai-tenants"
+
+	// DefaultMaaSAPINamespace is the infrastructure namespace where maas-api workloads run.
+	DefaultMaaSAPINamespace = "redhat-ai-gateway-infra"
+
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"

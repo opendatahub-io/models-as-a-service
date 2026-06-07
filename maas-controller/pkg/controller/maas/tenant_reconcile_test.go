@@ -492,7 +492,7 @@ func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManage
 	}
 
 	// All tenants deploy maas-api to infrastructure namespace
-	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal(DefaultAITenantNamespace))
+	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
 }
 
 func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
@@ -505,7 +505,7 @@ func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
 	}
 
 	// All tenants deploy maas-api to infrastructure namespace
-	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal(DefaultAITenantNamespace))
+	g.Expect(r.appNamespaceForTenant(tenant)).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
 }
 
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {

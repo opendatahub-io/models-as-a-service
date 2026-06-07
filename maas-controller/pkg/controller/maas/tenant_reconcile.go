@@ -288,7 +288,7 @@ func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) st
 	// All maas-api instances deploy to the infrastructure namespace (redhat-ai-gateway-infra)
 	// for consistent architecture and to avoid mixing infrastructure services with tenant
 	// management assets. The shared database secret also lives in this namespace.
-	return DefaultAITenantNamespace
+	return tenantreconcile.DefaultMaaSAPINamespace
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {
@@ -331,7 +331,7 @@ func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1
 
 func (r *TenantReconciler) cleanupLegacyMaaSAPIDeployment(ctx context.Context, log logr.Logger) error {
 	// Clean up maas-api resources from legacy namespaces (opendatahub, redhat-ods-applications)
-	// now that all maas-api instances deploy to redhat-ai-gateway-infra.
+	// now that all maas-api instances deploy to the infrastructure namespace.
 	legacyNamespaces := []string{"opendatahub", "redhat-ods-applications"}
 
 	for _, ns := range legacyNamespaces {

@@ -187,7 +187,7 @@ func TestPatchMaaSAPIAuthPolicyTargetRef(t *testing.T) {
 
 			appNamespace := "opendatahub"
 			if tt.tenantID != "" {
-				appNamespace = "redhat-ai-gateway-infra"
+				appNamespace = DefaultMaaSAPINamespace
 			}
 
 			params := PlatformParams{
