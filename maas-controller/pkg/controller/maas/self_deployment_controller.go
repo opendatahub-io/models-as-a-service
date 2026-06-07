@@ -214,65 +214,18 @@ func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Conte
 // ensureTenantReferencesConfig links default-tenant to Config/default via the same non-controller
 // ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the Tenant
 // shell without owner refs; this reconciler converges them once Config has a UID.
+//
+// DISABLED: Cross-namespace owner references (cluster-scoped Config → namespaced Tenant) are not
+// supported by Kubernetes. Setting such a reference causes Kubernetes to immediately mark the
+// Tenant for deletion with a deletionTimestamp, leading to the Tenant bootstrap loop bug.
+// See: https://kubernetes.io/docs/concepts/overview/working-with-objects/owners-dependents/
 func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
-	if r.TenantSubscriptionNamespace == "" {
-		return nil, nil
-	}
-	if r.Scheme == nil {
-		return nil, nil
-	}
-	log := ctrl.LoggerFrom(ctx)
-	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Tenant; requeueing")
-			res := ctrl.Result{RequeueAfter: 2 * time.Second}
-			return &res, nil
-		}
-		return nil, err
-	}
-	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Tenant; requeueing")
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
-	}
-	if cfg.UID == "" {
-		res := ctrl.Result{RequeueAfter: 2 * time.Second}
-		return &res, nil
-	}
-	tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
-	var tenant maasv1alpha1.Tenant
-	if err := r.Get(ctx, tKey, &tenant); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil, nil
-		}
-		return nil, err
-	}
-	if tenantReferencesConfig(&tenant, &cfg) {
-		return nil, nil
-	}
-	base := tenant.DeepCopy()
-	if err := controllerutil.SetOwnerReference(&cfg, &tenant, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on tenant: %w", err)
-	}
-	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch tenant ownerReferences: %w", err)
-	}
-	log.Info("set Config owner reference on default-tenant", "namespace", r.TenantSubscriptionNamespace)
+	// Disabled - cross-namespace owner references cause Kubernetes to delete the Tenant
 	return nil, nil
 }
 
-func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config) bool {
-	for _, ref := range tenant.OwnerReferences {
-		if ref.UID == ct.UID &&
-			ref.Kind == maasv1alpha1.ConfigKind &&
-			ref.APIVersion == maasv1alpha1.GroupVersion.String() {
-			return true
-		}
-	}
-	return false
-}
+// tenantReferencesConfig helper function removed - no longer needed after disabling
+// cross-namespace owner references (Config → Tenant)
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
