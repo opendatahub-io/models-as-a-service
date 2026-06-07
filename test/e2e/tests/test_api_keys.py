@@ -903,7 +903,9 @@ class TestEphemeralKeyCleanup:
 
     @pytest.fixture
     def deployment_namespace(self) -> str:
-        return os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+        """Return the namespace where maas-api is deployed."""
+        from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+        return MAAS_API_DEPLOYMENT_NAMESPACE
 
     def test_cronjob_exists_and_configured(self, deployment_namespace: str):
         """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
