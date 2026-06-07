@@ -45,7 +45,7 @@ spec:
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
-            value: "redhat-ai-gateway-infra"
+            value: "ai-tenants"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
