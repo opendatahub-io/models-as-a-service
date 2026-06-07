@@ -246,6 +246,7 @@ func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params Platfo
 		if !found {
 			return fmt.Errorf("HTTPRoute rule[%d] has no backendRefs", i)
 		}
+		rewritten := false
 		for j, backendRefRaw := range backendRefs {
 			backendRef, ok := backendRefRaw.(map[string]any)
 			if !ok {
@@ -255,7 +256,11 @@ func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params Platfo
 			if name, exists := backendRef["name"]; exists && name == "maas-api" {
 				backendRef["name"] = tenantServiceName
 				backendRefs[j] = backendRef
+				rewritten = true
 			}
+		}
+		if !rewritten {
+			return fmt.Errorf("HTTPRoute rule[%d] has no \"maas-api\" backendRef to rewrite", i)
 		}
 		if err := unstructured.SetNestedSlice(rule, backendRefs, "backendRefs"); err != nil {
 			return fmt.Errorf("write HTTPRoute rule[%d] backendRefs: %w", i, err)

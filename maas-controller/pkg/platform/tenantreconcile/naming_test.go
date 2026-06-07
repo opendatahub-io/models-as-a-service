@@ -59,20 +59,6 @@ func TestTenantIdentifierFor(t *testing.T) {
 			},
 			expected: "engineering",
 		},
-		{
-			name: "tenant with AITenant label but no tenant name returns empty",
-			tenant: &maasv1alpha1.Tenant{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "default-tenant",
-					Namespace: "ai-tenant-broken",
-					Labels: map[string]string{
-						LabelAITenantManaged: "true",
-						// Missing LabelTenantName
-					},
-				},
-			},
-			expected: "",
-		},
 	}
 
 	for _, tt := range tests {
@@ -81,6 +67,23 @@ func TestTenantIdentifierFor(t *testing.T) {
 			assert.Equal(t, tt.expected, got)
 		})
 	}
+
+	// Separate test for panic case: AITenant-managed without tenant name
+	t.Run("tenant with AITenant label but no tenant name panics", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default-tenant",
+				Namespace: "ai-tenant-broken",
+				Labels: map[string]string{
+					LabelAITenantManaged: "true",
+					// Missing LabelTenantName - should panic
+				},
+			},
+		}
+		assert.Panics(t, func() {
+			TenantIdentifierFor(tenant)
+		})
+	})
 }
 
 func TestResourceNamingFunctions(t *testing.T) {

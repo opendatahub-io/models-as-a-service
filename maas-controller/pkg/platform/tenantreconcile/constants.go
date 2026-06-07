@@ -5,6 +5,8 @@
 package tenantreconcile
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -180,6 +182,7 @@ func MaaSAPIServiceName(tenantID string) string {
 // Returns:
 //   - Empty string ("") for default/legacy tenant (not managed by AITenant)
 //   - Tenant name (e.g., "redteam") for AITenant-managed tenants
+//   - Panics if LabelAITenantManaged is true but LabelTenantName is missing (invalid state)
 //
 // The tenant identifier is used to generate unique per-tenant resource names.
 //
@@ -196,9 +199,16 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) string {
 	labels := tenant.GetLabels()
 	if labels != nil && labels[LabelAITenantManaged] == "true" {
 		// Use the tenant name from the label set by AITenant controller
-		if tenantName := labels[LabelTenantName]; tenantName != "" {
-			return tenantName
+		tenantName := labels[LabelTenantName]
+		if tenantName == "" {
+			// Fail closed: AITenant-managed Tenant must have LabelTenantName set.
+			// This should never happen if created by AITenant controller, but if someone
+			// manually creates a Tenant with LabelAITenantManaged=true and no LabelTenantName,
+			// we must not fall back to default tenant name.
+			panic(fmt.Sprintf("Tenant %s/%s has %s=true but %s is missing or empty",
+				tenant.Namespace, tenant.Name, LabelAITenantManaged, LabelTenantName))
 		}
+		return tenantName
 	}
 
 	// Legacy/default tenant - return empty string for backward compatibility
