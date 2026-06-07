@@ -174,8 +174,9 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
-	// Owner references are no longer set because cross-namespace owner references
-	// (cluster-scoped Config → namespaced Tenant) cause Kubernetes to immediately
-	// delete the Tenant. This was the root cause of the Tenant bootstrap loop bug.
-	g.Expect(updated.OwnerReferences).To(BeEmpty())
+	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
+	ref := updated.OwnerReferences[0]
+	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-tenant")))
+	g.Expect(ref.Kind).To(Equal(maasv1alpha1.ConfigKind))
+	g.Expect(ref.Controller).To(BeNil())
 }
