@@ -88,7 +88,8 @@ if [[ -n "$EXISTING_POSTGRES_NS" ]]; then
   # Replace short hostname with FQDN for cross-namespace access.
   # Extract the service name from the connection URL and append the namespace FQDN.
   # Handles URLs like: postgresql://user:pass@postgres:5432/db or @postgres-primary:5432/db
-  FQDN_URL=$(echo "$EXISTING_URL" | sed -E "s|@([^:/@]+)(:[0-9]+)|@\1.${EXISTING_POSTGRES_NS}.svc.cluster.local\2|")
+  # Only append FQDN if the hostname doesn't already contain dots (not already a FQDN)
+  FQDN_URL=$(echo "$EXISTING_URL" | sed -E "s|@([^.:/@]+)(:[0-9]+)|@\1.${EXISTING_POSTGRES_NS}.svc.cluster.local\2|")
 
   # Ensure infrastructure namespace exists
   if ! kubectl get namespace "$INFRA_NAMESPACE" >/dev/null 2>&1; then
