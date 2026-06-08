@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"errors"
 	"fmt"
+	neturl "net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -199,6 +200,43 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 	if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
 		return fmt.Errorf("patch cleanup CronJob image: %w", err)
 	}
+
+	// Patch the cleanup command to use tenant-specific service name
+	containers, found, err := unstructured.NestedSlice(r.Object,
+		"spec", "jobTemplate", "spec", "template", "spec", "containers")
+	if err != nil {
+		return fmt.Errorf("read cleanup CronJob containers: %w", err)
+	}
+	if found && len(containers) > 0 {
+		container, ok := containers[0].(map[string]interface{})
+		if !ok {
+			return errors.New("cleanup CronJob container is not a map")
+		}
+		command, ok := container["command"].([]interface{})
+		if ok && len(command) > 0 {
+			tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
+			// Look for the curl command with maas-api:8443
+			modified := false
+			for i, cmdInterface := range command {
+				if cmd, ok := cmdInterface.(string); ok && strings.Contains(cmd, "maas-api:8443") {
+					// Replace maas-api with tenant-specific service name
+					newCmd := strings.ReplaceAll(cmd, "maas-api:8443", tenantServiceName+":8443")
+					command[i] = newCmd
+					modified = true
+					log.V(4).Info("Patching cleanup CronJob command URL", "old", "maas-api:8443", "new", tenantServiceName+":8443")
+				}
+			}
+			if modified {
+				container["command"] = command
+				containers[0] = container
+				if err := unstructured.SetNestedSlice(r.Object, containers,
+					"spec", "jobTemplate", "spec", "template", "spec", "containers"); err != nil {
+					return fmt.Errorf("write cleanup CronJob containers: %w", err)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -308,17 +346,31 @@ func patchMaaSAPIAuthPolicy(log logr.Logger, r *unstructured.Unstructured, param
 	if !found {
 		return errors.New("AuthPolicy validation URL not found")
 	}
-	if url != "" && strings.Contains(url, ".placehold.") {
-		// Replace both the placeholder namespace AND the service name
-		tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
-		// Original: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
-		// Target:   https://maas-api-redteam.redhat-ai-gateway-infra.svc.cluster.local:8443/...
-		newURL := strings.Replace(url, "maas-api.placehold.", tenantServiceName+"."+params.AppNamespace+".", 1)
-		log.V(4).Info("Patching AuthPolicy validation URL", "old", url, "new", newURL)
-		if err := unstructured.SetNestedField(r.Object, newURL,
-			"spec", "rules", "metadata", "apiKeyValidation", "http", "url"); err != nil {
-			return fmt.Errorf("write AuthPolicy validation URL: %w", err)
-		}
+	if url == "" {
+		return errors.New("AuthPolicy validation URL is empty")
+	}
+
+	// Always rewrite the URL to use the correct tenant-specific service name
+	tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
+	// Parse the URL to extract just the path and port
+	u, err := neturl.Parse(url)
+	if err != nil {
+		return fmt.Errorf("parse AuthPolicy validation URL: %w", err)
+	}
+
+	// Rebuild URL with correct service name and namespace
+	// Target: https://maas-api-{tenant}.{namespace}.svc.cluster.local:8443/internal/v1/api-keys/validate
+	newHost := fmt.Sprintf("%s.%s.svc.cluster.local", tenantServiceName, params.AppNamespace)
+	u.Host = newHost
+	if u.Port() == "" {
+		u.Host = newHost + ":8443" // Default port if not specified
+	}
+	newURL := u.String()
+
+	log.V(4).Info("Patching AuthPolicy validation URL", "old", url, "new", newURL)
+	if err := unstructured.SetNestedField(r.Object, newURL,
+		"spec", "rules", "metadata", "apiKeyValidation", "http", "url"); err != nil {
+		return fmt.Errorf("write AuthPolicy validation URL: %w", err)
 	}
 	return nil
 }
@@ -333,7 +385,7 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 		return errors.New("maas-api DestinationRule host not found")
 	}
 	if host != "" {
-		newHost := replaceHostNamespace(host, params.AppNamespace)
+		newHost := fmt.Sprintf("%s.%s.svc.cluster.local", MaaSAPIServiceName(params.TenantIdentifier), params.AppNamespace)
 		log.V(4).Info("Patching maas-api DestinationRule host", "old", host, "new", newHost)
 		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
 			return fmt.Errorf("write maas-api DestinationRule host: %w", err)
