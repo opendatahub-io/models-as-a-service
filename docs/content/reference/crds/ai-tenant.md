@@ -2,7 +2,7 @@
 
 Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
-`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 ---
 
@@ -76,7 +76,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: red-team
-  namespace: redhat-ai-gateway-infra
+  namespace: ai-tenants
 spec:
   tenantNamespace:
     name: red-team-maas

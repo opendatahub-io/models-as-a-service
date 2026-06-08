@@ -1,9 +1,9 @@
 -- Schema for API Key Management: 0004_add_tenant_column.up.sql
--- Description: Add tenant_id column — binds each API key to a tenant identifier
+-- Description: Add tenant column — binds each API key to a tenant identifier
 
--- Add tenant_id column (idempotent). The ADR default tenant backfills pre-existing
--- single-tenant rows so existing API keys remain valid after upgrade.
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT 'models-as-a-service';
+-- Add tenant column (idempotent). DEFAULT '' backfills pre-existing rows with the
+-- sentinel empty-string value so the migration is safe on populated tables.
+ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS tenant TEXT NOT NULL DEFAULT '';
 
--- Index for tenant-scoped queries.
-CREATE INDEX IF NOT EXISTS idx_api_keys_tenant_id ON api_keys(tenant_id);
+-- Index for tenant-scoped queries. Migration 0005 renames this to tenant_id.
+CREATE INDEX IF NOT EXISTS idx_api_keys_tenant ON api_keys(tenant);

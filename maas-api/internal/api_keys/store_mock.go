@@ -170,11 +170,15 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	}, nil
 }
 
-// filterKeys applies username, status, and ephemeral filters to API keys.
-func (m *MockStore) filterKeys(username string, statusFilters []string, includeEphemeral bool, now time.Time) []ApiKey {
+// filterKeys applies tenant, username, status, and ephemeral filters to API keys.
+func (m *MockStore) filterKeys(tenant string, username string, statusFilters []string, includeEphemeral bool, now time.Time) []ApiKey {
 	filtered := make([]ApiKey, 0, len(m.keys))
 
 	for _, k := range m.keys {
+		if tenant != "" && k.metadata.Tenant != tenant {
+			continue
+		}
+
 		// Filter ephemeral keys unless explicitly included
 		if !includeEphemeral && k.ephemeral {
 			continue
@@ -322,6 +326,28 @@ func (m *MockStore) Search(
 	sortParams *SortParams,
 	pagination *PaginationParams,
 ) (*PaginatedResult, error) {
+	return m.search(ctx, "", username, filters, sortParams, pagination)
+}
+
+func (m *MockStore) SearchForTenant(
+	ctx context.Context,
+	tenant string,
+	username string,
+	filters *SearchFilters,
+	sortParams *SortParams,
+	pagination *PaginationParams,
+) (*PaginatedResult, error) {
+	return m.search(ctx, normalizeTenantName(tenant), username, filters, sortParams, pagination)
+}
+
+func (m *MockStore) search(
+	ctx context.Context,
+	tenant string,
+	username string,
+	filters *SearchFilters,
+	sortParams *SortParams,
+	pagination *PaginationParams,
+) (*PaginatedResult, error) {
 	// Validate pagination
 	if pagination.Limit < 1 || pagination.Limit > MaxLimit {
 		return nil, errors.New("limit must be between 1 and 100")
@@ -338,7 +364,7 @@ func (m *MockStore) Search(
 
 	// Filter keys by username, status, and ephemeral
 	now := time.Now().UTC()
-	allKeys := m.filterKeys(username, filters.Status, includeEphemeral, now)
+	allKeys := m.filterKeys(tenant, username, filters.Status, includeEphemeral, now)
 
 	// Filter by subscription
 	if filters.Subscription != nil && *filters.Subscription != "" {
@@ -367,11 +393,22 @@ func (m *MockStore) Search(
 }
 
 func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
+	return m.get(ctx, keyID, "")
+}
+
+func (m *MockStore) GetForTenant(ctx context.Context, tenant string, keyID string) (*ApiKey, error) {
+	return m.get(ctx, keyID, normalizeTenantName(tenant))
+}
+
+func (m *MockStore) get(ctx context.Context, keyID string, tenant string) (*ApiKey, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	k, ok := m.keys[keyID]
 	if !ok {
+		return nil, ErrKeyNotFound
+	}
+	if tenant != "" && k.metadata.Tenant != tenant {
 		return nil, ErrKeyNotFound
 	}
 
@@ -394,11 +431,19 @@ func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {
 }
 
 func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, error) {
+	return m.getByHash(ctx, keyHash, "")
+}
+
+func (m *MockStore) GetByHashForTenant(ctx context.Context, keyHash string, tenant string) (*ApiKey, error) {
+	return m.getByHash(ctx, keyHash, normalizeTenantName(tenant))
+}
+
+func (m *MockStore) getByHash(ctx context.Context, keyHash string, tenant string) (*ApiKey, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, k := range m.keys {
-		if k.keyHash == keyHash {
+		if k.keyHash == keyHash && (tenant == "" || k.metadata.Tenant == tenant) {
 			// Check expiration and auto-update status if expired
 			now := time.Now().UTC()
 			if !k.expiresAt.IsZero() && k.expiresAt.Before(now) {
@@ -439,6 +484,22 @@ func (m *MockStore) InvalidateAll(ctx context.Context, username string) (int, er
 	return count, nil
 }
 
+func (m *MockStore) InvalidateAllForTenant(ctx context.Context, tenant string, username string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tenant = normalizeTenantName(tenant)
+	count := 0
+	for _, k := range m.keys {
+		if k.metadata.Tenant == tenant && k.username == username && k.metadata.Status == StatusActive {
+			k.metadata.Status = StatusRevoked
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -457,12 +518,48 @@ func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 	return nil
 }
 
+func (m *MockStore) RevokeForTenant(ctx context.Context, tenant string, keyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k, ok := m.keys[keyID]
+	if !ok {
+		return ErrKeyNotFound
+	}
+	if k.metadata.Tenant != normalizeTenantName(tenant) {
+		return ErrKeyNotFound
+	}
+	if k.metadata.Status != StatusActive {
+		return ErrKeyNotFound
+	}
+
+	k.metadata.Status = StatusRevoked
+	return nil
+}
+
 func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	k, ok := m.keys[keyID]
 	if !ok {
+		return ErrKeyNotFound
+	}
+
+	now := time.Now().UTC()
+	k.lastUsedAt = &now
+	return nil
+}
+
+func (m *MockStore) UpdateLastUsedForTenant(ctx context.Context, tenant string, keyID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	k, ok := m.keys[keyID]
+	if !ok {
+		return ErrKeyNotFound
+	}
+	if k.metadata.Tenant != normalizeTenantName(tenant) {
 		return ErrKeyNotFound
 	}
 
@@ -487,6 +584,34 @@ func (m *MockStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {
 		}
 		if k.expiresAt.IsZero() {
 			continue // skip keys without expiration
+		}
+		if (k.metadata.Status == StatusExpired || k.expiresAt.Before(now)) && k.expiresAt.Before(graceThreshold) {
+			delete(m.keys, id)
+			count++
+		}
+	}
+
+	return count, nil
+}
+
+func (m *MockStore) DeleteExpiredEphemeralForTenant(ctx context.Context, tenant string) (int64, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	tenant = normalizeTenantName(tenant)
+	now := time.Now().UTC()
+	graceThreshold := now.Add(-30 * time.Minute)
+	var count int64
+
+	for id, k := range m.keys {
+		if k.metadata.Tenant != tenant {
+			continue
+		}
+		if !k.ephemeral {
+			continue
+		}
+		if k.expiresAt.IsZero() {
+			continue
 		}
 		if (k.metadata.Status == StatusExpired || k.expiresAt.Before(now)) && k.expiresAt.Before(graceThreshold) {
 			delete(m.keys, id)

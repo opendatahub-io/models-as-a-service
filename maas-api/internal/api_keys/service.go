@@ -45,6 +45,13 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 	}
 }
 
+func (s *Service) tenantName() string {
+	if s.config != nil && strings.TrimSpace(s.config.TenantName) != "" {
+		return strings.TrimSpace(s.config.TenantName)
+	}
+	return constant.DefaultMaaSSubscriptionNamespace
+}
+
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
@@ -143,11 +150,7 @@ func (s *Service) CreateAPIKey(
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
 	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
-	tenantName := constant.DefaultMaaSSubscriptionNamespace
-	if s.config != nil && s.config.TenantName != "" {
-		tenantName = s.config.TenantName
-	}
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, tenantName, &expiresAt, ephemeral); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, s.tenantName(), &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -170,7 +173,7 @@ func (s *Service) CreateAPIKey(
 }
 
 func (s *Service) GetAPIKey(ctx context.Context, id string) (*ApiKey, error) {
-	return s.store.Get(ctx, id)
+	return s.store.GetForTenant(ctx, s.tenantName(), id)
 }
 
 // ValidateAPIKey validates an API key (called by Authorino HTTP callback).
@@ -198,8 +201,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		}, nil
 	}
 
-	// Lookup by hash (O(1) indexed lookup)
-	metadata, err := s.store.GetByHash(ctx, hash)
+	tenantName := s.tenantName()
+
+	// Lookup by hash and tenant (O(1) indexed lookup).
+	metadata, err := s.store.GetByHashForTenant(ctx, hash, tenantName)
 	if err != nil {
 		if errors.Is(err, ErrKeyNotFound) {
 			return &ValidationResult{
@@ -230,7 +235,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
 
-		if err := s.store.UpdateLastUsed(ctx, metadata.ID); err != nil {
+		if err := s.store.UpdateLastUsedForTenant(ctx, tenantName, metadata.ID); err != nil {
 			// Log warning but don't fail validation - this is best-effort tracking
 			s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 		}
@@ -276,7 +281,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 
 // RevokeAPIKey revokes a specific permanent API key.
 func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
-	return s.store.Revoke(ctx, keyID)
+	return s.store.RevokeForTenant(ctx, s.tenantName(), keyID)
 }
 
 // Search searches API keys with flexible filtering, sorting, and pagination.
@@ -287,7 +292,7 @@ func (s *Service) Search(
 	sort *SortParams,
 	pagination *PaginationParams,
 ) (*PaginatedResult, error) {
-	return s.store.Search(ctx, username, filters, sort, pagination)
+	return s.store.SearchForTenant(ctx, s.tenantName(), username, filters, sort, pagination)
 }
 
 // BulkRevokeAPIKeys revokes all active keys for a user
@@ -296,13 +301,13 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string) (int, 
 	if username == "" {
 		return 0, errors.New("username is required")
 	}
-	return s.store.InvalidateAll(ctx, username)
+	return s.store.InvalidateAllForTenant(ctx, s.tenantName(), username)
 }
 
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.
 // Called by the internal cleanup endpoint (CronJob).
 func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
-	count, err := s.store.DeleteExpiredEphemeral(ctx)
+	count, err := s.store.DeleteExpiredEphemeralForTenant(ctx, s.tenantName())
 	if err != nil {
 		return 0, fmt.Errorf("cleanup failed: %w", err)
 	}

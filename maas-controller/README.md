@@ -486,18 +486,19 @@ The controller accepts the following command-line flags:
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
 | `--gateway-namespace` | `openshift-ingress` | The namespace of the default Gateway resource and existing Gateways referenced by AITenant resources. |
-| `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
+| `--maas-api-namespace` | `redhat-ai-gateway-infra` | The namespace where maas-api service instances are deployed. The base Deployment overrides this with the controller pod namespace for backward-compatible installs. |
 | `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and Tenant CRs. |
-| `--aitenant-namespace` | `redhat-ai-gateway-infra` | The infrastructure namespace where AITenant CRs are accepted. |
+| `--aitenant-namespace` | `ai-tenants` | The infrastructure namespace where AITenant CRs are accepted. |
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
 | `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
 | `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
-| `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile tenant namespaces labeled `maas.opendatahub.io/managed-by-aitenant=true`. |
+| `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile tenant namespaces labeled `ai-gateway.opendatahub.io/tenant` or `maas.opendatahub.io/managed-by-aitenant=true`. |
 
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **MaaS subscription namespace**: Default is `models-as-a-service`. Override via the `--maas-subscription-namespace` flag.
-- **AITenant infrastructure namespace**: Default is `redhat-ai-gateway-infra`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
+- **MaaS API namespace**: The binary default is `redhat-ai-gateway-infra`, but the base Deployment sets `--maas-api-namespace` from the controller pod namespace to preserve existing single-tenant installs. Override the flag when dedicated tenant maas-api instances should live elsewhere.
+- **AITenant infrastructure namespace**: Default is `ai-tenants`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
 - **Gateway name/namespace**: Legacy/default Tenant routing uses `spec.gatewayRef` with controller defaults. `AITenant` validates an existing tenant Gateway in `--gateway-namespace`; `spec.gateway.name` defaults to the `AITenant` name.

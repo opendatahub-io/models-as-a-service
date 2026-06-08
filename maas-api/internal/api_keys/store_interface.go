@@ -62,27 +62,55 @@ type MetadataStore interface {
 
 	Get(ctx context.Context, jti string) (*ApiKey, error)
 
+	// GetForTenant retrieves one API key by ID scoped to a tenant.
+	GetForTenant(ctx context.Context, tenant string, keyID string) (*ApiKey, error)
+
 	// GetByHash looks up an API key by its SHA-256 hash (for Authorino validation).
 	// Hash is computed as SHA-256(embedded_key_id + "\x00" + secret) where embedded_key_id
 	// is the per-key salt encoded in the API key format (sk-oai-{embedded_key_id}_{secret}).
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked or expired.
 	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
 
+	// GetByHashForTenant looks up an API key by hash scoped to a tenant.
+	GetByHashForTenant(ctx context.Context, keyHash string, tenant string) (*ApiKey, error)
+
+	// SearchForTenant returns API keys matching the search criteria scoped to a tenant.
+	SearchForTenant(
+		ctx context.Context,
+		tenant string,
+		username string,
+		filters *SearchFilters,
+		sort *SortParams,
+		pagination *PaginationParams,
+	) (*PaginatedResult, error)
+
 	// InvalidateAll marks all active tokens for a user as revoked.
 	// Returns the count of keys that were revoked.
 	InvalidateAll(ctx context.Context, username string) (int, error)
 
+	// InvalidateAllForTenant marks all active tokens for a user in a tenant as revoked.
+	InvalidateAllForTenant(ctx context.Context, tenant string, username string) (int, error)
+
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error
+
+	// RevokeForTenant marks a specific API key as revoked within a tenant.
+	RevokeForTenant(ctx context.Context, tenant string, keyID string) error
 
 	// UpdateLastUsed updates the last_used_at timestamp for an API key.
 	// Called after successful validation to track key usage.
 	UpdateLastUsed(ctx context.Context, keyID string) error
 
+	// UpdateLastUsedForTenant updates last_used_at for an API key within a tenant.
+	UpdateLastUsedForTenant(ctx context.Context, tenant string, keyID string) error
+
 	// DeleteExpiredEphemeral removes expired ephemeral API keys from storage.
 	// Deletes keys where ephemeral=TRUE AND (status='expired' OR expires_at < NOW()).
 	// Returns the count of deleted keys.
 	DeleteExpiredEphemeral(ctx context.Context) (int64, error)
+
+	// DeleteExpiredEphemeralForTenant removes expired ephemeral API keys in a tenant.
+	DeleteExpiredEphemeralForTenant(ctx context.Context, tenant string) (int64, error)
 
 	Close() error
 }

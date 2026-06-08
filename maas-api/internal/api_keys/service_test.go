@@ -175,6 +175,32 @@ func TestValidateAPIKey_EmptyGroups(t *testing.T) {
 	assert.Empty(t, result.Groups, "Groups should be empty")
 }
 
+func TestValidateAPIKey_TenantScoped(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{TenantName: "team-a"}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	teamAPlain, teamAHash := createTestAPIKey(t)
+	teamBPlain, teamBHash := createTestAPIKey(t)
+
+	require.NoError(t, store.AddKey(ctx, "alice", "550e8400-e29b-41d4-a716-446655440010", teamAHash, "Team A Key", "", []string{"team-a"}, "sub-a", "team-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "bob", "550e8400-e29b-41d4-a716-446655440011", teamBHash, "Team B Key", "", []string{"team-b"}, "sub-b", "team-b", nil, false))
+
+	result, err := svc.ValidateAPIKey(ctx, teamAPlain)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.Valid)
+	assert.Equal(t, "alice", result.Username)
+	assert.Equal(t, "sub-a", result.Subscription)
+
+	result, err = svc.ValidateAPIKey(ctx, teamBPlain)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.False(t, result.Valid)
+	assert.Equal(t, "key not found", result.Reason)
+}
+
 func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 	ctx := context.Background()
 	svc, store := createTestService(t)
