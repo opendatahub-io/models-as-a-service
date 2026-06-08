@@ -63,15 +63,10 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	allowed, err := tenantNamespaceAllowed(ctx, r.Client, tenant.Namespace, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if !allowed {
+	if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
 		log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
 			"tenantNamespace", tenant.Namespace,
-			"configuredTenantNamespace", r.TenantNamespace,
-			"tenantNamespaceDiscoveryEnabled", r.TenantNamespaceDiscoveryEnabled)
+			"configuredTenantNamespace", r.TenantNamespace)
 		return ctrl.Result{}, nil
 	}
 

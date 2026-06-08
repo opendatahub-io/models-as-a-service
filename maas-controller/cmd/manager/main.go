@@ -447,7 +447,7 @@ func main() {
 		"Enable leader election for controller manager.")
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
-	flag.StringVar(&maasAPINamespace, "maas-api-namespace", maas.DefaultMaaSAPIInfraNamespace, "The namespace where maas-api service is deployed.")
+	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", maas.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
@@ -553,7 +553,6 @@ func main() {
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
 		MaaSAPINamespace:                maasAPINamespace,
-		DefaultMaaSAPINamespace:         maasAPINamespace,
 		TenantNamespace:                 maasSubscriptionNamespace,
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
@@ -638,16 +637,14 @@ func main() {
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
 	if err := (&maas.TenantReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		ManifestPath:                    manifestPath,
-		AppNamespace:                    maasAPINamespace,
-		TenantNamespace:                 maasSubscriptionNamespace,
-		AITenantNamespace:               aitenantNamespace,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		ClusterAudience:                 clusterAudience,
+		Client:           mgr.GetClient(),
+		Scheme:           mgr.GetScheme(),
+		ManifestPath:     manifestPath,
+		AppNamespace:     maasAPINamespace,
+		TenantNamespace:  maasSubscriptionNamespace,
+		GatewayName:      gatewayName,
+		GatewayNamespace: gatewayNamespace,
+		ClusterAudience:  clusterAudience,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)

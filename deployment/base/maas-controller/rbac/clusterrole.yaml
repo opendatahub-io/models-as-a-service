@@ -200,7 +200,6 @@ rules:
   - maas.opendatahub.io
   resources:
   - aitenants/finalizers
-  - configs/finalizers
   - externalmodels/finalizers
   - maasauthpolicies/finalizers
   - maasmodelrefs/finalizers
@@ -223,16 +222,6 @@ rules:
   - maas.opendatahub.io
   resources:
   - configs
-  verbs:
-  - create
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
   - externalmodels
   verbs:
   - get

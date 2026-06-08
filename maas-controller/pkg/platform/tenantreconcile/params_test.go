@@ -8,7 +8,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -33,8 +32,6 @@ func TestBuildPlatformParams(t *testing.T) {
 		got := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc")
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
-		assert.Equal(t, "", got.TenantNamespace)
-		assert.Equal(t, "", got.TenantName)
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
@@ -51,12 +48,6 @@ func TestBuildPlatformParams(t *testing.T) {
 
 		maxExpirationDays := int32(45)
 		tenant := &maasv1alpha1.Tenant{
-			ObjectMeta: metav1.ObjectMeta{
-				Namespace: "tenant-admin",
-				Labels: map[string]string{
-					LabelAIGatewayTenant: "team-a",
-				},
-			},
 			Spec: maasv1alpha1.TenantSpec{
 				GatewayRef: maasv1alpha1.TenantGatewayRef{
 					Namespace: "gateway-ns",
@@ -71,11 +62,6 @@ func TestBuildPlatformParams(t *testing.T) {
 		got := BuildPlatformParams(tenant, "tenant-ns", "cluster-audience")
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
-		assert.Equal(t, "tenant-admin", got.TenantNamespace)
-		assert.Equal(t, "team-a", got.TenantName)
-		assert.True(t, got.DedicatedMaaSAPI)
-		assert.Equal(t, "maas-api-team-a", got.MaaSAPIName)
-		assert.Equal(t, "maas-api-route-team-a", got.MaaSAPIRouteName)
 		assert.Equal(t, "gateway-ns", got.GatewayNamespace)
 		assert.Equal(t, "gateway-name", got.GatewayName)
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
@@ -97,8 +83,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		PayloadProcessingImage:  "quay.io/example/payload:test",
 		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
-		TenantNamespace:         "team-a-maas",
-		TenantName:              "team-a",
 	}
 
 	err := applyPlatformParams(logr.Discard(), resources, params)
@@ -109,8 +93,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAMESPACE"))
 	assert.Equal(t, params.GatewayName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAME"))
 	assert.Equal(t, params.APIKeyMaxExpirationDays, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS"))
-	assert.Equal(t, params.TenantNamespace, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "MAAS_SUBSCRIPTION_NAMESPACE"))
-	assert.Equal(t, params.TenantName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "TENANT_NAME"))
 
 	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
@@ -227,72 +209,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
 }
 
-func TestApplyPlatformParamsScopesDedicatedMaaSAPI(t *testing.T) {
-	resources := renderOverlayResources(t, "redhat-ai-gateway-infra")
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: "team-a-maas",
-			Labels: map[string]string{
-				LabelAIGatewayTenant: "team-a",
-			},
-		},
-		Spec: maasv1alpha1.TenantSpec{
-			GatewayRef: maasv1alpha1.TenantGatewayRef{
-				Namespace: "openshift-ingress",
-				Name:      "team-a-gateway",
-			},
-		},
-	}
-	params := BuildPlatformParams(tenant, "redhat-ai-gateway-infra", "cluster-audience")
-
-	err := applyPlatformParams(logr.Discard(), resources, params)
-	require.NoError(t, err)
-
-	deployment := requireResource(t, resources, GVKDeployment, params.MaaSAPIName)
-	assert.Equal(t, params.MaaSAPIName, nestedString(t, deployment, "spec", "template", "spec", "serviceAccountName"))
-	podLabels := nestedStringMap(t, deployment, "spec", "template", "metadata", "labels")
-	assert.Equal(t, "team-a", podLabels[LabelTenantName])
-	assert.Equal(t, "team-a-maas", podLabels[LabelTenantNamespace])
-	assert.Equal(t, "team-a", requireEnvVarValue(t, deployment, "maas-api", "TENANT_NAME"))
-	assert.Equal(t, "team-a-maas", requireEnvVarValue(t, deployment, "maas-api", "MAAS_SUBSCRIPTION_NAMESPACE"))
-
-	service := requireResource(t, resources, GVKService, params.MaaSAPIName)
-	serviceSelector := nestedStringMap(t, service, "spec", "selector")
-	assert.Equal(t, "team-a", serviceSelector[LabelTenantName])
-	assert.Equal(t, params.MaaSAPIServiceCertSecretName, service.GetAnnotations()["service.beta.openshift.io/serving-cert-secret-name"])
-
-	httpRoute := requireResource(t, resources, GVKHTTPRoute, params.MaaSAPIRouteName)
-	rules, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "rules")
-	require.NoError(t, err)
-	require.True(t, found)
-	firstRule, ok := rules[0].(map[string]any)
-	require.True(t, ok)
-	backendRefs, ok := firstRule["backendRefs"].([]any)
-	require.True(t, ok)
-	firstBackend, ok := backendRefs[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, params.MaaSAPIName, firstBackend["name"])
-
-	authPolicy := requireResource(t, resources, GVKAuthPolicy, params.MaaSAPIAuthPolicyName)
-	assert.Equal(t, params.MaaSAPIRouteName, nestedString(t, authPolicy, "spec", "targetRef", "name"))
-	validationURL := nestedString(t, authPolicy, "spec", "rules", "metadata", "apiKeyValidation", "http", "url")
-	assert.Contains(t, validationURL, "https://"+params.MaaSAPIName+".redhat-ai-gateway-infra.svc.cluster.local")
-
-	cleanup := requireResource(t, resources, GVKCronJob, params.MaaSAPIKeyCleanupCronJobName)
-	assert.Equal(t, params.MaaSAPIName, nestedString(t, cleanup, "spec", "jobTemplate", "spec", "template", "spec", "serviceAccountName"))
-	containers, found, err := unstructured.NestedSlice(cleanup.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
-	require.NoError(t, err)
-	require.True(t, found)
-	cleanupContainer, ok := containers[0].(map[string]any)
-	require.True(t, ok)
-	command, ok := cleanupContainer["command"].([]any)
-	require.True(t, ok)
-	cleanupCommand, ok := command[len(command)-1].(string)
-	require.True(t, ok)
-	assert.Contains(t, cleanupCommand, "https://"+params.MaaSAPIName+":8443/internal/v1/api-keys/cleanup")
-}
-
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 
@@ -375,20 +291,4 @@ func requireEnvVarValue(t *testing.T, r *unstructured.Unstructured, containerNam
 
 	t.Fatalf("env var %q not found in container %q", envName, containerName)
 	return ""
-}
-
-func nestedString(t *testing.T, r *unstructured.Unstructured, fields ...string) string {
-	t.Helper()
-	value, found, err := unstructured.NestedString(r.Object, fields...)
-	require.NoError(t, err)
-	require.True(t, found, "nested string %v not found", fields)
-	return value
-}
-
-func nestedStringMap(t *testing.T, r *unstructured.Unstructured, fields ...string) map[string]string {
-	t.Helper()
-	value, found, err := unstructured.NestedStringMap(r.Object, fields...)
-	require.NoError(t, err)
-	require.True(t, found, "nested string map %v not found", fields)
-	return value
 }

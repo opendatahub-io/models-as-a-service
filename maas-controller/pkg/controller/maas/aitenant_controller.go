@@ -45,14 +45,12 @@ import (
 
 const (
 	// DefaultAITenantNamespace is the default infrastructure namespace for AITenant CRs.
-	DefaultAITenantNamespace = "ai-tenants"
-	// DefaultMaaSAPIInfraNamespace is the ADR-defined namespace for tenant maas-api instances.
-	DefaultMaaSAPIInfraNamespace = "redhat-ai-gateway-infra"
+	DefaultAITenantNamespace = "redhat-ai-gateway-infra"
 
 	aitenantFinalizer = "maas.opendatahub.io/aitenant-cleanup"
 
 	aitenantManagedLabel = "maas.opendatahub.io/managed-by-aitenant"
-	aiGatewayTenantLabel = tenantreconcile.LabelAIGatewayTenant
+	aiGatewayTenantLabel = "ai-gateway.opendatahub.io/tenant"
 
 	aitenantNameAnnotation      = "maas.opendatahub.io/aitenant-name"
 	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"

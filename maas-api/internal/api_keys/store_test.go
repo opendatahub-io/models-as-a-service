@@ -230,13 +230,13 @@ func TestAddKeyWithTenant(t *testing.T) {
 		assert.Equal(t, "acme-corp", key.Tenant)
 	})
 
-	t.Run("EmptyTenantDefaultsToDefaultTenant", func(t *testing.T) {
+	t.Run("EmptyTenantSentinel", func(t *testing.T) {
 		err := store.AddKey(ctx, "user1", "tenant-key-2", "thash2", "no-tenant-key", "", nil, "sub-1", "", nil, false)
 		require.NoError(t, err)
 
 		key, err := store.Get(ctx, "tenant-key-2")
 		require.NoError(t, err)
-		assert.Equal(t, "models-as-a-service", key.Tenant)
+		assert.Empty(t, key.Tenant)
 	})
 
 	t.Run("TenantRoundTripsViaGetByHash", func(t *testing.T) {

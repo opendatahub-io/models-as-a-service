@@ -49,22 +49,12 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 				}
 			},
 		},
-		{
-			name:    "TENANT_NAME overrides TenantName",
-			envVars: map[string]string{"TENANT_NAME": "team-a"},
-			check: func(t *testing.T, cfg *Config) {
-				t.Helper()
-				if cfg.TenantName != "team-a" {
-					t.Errorf("expected TenantName %q, got %q", "team-a", cfg.TenantName)
-				}
-			},
-		},
 	}
 
 	// All env vars that Load() reads, to be cleared before each subtest.
 	allEnvVars := []string{
 		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
-		"NAMESPACE", "GATEWAY_NAMESPACE", "MAAS_SUBSCRIPTION_NAMESPACE", "TENANT_NAME", "ADDRESS",
+		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
 		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 	}

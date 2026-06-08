@@ -58,8 +58,7 @@ type LifecycleReconciler struct {
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch;create;update;patch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

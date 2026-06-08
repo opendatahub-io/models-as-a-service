@@ -55,9 +55,6 @@ type MaaSAuthPolicyReconciler struct {
 	// MaaSAPINamespace is the namespace where maas-api service is deployed.
 	// Used to construct the subscription selector endpoint URL.
 	MaaSAPINamespace string
-	// DefaultMaaSAPINamespace is the legacy/default maas-api namespace. It is
-	// used for the default tenant and as a fallback for older tests that set only MaaSAPINamespace.
-	DefaultMaaSAPINamespace string
 
 	// TenantNamespace is the namespace where the Tenant CR lives (configurable via flags).
 	// Defaults to "models-as-a-service".
@@ -509,16 +506,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 		allowedGroups = deduplicateAndSort(allowedGroups)
 		allowedUsers = deduplicateAndSort(allowedUsers)
 
-		maasAPINamespace := r.MaaSAPINamespace
-		if maasAPINamespace == "" {
-			maasAPINamespace = r.DefaultMaaSAPINamespace
-		}
-		apiServiceName, apiServiceNamespace, err := tenantMaaSAPIEndpoint(ctx, r.Client, policy.Namespace, r.TenantNamespace, maasAPINamespace, r.TenantNamespaceDiscoveryEnabled)
-		if err != nil {
-			return nil, err
-		}
-		apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", apiServiceName, apiServiceNamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", apiServiceName, apiServiceNamespace)
+		// Construct API URLs using configured namespace
+		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
+		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
 		rule := map[string]any{
 			"metadata": map[string]any{

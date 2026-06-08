@@ -2,7 +2,7 @@
 
 Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
-`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 ---
 
@@ -27,6 +27,12 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 | create | bool | No | `true` | Whether the controller creates the namespace if it does not exist. |
 
 The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
+
+---
+
+## Namespace Discovery
+
+`AITenant` labels tenant namespaces with `ai-gateway.opendatahub.io/tenant=<aitenant-name>` and `maas.opendatahub.io/managed-by-aitenant=true`. When `maas-controller` runs with `--enable-tenant-namespace-discovery=true`, `MaaSAuthPolicy` and `MaaSSubscription` resources in those namespaces are reconciled against the namespace's `Tenant/default-tenant.spec.gatewayRef`.
 
 ---
 
@@ -76,7 +82,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: red-team
-  namespace: ai-tenants
+  namespace: redhat-ai-gateway-infra
 spec:
   tenantNamespace:
     name: red-team-maas

@@ -42,18 +42,35 @@ func TestIsTenantNamespace_DefaultNamespace(t *testing.T) {
 }
 
 func TestIsTenantNamespace_LabeledNamespace(t *testing.T) {
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:   "team-a-maas",
-			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+	tests := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{
+			name:   "ADR tenant label",
+			labels: map[string]string{tenantreconcile.LabelAIGatewayTenant: "team-a"},
+		},
+		{
+			name:   "AITenant compatibility label",
+			labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
 		},
 	}
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
-	if !isTenantNamespace(context.Background(), c, "team-a-maas", "models-as-a-service", true) {
-		t.Error("AITenant-labeled namespace should be recognized as tenant namespace")
-	}
-	if isTenantNamespace(context.Background(), c, "team-a-maas", "models-as-a-service", false) {
-		t.Error("AITenant-labeled namespace should be ignored while discovery is disabled")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ns := &corev1.Namespace{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:   "team-a-maas",
+					Labels: tt.labels,
+				},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(ns).Build()
+			if !isTenantNamespace(context.Background(), c, "team-a-maas", "models-as-a-service", true) {
+				t.Error("labeled namespace should be recognized as tenant namespace")
+			}
+			if isTenantNamespace(context.Background(), c, "team-a-maas", "models-as-a-service", false) {
+				t.Error("labeled namespace should be ignored while discovery is disabled")
+			}
+		})
 	}
 }
 
