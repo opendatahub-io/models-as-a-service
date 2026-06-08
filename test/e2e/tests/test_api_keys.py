@@ -884,18 +884,18 @@ class TestAPIKeyRevocationE2E:
 
 
 class TestEphemeralKeyCleanup:
-    """Tests for ephemeral API key cleanup (CronJob + internal endpoint).
+    """Tests for ephemeral API key cleanup via the internal endpoint.
 
     Validates that:
     - Ephemeral keys can be created with short expiration
-    - The cleanup CronJob exists and is correctly configured
+    - maas-api is configured with CLEANUP_INTERVAL_MINUTES (the in-process cleanup
+      loop is only validated by config presence here, not by observing it run)
     - Triggering cleanup does not delete active (non-expired) ephemeral keys
     - Cleanup returns a well-formed response with deletedCount
 
     The cleanup endpoint (POST /internal/v1/api-keys/cleanup) is cluster-internal
-    and not exposed on the public Route. These tests trigger it via the CronJob
-    mechanism (kubectl create job --from=cronjob/maas-api-key-cleanup) or via
-    oc exec into the maas-api pod.
+    and not exposed on the public Route. These tests trigger it via oc exec into
+    the maas-api pod.
 
     Environment Variables:
     - DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: opendatahub)
@@ -905,87 +905,36 @@ class TestEphemeralKeyCleanup:
     def deployment_namespace(self) -> str:
         return os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 
-    def test_cronjob_exists_and_configured(self, deployment_namespace: str):
-        """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
+    def test_cleanup_interval_configured(self, deployment_namespace: str):
+        """Verify maas-api Deployment has CLEANUP_INTERVAL_MINUTES configured."""
         import subprocess as sp
 
         result = sp.run(
-            ["oc", "get", "cronjob", "maas-api-key-cleanup",
+            ["oc", "get", "deploy", "maas-api",
              "-n", deployment_namespace, "-o", "json"],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             pytest.skip(
-                f"CronJob maas-api-key-cleanup not found in {deployment_namespace}: "
+                f"Deployment maas-api not found in {deployment_namespace}: "
                 f"{result.stderr.strip()}"
             )
 
         import json as _json
-        cj = _json.loads(result.stdout)
-        spec = cj["spec"]
-
-        # Verify schedule (every 15 minutes)
-        assert spec["schedule"] == "*/15 * * * *", \
-            f"Expected schedule '*/15 * * * *', got '{spec['schedule']}'"
-
-        # Verify concurrency policy
-        assert spec["concurrencyPolicy"] == "Forbid", \
-            "CronJob should use Forbid concurrency policy"
-
-        # Verify the curl command targets the internal cleanup endpoint
-        containers = spec["jobTemplate"]["spec"]["template"]["spec"]["containers"]
-        assert len(containers) >= 1
-        container_spec = containers[0]
-        # Command is in the 'command' field (shell script via /bin/sh -c)
-        cmd_parts = container_spec.get("command", [])
-        cmd_str = " ".join(cmd_parts)
-        assert "/internal/v1/api-keys/cleanup" in cmd_str, \
-            f"CronJob command should target cleanup endpoint, got: {cmd_str}"
-
-        # Verify security context (non-root, read-only fs)
-        sec_ctx = container_spec.get("securityContext", {})
-        assert sec_ctx.get("runAsNonRoot", False) is True, \
-            "Cleanup container should run as non-root"
-        assert sec_ctx.get("readOnlyRootFilesystem", False) is True, \
-            "Cleanup container should have read-only root filesystem"
-
-        print(f"[cleanup] CronJob validated: schedule={spec['schedule']}, "
-              f"concurrency={spec['concurrencyPolicy']}")
-
-    def test_cleanup_networkpolicy_exists(self, deployment_namespace: str):
-        """Verify the cleanup NetworkPolicy exists and restricts cleanup pod access."""
-        import subprocess as sp
-
-        result = sp.run(
-            ["oc", "get", "networkpolicy", "maas-api-cleanup-restrict",
-             "-n", deployment_namespace, "-o", "json"],
-            capture_output=True, text=True,
+        deploy = _json.loads(result.stdout)
+        containers = deploy["spec"]["template"]["spec"]["containers"]
+        maas_api_container = next(
+            (c for c in containers if c.get("name") == "maas-api"),
+            containers[0] if containers else {},
         )
-        if result.returncode != 0:
-            pytest.skip(
-                f"NetworkPolicy maas-api-cleanup-restrict not found in "
-                f"{deployment_namespace}: {result.stderr.strip()}"
-            )
+        env_vars = {e["name"]: e.get("value") for e in maas_api_container.get("env", []) if "name" in e}
 
-        import json as _json
-        np = _json.loads(result.stdout)
-        spec = np["spec"]
+        assert "CLEANUP_INTERVAL_MINUTES" in env_vars, \
+            "maas-api should have CLEANUP_INTERVAL_MINUTES env var"
+        assert env_vars["CLEANUP_INTERVAL_MINUTES"] == "15", \
+            f"Expected CLEANUP_INTERVAL_MINUTES=15, got {env_vars['CLEANUP_INTERVAL_MINUTES']!r}"
 
-        # Verify it targets cleanup pods
-        selector = spec.get("podSelector", {}).get("matchLabels", {})
-        assert selector.get("app") == "maas-api-cleanup", \
-            f"NetworkPolicy should target app=maas-api-cleanup, got: {selector}"
-
-        # Verify policy types include both Egress and Ingress
-        policy_types = spec.get("policyTypes", [])
-        assert "Egress" in policy_types, "NetworkPolicy should control egress"
-        assert "Ingress" in policy_types, "NetworkPolicy should control ingress"
-
-        # Verify ingress is blocked (empty list)
-        assert spec.get("ingress") == [] or spec.get("ingress") is None, \
-            "Cleanup pods should have no inbound traffic"
-
-        print("[cleanup] NetworkPolicy validated: cleanup pods restricted to maas-api egress only")
+        print(f"[cleanup] Deployment validated: CLEANUP_INTERVAL_MINUTES={env_vars['CLEANUP_INTERVAL_MINUTES']}")
 
     def test_create_ephemeral_key(self, api_keys_base_url: str, headers: dict):
         """Create an ephemeral key and verify it appears in search with includeEphemeral."""
@@ -1072,8 +1021,8 @@ class TestEphemeralKeyCleanup:
         key_id = r.json()["id"]
         print(f"[cleanup] Created ephemeral key for survival test: id={key_id}")
 
-        # Trigger cleanup via oc exec into maas-api pod
-        # This calls the internal endpoint directly, same as the CronJob does
+        # Trigger cleanup via oc exec into maas-api pod, calling the internal endpoint.
+        # Note: the in-process loop deletes via the store directly and does not use this endpoint.
         get_pod = sp.run(
             ["oc", "get", "pods", "-n", deployment_namespace,
              "-l", "app.kubernetes.io/name=maas-api",
