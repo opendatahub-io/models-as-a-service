@@ -89,7 +89,6 @@ SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
 EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
-CI_DEBUG_CLUSTER_ACCESS=${CI_DEBUG_CLUSTER_ACCESS:-true}  # TODO: Remove after debugging maas-api startup failure
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
@@ -1010,34 +1009,6 @@ _run_exit_artifacts() {
     DEPLOYMENT_NAMESPACE="$DEPLOYMENT_NAMESPACE" MAAS_SUBSCRIPTION_NAMESPACE="$MAAS_SUBSCRIPTION_NAMESPACE" AUTHORINO_NAMESPACE="$AUTHORINO_NAMESPACE" \
         run_auth_debug_report 2>&1 | tee "$ARTIFACTS_DIR/auth-debug.log"
     echo "======================================"
-
-    # Debug: pause on failure for manual cluster investigation
-    if [[ $exit_code -ne 0 ]] && [[ "${CI_DEBUG_CLUSTER_ACCESS:-false}" == "true" ]]; then
-        local debug_sa="ci-debug-admin"
-        oc create sa "$debug_sa" -n default 2>/dev/null || true
-        oc adm policy add-cluster-role-to-user cluster-admin "system:serviceaccount:default:${debug_sa}" 2>/dev/null || true
-        local debug_token
-        debug_token=$(oc create token "$debug_sa" -n default --duration=4h 2>/dev/null || echo "FAILED")
-
-        echo ""
-        echo "========== CLUSTER ACCESS (CI_DEBUG_CLUSTER_ACCESS=true) =========="
-        echo "API Server: $(oc whoami --show-server 2>/dev/null)"
-        echo "Console: https://console-openshift-console.$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null)"
-        echo ""
-        echo "Login command:"
-        echo "  oc login --token=${debug_token} --server=$(oc whoami --show-server 2>/dev/null) --insecure-skip-tls-verify"
-        echo ""
-        echo "Debug commands:"
-        echo "  kubectl get pods -n ${DEPLOYMENT_NAMESPACE} -l app.kubernetes.io/name=maas-api -o wide"
-        echo "  kubectl logs -n ${DEPLOYMENT_NAMESPACE} -l app.kubernetes.io/name=maas-api --tail=100"
-        echo "  kubectl describe pods -n ${DEPLOYMENT_NAMESPACE} -l app.kubernetes.io/name=maas-api"
-        echo "  kubectl get events -n ${DEPLOYMENT_NAMESPACE} --sort-by='.lastTimestamp' | tail -30"
-        echo "==================================================================="
-        local debug_wait="${CI_DEBUG_WAIT:-14400}"
-        echo "Sleeping ${debug_wait}s ($(( debug_wait / 3600 ))h) for debugging (set CI_DEBUG_WAIT to change)..."
-        sleep "$debug_wait"
-    fi
-
     exit $exit_code
 }
 trap '_run_exit_artifacts' EXIT

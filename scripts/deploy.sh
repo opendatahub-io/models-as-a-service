@@ -636,24 +636,6 @@ EOF
     return 1
   fi
 
-  # Dump diagnostics if maas-api rollout did not complete
-  local maas_api_ready
-  maas_api_ready=$(kubectl get deployment maas-api -n "$NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Available")].status}' 2>/dev/null || echo "")
-  if [[ "$maas_api_ready" != "True" ]]; then
-    log_warn "maas-api deployment exists but is NOT ready after ${maas_api_timeout}s — dumping diagnostics"
-    echo "========== maas-api pod status =========="
-    kubectl get pods -n "$NAMESPACE" -l app.kubernetes.io/name=maas-api -o wide 2>&1 || true
-    echo "========== maas-api pod describe =========="
-    kubectl describe pods -n "$NAMESPACE" -l app.kubernetes.io/name=maas-api 2>&1 | tail -60 || true
-    echo "========== maas-api container logs (last 100 lines) =========="
-    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=maas-api --tail=100 2>&1 || true
-    echo "========== maas-api previous container logs =========="
-    kubectl logs -n "$NAMESPACE" -l app.kubernetes.io/name=maas-api --previous --tail=50 2>&1 || true
-    echo "========== namespace events (last 20) =========="
-    kubectl get events -n "$NAMESPACE" --sort-by='.lastTimestamp' 2>&1 | tail -20 || true
-    echo "=========================================="
-  fi
-
   # External OIDC: merge-patch maas-api-auth-policy with Keycloak (or other IdP) JWT rules.
   # The Tenant reconciler creates the base AuthPolicy; this must run after it exists.
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
