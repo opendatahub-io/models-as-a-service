@@ -1152,7 +1152,7 @@ func TestListSubscriptionsForModel_UnknownModel(t *testing.T) {
 	}
 }
 
-func TestListSubscriptions_DescriptionFallback(t *testing.T) {
+func TestListSubscriptions_DescriptionNoFallback(t *testing.T) {
 	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
 		createTestSubscriptionWithAnnotations("both-annotations", []string{"free-users"}, []string{"m"}, map[string]string{
 			"openshift.io/display-name": "My Display Name",
