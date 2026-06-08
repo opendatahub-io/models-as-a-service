@@ -713,7 +713,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 			name:        "ExceedsOneHourLimit",
 			expiresIn:   2 * time.Hour,
 			expectedErr: api_keys.ErrExpirationExceedsMax,
-			errContains: "cannot exceed 1 hour",
+			errContains: "cannot exceed 1h0m0s",
 		},
 		{
 			name:        "ZeroExpiration",
