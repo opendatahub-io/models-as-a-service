@@ -87,8 +87,7 @@ func (s *Service) CreateAPIKey(
 	// Default expiration if not provided
 	if expiresIn == nil {
 		if ephemeral {
-			// Ephemeral keys default to 1 hour
-			d := 1 * time.Hour
+			d := constant.DefaultEphemeralKeyMaxExpiration
 			expiresIn = &d
 		} else {
 			// Regular keys default to max expiration days
@@ -102,10 +101,8 @@ func (s *Service) CreateAPIKey(
 
 	// Validate against maximum expiration limit (always enforced)
 	if ephemeral {
-		// Ephemeral keys have a strict 1-hour maximum to prevent abuse
-		maxEphemeralDuration := 1 * time.Hour
-		if *expiresIn > maxEphemeralDuration {
-			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour: %w", *expiresIn, ErrExpirationExceedsMax)
+		if *expiresIn > constant.DefaultEphemeralKeyMaxExpiration {
+			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed %v: %w", *expiresIn, constant.DefaultEphemeralKeyMaxExpiration, ErrExpirationExceedsMax)
 		}
 	} else if *expiresIn > maxRegularDuration {
 		// Regular keys always enforce max expiration (config or default)
