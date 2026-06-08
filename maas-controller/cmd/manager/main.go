@@ -24,6 +24,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -468,7 +469,12 @@ func main() {
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
 		os.Exit(1)
 	}
-	if aitenantNamespace == "" {
+	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid MaaS subscription namespace configuration"),
+			"--maas-subscription-namespace must be non-empty")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(aitenantNamespace) == "" {
 		setupLog.Error(stderrors.New("invalid AITenant namespace configuration"),
 			"--aitenant-namespace must be non-empty")
 		os.Exit(1)

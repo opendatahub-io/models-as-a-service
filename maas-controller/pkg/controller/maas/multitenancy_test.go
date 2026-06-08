@@ -223,6 +223,100 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_DeletionRunsAfterNamespaceDelabeled(t *testing.T) {
+	const (
+		namespace  = "team-a-maas"
+		policyName = "test-policy"
+		modelName  = "llm"
+	)
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+	policy := newMaaSAuthPolicy(policyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+	policy.Finalizers = []string{maasAuthPolicyFinalizer}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(ns, policy).
+		Build()
+
+	if err := c.Delete(context.Background(), policy); err != nil {
+		t.Fatalf("delete MaaSAuthPolicy: %v", err)
+	}
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:                          c,
+		Scheme:                          scheme,
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile error: %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSAuthPolicy{}
+	err := c.Get(context.Background(), req.NamespacedName, got)
+	if apierrors.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("get MaaSAuthPolicy after deletion reconcile: %v", err)
+	}
+	if len(got.Finalizers) != 0 {
+		t.Fatalf("expected finalizers removed after deletion in delabeled namespace, got %v", got.Finalizers)
+	}
+}
+
+func TestMaaSSubscriptionReconciler_DeletionRunsAfterNamespaceDelabeled(t *testing.T) {
+	const (
+		namespace = "team-a-maas"
+		subName   = "test-sub"
+		modelName = "llm"
+	)
+
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
+	sub := newMaaSSubscription(subName, namespace, "team-a", modelName, 100)
+	sub.Finalizers = []string{maasSubscriptionFinalizer}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(ns, sub).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	if err := c.Delete(context.Background(), sub); err != nil {
+		t.Fatalf("delete MaaSSubscription: %v", err)
+	}
+
+	r := &MaaSSubscriptionReconciler{
+		Client:                          c,
+		Scheme:                          scheme,
+		DefaultTenantNamespace:          "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile error: %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSSubscription{}
+	err := c.Get(context.Background(), req.NamespacedName, got)
+	if apierrors.IsNotFound(err) {
+		return
+	}
+	if err != nil {
+		t.Fatalf("get MaaSSubscription after deletion reconcile: %v", err)
+	}
+	if len(got.Finalizers) != 0 {
+		t.Fatalf("expected finalizers removed after deletion in delabeled namespace, got %v", got.Finalizers)
+	}
+}
+
 func TestMapTenantToMaaSAuthPolicies_ScopedToNamespace(t *testing.T) {
 	const (
 		tenantNSA = "tenant-a"
@@ -333,11 +427,13 @@ func TestFetchOIDCConfig_PerTenantNamespace(t *testing.T) {
 	}
 }
 
-func TestMapNamespaceToMaaSAuthPolicies_OnlyLabeledNamespaces(t *testing.T) {
-	policy := newMaaSAuthPolicy("policy-a", "tenant-a", "team-a",
+func TestMapNamespaceToMaaSAuthPolicies_EnqueuesWhenDiscoveryEnabled(t *testing.T) {
+	labeledPolicy := newMaaSAuthPolicy("policy-a", "tenant-a", "team-a",
+		maasv1alpha1.ModelRef{Name: "llm", Namespace: "models"})
+	unlabeledPolicy := newMaaSAuthPolicy("policy-b", "random-ns", "team-b",
 		maasv1alpha1.ModelRef{Name: "llm", Namespace: "models"})
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(policy).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(labeledPolicy, unlabeledPolicy).Build()
 	r := &MaaSAuthPolicyReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
@@ -360,20 +456,32 @@ func TestMapNamespaceToMaaSAuthPolicies_OnlyLabeledNamespaces(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "random-ns"},
 	}
 	requests = r.mapNamespaceToMaaSAuthPolicies(context.Background(), unlabeled)
+	if len(requests) != 1 {
+		t.Errorf("unlabeled namespace should enqueue policies on label changes when discovery is enabled, got %d requests", len(requests))
+	}
+
+	r.TenantNamespaceDiscoveryEnabled = false
+	requests = r.mapNamespaceToMaaSAuthPolicies(context.Background(), unlabeled)
 	if len(requests) != 0 {
-		t.Errorf("unlabeled namespace should NOT enqueue policies, got %d requests", len(requests))
+		t.Errorf("unlabeled namespace should not enqueue policies when discovery is disabled, got %d requests", len(requests))
 	}
 }
 
-func TestMapNamespaceToMaaSSubscriptions_OnlyLabeledNamespaces(t *testing.T) {
-	sub := &maasv1alpha1.MaaSSubscription{
+func TestMapNamespaceToMaaSSubscriptions_EnqueuesWhenDiscoveryEnabled(t *testing.T) {
+	labeledSub := &maasv1alpha1.MaaSSubscription{
 		ObjectMeta: metav1.ObjectMeta{Name: "sub-a", Namespace: "tenant-a"},
 		Spec: maasv1alpha1.MaaSSubscriptionSpec{
 			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "llm", Namespace: "models"}},
 		},
 	}
+	unlabeledSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "sub-b", Namespace: "random-ns"},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "llm", Namespace: "models"}},
+		},
+	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(sub).Build()
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(labeledSub, unlabeledSub).Build()
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
@@ -396,8 +504,14 @@ func TestMapNamespaceToMaaSSubscriptions_OnlyLabeledNamespaces(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "random-ns"},
 	}
 	requests = r.mapNamespaceToMaaSSubscriptions(context.Background(), unlabeled)
+	if len(requests) != 1 {
+		t.Errorf("unlabeled namespace should enqueue subscriptions on label changes when discovery is enabled, got %d requests", len(requests))
+	}
+
+	r.TenantNamespaceDiscoveryEnabled = false
+	requests = r.mapNamespaceToMaaSSubscriptions(context.Background(), unlabeled)
 	if len(requests) != 0 {
-		t.Errorf("unlabeled namespace should NOT enqueue subscriptions, got %d requests", len(requests))
+		t.Errorf("unlabeled namespace should not enqueue subscriptions when discovery is disabled, got %d requests", len(requests))
 	}
 }
 

@@ -346,6 +346,12 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before tenant namespace gating. A namespace may lose its
+	// discovery label while a CR is terminating; finalizer cleanup must still run.
+	if !subscription.GetDeletionTimestamp().IsZero() {
+		return r.handleDeletion(ctx, log, subscription)
+	}
+
 	isTenantNS, err := tenantNamespaceAllowed(ctx, r.Client, req.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 	if err != nil {
 		log.Error(err, "failed to check tenant namespace")
@@ -354,11 +360,6 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	if !isTenantNS {
 		log.V(1).Info("ignoring MaaSSubscription in non-tenant namespace", "namespace", req.Namespace)
 		return ctrl.Result{}, nil
-	}
-
-	// Handle deletion
-	if !subscription.GetDeletionTimestamp().IsZero() {
-		return r.handleDeletion(ctx, log, subscription)
 	}
 
 	// Handle no spec (e.g. legacy resources created before spec was required).
@@ -1126,10 +1127,10 @@ func duplicatePriorityScanPredicate() predicate.Predicate {
 }
 
 // mapNamespaceToMaaSSubscriptions enqueues all MaaSSubscription resources in a
-// namespace when that namespace's labels change (e.g. AITenant label added).
+// namespace when that namespace's labels change (e.g. AITenant label added or removed).
 func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
 	ns := obj.GetName()
-	if ns != r.DefaultTenantNamespace && (!r.TenantNamespaceDiscoveryEnabled || !hasTenantDiscoveryLabel(obj)) {
+	if ns != r.DefaultTenantNamespace && !r.TenantNamespaceDiscoveryEnabled {
 		return nil
 	}
 	subList := &maasv1alpha1.MaaSSubscriptionList{}

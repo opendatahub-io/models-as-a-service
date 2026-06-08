@@ -271,6 +271,12 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before tenant namespace gating. A namespace may lose its
+	// discovery label while a CR is terminating; finalizer cleanup must still run.
+	if !policy.GetDeletionTimestamp().IsZero() {
+		return r.handleDeletion(ctx, log, policy)
+	}
+
 	isTenantNS, err := tenantNamespaceAllowed(ctx, r.Client, req.Namespace, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 	if err != nil {
 		log.Error(err, "failed to check tenant namespace")
@@ -285,10 +291,6 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// as the policy being reconciled. Each tenant namespace has its own
 	// Tenant/default-tenant with per-tenant OIDC settings.
 	oidcConfig := r.fetchOIDCConfig(ctx, log, req.Namespace)
-
-	if !policy.GetDeletionTimestamp().IsZero() {
-		return r.handleDeletion(ctx, log, policy)
-	}
 
 	// Handle no spec (e.g. legacy resources created before spec was required).
 	// No finalizer needed — there are no AuthPolicies to clean up.
@@ -1364,10 +1366,10 @@ func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Conte
 }
 
 // mapNamespaceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources in a
-// namespace when that namespace's labels change (e.g. AITenant label added).
+// namespace when that namespace's labels change (e.g. AITenant label added or removed).
 func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	ns := obj.GetName()
-	if ns != r.TenantNamespace && (!r.TenantNamespaceDiscoveryEnabled || !hasTenantDiscoveryLabel(obj)) {
+	if ns != r.TenantNamespace && !r.TenantNamespaceDiscoveryEnabled {
 		return nil
 	}
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
