@@ -208,11 +208,11 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 		return fmt.Errorf("read cleanup CronJob containers: %w", err)
 	}
 	if found && len(containers) > 0 {
-		container, ok := containers[0].(map[string]interface{})
+		container, ok := containers[0].(map[string]any)
 		if !ok {
 			return errors.New("cleanup CronJob container is not a map")
 		}
-		command, ok := container["command"].([]interface{})
+		command, ok := container["command"].([]any)
 		if ok && len(command) > 0 {
 			tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
 			// Look for the curl command with maas-api:8443
