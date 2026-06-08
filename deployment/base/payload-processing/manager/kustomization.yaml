@@ -4,7 +4,9 @@ kind: Kustomization
 resources:
   - ../after
   - ../pre-processing
-  - envoy-filter.yaml
+  # FIXME: EnvoyFilter disabled - payload-processing controller crashes looking for
+  # CRDs in wrong API group (inference.opendatahub.io instead of maas.opendatahub.io)
+  # - envoy-filter.yaml
   - plugins-configmap.yaml
 
 images:
