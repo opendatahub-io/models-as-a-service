@@ -54,11 +54,17 @@ spec:
           title: Token Consumption
         items:
           - content:
-              $ref: '#/spec/panels/tokenConsumptionByUser'
-            height: 12
+              $ref: '#/spec/panels/tokenConsumptionOverTime'
+            height: 10
             width: 24
             x: 0
             'y': 0
+          - content:
+              $ref: '#/spec/panels/tokenConsumptionByUser'
+            height: 8
+            width: 24
+            x: 0
+            'y': 10
   panels:
     activeUsers:
       kind: Panel
@@ -163,6 +169,47 @@ spec:
                       )
                     ) or vector(1)
                   seriesNameFormat: Success Rate
+    tokenConsumptionOverTime:
+      kind: Panel
+      spec:
+        display:
+          name: Token consumption
+          description: >-
+            Tokens over time by model or subscription.
+            View by drives chart sum by (${view_by:raw}).
+            Table always shows full model x subscription detail.
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+              values: []
+            visual:
+              display: line
+              lineWidth: 3
+              areaOpacity: 1
+              connectNulls: true
+              stack: all
+              showPoints: always
+              pointRadius: 6
+            yAxis:
+              min: 0
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: PrometheusDatasource
+                    name: kuadrant-prometheus-datasource
+                  query: >-
+                    round(sum by (${view_by:raw}) (increase(authorized_hits{user!="",
+                    user=~"$user", subscription=~"$subscription",
+                    model=~"$model"}[30m])))
     tokenConsumptionByUser:
       kind: Panel
       spec:
@@ -425,3 +472,19 @@ spec:
             labelName: model
             matchers:
               - 'authorized_hits{model!=""}'
+    - kind: ListVariable
+      spec:
+        allowAllValue: false
+        allowMultiple: false
+        defaultValue: model
+        display:
+          name: View by
+        name: view_by
+        plugin:
+          kind: StaticListVariable
+          spec:
+            values:
+              - value: model
+                label: By model
+              - value: subscription
+                label: By subscription
