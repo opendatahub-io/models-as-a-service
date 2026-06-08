@@ -29,7 +29,7 @@ spec:
             x: 5
             'y': 0
           - content:
-              $ref: '#/spec/panels/totalErrors'
+              $ref: '#/spec/panels/totalRateLimited'
             height: 5
             width: 5
             x: 10
@@ -316,12 +316,12 @@ spec:
                       or
                       0 * sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range]))
                     )
-    totalErrors:
+    totalRateLimited:
       kind: Panel
       spec:
         display:
           description: Total rate-limited requests over the selected time window.
-          name: Total Errors
+          name: Total Rate Limited
         plugin:
           kind: StatChart
           spec:
