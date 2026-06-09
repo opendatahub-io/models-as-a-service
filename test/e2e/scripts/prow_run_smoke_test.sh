@@ -686,9 +686,9 @@ run_e2e_tests() {
     if [[ "${EXTERNAL_OIDC}" == "true" ]] && [[ -n "${OIDC_TOKEN_URL:-}" ]]; then
         # Fail fast if cluster AuthPolicy was not patched with the same issuer as this job (no 180s of 401).
         if [[ -n "${OIDC_ISSUER_URL:-}" ]]; then
-            echo "Checking maas-api AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
-            if ! verify_maas_api_oidc_authpolicy "$DEPLOYMENT_NAMESPACE"; then
-                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see validate-deployment.sh / deployment-helpers.sh verify_maas_api_oidc_authpolicy"
+            echo "Checking gateway AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
+            if ! verify_gateway_oidc_authpolicy "${GATEWAY_NAMESPACE:-openshift-ingress}"; then
+                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see deployment-helpers.sh verify_gateway_oidc_authpolicy"
                 exit 1
             fi
         fi
@@ -719,7 +719,7 @@ run_e2e_tests() {
             if [[ $SECONDS -ge $oidc_deadline ]]; then
                 echo "⚠️  WARNING: OIDC gateway readiness failed after ${oidc_timeout}s (still HTTP 401)."
                 echo "   Issuer check already passed; suspect JWKS/network from kuadrant-system to Keycloak or token signature."
-                echo "   kubectl get authpolicy maas-api-auth-policy -n ${DEPLOYMENT_NAMESPACE} -o yaml | grep -A30 oidc"
+                echo "   kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml | grep -A30 oidc"
                 echo "   kubectl logs -n ${AUTHORINO_NAMESPACE} -l app=authorino --tail=80"
                 if [[ "${OIDC_READINESS_STRICT}" == "true" ]]; then
                     echo "❌ ERROR: OIDC_READINESS_STRICT=true — exiting before pytest."
