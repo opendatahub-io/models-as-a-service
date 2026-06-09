@@ -105,12 +105,9 @@ jobs:
             deployment/base/payload-processing/manager/kustomization.yaml \
             maas-controller/pkg/platform/tenantreconcile/constants.go \
             test/e2e/scripts/local-deploy.sh
-          git commit -m "$(cat <<EOF
-chore: update payload-processing pin to ${SHORT}
-
-Bump ai-gateway-payload-processing from ${CURRENT:0:12} to ${SHORT}.
-EOF
-)"
+          git commit \
+            -m "chore: update payload-processing pin to ${SHORT}" \
+            -m "Bump ai-gateway-payload-processing from ${CURRENT:0:12} to ${SHORT}."
           git push --force-with-lease origin "$BRANCH"
 
           COMMIT_URL="https://github.com/${UPSTREAM_REPO}/commit/${LATEST}"
