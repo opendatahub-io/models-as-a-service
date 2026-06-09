@@ -98,13 +98,9 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.APIKeyMaxExpirationDays, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS"))
 	assert.Equal(t, tenantID, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "TENANT_NAME"))
 
-	// payload-processing is temporarily disabled due to CRD API group mismatch in PR #948
-	// The external payload-processing image expects CRDs in inference.opendatahub.io/v1alpha1
-	// but they're actually in maas.opendatahub.io/v1alpha1
-	// TODO: Re-enable when payload-processing is updated to use correct API group
-	// payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
-	// assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
-	// assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadDeployment, "spec", "template", "spec", "containers"))
+	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
+	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadDeployment, "spec", "template", "spec", "containers"))
 
 	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
 		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
@@ -140,86 +136,81 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, found)
 	assert.Contains(t, maasAPIHost, "."+params.AppNamespace+".")
 
-	// payload-processing DestinationRule is disabled (same reason as Deployment above)
-	// payloadDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadProcessingName)
-	// assert.Equal(t, params.GatewayNamespace, payloadDestinationRule.GetNamespace())
-	// payloadHost, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "host")
-	// require.NoError(t, err)
-	// require.True(t, found)
-	// assert.Contains(t, payloadHost, "."+params.GatewayNamespace+".")
+	payloadDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadDestinationRule.GetNamespace())
+	payloadHost, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, payloadHost, "."+params.GatewayNamespace+".")
 
-	// All payload-processing checks disabled (CRD API group mismatch in PR #948)
-	// TODO: Re-enable when payload-processing is fixed
-	/*
-		payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
-		preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
-		require.NoError(t, err)
-		require.True(t, found)
-		assert.Contains(t, preProcessingHost, "."+params.GatewayNamespace+".")
+	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
+	preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Contains(t, preProcessingHost, "."+params.GatewayNamespace+".")
 
-		payloadService := requireResource(t, resources, GVKService, PayloadProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
+	payloadService := requireResource(t, resources, GVKService, PayloadProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
 
-		payloadServiceAccount := requireResource(t, resources, GVKServiceAccount, PayloadProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadServiceAccount.GetNamespace())
+	payloadServiceAccount := requireResource(t, resources, GVKServiceAccount, PayloadProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadServiceAccount.GetNamespace())
 
-		payloadPluginsConfigMap := requireResource(t, resources, GVKConfigMap, PayloadProcessingPluginsConfigMapName)
-		assert.Equal(t, params.GatewayNamespace, payloadPluginsConfigMap.GetNamespace())
+	payloadPluginsConfigMap := requireResource(t, resources, GVKConfigMap, PayloadProcessingPluginsConfigMapName)
+	assert.Equal(t, params.GatewayNamespace, payloadPluginsConfigMap.GetNamespace())
 
-		payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
-		targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.NotEmpty(t, targetRefs)
-		firstTargetRef, ok := targetRefs[0].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, params.GatewayName, firstTargetRef["name"])
+	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
+	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, targetRefs)
+	firstTargetRef, ok := targetRefs[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
 
-		// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER.
-		configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.Len(t, configPatches, 2, "expected two configPatches (INSERT_BEFORE + INSERT_AFTER)")
+	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER.
+	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 2, "expected two configPatches (INSERT_BEFORE + INSERT_AFTER)")
 
-		wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-		wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
-		wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
-		wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
-		wantClusters := []string{wantBeforeCluster, wantAfterCluster}
+	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
+	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
+	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
+	wantClusters := []string{wantBeforeCluster, wantAfterCluster}
 
-		for i, raw := range configPatches {
-			cp, ok := raw.(map[string]any)
-			require.True(t, ok, "configPatches[%d] should be a map", i)
+	for i, raw := range configPatches {
+		cp, ok := raw.(map[string]any)
+		require.True(t, ok, "configPatches[%d] should be a map", i)
 
-			op, _, _ := unstructured.NestedString(cp, "patch", "operation")
-			assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
+		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
+		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
 
-			anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-			assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
+		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
+		assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
 
-			cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-			assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
-		}
+		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
+	}
 
-		// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
-		payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadBeforeDeployment.GetNamespace())
-		assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
+	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
+	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeDeployment.GetNamespace())
+	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
 
-		payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingName)
-		assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
+	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingName)
+	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
 
-		payloadClusterRoleBinding := requireResource(t, resources, GVKClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingName)
-		subjects, found, err := unstructured.NestedSlice(payloadClusterRoleBinding.Object, "subjects")
-		require.NoError(t, err)
-		require.True(t, found)
-		require.NotEmpty(t, subjects)
-		firstSubject, ok := subjects[0].(map[string]any)
-		require.True(t, ok)
-		assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
-	*/
+	payloadClusterRoleBinding := requireResource(t, resources, GVKClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingName)
+	subjects, found, err := unstructured.NestedSlice(payloadClusterRoleBinding.Object, "subjects")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, subjects)
+	firstSubject, ok := subjects[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

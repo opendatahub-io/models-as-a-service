@@ -10,8 +10,7 @@ metadata:
 resources:
 - ../../../../deployment/base/maas-api/overlays/tls
 - ../../../../deployment/base/maas-controller/policies
-# FIXME: Disabled - payload-processing crashes and EnvoyFilter breaks all gateway traffic
-# - ../../../../deployment/base/payload-processing/default
+- ../../../../deployment/base/payload-processing/default
 - ../../../../deployment/components/observability/observability/dashboards
 
 namespace: opendatahub
