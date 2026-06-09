@@ -15,6 +15,8 @@
 #   KUADRANT_VERSION     - Kuadrant Helm chart version (default: 1.3.1)
 #   MAAS_NAMESPACE       - MaaS deployment namespace (default: maas-system)
 #   GATEWAY_NAMESPACE    - Gateway namespace (default: istio-system)
+#   BBR_IMAGE            - Payload-processing image (default: see params.env pin)
+#   PAYLOAD_PROCESSING_COMMIT - Upstream repo commit for local BBR builds (default: BBR_IMAGE tag)
 
 set -euo pipefail
 
@@ -34,7 +36,9 @@ SUBSCRIPTION_NAMESPACE="models-as-a-service"
 
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
-BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable}"
+
+BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5}"
+PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${BBR_IMAGE##*:}}"
 
 # Path to BBR repo (for arm64 image builds)
 BBR_REPO="${BBR_REPO:-$(cd "$PROJECT_ROOT/../ai-gateway-payload-processing" 2>/dev/null && pwd || echo "")}"
@@ -73,6 +77,24 @@ step() {
 ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
 warn() { echo -e "  ${YELLOW}!${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1" >&2; }
+
+ensure_bbr_repo() {
+  if [[ -z "${BBR_REPO:-}" || ! -d "$BBR_REPO" ]]; then
+    BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
+  fi
+  if [[ ! -d "$BBR_REPO/.git" ]]; then
+    echo "  Cloning ai-gateway-payload-processing..."
+    gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO"
+  fi
+  local current
+  current="$(git -C "$BBR_REPO" rev-parse HEAD 2>/dev/null || echo "")"
+  if [[ "$current" != "$PAYLOAD_PROCESSING_COMMIT" ]]; then
+    echo "  Checking out payload-processing commit ${PAYLOAD_PROCESSING_COMMIT:0:12}..."
+    git -C "$BBR_REPO" fetch origin "$PAYLOAD_PROCESSING_COMMIT" --depth 1 2>/dev/null \
+      || git -C "$BBR_REPO" fetch origin
+    git -C "$BBR_REPO" checkout "$PAYLOAD_PROCESSING_COMMIT"
+  fi
+}
 
 # ─── Argument parsing ───────────────────────────────────────────────────────
 
@@ -300,14 +322,7 @@ if [[ "$ACTION" == "rebuild" ]]; then
   fi
   kubectl config use-context "kind-${KIND_CLUSTER_NAME}" &>/dev/null
 
-  # Ensure BBR repo is available
-  if [[ -z "$BBR_REPO" || ! -d "$BBR_REPO" ]]; then
-    BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
-    if [[ ! -d "$BBR_REPO" ]]; then
-      echo "  Cloning ai-gateway-payload-processing..."
-      gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO" -- --depth 1 2>&1 | tail -1
-    fi
-  fi
+  ensure_bbr_repo
 
   case "$REBUILD_COMPONENT" in
     bbr|payload-processing)
@@ -1060,14 +1075,7 @@ if [[ "$ARCH" == "arm64" ]]; then
         -t "$MAAS_CONTROLLER_IMAGE" . 2>&1 | tail -3)
     kind load docker-image "$MAAS_CONTROLLER_IMAGE" --name "$KIND_CLUSTER_NAME"
 
-    # Auto-clone BBR repo if not present
-    if [[ -z "$BBR_REPO" || ! -d "$BBR_REPO" ]]; then
-      BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
-      if [[ ! -d "$BBR_REPO" ]]; then
-        echo "  Cloning ai-gateway-payload-processing..."
-        gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO" -- --depth 1 2>&1 | tail -1
-      fi
-    fi
+    ensure_bbr_repo
 
     echo "  Building payload-processing (BBR)..."
     (cd "$BBR_REPO" && \
