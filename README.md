@@ -2,9 +2,6 @@
 
 Our goal is to create a comprehensive platform for **Models as a Service** with real-time policy management.
 
-> [!IMPORTANT]
-> This project is a work in progress and is not yet ready for production.
-
 ## 📦 Technology Stack
 
 - **OpenShift**: Kubernetes platform
