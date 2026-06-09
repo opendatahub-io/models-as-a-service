@@ -57,6 +57,7 @@ type ModelRefInfo struct {
 	Namespace       string           `json:"-"`
 	DisplayName     string           `json:"display_name,omitempty"`
 	Description     string           `json:"description,omitempty"`
+	Source          string           `json:"source,omitempty"`
 	TokenRateLimits []TokenRateLimit `json:"token_rate_limits,omitempty"`
 	BillingRate     *BillingRate     `json:"billing_rate,omitempty"`
 }
