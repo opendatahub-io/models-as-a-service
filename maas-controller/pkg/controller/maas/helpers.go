@@ -253,6 +253,9 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 			routeNamespace, routeName, len(route.Spec.ParentRefs), maxHTTPRouteParentRefs)
 	}
 	for _, parentRef := range route.Spec.ParentRefs {
+		if !parentRefTargetsGateway(parentRef) {
+			continue
+		}
 		parentNamespace := routeNamespace
 		if parentRef.Namespace != nil {
 			parentNamespace = string(*parentRef.Namespace)
@@ -264,4 +267,21 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
 }
 
-const maxHTTPRouteParentRefs = 32
+const (
+	maxHTTPRouteParentRefs          = 32
+	gatewayAPIParentRefKindGateway  = "Gateway"
+)
+
+// parentRefTargetsGateway reports whether parentRef refers to a Gateway API Gateway.
+// Omitted kind/group use Gateway API defaults (kind=Gateway, group=gateway.networking.k8s.io).
+func parentRefTargetsGateway(parentRef gatewayapiv1.ParentReference) bool {
+	parentKind := gatewayAPIParentRefKindGateway
+	if parentRef.Kind != nil {
+		parentKind = string(*parentRef.Kind)
+	}
+	parentGroup := string(gatewayapiv1.GroupName)
+	if parentRef.Group != nil {
+		parentGroup = string(*parentRef.Group)
+	}
+	return parentKind == gatewayAPIParentRefKindGateway && parentGroup == string(gatewayapiv1.GroupName)
+}

@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -638,6 +640,152 @@ func TestFindAnyAuthPolicyForModel(t *testing.T) {
 			got := findAnyAuthPolicyForModel(ctx, c, tt.modelNamespace, tt.modelName)
 			if (got == nil) != tt.wantNil {
 				t.Errorf("findAnyAuthPolicyForModel() nil = %v, want nil = %v", got == nil, tt.wantNil)
+			}
+		})
+	}
+}
+
+func TestValidateHTTPRouteReferencesGateway(t *testing.T) {
+	ctx := context.Background()
+	gatewayNS := gatewayapiv1.Namespace("openshift-ingress")
+	gatewayName := gatewayapiv1.ObjectName("tenant-gateway")
+	gatewayRef := maasv1alpha1.TenantGatewayRef{
+		Name:      "tenant-gateway",
+		Namespace: "openshift-ingress",
+	}
+
+	gatewayParentRef := gatewayapiv1.ParentReference{
+		Name:      gatewayName,
+		Namespace: &gatewayNS,
+	}
+	gatewayKind := gatewayapiv1.Kind(gatewayAPIParentRefKindGateway)
+	gatewayGroup := gatewayapiv1.Group(gatewayapiv1.GroupName)
+	explicitGatewayParentRef := gatewayapiv1.ParentReference{
+		Name:      gatewayName,
+		Namespace: &gatewayNS,
+		Kind:      &gatewayKind,
+		Group:     &gatewayGroup,
+	}
+	serviceKind := gatewayapiv1.Kind("Service")
+	emptyGroup := gatewayapiv1.Group("")
+	serviceParentRef := gatewayapiv1.ParentReference{
+		Name:      gatewayName,
+		Namespace: &gatewayNS,
+		Kind:      &serviceKind,
+		Group:     &emptyGroup,
+	}
+	wrongGroup := gatewayapiv1.Group("core")
+	wrongGroupParentRef := gatewayapiv1.ParentReference{
+		Name:      gatewayName,
+		Namespace: &gatewayNS,
+		Kind:      &gatewayKind,
+		Group:     &wrongGroup,
+	}
+
+	tests := []struct {
+		name        string
+		parentRefs  []gatewayapiv1.ParentReference
+		wantErr     bool
+		errContains string
+	}{
+		{
+			name:       "default kind and group",
+			parentRefs: []gatewayapiv1.ParentReference{gatewayParentRef},
+			wantErr:    false,
+		},
+		{
+			name:       "explicit gateway kind and group",
+			parentRefs: []gatewayapiv1.ParentReference{explicitGatewayParentRef},
+			wantErr:    false,
+		},
+		{
+			name:        "service parentRef with matching name and namespace is rejected",
+			parentRefs:  []gatewayapiv1.ParentReference{serviceParentRef},
+			wantErr:     true,
+			errContains: "does not reference tenant Gateway",
+		},
+		{
+			name:        "non-gateway group with gateway kind is rejected",
+			parentRefs:  []gatewayapiv1.ParentReference{wrongGroupParentRef},
+			wantErr:     true,
+			errContains: "does not reference tenant Gateway",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			route := &gatewayapiv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "model-route", Namespace: "tenant-a"},
+				Spec: gatewayapiv1.HTTPRouteSpec{
+					CommonRouteSpec: gatewayapiv1.CommonRouteSpec{ParentRefs: tt.parentRefs},
+				},
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(route).Build()
+
+			err := validateHTTPRouteReferencesGateway(ctx, c, route.Name, route.Namespace, gatewayRef)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if tt.errContains != "" && !strings.Contains(err.Error(), tt.errContains) {
+					t.Fatalf("error %q should contain %q", err.Error(), tt.errContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestParentRefTargetsGateway(t *testing.T) {
+	gatewayNS := gatewayapiv1.Namespace("openshift-ingress")
+	gatewayName := gatewayapiv1.ObjectName("tenant-gateway")
+	serviceKind := gatewayapiv1.Kind("Service")
+	emptyGroup := gatewayapiv1.Group("")
+	gatewayKind := gatewayapiv1.Kind(gatewayAPIParentRefKindGateway)
+	gatewayGroup := gatewayapiv1.Group(gatewayapiv1.GroupName)
+
+	tests := []struct {
+		name      string
+		parentRef gatewayapiv1.ParentReference
+		want      bool
+	}{
+		{
+			name: "omitted kind and group",
+			parentRef: gatewayapiv1.ParentReference{
+				Name:      gatewayName,
+				Namespace: &gatewayNS,
+			},
+			want: true,
+		},
+		{
+			name: "explicit gateway kind and group",
+			parentRef: gatewayapiv1.ParentReference{
+				Name:      gatewayName,
+				Namespace: &gatewayNS,
+				Kind:      &gatewayKind,
+				Group:     &gatewayGroup,
+			},
+			want: true,
+		},
+		{
+			name: "service with empty core group",
+			parentRef: gatewayapiv1.ParentReference{
+				Name:      gatewayName,
+				Namespace: &gatewayNS,
+				Kind:      &serviceKind,
+				Group:     &emptyGroup,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := parentRefTargetsGateway(tt.parentRef); got != tt.want {
+				t.Fatalf("parentRefTargetsGateway() = %v, want %v", got, tt.want)
 			}
 		})
 	}
