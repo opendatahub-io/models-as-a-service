@@ -268,8 +268,8 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 }
 
 const (
-	maxHTTPRouteParentRefs          = 32
-	gatewayAPIParentRefKindGateway  = "Gateway"
+	maxHTTPRouteParentRefs         = 32
+	gatewayAPIParentRefKindGateway = "Gateway"
 )
 
 // parentRefTargetsGateway reports whether parentRef refers to a Gateway API Gateway.
