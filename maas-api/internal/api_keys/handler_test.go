@@ -1782,36 +1782,89 @@ func TestGetAPIKey_ExpiredStatusComputation(t *testing.T) {
 	})
 }
 
-// TestGetAPIKey_CrossTenantRejected verifies tenant isolation: a user from tenant-B
-// cannot access a key belonging to tenant-A (returns 404, not 403).
-func TestGetAPIKey_CrossTenantRejected(t *testing.T) {
+// TestCrossTenantAccessRejected verifies tenant isolation across get and revoke
+// operations for both regular users and admins.
+func TestCrossTenantAccessRejected(t *testing.T) {
 	gin.SetMode(gin.TestMode)
-	store := NewMockStore()
-	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
 
-	// Create key for tenant-A
-	ctx := context.Background()
-	err := store.AddKey(ctx, "alice", "tenant-a-key", "hash-ta", "Tenant A Key", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
-	require.NoError(t, err)
-
-	// User from tenant-B tries to access it
-	tenantBUser := &token.UserContext{
-		Username: "alice",
-		Groups:   []string{"system:authenticated"},
-		Tenant:   "tenant-b",
+	tests := []struct {
+		name   string
+		method string
+		user   *token.UserContext
+		action func(*Handler, *gin.Context)
+	}{
+		{
+			name:   "GetByRegularUser",
+			method: http.MethodGet,
+			user: &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"system:authenticated"},
+				Tenant:   "tenant-b",
+			},
+			action: func(h *Handler, c *gin.Context) { h.GetAPIKey(c) },
+		},
+		{
+			name:   "GetByAdmin",
+			method: http.MethodGet,
+			user: &token.UserContext{
+				Username: "admin",
+				Groups:   []string{"admin-users"},
+				Tenant:   "tenant-b",
+			},
+			action: func(h *Handler, c *gin.Context) { h.GetAPIKey(c) },
+		},
+		{
+			name:   "RevokeByRegularUser",
+			method: http.MethodDelete,
+			user: &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"system:authenticated"},
+				Tenant:   "tenant-b",
+			},
+			action: func(h *Handler, c *gin.Context) { h.RevokeAPIKey(c) },
+		},
+		{
+			name:   "RevokeByAdmin",
+			method: http.MethodDelete,
+			user: &token.UserContext{
+				Username: "admin",
+				Groups:   []string{"admin-users"},
+				Tenant:   "tenant-b",
+			},
+			action: func(h *Handler, c *gin.Context) { h.RevokeAPIKey(c) },
+		},
 	}
 
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/tenant-a-key", nil)
-	c.Set("user", tenantBUser)
-	c.Params = gin.Params{{Key: "id", Value: "tenant-a-key"}}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			cfg := &config.Config{}
+			svc := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+			h := NewHandler(logger.Development(), svc, newMockAdminChecker())
 
-	handler.GetAPIKey(c)
+			ctx := context.Background()
+			err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
+				[]string{"system:authenticated"}, testSubscriptionName,
+				"tenant-a", nil, false)
+			require.NoError(t, err)
 
-	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant access should return 404")
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(tt.method, "/v1/api-keys/ta-key-1", nil)
+			c.Set("user", tt.user)
+			c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
+
+			tt.action(h, c)
+
+			assert.Equal(t, http.StatusNotFound, w.Code,
+				"cross-tenant %s should return 404", tt.name)
+
+			key, err := store.Get(ctx, "ta-key-1")
+			require.NoError(t, err)
+			assert.Equal(t, StatusActive, key.Status,
+				"key should remain active after cross-tenant attempt")
+		})
+	}
 }
 
 // TestSearchAPIKeys_TenantIsolation verifies that search only returns keys
@@ -1893,112 +1946,6 @@ func TestCreateAPIKey_StoresTenant(t *testing.T) {
 // ============================================================
 // TENANT SCOPING EDGE CASE TESTS
 // ============================================================
-
-func TestRevokeAPIKey_CrossTenantRejected(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := NewMockStore()
-	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
-
-	ctx := context.Background()
-
-	// Create key in tenant-a for user "alice"
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
-	require.NoError(t, err)
-
-	// Tenant-b user "alice" tries to DELETE it
-	tenantBUser := &token.UserContext{
-		Username: "alice",
-		Groups:   []string{"system:authenticated"},
-		Tenant:   "tenant-b",
-	}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/ta-key-1", nil)
-	c.Set("user", tenantBUser)
-	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
-
-	handler.RevokeAPIKey(c)
-
-	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant revoke should return 404")
-
-	// Verify key is still active in store (not revoked)
-	key, err := store.Get(ctx, "ta-key-1")
-	require.NoError(t, err)
-	assert.Equal(t, StatusActive, key.Status, "key should remain active after cross-tenant revoke attempt")
-}
-
-func TestRevokeAPIKey_CrossTenantAdminRejected(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := NewMockStore()
-	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
-
-	ctx := context.Background()
-
-	// Create key in tenant-a for user "alice"
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
-	require.NoError(t, err)
-
-	// Admin user from tenant-b tries to DELETE it
-	tenantBAdmin := &token.UserContext{
-		Username: "admin",
-		Groups:   []string{"admin-users"},
-		Tenant:   "tenant-b",
-	}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/ta-key-1", nil)
-	c.Set("user", tenantBAdmin)
-	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
-
-	handler.RevokeAPIKey(c)
-
-	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant admin revoke should return 404")
-
-	// Verify key still active — admin does NOT override tenant isolation
-	key, err := store.Get(ctx, "ta-key-1")
-	require.NoError(t, err)
-	assert.Equal(t, StatusActive, key.Status, "admin should not override tenant isolation")
-}
-
-func TestGetAPIKey_CrossTenantAdminRejected(t *testing.T) {
-	gin.SetMode(gin.TestMode)
-	store := NewMockStore()
-	cfg := &config.Config{}
-	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
-	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
-
-	ctx := context.Background()
-
-	// Create key in tenant-a for user "alice"
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
-	require.NoError(t, err)
-
-	// Admin from tenant-b tries GET
-	tenantBAdmin := &token.UserContext{
-		Username: "admin",
-		Groups:   []string{"admin-users"},
-		Tenant:   "tenant-b",
-	}
-
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/ta-key-1", nil)
-	c.Set("user", tenantBAdmin)
-	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
-
-	handler.GetAPIKey(c)
-
-	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant admin GET should return 404")
-}
 
 func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
@@ -2091,7 +2038,7 @@ func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
 		}
 
 		response := executeSearchRequest(t, handler, `{}`, tenantBAdmin)
-		assert.Len(t, response.Data, 0, "admin from tenant-b should see no tenant-a keys")
+		assert.Empty(t, response.Data, "admin from tenant-b should see no tenant-a keys")
 	})
 
 	t.Run("AdminFromTenantASeesAllKeys", func(t *testing.T) {

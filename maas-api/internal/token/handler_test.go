@@ -66,7 +66,7 @@ func TestExtractUserInfo_TenantHeader(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 
-		var body map[string]interface{}
+		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, "004", body["refId"])
 	})
@@ -82,7 +82,7 @@ func TestExtractUserInfo_TenantHeader(t *testing.T) {
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
 
-		var body map[string]interface{}
+		var body map[string]any
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, "004", body["refId"])
 	})

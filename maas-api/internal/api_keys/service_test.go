@@ -239,7 +239,7 @@ func TestValidateAPIKey_EmptyTenantReturnsEmpty(t *testing.T) {
 	require.NotNil(t, result)
 
 	assert.True(t, result.Valid, "legacy key with empty tenant should still be valid")
-	assert.Equal(t, "", result.Tenant, "tenant should be empty string for legacy keys")
+	assert.Empty(t, result.Tenant, "tenant should be empty string for legacy keys")
 }
 
 func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
@@ -261,7 +261,7 @@ func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
 		require.NotNil(t, result)
 
 		assert.False(t, result.Valid)
-		assert.Equal(t, "", result.Tenant, "tenant must not leak in validation response for revoked key")
+		assert.Empty(t, result.Tenant, "tenant must not leak in validation response for revoked key")
 	})
 
 	t.Run("NonExistentKey", func(t *testing.T) {
@@ -275,7 +275,7 @@ func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
 		require.NotNil(t, result)
 
 		assert.False(t, result.Valid)
-		assert.Equal(t, "", result.Tenant, "tenant must not leak in validation response for missing key")
+		assert.Empty(t, result.Tenant, "tenant must not leak in validation response for missing key")
 	})
 }
 
