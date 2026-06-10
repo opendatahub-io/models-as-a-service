@@ -132,6 +132,20 @@ func TestIsAuthorizedForKey(t *testing.T) {
 		require.NoError(t, err)
 		assert.True(t, result)
 	})
+
+	t.Run("CrossTenantOwnerDenied", func(t *testing.T) {
+		user := &token.UserContext{Username: "alice", Groups: []string{"users"}, Tenant: "tenant-b"}
+		result, err := h.isAuthorizedForKey(ctx, user, "alice", "tenant-a")
+		require.NoError(t, err)
+		assert.False(t, result, "same username but different tenant should be denied")
+	})
+
+	t.Run("CrossTenantAdminDenied", func(t *testing.T) {
+		admin := &token.UserContext{Username: "admin", Groups: []string{"admin-users"}, Tenant: "tenant-b"}
+		result, err := h.isAuthorizedForKey(ctx, admin, "alice", "tenant-a")
+		require.NoError(t, err)
+		assert.False(t, result, "admin from different tenant should be denied")
+	})
 }
 
 // ============================================================
@@ -1874,4 +1888,265 @@ func TestCreateAPIKey_StoresTenant(t *testing.T) {
 	meta, err := store.Get(context.Background(), response.ID)
 	require.NoError(t, err)
 	assert.Equal(t, "my-tenant", meta.Tenant, "key should be stored with caller's tenant")
+}
+
+// ============================================================
+// TENANT SCOPING EDGE CASE TESTS
+// ============================================================
+
+func TestRevokeAPIKey_CrossTenantRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create key in tenant-a for user "alice"
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	// Tenant-b user "alice" tries to DELETE it
+	tenantBUser := &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"system:authenticated"},
+		Tenant:   "tenant-b",
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/ta-key-1", nil)
+	c.Set("user", tenantBUser)
+	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
+
+	handler.RevokeAPIKey(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant revoke should return 404")
+
+	// Verify key is still active in store (not revoked)
+	key, err := store.Get(ctx, "ta-key-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status, "key should remain active after cross-tenant revoke attempt")
+}
+
+func TestRevokeAPIKey_CrossTenantAdminRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create key in tenant-a for user "alice"
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	// Admin user from tenant-b tries to DELETE it
+	tenantBAdmin := &token.UserContext{
+		Username: "admin",
+		Groups:   []string{"admin-users"},
+		Tenant:   "tenant-b",
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/v1/api-keys/ta-key-1", nil)
+	c.Set("user", tenantBAdmin)
+	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
+
+	handler.RevokeAPIKey(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant admin revoke should return 404")
+
+	// Verify key still active — admin does NOT override tenant isolation
+	key, err := store.Get(ctx, "ta-key-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status, "admin should not override tenant isolation")
+}
+
+func TestGetAPIKey_CrossTenantAdminRejected(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create key in tenant-a for user "alice"
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	// Admin from tenant-b tries GET
+	tenantBAdmin := &token.UserContext{
+		Username: "admin",
+		Groups:   []string{"admin-users"},
+		Tenant:   "tenant-b",
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/ta-key-1", nil)
+	c.Set("user", tenantBAdmin)
+	c.Params = gin.Params{{Key: "id", Value: "ta-key-1"}}
+
+	handler.GetAPIKey(c)
+
+	assert.Equal(t, http.StatusNotFound, w.Code, "cross-tenant admin GET should return 404")
+}
+
+func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create 2 keys for "alice" in tenant-a
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	// Create 2 keys for "alice" in tenant-b
+	err = store.AddKey(ctx, "alice", "tb-key-1", "hash-tb1", "TB Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "alice", "tb-key-2", "hash-tb2", "TB Key 2", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false)
+	require.NoError(t, err)
+
+	// Admin from tenant-a bulk revokes "alice"
+	tenantAAdmin := &token.UserContext{
+		Username: "admin",
+		Groups:   []string{"admin-users"},
+		Tenant:   "tenant-a",
+	}
+
+	requestBody := testBulkRevokeAliceJSON
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+	c.Set("user", tenantAAdmin)
+
+	handler.BulkRevokeAPIKeys(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response BulkRevokeResponse
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, 2, response.RevokedCount, "should only revoke tenant-a keys")
+
+	// Verify tenant-a keys are revoked
+	key, err := store.Get(ctx, "ta-key-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRevoked, key.Status, "tenant-a key 1 should be revoked")
+	key, err = store.Get(ctx, "ta-key-2")
+	require.NoError(t, err)
+	assert.Equal(t, StatusRevoked, key.Status, "tenant-a key 2 should be revoked")
+
+	// Verify tenant-b keys remain active
+	key, err = store.Get(ctx, "tb-key-1")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status, "tenant-b key 1 should remain active")
+	key, err = store.Get(ctx, "tb-key-2")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status, "tenant-b key 2 should remain active")
+}
+
+func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create keys for "alice" in tenant-a
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	t.Run("AdminFromTenantBSeesNoKeys", func(t *testing.T) {
+		tenantBAdmin := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users"},
+			Tenant:   "tenant-b",
+		}
+
+		response := executeSearchRequest(t, handler, `{}`, tenantBAdmin)
+		assert.Len(t, response.Data, 0, "admin from tenant-b should see no tenant-a keys")
+	})
+
+	t.Run("AdminFromTenantASeesAllKeys", func(t *testing.T) {
+		tenantAAdmin := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users"},
+			Tenant:   "tenant-a",
+		}
+
+		response := executeSearchRequest(t, handler, `{}`, tenantAAdmin)
+		assert.Len(t, response.Data, 2, "admin from tenant-a should see all tenant-a keys")
+		for _, key := range response.Data {
+			assert.Equal(t, "tenant-a", key.Tenant)
+		}
+	})
+}
+
+func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	ctx := context.Background()
+
+	// Create keys in tenant-a
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	require.NoError(t, err)
+
+	// User from tenant-c (no keys exist) searches
+	tenantCUser := &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"system:authenticated"},
+		Tenant:   "tenant-c",
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(`{}`))
+	c.Set("user", tenantCUser)
+
+	handler.SearchAPIKeys(c)
+
+	assert.Equal(t, http.StatusOK, w.Code, "should return 200 OK even with no results")
+	var response SearchAPIKeysResponse
+	err = json.Unmarshal(w.Body.Bytes(), &response)
+	require.NoError(t, err)
+	assert.Equal(t, "list", response.Object)
+	assert.Empty(t, response.Data, "tenant-c user should see no keys")
+	assert.False(t, response.HasMore)
 }

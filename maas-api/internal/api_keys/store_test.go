@@ -248,3 +248,71 @@ func TestAddKeyWithTenant(t *testing.T) {
 		assert.Equal(t, "tenant-xyz", key.Tenant)
 	})
 }
+
+func TestSearchByTenant(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Add 2 keys for tenant-a
+	require.NoError(t, store.AddKey(ctx, "user1", "sa-1", "shah1", "key-a1", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "user1", "sa-2", "shah2", "key-a2", "", nil, "sub-1", "tenant-a", nil, false))
+	// Add 1 key for tenant-b
+	require.NoError(t, store.AddKey(ctx, "user1", "sb-1", "shbh1", "key-b1", "", nil, "sub-1", "tenant-b", nil, false))
+	// Add 1 key for tenant-c
+	require.NoError(t, store.AddKey(ctx, "user1", "sc-1", "shch1", "key-c1", "", nil, "sub-1", "tenant-c", nil, false))
+
+	filters := api_keys.SearchFilters{}
+	sortP := api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder}
+	pagination := api_keys.PaginationParams{Limit: 50, Offset: 0}
+
+	t.Run("TenantA_Returns2Keys", func(t *testing.T) {
+		result, err := store.Search(ctx, "user1", "tenant-a", &filters, &sortP, &pagination)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 2)
+	})
+
+	t.Run("TenantB_Returns1Key", func(t *testing.T) {
+		result, err := store.Search(ctx, "user1", "tenant-b", &filters, &sortP, &pagination)
+		require.NoError(t, err)
+		assert.Len(t, result.Keys, 1)
+	})
+
+	t.Run("NonexistentTenant_Returns0Keys", func(t *testing.T) {
+		result, err := store.Search(ctx, "user1", "nonexistent", &filters, &sortP, &pagination)
+		require.NoError(t, err)
+		assert.Empty(t, result.Keys)
+	})
+}
+
+func TestInvalidateAll_TenantScoped(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	// Add 2 keys for alice in tenant-a
+	require.NoError(t, store.AddKey(ctx, "alice", "ta-1", "tah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "ta-2", "tah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false))
+	// Add 2 keys for alice in tenant-b
+	require.NoError(t, store.AddKey(ctx, "alice", "tb-1", "tbh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "tb-2", "tbh2", "key-tb2", "", nil, "sub-1", "tenant-b", nil, false))
+
+	// Invalidate only tenant-a keys
+	count, err := store.InvalidateAll(ctx, "alice", "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	// Verify tenant-a keys are revoked
+	for _, id := range []string{"ta-1", "ta-2"} {
+		key, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusRevoked, key.Status, "tenant-a key %s should be revoked", id)
+	}
+
+	// Verify tenant-b keys are still active
+	for _, id := range []string{"tb-1", "tb-2"} {
+		key, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusActive, key.Status, "tenant-b key %s should remain active", id)
+	}
+}

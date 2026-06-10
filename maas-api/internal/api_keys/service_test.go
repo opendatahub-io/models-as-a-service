@@ -223,6 +223,99 @@ func TestValidateAPIKey_ReturnsTenant(t *testing.T) {
 	assert.Equal(t, "acme-corp", result.Tenant, "ValidationResult should include tenant from stored key")
 }
 
+func TestValidateAPIKey_EmptyTenantReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	keyID := "550e8400-e29b-41d4-a716-446655440011"
+	plainKey, hash := createTestAPIKey(t)
+
+	// Legacy key with empty tenant
+	err := store.AddKey(ctx, "alice", keyID, hash, "Legacy Key", "", []string{"users"}, "default-sub", "", nil, false)
+	require.NoError(t, err)
+
+	result, err := svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, result.Valid, "legacy key with empty tenant should still be valid")
+	assert.Equal(t, "", result.Tenant, "tenant should be empty string for legacy keys")
+}
+
+func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
+	t.Run("RevokedKey", func(t *testing.T) {
+		ctx := context.Background()
+		svc, store := createTestService(t)
+
+		keyID := "550e8400-e29b-41d4-a716-446655440012"
+		plainKey, hash := createTestAPIKey(t)
+
+		err := store.AddKey(ctx, "alice", keyID, hash, "Tenant Revoked", "", []string{"users"}, "default-sub", "acme-corp", nil, false)
+		require.NoError(t, err)
+
+		err = store.Revoke(ctx, keyID)
+		require.NoError(t, err)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, result.Valid)
+		assert.Equal(t, "", result.Tenant, "tenant must not leak in validation response for revoked key")
+	})
+
+	t.Run("NonExistentKey", func(t *testing.T) {
+		ctx := context.Background()
+		svc, _ := createTestService(t)
+
+		plainKey, _ := createTestAPIKey(t)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, result.Valid)
+		assert.Equal(t, "", result.Tenant, "tenant must not leak in validation response for missing key")
+	})
+}
+
+func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	// Create 3 keys for alice in tenant-a
+	tenantAIDs := make([]string, 3)
+	for i := range 3 {
+		_, hash := createTestAPIKey(t)
+		id := "tenant-a-key-" + string(rune('a'+i))
+		tenantAIDs[i] = id
+		err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false)
+		require.NoError(t, err)
+	}
+
+	// Create 2 keys for alice in tenant-b
+	tenantBIDs := make([]string, 2)
+	for i := range 2 {
+		_, hash := createTestAPIKey(t)
+		id := "tenant-b-key-" + string(rune('a'+i))
+		tenantBIDs[i] = id
+		err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-b", nil, false)
+		require.NoError(t, err)
+	}
+
+	// Bulk revoke only tenant-a keys
+	count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, 3, count, "should revoke exactly the 3 keys in tenant-a")
+
+	// Verify tenant-b keys are still active
+	for _, id := range tenantBIDs {
+		meta, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusActive, meta.Status, "key %s in tenant-b should remain active", id)
+	}
+}
+
 // ============================================================
 // SERVICE LAYER PASS-THROUGH TESTS
 // ============================================================
