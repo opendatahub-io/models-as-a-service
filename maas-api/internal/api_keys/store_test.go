@@ -249,6 +249,8 @@ func TestAddKeyWithTenant(t *testing.T) {
 	})
 }
 
+// TestSearchByTenant verifies that the store Search method correctly scopes
+// results by tenant, returning only keys matching the specified tenant.
 func TestSearchByTenant(t *testing.T) {
 	ctx := t.Context()
 	store := createTestStore(t)
@@ -285,6 +287,8 @@ func TestSearchByTenant(t *testing.T) {
 	})
 }
 
+// TestInvalidateAll_TenantScoped verifies that InvalidateAll only revokes keys
+// within the specified tenant, leaving keys in other tenants active.
 func TestInvalidateAll_TenantScoped(t *testing.T) {
 	ctx := t.Context()
 	store := createTestStore(t)

@@ -34,6 +34,9 @@ func setupRouter(t *testing.T) *gin.Engine {
 	return router
 }
 
+// TestExtractUserInfo_TenantHeader verifies that the ExtractUserInfo middleware
+// correctly extracts the X-MaaS-Tenant header and rejects requests where it is
+// missing or whitespace-only.
 func TestExtractUserInfo_TenantHeader(t *testing.T) {
 	router := setupRouter(t)
 

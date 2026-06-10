@@ -207,6 +207,8 @@ func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 	assert.NotEmpty(t, metaAfter.LastUsedAt, "LastUsedAt should be updated after validation")
 }
 
+// TestValidateAPIKey_ReturnsTenant verifies that a valid key's tenant is included
+// in the ValidationResult returned to Authorino.
 func TestValidateAPIKey_ReturnsTenant(t *testing.T) {
 	ctx := context.Background()
 	svc, store := createTestService(t)
@@ -223,6 +225,8 @@ func TestValidateAPIKey_ReturnsTenant(t *testing.T) {
 	assert.Equal(t, "acme-corp", result.Tenant, "ValidationResult should include tenant from stored key")
 }
 
+// TestValidateAPIKey_EmptyTenantReturnsEmpty verifies that legacy keys created
+// with an empty tenant still validate successfully and return an empty tenant string.
 func TestValidateAPIKey_EmptyTenantReturnsEmpty(t *testing.T) {
 	ctx := context.Background()
 	svc, store := createTestService(t)
@@ -242,6 +246,8 @@ func TestValidateAPIKey_EmptyTenantReturnsEmpty(t *testing.T) {
 	assert.Empty(t, result.Tenant, "tenant should be empty string for legacy keys")
 }
 
+// TestValidateAPIKey_TenantNotExposedOnInvalid verifies that tenant information
+// is not leaked in validation responses for revoked or non-existent keys.
 func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
 	t.Run("RevokedKey", func(t *testing.T) {
 		ctx := context.Background()
@@ -279,6 +285,8 @@ func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
 	})
 }
 
+// TestBulkRevokeAPIKeys_TenantScopedCount verifies that bulk revoke count is
+// scoped to the specified tenant, not all keys for the user across tenants.
 func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
 	ctx := context.Background()
 	svc, store := createTestService(t)
