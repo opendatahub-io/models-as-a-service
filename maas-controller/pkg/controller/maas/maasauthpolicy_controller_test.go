@@ -443,8 +443,8 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 
 	// Verify only ap2 is in the annotation (ap1 no longer contributes)
 	ann := apB.GetAnnotations()["maas.opendatahub.io/auth-policies"]
-	if ann != "ap2" {
-		t.Errorf("AuthPolicy annotation = %q, want %q (only ap2 should contribute)", ann, "ap2")
+	if ann != namespace+"/ap2" {
+		t.Errorf("AuthPolicy annotation = %q, want %q (only ap2 should contribute)", ann, namespace+"/ap2")
 	}
 }
 
