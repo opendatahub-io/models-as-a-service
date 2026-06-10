@@ -1947,6 +1947,8 @@ func TestCreateAPIKey_StoresTenant(t *testing.T) {
 // TENANT SCOPING EDGE CASE TESTS
 // ============================================================
 
+// TestBulkRevokeAPIKeys_TenantIsolation verifies that bulk revoke only affects
+// keys within the caller's tenant, leaving keys in other tenants untouched.
 func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
@@ -2013,6 +2015,8 @@ func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
 	assert.Equal(t, StatusActive, key.Status, "tenant-b key 2 should remain active")
 }
 
+// TestSearchAPIKeys_AdminCrossTenantIsolation verifies that admin privileges
+// do not bypass tenant isolation — an admin from tenant-B cannot see keys in tenant-A.
 func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
@@ -2056,6 +2060,8 @@ func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
 	})
 }
 
+// TestSearchAPIKeys_EmptyTenantNoResults verifies that a user whose tenant has
+// no keys gets an empty list (200 OK), not an error.
 func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
