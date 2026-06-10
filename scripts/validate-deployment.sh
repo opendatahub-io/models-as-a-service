@@ -587,6 +587,15 @@ else
                 
                 # Set the inference endpoint if we have a valid model
                 if [ -n "$MODEL_CHAT" ] && [ "$MODEL_CHAT" != "null" ]; then
+                    # The URL returned by /v1/models is the in-cluster service URL
+                    # (e.g. https://<service>.svc.cluster.local/llm/<model>).
+                    # When running from outside the cluster (CI/Prow) rewrite it to
+                    # use the external gateway hostname so the request is routable.
+                    if echo "$MODEL_CHAT" | grep -q "\.svc\.cluster\.local"; then
+                        MODEL_PATH=$(echo "$MODEL_CHAT" | sed 's|https\?://[^/]*||')
+                        MODEL_CHAT="${HOST}${MODEL_PATH}"
+                        print_info "Rewrote internal model URL to external gateway: $MODEL_CHAT"
+                    fi
                     # Use custom model path if provided, otherwise use endpoint
                     if [ -n "$CUSTOM_MODEL_PATH" ]; then
                         MODEL_CHAT_ENDPOINT="${MODEL_CHAT}${CUSTOM_MODEL_PATH}"
