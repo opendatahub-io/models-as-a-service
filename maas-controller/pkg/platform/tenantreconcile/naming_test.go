@@ -38,8 +38,8 @@ func TestTenantIdentifierFor(t *testing.T) {
 					Namespace: "ai-tenant-redteam",
 					Labels: map[string]string{
 						LabelManagedByAITenant: "true",
-						LabelTenantName:      "redteam",
-						LabelTenantNamespace: "ai-tenant-redteam",
+						LabelTenantName:        "redteam",
+						LabelTenantNamespace:   "ai-tenant-redteam",
 					},
 				},
 			},
@@ -53,7 +53,7 @@ func TestTenantIdentifierFor(t *testing.T) {
 					Namespace: "ai-tenant-engineering",
 					Labels: map[string]string{
 						LabelManagedByAITenant: "true",
-						LabelTenantName:      "engineering",
+						LabelTenantName:        "engineering",
 					},
 				},
 			},
@@ -199,7 +199,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 				Namespace: "ai-tenant-redteam",
 				Labels: map[string]string{
 					LabelManagedByAITenant: "true",
-					LabelTenantName:      "redteam",
+					LabelTenantName:        "redteam",
 				},
 			},
 			Spec: maasv1alpha1.TenantSpec{

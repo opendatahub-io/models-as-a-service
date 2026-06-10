@@ -568,7 +568,7 @@ func TestAITenantReconcile_RejectsDefaultTenantNamespaceForNonDefaultAITenant(t 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "red-team",
-			Namespace: "redhat-ai-gateway-infra",
+			Namespace: tenantreconcile.DefaultAITenantNamespace, // Must be in ai-tenants namespace
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "models-as-a-service"},
