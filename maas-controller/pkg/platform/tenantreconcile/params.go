@@ -179,6 +179,55 @@ func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params Platfo
 	return nil
 }
 
+func patchMaaSAPIAuthPolicy(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	log.V(4).Info("Patching AuthPolicy cluster-audience", "audience", params.ClusterAudience)
+	audiences, found, err := unstructured.NestedSlice(r.Object,
+		"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
+	if err != nil {
+		return fmt.Errorf("read AuthPolicy audiences: %w", err)
+	}
+	if !found || len(audiences) == 0 {
+		return errors.New("AuthPolicy audiences not found")
+	}
+	audiences[0] = params.ClusterAudience
+	if err := unstructured.SetNestedSlice(r.Object, audiences,
+		"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences"); err != nil {
+		return fmt.Errorf("write AuthPolicy audiences: %w", err)
+	}
+
+	url, found, err := unstructured.NestedString(r.Object,
+		"spec", "rules", "metadata", "apiKeyValidation", "http", "url")
+	if err != nil {
+		return fmt.Errorf("read AuthPolicy validation URL: %w", err)
+	}
+	if !found {
+		return errors.New("AuthPolicy validation URL not found")
+	}
+	if url != "" && strings.Contains(url, ".placehold.") {
+		newURL := strings.Replace(url, ".placehold.", "."+params.AppNamespace+".", 1)
+		log.V(4).Info("Patching AuthPolicy validation URL", "old", url, "new", newURL)
+		if err := unstructured.SetNestedField(r.Object, newURL,
+			"spec", "rules", "metadata", "apiKeyValidation", "http", "url"); err != nil {
+			return fmt.Errorf("write AuthPolicy validation URL: %w", err)
+		}
+	}
+
+	tenantExpr, found, err := unstructured.NestedString(r.Object,
+		"spec", "rules", "response", "success", "headers", "X-MaaS-Tenant-OC", "plain", "expression")
+	if err != nil {
+		return fmt.Errorf("read AuthPolicy tenant expression: %w", err)
+	}
+	if found && strings.Contains(tenantExpr, "TENANT_PLACEHOLDER") {
+		newExpr := strings.Replace(tenantExpr, "TENANT_PLACEHOLDER", params.AppNamespace, 1)
+		log.V(4).Info("Patching AuthPolicy tenant header", "namespace", params.AppNamespace)
+		if err := unstructured.SetNestedField(r.Object, newExpr,
+			"spec", "rules", "response", "success", "headers", "X-MaaS-Tenant-OC", "plain", "expression"); err != nil {
+			return fmt.Errorf("write AuthPolicy tenant expression: %w", err)
+		}
+	}
+	return nil
+}
+
 func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 	host, found, err := unstructured.NestedString(r.Object, "spec", "host")

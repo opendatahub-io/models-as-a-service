@@ -97,6 +97,23 @@ spec:
               selector: auth.identity.user.groups.@tostr
             key: X-MaaS-Group
             priority: 1
+          # Tenant: from API key validation (when API key used)
+          X-MaaS-Tenant:
+            when:
+              - selector: request.headers.authorization
+                operator: matches
+                value: "^Bearer sk-oai-.*"
+            plain:
+              selector: auth.metadata.apiKeyValidation.tenant
+            priority: 0
+          # Tenant: static value for non-API-key tokens (patched by PostRender)
+          X-MaaS-Tenant-OC:
+            when:
+              - predicate: '!request.headers.authorization.startsWith("Bearer sk-oai-")'
+            plain:
+              expression: '"TENANT_PLACEHOLDER"'
+            key: X-MaaS-Tenant
+            priority: 1
           # Subscription: from API key validation (when API key with subscription used)
           # This header is used by /v1/models to determine which subscription's models to return
           X-MaaS-Subscription:
