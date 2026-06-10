@@ -408,14 +408,14 @@ else
 fi
 
 if [ -n "${OIDC_ISSUER_URL:-}" ]; then
-    print_check "maas-api AuthPolicy OIDC issuer (OIDC_ISSUER_URL)"
-    if verify_maas_api_oidc_authpolicy "$MAAS_API_NAMESPACE"; then
-        print_success "maas-api-auth-policy jwt.issuerUrl matches OIDC_ISSUER_URL"
+    print_check "maas-gateway-auth AuthPolicy OIDC issuer (OIDC_ISSUER_URL)"
+    if verify_gateway_oidc_authpolicy "${GATEWAY_NAMESPACE:-openshift-ingress}"; then
+        print_success "maas-gateway-auth jwt.issuerUrl matches OIDC_ISSUER_URL"
     else
-        print_fail "maas-api AuthPolicy OIDC config does not match OIDC_ISSUER_URL / OIDC_CLIENT_ID" \
+        print_fail "maas-gateway-auth AuthPolicy OIDC config does not match OIDC_ISSUER_URL / OIDC_CLIENT_ID" \
             "Authorino will reject Keycloak JWTs (HTTP 401) until issuers align" \
             "Deploy with the same OIDC_ISSUER_URL as tests: ./scripts/deploy.sh ... --external-oidc" \
-            "Check: kubectl get authpolicy maas-api-auth-policy -n $MAAS_API_NAMESPACE -o yaml"
+            "Check: kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml"
     fi
 fi
 

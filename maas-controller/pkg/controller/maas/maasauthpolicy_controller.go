@@ -575,18 +575,21 @@ else := []
 
 model_rules := object.get(model_access, model_identity, null)
 
-# No model-specific allowlist for this request target; rely on gateway-level auth + subscription checks.
+# Management endpoints (e.g. /v1/models, /v1/api-keys) carry no model context.
+# Allow them here; subscription and rate-limit checks are gated by the /llm/ when-condition.
 allow {
-	model_rules == null
+	model_identity == ""
 }
 
-# Allow if user is explicitly listed for this model.
+# Inference path: deny by default when no MaaSAuthPolicy covers this model.
+# Allow only when the caller's username or a group is explicitly listed.
 allow {
+	model_rules != null
 	model_rules.users[_] == username
 }
 
-# Allow if any caller group is listed for this model.
 allow {
+	model_rules != null
 	g := groups[_]
 	model_rules.groups[_] == g
 }
@@ -760,13 +763,23 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					"X-MaaS-Subscription": map[string]any{
-						"plain": map[string]any{
-							"expression": celSubscription,
+				// Only inject X-MaaS-Subscription when there is a real value to inject.
+				// An empty string injected for K8s tokens without a subscription header
+				// causes maas-api to filter by an empty subscription name and return 0 models.
+				// The old maas-api-auth-policy never injected this header for K8s tokens —
+				// only for API keys with a non-empty subscription field.
+				"X-MaaS-Subscription": map[string]any{
+					"when": []any{
+						map[string]any{
+							"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
 						},
-						"metrics":  false,
-						"priority": int64(0),
 					},
+					"plain": map[string]any{
+						"expression": celSubscription,
+					},
+					"metrics":  false,
+					"priority": int64(0),
+				},
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -839,7 +852,19 @@ allow {
 			"name":      r.GatewayName,
 			"namespace": r.GatewayNamespace,
 		},
-		"defaults": map[string]any{"rules": defaultsRules},
+		// "when" must live inside "defaults" (not at spec level) because Kuadrant treats
+		// top-level "when" as implicit defaults, which conflicts with explicit "defaults".
+		"defaults": map[string]any{
+			// Skip auth for the health readiness probe so unauthenticated GET /maas-api/health
+			// returns 200 without triggering Authorino. Previously handled by maas-api-auth-policy;
+			// now that the route-level policy is removed this condition lives at the gateway level.
+			"when": []any{
+				map[string]any{
+					"predicate": `request.path != "/maas-api/health" || request.method != "GET"`,
+				},
+			},
+			"rules": defaultsRules,
+		},
 	}
 }
 

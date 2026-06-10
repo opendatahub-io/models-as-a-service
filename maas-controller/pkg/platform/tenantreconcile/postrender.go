@@ -41,8 +41,6 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		filteredResources = append(filteredResources, *resource)
 	}
 
-	setManagedFalseAnnotation(filteredResources)
-
 	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
 		return nil, err
 	}
@@ -73,36 +71,15 @@ func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructur
 	resource.SetNamespace(gatewayNamespace)
 }
 
-// setManagedFalseAnnotation marks the maas-api AuthPolicy with opendatahub.io/managed=false
-// so the ODH operator does not reconcile it back to its defaults after the Tenant reconciler
-// has applied OIDC, audience, and other customizations.
-func setManagedFalseAnnotation(resources []unstructured.Unstructured) {
-	for i := range resources {
-		r := &resources[i]
-		if r.GroupVersionKind() == GVKAuthPolicy && r.GetName() == MaaSAPIAuthPolicyName {
-			ann := r.GetAnnotations()
-			if ann == nil {
-				ann = make(map[string]string)
-			}
-			ann[AnnotationManaged] = "false"
-			r.SetAnnotations(ann)
-			return
-		}
-	}
-}
-
 func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {
 	if tenant.Spec.ExternalOIDC == nil {
 		return nil
 	}
-	oidc := tenant.Spec.ExternalOIDC
-	for i := range resources {
-		resource := &resources[i]
-		if resource.GroupVersionKind() == GVKAuthPolicy && resource.GetName() == MaaSAPIAuthPolicyName {
-			return patchAuthPolicyWithOIDC(log, resource, oidc)
-		}
-	}
-	log.Info("AuthPolicy not found in rendered resources; OIDC is handled by gateway-level policy", "name", MaaSAPIAuthPolicyName)
+	// OIDC is configured in the singleton maas-gateway-auth AuthPolicy managed by
+	// maas-controller (see MaaSAuthPolicyReconciler.buildGatewayAuthPolicySpec).
+	// The route-level maas-api-auth-policy has been removed, so there is nothing
+	// to patch in the kustomize-rendered resources here.
+	log.V(1).Info("external OIDC configured via gateway-level AuthPolicy; no kustomize resources to patch")
 	return nil
 }
 

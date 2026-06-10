@@ -921,6 +921,10 @@ class TestCascadeDeletion:
         finally:
             _apply_cr(original)
             _wait_reconcile()
+            # Wait for the TRLP to be re-enforced before returning — this confirms the
+            # controller has fully reconciled the restored subscription and the maas-api
+            # subscription cache has caught up, preventing flaky failures in subsequent tests.
+            _wait_for_token_rate_limit_policy(MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90)
 
     def test_unconfigured_model_denied_by_gateway_auth(self):
         """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""

@@ -386,6 +386,11 @@ deploy_models() {
         dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
         exit 1
     fi
+    if ! oc wait llminferenceservice/e2e-unconfigured-facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for e2e-unconfigured simulator to be ready"
+        dump_llmis_diagnostics "e2e-unconfigured-facebook-opt-125m-simulated" "llm"
+        exit 1
+    fi
     echo "✅ Simulator models ready"
 
     # Wait for governed MaaSModelRefs to transition to Ready phase.
