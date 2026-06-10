@@ -114,8 +114,14 @@ def _create_external_model(name: str,
     })
 
 
-def _create_namespace(name: str):
-    """Create namespace if it doesn't exist."""
+def _create_namespace(name: str, tenant_enabled: bool = False):
+    """Create namespace if it doesn't exist.
+
+    Args:
+        name: Namespace name
+        tenant_enabled: If True, create Tenant CR to allow MaaS tenant resources
+                       (MaaSSubscription, MaaSAuthPolicy). Required for webhook validation.
+    """
     result = subprocess.run(
         ["oc", "create", "namespace", name],
         capture_output=True,
@@ -123,6 +129,15 @@ def _create_namespace(name: str):
     )
     if result.returncode != 0 and "already exists" not in result.stderr:
         raise RuntimeError(f"Failed to create namespace {name}: {result.stderr}")
+
+    if tenant_enabled:
+        # Create Tenant CR to enable tenant resources in this namespace
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "Tenant",
+            "metadata": {"name": "default-tenant", "namespace": name},
+            "spec": {},
+        })
 
 
 def _delete_namespace(name: str):
@@ -218,7 +233,9 @@ class TestMaaSAPIWatchNamespace:
         """
         sub_name = f"e2e-api-hidden-{uuid.uuid4().hex[:6]}"
         other_ns = "e2e-api-unwatched-ns"
-        _create_namespace(other_ns)
+        # Label namespace as tenant-enabled to satisfy webhook validation.
+        # Test validates API namespace scoping (API only sees its configured namespace).
+        _create_namespace(other_ns, tenant_enabled=True)
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -290,9 +307,15 @@ class TestMaaSControllerWatchNamespace:
 
     def test_authpolicy_and_subscription_in_another_namespace(self):
         """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
-        and should not appear in the AuthPolicy and TRLP annotations for the model."""
+        and should not appear in the AuthPolicy and TRLP annotations for the model.
+
+        TODO: When multi-tenancy is fully implemented with controller watching all tenant namespaces,
+        this test will need to be redesigned to validate cross-namespace isolation differently.
+        """
         ns = "e2e-unwatched-ns"
-        _create_namespace(ns)
+        # Label namespace as tenant-enabled to satisfy webhook validation.
+        # Test validates controller namespace scoping (controller only watches MAAS_SUBSCRIPTION_NAMESPACE).
+        _create_namespace(ns, tenant_enabled=True)
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",

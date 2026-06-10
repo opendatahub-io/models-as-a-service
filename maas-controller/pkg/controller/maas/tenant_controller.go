@@ -153,7 +153,7 @@ func secretNamedMaaSDB() predicate.Predicate {
 func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		ns := o.GetNamespace()
-		return ns == r.AppNamespace || ns == r.operatorNamespace()
+		return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.operatorNamespace()
 	})
 }
 

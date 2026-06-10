@@ -39,7 +39,7 @@ const (
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
@@ -53,6 +53,7 @@ const (
 	IstioTelemetryName                            = "latency-per-subscription"
 	MaaSAPIDeploymentName                         = "maas-api"
 	PayloadProcessingName                         = "payload-processing"
+	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.

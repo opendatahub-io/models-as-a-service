@@ -53,6 +53,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/webhook"
 )
 
 var (
@@ -70,7 +71,7 @@ func init() {
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
 
-// ensureSubscriptionNamespaceWithClient checks whether the subscription namespace exists
+// ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
 // start even when the service account lacks namespace-create permission (common in
 // operator-managed deployments where the operator pre-creates the namespace).
@@ -78,37 +79,37 @@ func init() {
 //
 // Handles the edge case where the namespace is in Terminating phase during RHOAI
 // reinstall/upgrade - waits for deletion to complete before attempting creation.
-func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
+func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose string, clientset kubernetes.Interface) error {
 	ns, err := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 	if err == nil {
 		if ns.Status.Phase == corev1.NamespaceTerminating {
-			setupLog.Info("subscription namespace is terminating, waiting for deletion to complete",
-				"namespace", namespace)
+			setupLog.Info("managed namespace is terminating, waiting for deletion to complete",
+				"namespace", namespace, "purpose", purpose)
 
 			pollErr := wait.PollUntilContextTimeout(ctx, 2*time.Second, 90*time.Second, true,
 				func(ctx context.Context) (bool, error) {
 					checkNs, pollErr := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
 					if errors.IsNotFound(pollErr) {
-						setupLog.Info("terminating namespace has been deleted", "namespace", namespace)
+						setupLog.Info("terminating namespace has been deleted", "namespace", namespace, "purpose", purpose)
 						return true, nil
 					}
 					if errors.IsForbidden(pollErr) {
 						setupLog.Info("insufficient permissions to poll namespace deletion status, "+
 							"assuming namespace is managed externally",
-							"namespace", namespace, "error", pollErr)
+							"namespace", namespace, "purpose", purpose, "error", pollErr)
 						return true, nil
 					}
 					if pollErr != nil {
 						return false, fmt.Errorf("error checking namespace status during deletion wait: %w", pollErr)
 					}
 					if checkNs.Status.Phase == corev1.NamespaceActive || checkNs.Status.Phase == "" {
-						setupLog.Info("subscription namespace became active during deletion wait "+
+						setupLog.Info("managed namespace became active during deletion wait "+
 							"(recreated by operator or external process)",
-							"namespace", namespace)
+							"namespace", namespace, "purpose", purpose)
 						return true, nil
 					}
 					setupLog.V(1).Info("namespace still terminating, will retry",
-						"namespace", namespace, "phase", checkNs.Status.Phase)
+						"namespace", namespace, "purpose", purpose, "phase", checkNs.Status.Phase)
 					return false, nil
 				})
 
@@ -128,8 +129,8 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 				return nil
 			}
 		} else {
-			setupLog.Info("subscription namespace already exists",
-				"namespace", namespace, "phase", ns.Status.Phase)
+			setupLog.Info("managed namespace already exists",
+				"namespace", namespace, "purpose", purpose, "phase", ns.Status.Phase)
 			return nil
 		}
 	}
@@ -137,14 +138,14 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 	if errors.IsForbidden(err) {
 		setupLog.Info("insufficient permissions to check namespace existence, assuming it exists — "+
 			"verify that the ClusterRoleBinding references the correct namespace for the controller ServiceAccount",
-			"namespace", namespace, "error", err)
+			"namespace", namespace, "purpose", purpose, "error", err)
 		return nil
 	}
 	if !errors.IsNotFound(err) {
 		return fmt.Errorf("unable to check if namespace %q exists: %w", namespace, err)
 	}
 
-	setupLog.Info("subscription namespace not found, attempting to create it", "namespace", namespace)
+	setupLog.Info("managed namespace not found, attempting to create it", "namespace", namespace, "purpose", purpose)
 	return wait.ExponentialBackoffWithContext(ctx, wait.Backoff{
 		Steps:    5,
 		Duration: 1 * time.Second,
@@ -163,7 +164,7 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 
 		_, err := clientset.CoreV1().Namespaces().Create(ctx, ns, metav1.CreateOptions{})
 		if err == nil {
-			setupLog.Info("subscription namespace ready", "namespace", namespace)
+			setupLog.Info("managed namespace ready", "namespace", namespace, "purpose", purpose)
 			return true, nil
 		}
 		if errors.IsAlreadyExists(err) {
@@ -176,11 +177,11 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 				return false, nil
 			}
 			if existingNs.Status.Phase == corev1.NamespaceActive || existingNs.Status.Phase == "" {
-				setupLog.Info("subscription namespace ready", "namespace", namespace)
+				setupLog.Info("managed namespace ready", "namespace", namespace, "purpose", purpose)
 				return true, nil
 			}
 			setupLog.Info("namespace already exists but is not ready, will retry",
-				"namespace", namespace, "phase", existingNs.Status.Phase)
+				"namespace", namespace, "purpose", purpose, "phase", existingNs.Status.Phase)
 			return false, nil
 		}
 		if errors.IsForbidden(err) {
@@ -188,15 +189,23 @@ func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string
 				"either pre-create the namespace or grant 'create' on namespaces to the controller service account: %w",
 				namespace, err)
 		}
-		setupLog.Info("retrying namespace creation", "namespace", namespace, "error", err)
+		setupLog.Info("retrying namespace creation", "namespace", namespace, "purpose", purpose, "error", err)
 		return false, nil // transient error, retry
 	})
+}
+
+func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
+	return ensureManagedNamespaceWithClient(ctx, namespace, "subscription", clientset)
+}
+
+func ensureAITenantNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
+	return ensureManagedNamespaceWithClient(ctx, namespace, "aitenant", clientset)
 }
 
 // resolveNamespaceAfterTerminationWait interprets the namespace GET after a successful termination poll.
 // If fallThroughToCreate is true, the caller must assign the original finalErr to the outer GET error and
 // continue into namespace creation. If fallThroughToCreate is false and the returned error is nil, the
-// subscription namespace is already satisfied (Active or assumed external management).
+// managed namespace is already satisfied (Active or assumed external management).
 func resolveNamespaceAfterTerminationWait(namespace string, finalNs *corev1.Namespace, finalErr error) (doneErr error, fallThroughToCreate bool) {
 	if finalErr == nil && (finalNs.Status.Phase == corev1.NamespaceActive || finalNs.Status.Phase == "") {
 		setupLog.Info("subscription namespace exists and is active "+
@@ -259,30 +268,31 @@ func subscriptionNamespaceReadiness(clientset kubernetes.Interface, namespace st
 	}
 }
 
-// subscriptionNamespaceMonitor periodically re-runs ensureSubscriptionNamespaceWithClient so a namespace
+// managedNamespaceMonitor periodically re-runs ensureManagedNamespaceWithClient so a namespace
 // removed while the process is running can be recreated. When leader election is enabled, only the leader runs this.
-type subscriptionNamespaceMonitor struct {
+type managedNamespaceMonitor struct {
 	clientset          kubernetes.Interface
 	namespace          string
+	purpose            string
 	interval           time.Duration
 	needLeaderElection bool
 }
 
-func (m *subscriptionNamespaceMonitor) NeedLeaderElection() bool {
+func (m *managedNamespaceMonitor) NeedLeaderElection() bool {
 	return m.needLeaderElection
 }
 
-func (m *subscriptionNamespaceMonitor) Start(ctx context.Context) error {
+func (m *managedNamespaceMonitor) Start(ctx context.Context) error {
 	if m.interval <= 0 {
-		return fmt.Errorf("subscription namespace maintain interval must be positive, got %v", m.interval)
+		return fmt.Errorf("managed namespace maintain interval must be positive, got %v", m.interval)
 	}
 	run := func() {
 		innerCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 		defer cancel()
-		if err := ensureSubscriptionNamespaceWithClient(innerCtx, m.namespace, m.clientset); err != nil {
+		if err := ensureManagedNamespaceWithClient(innerCtx, m.namespace, m.purpose, m.clientset); err != nil {
 			// Keep running; the next tick will retry. Alerting on sustained failure is better done via
 			// metrics (e.g. Prometheus counter) in a follow-up if product needs it.
-			setupLog.Error(err, "subscription namespace maintenance failed", "namespace", m.namespace)
+			setupLog.Error(err, "managed namespace maintenance failed", "namespace", m.namespace, "purpose", m.purpose)
 		}
 	}
 	run()
@@ -425,6 +435,7 @@ func main() {
 	var gatewayNamespace string
 	var maasAPINamespace string
 	var maasSubscriptionNamespace string
+	var aitenantNamespace string
 	var metadataCacheTTL int64
 	var authzCacheTTL int64
 	var subscriptionNamespaceMaintainInterval time.Duration
@@ -437,10 +448,11 @@ func main() {
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
 	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
+	flag.StringVar(&aitenantNamespace, "aitenant-namespace", maas.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
 	flag.Int64Var(&authzCacheTTL, "authz-cache-ttl", 60, "TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership).")
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
-		"How often to re-check the subscription namespace while the manager is running (recreate if deleted). "+
+		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
 
 	opts := zap.Options{Development: false}
@@ -453,17 +465,26 @@ func main() {
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
 		os.Exit(1)
 	}
+	if aitenantNamespace == "" {
+		setupLog.Error(stderrors.New("invalid AITenant namespace configuration"),
+			"--aitenant-namespace must be non-empty")
+		os.Exit(1)
+	}
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	cfg := ctrl.GetConfigOrDie()
 	clientset, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
-		setupLog.Error(err, "unable to create Kubernetes client for subscription namespace setup")
+		setupLog.Error(err, "unable to create Kubernetes client for managed namespace setup")
 		os.Exit(1)
 	}
 	if err := ensureSubscriptionNamespaceWithClient(context.Background(), maasSubscriptionNamespace, clientset); err != nil {
 		setupLog.Error(err, "unable to ensure subscription namespace exists", "namespace", maasSubscriptionNamespace)
+		os.Exit(1)
+	}
+	if err := ensureAITenantNamespaceWithClient(context.Background(), aitenantNamespace, clientset); err != nil {
+		setupLog.Error(err, "unable to ensure AITenant namespace exists", "namespace", aitenantNamespace)
 		os.Exit(1)
 	}
 
@@ -529,6 +550,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)
 	}
+	if err := (&maas.AITenantReconciler{
+		Client:            mgr.GetClient(),
+		Scheme:            mgr.GetScheme(),
+		APIReader:         mgr.GetAPIReader(),
+		AppNamespace:      maasAPINamespace,
+		TenantNamespace:   maasSubscriptionNamespace,
+		AITenantNamespace: aitenantNamespace,
+		GatewayNamespace:  gatewayNamespace,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
+		os.Exit(1)
+	}
 
 	if err := (&externalmodel.Reconciler{
 		Client:           mgr.GetClient(),
@@ -541,18 +574,29 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(&subscriptionNamespaceMonitor{
+	if err := mgr.Add(&managedNamespaceMonitor{
 		clientset:          clientset,
 		namespace:          maasSubscriptionNamespace,
+		purpose:            "subscription",
 		interval:           subscriptionNamespaceMaintainInterval,
 		needLeaderElection: enableLeaderElection,
 	}); err != nil {
 		setupLog.Error(err, "unable to add subscription namespace monitor")
 		os.Exit(1)
 	}
+	if err := mgr.Add(&managedNamespaceMonitor{
+		clientset:          clientset,
+		namespace:          aitenantNamespace,
+		purpose:            "aitenant",
+		interval:           subscriptionNamespaceMaintainInterval,
+		needLeaderElection: enableLeaderElection,
+	}); err != nil {
+		setupLog.Error(err, "unable to add AITenant namespace monitor")
+		os.Exit(1)
+	}
 
 	// Startup ordering contract:
-	//   1. ensureSubscriptionNamespaceWithClient runs synchronously above, before the manager starts.
+	//   1. Managed namespace ensures run synchronously above, before the manager starts.
 	//   2. LifecycleReconciler creates Config/default when maas-controller is running (see Setup below).
 	//   3. ensureClusterBootstrapRunnable creates default-tenant once Config/default exists (no owner refs).
 	//   4. LifecycleReconciler patches Config→Tenant owner refs (and enqueues on Tenant events).
@@ -592,6 +636,29 @@ func main() {
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
+		os.Exit(1)
+	}
+
+	// Setup validating webhooks for MaaSSubscription and MaaSAuthPolicy to ensure they are only
+	// created in tenant-enabled namespaces. This prevents users from creating resources in
+	// random namespaces where they will be silently ignored.
+	tenantValidator := &webhook.TenantNamespaceValidator{
+		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
+	}
+
+	if err := (&webhook.MaaSSubscriptionValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSSubscription")
+		os.Exit(1)
+	}
+
+	if err := (&webhook.MaaSAuthPolicyValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSAuthPolicy")
 		os.Exit(1)
 	}
 
