@@ -549,7 +549,7 @@ main() {
     [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
-    local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
 
     log_info "  Ensuring maas-parameters ConfigMap..."

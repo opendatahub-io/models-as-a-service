@@ -1,0 +1,163 @@
+# Update Payload Processing Pin
+#
+# Fetches the latest commit from opendatahub-io/ai-gateway-payload-processing
+# and opens a PR to update the pinned commit and image tag in this repository.
+#
+# Usage:
+#   1. Go to Actions > Update Payload Processing > Run workflow
+#   2. Optionally override the upstream branch (default: main)
+
+name: Update Payload Processing
+
+on:
+  workflow_dispatch:
+    inputs:
+      upstream_branch:
+        description: 'Upstream branch to track (default: main)'
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  GH_USER_NAME: github-actions[bot]
+  GH_USER_EMAIL: github-actions[bot]@users.noreply.github.com
+  UPSTREAM_REPO: opendatahub-io/ai-gateway-payload-processing
+
+jobs:
+  update:
+    name: Update payload-processing pin
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure Git
+        run: |
+          git config user.name "${{ env.GH_USER_NAME }}"
+          git config user.email "${{ env.GH_USER_EMAIL }}"
+
+      - name: Resolve current and latest commits
+        id: commits
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          UPSTREAM_BRANCH: ${{ inputs.upstream_branch || 'main' }}
+        run: |
+          set -euo pipefail
+
+          IMAGE="$(grep '^payload-processing-image=' deployment/overlays/odh/params.env | cut -d= -f2-)"
+          CURRENT="${IMAGE##*:}"
+          if ! [[ "$CURRENT" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid current commit in deployment/overlays/odh/params.env payload-processing-image: '$CURRENT'"
+            exit 1
+          fi
+
+          LATEST="$(gh api "repos/${UPSTREAM_REPO}/commits/${UPSTREAM_BRANCH}" --jq .sha)"
+          if ! [[ "$LATEST" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Failed to resolve latest commit from ${UPSTREAM_REPO}@${UPSTREAM_BRANCH}"
+            exit 1
+          fi
+
+          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
+          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
+          echo "upstream_branch=${UPSTREAM_BRANCH}" >> "$GITHUB_OUTPUT"
+
+          if [ "$CURRENT" = "$LATEST" ]; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "Payload-processing pin is already up to date (${CURRENT})."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+            echo "Updating payload-processing pin: ${CURRENT} -> ${LATEST}"
+          fi
+
+      - name: Update pin
+        if: steps.commits.outputs.skip != 'true'
+        env:
+          LATEST: ${{ steps.commits.outputs.latest }}
+        run: |
+          chmod +x .github/scripts/update-payload-processing.sh
+          .github/scripts/update-payload-processing.sh "$LATEST"
+
+      - name: Create or update PR
+        if: steps.commits.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CURRENT: ${{ steps.commits.outputs.current }}
+          LATEST: ${{ steps.commits.outputs.latest }}
+          UPSTREAM_BRANCH: ${{ steps.commits.outputs.upstream_branch }}
+        run: |
+          set -euo pipefail
+
+          SHORT="${LATEST:0:12}"
+          BRANCH="chore/update-payload-processing-${SHORT}"
+          IMAGE="quay.io/opendatahub/odh-ai-gateway-payload-processing:${LATEST}"
+
+          git checkout -b "$BRANCH"
+          git add deployment/overlays/odh/params.env \
+            deployment/base/maas-controller/default/params.env \
+            deployment/base/payload-processing/manager/kustomization.yaml \
+            maas-controller/pkg/platform/tenantreconcile/constants.go \
+            test/e2e/scripts/local-deploy.sh
+          git commit \
+            -m "chore: update payload-processing pin to ${SHORT}" \
+            -m "Bump ai-gateway-payload-processing from ${CURRENT:0:12} to ${SHORT}."
+          git push --force-with-lease origin "$BRANCH"
+
+          COMMIT_URL="https://github.com/${UPSTREAM_REPO}/commit/${LATEST}"
+          COMPARE_URL="https://github.com/${UPSTREAM_REPO}/compare/${CURRENT}...${LATEST}"
+
+          BODY="## Update payload-processing pin"
+          BODY="${BODY}"$'\n\n'"Automated bump of the pinned [\`ai-gateway-payload-processing\`](https://github.com/${UPSTREAM_REPO}) commit and image tag."
+          BODY="${BODY}"$'\n\n'"| Detail | Value |"
+          BODY="${BODY}"$'\n'"| --- | --- |"
+          BODY="${BODY}"$'\n'"| Previous commit | [\`${CURRENT}\`](https://github.com/${UPSTREAM_REPO}/commit/${CURRENT}) |"
+          BODY="${BODY}"$'\n'"| New commit | [\`${LATEST}\`](${COMMIT_URL}) |"
+          BODY="${BODY}"$'\n'"| Upstream branch | \`${UPSTREAM_BRANCH}\` |"
+          BODY="${BODY}"$'\n'"| Image tag | \`${IMAGE}\` |"
+          BODY="${BODY}"$'\n\n'"[View upstream changes](${COMPARE_URL})"
+
+          EXISTING_PR="$(gh pr list --head "$BRANCH" --state open --json number,url --jq '.[0] // empty')"
+          if [ -n "$EXISTING_PR" ]; then
+            PR_NUMBER="$(echo "$EXISTING_PR" | jq -r '.number')"
+            PR_URL="$(echo "$EXISTING_PR" | jq -r '.url')"
+            echo "$BODY" | gh pr edit "$PR_NUMBER" --title "chore: update payload-processing pin to ${SHORT}" --body-file -
+            echo "Updated existing PR #${PR_NUMBER}"
+          else
+            PR_URL="$(echo "$BODY" | gh pr create \
+              --base main \
+              --head "$BRANCH" \
+              --title "chore: update payload-processing pin to ${SHORT}" \
+              --body-file -)"
+            PR_NUMBER="${PR_URL##*/}"
+            echo "Created PR #${PR_NUMBER}"
+          fi
+
+          {
+            echo "## Payload-processing pin updated"
+            echo ""
+            echo "**PR:** [#${PR_NUMBER}](${PR_URL})"
+            echo ""
+            echo "| Detail | Value |"
+            echo "| --- | --- |"
+            echo "| Previous | \`${CURRENT}\` |"
+            echo "| New | \`${LATEST}\` |"
+            echo "| Image | \`${IMAGE}\` |"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Summary (already up to date)
+        if: steps.commits.outputs.skip == 'true'
+        env:
+          CURRENT: ${{ steps.commits.outputs.current }}
+        run: |
+          {
+            echo "## Payload-processing pin up to date"
+            echo ""
+            echo "No changes needed. Current pin: \`${CURRENT}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

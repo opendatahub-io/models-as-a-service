@@ -24,7 +24,9 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -84,6 +86,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return ctrl.Result{}, err
 		} else if res != nil {
 			return *res, nil
+		}
+		if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
@@ -272,6 +277,67 @@ func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config
 		}
 	}
 	return false
+}
+
+// ensureLimitadorServiceMonitor creates or updates the Limitador ServiceMonitor in the operator namespace.
+// This ServiceMonitor ensures metrics are scraped from the Limitador pod and get to the DSC's monitoring stack.
+// TODO: move the ServiceMonitor to the monitoring namespace (opendatahub/redahat-ods-monitoring).
+// If the ServiceMonitor CRD is not available, this is a no-op (allows running without the monitoring stack).
+// TODO: need to set the overall status of MaaS to Degraded if COO is missing.
+func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context) error {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	sm := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "monitoring.coreos.com/v1",
+			"kind":       "ServiceMonitor",
+			"metadata": map[string]any{
+				"name":      "limitador-metrics",
+				"namespace": r.DeploymentNS,
+				"labels": map[string]any{
+					"app":                              "limitador",
+					"monitoring.opendatahub.io/scrape": "true",
+				},
+			},
+			"spec": map[string]any{
+				"endpoints": []any{
+					map[string]any{
+						"interval": "30s",
+						"path":     "/metrics",
+						"port":     "http",
+					},
+				},
+				"namespaceSelector": map[string]any{
+					"any": true,
+				},
+				"selector": map[string]any{
+					"matchLabels": map[string]any{
+						"app": "limitador",
+					},
+				},
+			},
+		},
+	}
+
+	if err := controllerutil.SetOwnerReference(&cfg, sm, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on ServiceMonitor: %w", err)
+	}
+
+	if err := r.Patch(ctx, sm, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		// If ServiceMonitor CRD is not installed, skip creation (monitoring stack is optional)
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("apply ServiceMonitor: %w", err)
+	}
+
+	return nil
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.

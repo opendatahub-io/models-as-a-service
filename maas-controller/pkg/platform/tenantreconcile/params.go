@@ -290,8 +290,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 2 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 2 entries, got %d", len(configPatches))
+	if !found || len(configPatches) < 4 {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least 4 entries, got %d", len(configPatches))
 	}
 
 	clusterByIndex := []string{beforeCluster, afterCluster}
@@ -313,6 +313,20 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		}
 
 		configPatches[i] = patch
+	}
+
+	// Patches 2 and 3 disable ext_proc on non-inference routes.
+	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
+	for i := 2; i < 4; i++ {
+		patch, ok := configPatches[i].(map[string]any)
+		if !ok {
+			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+		}
+		if err := unstructured.SetNestedField(patch,
+			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName, i-2),
+			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
+			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
+		}
 	}
 
 	if err := unstructured.SetNestedSlice(r.Object, configPatches, "spec", "configPatches"); err != nil {
