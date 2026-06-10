@@ -561,6 +561,45 @@ func TestAITenantReconcile_RejectsTenantNamespaceEqualToAITenantNamespace(t *tes
 	g.Expect(ready.Message).To(ContainSubstring("must be different from the AITenant infra namespace"))
 }
 
+func TestAITenantReconcile_RejectsDefaultTenantNamespaceForNonDefaultAITenant(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "red-team",
+			Namespace: "redhat-ai-gateway-infra",
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			TenantNamespace: maasv1alpha1.AITenantTenantNamespace{Name: "models-as-a-service"},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantTwice(t, r, key)
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Failed"))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("InvalidPlacement"))
+	g.Expect(ready.Message).To(ContainSubstring("reserved for the default AITenant"))
+}
+
 func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

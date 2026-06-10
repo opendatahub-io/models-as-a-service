@@ -37,7 +37,7 @@ func TestTenantIdentifierFor(t *testing.T) {
 					Name:      "default-tenant",
 					Namespace: "ai-tenant-redteam",
 					Labels: map[string]string{
-						LabelAITenantManaged: "true",
+						LabelManagedByAITenant: "true",
 						LabelTenantName:      "redteam",
 						LabelTenantNamespace: "ai-tenant-redteam",
 					},
@@ -52,7 +52,7 @@ func TestTenantIdentifierFor(t *testing.T) {
 					Name:      "default-tenant",
 					Namespace: "ai-tenant-engineering",
 					Labels: map[string]string{
-						LabelAITenantManaged: "true",
+						LabelManagedByAITenant: "true",
 						LabelTenantName:      "engineering",
 					},
 				},
@@ -76,7 +76,7 @@ func TestTenantIdentifierFor(t *testing.T) {
 				Name:      "default-tenant",
 				Namespace: "ai-tenant-broken",
 				Labels: map[string]string{
-					LabelAITenantManaged: "true",
+					LabelManagedByAITenant: "true",
 					// Missing LabelTenantName - should error
 				},
 			},
@@ -198,7 +198,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 				Name:      "default-tenant",
 				Namespace: "ai-tenant-redteam",
 				Labels: map[string]string{
-					LabelAITenantManaged: "true",
+					LabelManagedByAITenant: "true",
 					LabelTenantName:      "redteam",
 				},
 			},

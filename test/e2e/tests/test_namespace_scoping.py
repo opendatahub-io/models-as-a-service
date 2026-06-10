@@ -291,14 +291,18 @@ class TestMaaSControllerWatchNamespace:
 
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert "e2e-watched-auth" in auth_policies, (
-                f"AuthPolicy {auth_name} not found or MaaSAuthPolicy e2e-watched-auth not reconciled"
+            expected_auth = f"{ns}/e2e-watched-auth"
+            assert expected_auth in auth_policies, (
+                f"AuthPolicy {auth_name} not found or MaaSAuthPolicy e2e-watched-auth not reconciled, "
+                f"expected '{expected_auth}' in {auth_policies}"
             )
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert "e2e-watched-sub" in subscriptions, (
-                f"TRLP {trlp_name} not found or MaaSSubscription e2e-watched-sub not reconciled"
+            expected_sub = f"{ns}/e2e-watched-sub"
+            assert expected_sub in subscriptions, (
+                f"TRLP {trlp_name} not found or MaaSSubscription e2e-watched-sub not reconciled, "
+                f"expected '{expected_sub}' in {subscriptions}"
             )
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-watched-auth", ns)
@@ -339,14 +343,18 @@ class TestMaaSControllerWatchNamespace:
 
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert "e2e-unwatched-auth" not in auth_policies, (
-                "MaaSAuthPolicy e2e-unwatched-auth reconciled"
+            unwatched_auth = f"{ns}/e2e-unwatched-auth"
+            assert unwatched_auth not in auth_policies, (
+                f"MaaSAuthPolicy e2e-unwatched-auth from {ns} should not be reconciled, "
+                f"but '{unwatched_auth}' found in {auth_policies}"
             )
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert "e2e-unwatched-sub" not in subscriptions, (
-                "MaaSSubscription e2e-unwatched-sub reconciled"
+            unwatched_sub = f"{ns}/e2e-unwatched-sub"
+            assert unwatched_sub not in subscriptions, (
+                f"MaaSSubscription e2e-unwatched-sub from {ns} should not be reconciled, "
+                f"but '{unwatched_sub}' found in {subscriptions}"
             )
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-unwatched-auth", ns)
@@ -409,8 +417,10 @@ class TestModelRef:
 
             # Verify: policy is reconciled into MODEL_REF's AuthPolicy in MODEL_NAMESPACE
             auth_policies_reconciled = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert policy_name in auth_policies_reconciled, (
-                f"MaaSAuthPolicy {policy_name} should be in AuthPolicy {auth_name} in {MODEL_NAMESPACE}, got: {auth_policies_reconciled}"
+            expected_policy = f"{ns}/{policy_name}"
+            assert expected_policy in auth_policies_reconciled, (
+                f"MaaSAuthPolicy {policy_name} should be in AuthPolicy {auth_name} in {MODEL_NAMESPACE}, "
+                f"expected '{expected_policy}' in {auth_policies_reconciled}"
             )
 
             # Verify: MODEL_REF's AuthPolicy in the new namespace does not exist
@@ -487,8 +497,10 @@ class TestModelRef:
 
             # Verify: subscription is reconciled into MODEL_REF's TRLP in MODEL_NAMESPACE
             subscriptions_in_model_ns = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert sub_name in subscriptions_in_model_ns, (
-                f"MaaSSubscription {sub_name} should be in TRLP {trlp_name} in {MODEL_NAMESPACE}, got: {subscriptions_in_model_ns}"
+            expected_sub = f"{ns}/{sub_name}"
+            assert expected_sub in subscriptions_in_model_ns, (
+                f"MaaSSubscription {sub_name} should be in TRLP {trlp_name} in {MODEL_NAMESPACE}, "
+                f"expected '{expected_sub}' in {subscriptions_in_model_ns}"
             )
 
             # Verify: MODEL_REF's TRLP in the new namespace does not exist

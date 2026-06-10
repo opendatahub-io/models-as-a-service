@@ -41,7 +41,14 @@ const (
 	LabelK8sPartOf       = "app.kubernetes.io/part-of"
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
-	LabelAITenantManaged = "maas.opendatahub.io/managed-by-aitenant"
+
+	// LabelAIGatewayTenant is the ADR-defined tenant marker on tenant admin namespaces.
+	LabelAIGatewayTenant = "ai-gateway.opendatahub.io/tenant"
+
+	// LabelManagedByAITenant is set to "true" on namespaces created/adopted
+	// by the AITenant reconciler (S11). The subscription/auth-policy controllers
+	// use this label to discover tenant namespaces dynamically.
+	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
 
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
@@ -182,7 +189,7 @@ func MaaSAPIServiceName(tenantID string) string {
 // Returns:
 //   - Empty string ("") for default/legacy tenant (not managed by AITenant)
 //   - Tenant name (e.g., "redteam") for AITenant-managed tenants
-//   - Error if LabelAITenantManaged is true but LabelTenantName is missing (invalid state)
+//   - Error if LabelManagedByAITenant is true but LabelTenantName is missing (invalid state)
 //
 // The tenant identifier is used to generate unique per-tenant resource names.
 //
@@ -197,18 +204,18 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 	// Check if this Tenant is managed by AITenant controller
 	// AITenant controller sets this label when creating Tenant CRs
 	labels := tenant.GetLabels()
-	if labels != nil && labels[LabelAITenantManaged] == "true" {
+	if labels != nil && labels[LabelManagedByAITenant] == "true" {
 		// Use the tenant name from the label set by AITenant controller
 		tenantName := labels[LabelTenantName]
 		if tenantName == "" {
 			// Fail closed: AITenant-managed Tenant must have LabelTenantName set.
 			// This should never happen if created by AITenant controller, but if someone
-			// manually creates a Tenant with LabelAITenantManaged=true and no LabelTenantName,
+			// manually creates a Tenant with LabelManagedByAITenant=true and no LabelTenantName,
 			// we must not fall back to default tenant name. Return error instead of panic
 			// to allow graceful degradation - the Tenant reconciler can set a degraded
 			// condition instead of crashing the entire controller.
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
-				tenant.Namespace, tenant.Name, LabelAITenantManaged, LabelTenantName)
+				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
 		}
 		return tenantName, nil
 	}

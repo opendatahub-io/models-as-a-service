@@ -30,6 +30,12 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 
 ---
 
+## Namespace Discovery
+
+`AITenant` labels tenant namespaces with `ai-gateway.opendatahub.io/tenant=<aitenant-name>` and `maas.opendatahub.io/managed-by-aitenant=true`. When `maas-controller` runs with `--enable-tenant-namespace-discovery=true`, `MaaSAuthPolicy` and `MaaSSubscription` resources in those namespaces are reconciled against the namespace's `Tenant/default-tenant.spec.gatewayRef`.
+
+---
+
 ## AITenantGatewayRef
 
 | Field | Type | Required | Default | Description |

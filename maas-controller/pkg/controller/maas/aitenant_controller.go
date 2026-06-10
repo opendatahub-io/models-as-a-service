@@ -193,6 +193,11 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 	if r.AppNamespace != "" && aitenant.Spec.TenantNamespace.Name == r.AppNamespace {
 		return fmt.Errorf("spec.tenantNamespace.name must not be the protected application namespace %q", r.AppNamespace)
 	}
+	if r.TenantNamespace != "" &&
+		aitenant.Spec.TenantNamespace.Name == r.TenantNamespace &&
+		aitenant.Name != r.TenantNamespace {
+		return fmt.Errorf("spec.tenantNamespace.name %q is reserved for the default AITenant %q", r.TenantNamespace, r.TenantNamespace)
+	}
 	return nil
 }
 
