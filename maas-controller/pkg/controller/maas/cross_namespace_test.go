@@ -616,6 +616,58 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation verifies that
+// same-named MaaSAuthPolicies in different namespaces each contribute independently
+// to the gateway-level AuthPolicy rego when their respective namespace is reconciled.
+func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T) {
+	const (
+		modelName      = "llm"
+		modelNamespace = "models"
+		policyName     = "access"
+		namespaceA     = "tenant-a"
+		gwNamespace    = "gateway-ns"
+	)
+
+	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
+	route := newHTTPRoute(modelName, modelNamespace)
+	policyA := newMaaSAuthPolicy(policyName, namespaceA, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, policyA).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "opendatahub",
+		GatewayName:      "default-gateway",
+		GatewayNamespace: gwNamespace,
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespaceA}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile MaaSAuthPolicy %s/%s: %v", namespaceA, policyName, err)
+	}
+
+	gw := &unstructured.Unstructured{}
+	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gwNamespace}, gw); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	// The group from namespaceA's policy should appear in the gateway rego.
+	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
+	}
+	if !contains(rego, "team-a") {
+		t.Errorf("gateway rego should contain group %q for model %s/%s, rego=%s", "team-a", modelNamespace, modelName, rego)
+	}
+}
+
 // Helper function for test
 func getMapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))

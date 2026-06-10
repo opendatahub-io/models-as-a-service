@@ -22,11 +22,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"slices"
 	"sort"
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -62,10 +62,11 @@ type MaaSAuthPolicyReconciler struct {
 
 	// GatewayName is the name of the Gateway used for model HTTPRoutes (configurable via flags).
 	GatewayName string
-
-	// GatewayNamespace is the namespace of the Gateway resource (configurable via flags).
-	// The singleton gateway-level AuthPolicy is created in this namespace.
+	// GatewayNamespace is the namespace of the Gateway used for model HTTPRoutes.
 	GatewayNamespace string
+
+	// TenantNamespaceDiscoveryEnabled enables AITenant-labeled tenant namespaces.
+	TenantNamespaceDiscoveryEnabled bool
 
 	// ClusterAudience is the OIDC audience of the cluster (configurable via flags).
 	// Standard clusters use "https://kubernetes.default.svc"; HyperShift/ROSA use a custom OIDC provider URL.
@@ -111,11 +112,11 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 	return metadata
 }
 
-// fetchOIDCConfig fetches OIDC configuration from the Tenant CR.
-// Returns nil if Tenant CR doesn't exist or doesn't have externalOIDC configured.
-func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr.Logger) *oidcConfig {
-	// Tenant is a namespace-scoped singleton resource named "default-tenant"
-	// GVK: maas.opendatahub.io/v1alpha1, Kind: Tenant
+// fetchOIDCConfig fetches OIDC configuration from the Tenant CR in the given
+// namespace. Each tenant namespace has its own Tenant/default-tenant with
+// per-tenant OIDC settings. Returns nil if the Tenant CR doesn't exist or
+// doesn't have externalOIDC configured.
+func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr.Logger, policyNamespace string) *oidcConfig {
 	tenant := &unstructured.Unstructured{}
 	tenant.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "maas.opendatahub.io",
@@ -123,22 +124,21 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		Kind:    "Tenant",
 	})
 
-	// Get the singleton Tenant CR (name enforced by CRD validation)
 	tenantKey := client.ObjectKey{
 		Name:      maasv1alpha1.TenantInstanceName,
-		Namespace: r.TenantNamespace,
+		Namespace: policyNamespace,
 	}
 
 	if err := r.Get(ctx, tenantKey, tenant); err != nil {
 		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
 			log.V(1).Info("Tenant CRD not installed or Tenant not found, OIDC support disabled",
 				"tenantName", maasv1alpha1.TenantInstanceName,
-				"tenantNamespace", r.TenantNamespace)
+				"tenantNamespace", policyNamespace)
 			return nil
 		}
 		log.Error(err, "failed to get Tenant resource",
 			"tenantName", maasv1alpha1.TenantInstanceName,
-			"tenantNamespace", r.TenantNamespace)
+			"tenantNamespace", policyNamespace)
 		return nil
 	}
 
@@ -290,8 +290,20 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	// Handle deletion before tenant namespace gating. A namespace may lose its
+	// discovery label while a CR is terminating; finalizer cleanup must still run.
 	if !policy.GetDeletionTimestamp().IsZero() {
 		return r.handleDeletion(ctx, log, policy)
+	}
+
+	isTenantNS, err := tenantNamespaceAllowed(ctx, r.Client, req.Namespace, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if err != nil {
+		log.Error(err, "failed to check tenant namespace")
+		return ctrl.Result{}, err
+	}
+	if !isTenantNS {
+		log.V(1).Info("ignoring MaaSAuthPolicy in non-tenant namespace", "namespace", req.Namespace)
+		return ctrl.Result{}, nil
 	}
 
 	// Handle no spec (e.g. legacy resources created before spec was required).
@@ -328,7 +340,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
-	oidc := r.fetchOIDCConfig(ctx, log)
+	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 
 	// Reconcile the singleton gateway-level AuthPolicy first, then the per-model group policies.
 	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc); err != nil {
@@ -763,23 +775,23 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-				// Only inject X-MaaS-Subscription when there is a real value to inject.
-				// An empty string injected for K8s tokens without a subscription header
-				// causes maas-api to filter by an empty subscription name and return 0 models.
-				// The old maas-api-auth-policy never injected this header for K8s tokens —
-				// only for API keys with a non-empty subscription field.
-				"X-MaaS-Subscription": map[string]any{
-					"when": []any{
-						map[string]any{
-							"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+					// Only inject X-MaaS-Subscription when there is a real value to inject.
+					// An empty string injected for K8s tokens without a subscription header
+					// causes maas-api to filter by an empty subscription name and return 0 models.
+					// The old maas-api-auth-policy never injected this header for K8s tokens —
+					// only for API keys with a non-empty subscription field.
+					"X-MaaS-Subscription": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+							},
 						},
+						"plain": map[string]any{
+							"expression": celSubscription,
+						},
+						"metrics":  false,
+						"priority": int64(0),
 					},
-					"plain": map[string]any{
-						"expression": celSubscription,
-					},
-					"metrics":  false,
-					"priority": int64(0),
-				},
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1055,15 +1067,21 @@ func (r *MaaSAuthPolicyReconciler) cleanupStaleAuthPolicies(ctx context.Context,
 		if modelName == "" {
 			continue
 		}
-		modelKey := ap.GetNamespace() + "/" + modelName
+		modelNamespace := ap.GetLabels()["maas.opendatahub.io/model-namespace"]
+		if modelNamespace == "" {
+			modelNamespace = ap.GetNamespace()
+		}
+		modelKey := modelNamespace + "/" + modelName
 		if currentModels[modelKey] {
 			continue
 		}
-		if !slices.Contains(strings.Split(ap.GetAnnotations()["maas.opendatahub.io/auth-policies"], ","), policy.Name) {
+		owners := ap.GetAnnotations()["maas.opendatahub.io/auth-policies"]
+		if !annotationListContains(owners, qualifiedName(policy.Namespace, policy.Name)) &&
+			!annotationListContains(owners, policy.Name) {
 			continue
 		}
 		log.Info("Cleaning up stale AuthPolicy for removed modelRef", "model", modelKey, "authPolicy", ap.GetName())
-		if err := r.deleteModelAuthPolicy(ctx, log, ap.GetNamespace(), modelName); err != nil {
+		if err := r.deleteModelAuthPolicy(ctx, log, modelNamespace, modelName); err != nil {
 			return fmt.Errorf("failed to clean up stale AuthPolicy for removed model %s: %w", modelKey, err)
 		}
 	}
@@ -1090,6 +1108,9 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 	}
 	for i := range policyList.Items {
 		p := &policyList.Items[i]
+		if labeledModelNamespace := p.GetLabels()["maas.opendatahub.io/model-namespace"]; labeledModelNamespace != "" && labeledModelNamespace != modelNamespace {
+			continue
+		}
 		if !isManaged(p) {
 			log.Info("AuthPolicy opted out, skipping deletion", "name", p.GetName(), "namespace", p.GetNamespace(), "model", modelNamespace+"/"+modelName)
 			continue
@@ -1415,7 +1436,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Kind:    "Tenant",
 	})
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSAuthPolicy{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
@@ -1436,21 +1457,29 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch Tenant so OIDC configuration changes trigger reconciles.
 		Watches(tenant, handler.EnqueueRequestsFromMapFunc(
 			r.mapTenantToMaaSAuthPolicies,
-		)).
-		Complete(r)
+		))
+	if r.TenantNamespaceDiscoveryEnabled {
+		// Watch Namespaces so that policies in newly labeled tenant
+		// namespaces are discovered without a controller restart.
+		b = b.Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapNamespaceToMaaSAuthPolicies,
+		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
+	}
+	return b.Complete(r)
 }
 
-// mapTenantToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources
-// when Tenant changes (to pick up OIDC configuration changes).
+// mapTenantToMaaSAuthPolicies enqueues MaaSAuthPolicy resources in the same
+// namespace as the changed Tenant so that OIDC configuration changes propagate
+// only to the affected tenant's policies.
 func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	// List all MaaSAuthPolicy resources
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
-	if err := r.List(ctx, policyList); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change")
+	if err := r.List(ctx, policyList, client.InNamespace(obj.GetNamespace())); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change",
+			"tenantNamespace", obj.GetNamespace())
 		return nil
 	}
+	policyList.Items = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policyList.Items, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 
-	// Enqueue reconcile requests for all policies
 	requests := make([]reconcile.Request, len(policyList.Items))
 	for i, policy := range policyList.Items {
 		requests[i] = reconcile.Request{
@@ -1461,6 +1490,37 @@ func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Conte
 		}
 	}
 	return requests
+}
+
+// mapNamespaceToMaaSAuthPolicies enqueues all MaaSAuthPolicy resources in a
+// namespace when that namespace's labels change (e.g. AITenant label added or removed).
+func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	ns := obj.GetName()
+	if ns != r.TenantNamespace && !r.TenantNamespaceDiscoveryEnabled {
+		return nil
+	}
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList, client.InNamespace(ns)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy for namespace label change", "namespace", ns)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, p := range policyList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return requests
+}
+
+func (r *MaaSAuthPolicyReconciler) findAnyAuthPolicyForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSAuthPolicy {
+	policies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return nil
+	}
+	policies = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if len(policies) == 0 {
+		return nil
+	}
+	return &policies[0]
 }
 
 // mapGeneratedAuthPolicyToParent maps a generated AuthPolicy back to any
@@ -1475,8 +1535,11 @@ func (r *MaaSAuthPolicyReconciler) mapGeneratedAuthPolicyToParent(ctx context.Co
 	if modelName == "" {
 		return nil
 	}
-	modelNamespace := obj.GetNamespace()
-	ap := findAnyAuthPolicyForModel(ctx, r.Client, modelNamespace, modelName)
+	modelNamespace := labels["maas.opendatahub.io/model-namespace"]
+	if modelNamespace == "" {
+		modelNamespace = obj.GetNamespace()
+	}
+	ap := r.findAnyAuthPolicyForModel(ctx, modelNamespace, modelName)
 	if ap == nil {
 		return nil
 	}
@@ -1496,6 +1559,7 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 	if err := r.List(ctx, &policies); err != nil {
 		return nil
 	}
+	policies.Items = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies.Items, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {
@@ -1535,6 +1599,7 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	if err := r.List(ctx, &policies); err != nil {
 		return nil
 	}
+	policies.Items = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies.Items, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
 	var requests []reconcile.Request
 	for _, p := range policies.Items {
 		for _, ref := range p.Spec.ModelRefs {

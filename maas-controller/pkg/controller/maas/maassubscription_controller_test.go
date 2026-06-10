@@ -555,8 +555,8 @@ func TestMaaSSubscriptionReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 
 	// Verify only sub2 is in the annotation
 	ann := trlpObj.GetAnnotations()["maas.opendatahub.io/subscriptions"]
-	if ann != "sub2" {
-		t.Errorf("TRLP annotation = %q, want %q (only sub2 should contribute)", ann, "sub2")
+	if ann != namespace+"/sub2" {
+		t.Errorf("TRLP annotation = %q, want %q (only sub2 should contribute)", ann, namespace+"/sub2")
 	}
 }
 
@@ -681,8 +681,9 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	}
 	// Verify subscription annotation only contains sub2
 	annotations := trlp.GetAnnotations()
-	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != sub2Name {
-		t.Errorf("TRLP annotation should only contain %s, got: %s", sub2Name, subs)
+	wantSubAnnotation := subNS + "/" + sub2Name
+	if subs, ok := annotations["maas.opendatahub.io/subscriptions"]; !ok || subs != wantSubAnnotation {
+		t.Errorf("TRLP annotation should only contain %s, got: %s", wantSubAnnotation, subs)
 	}
 
 	// Now delete sub2 (the last one)
