@@ -336,19 +336,19 @@ class TestUninstallCleanup:
         _wait_for_not_found("datasciencecluster", DSC_NAME, timeout=UNINSTALL_TIMEOUT)
         log.info("DataScienceCluster/%s deleted", DSC_NAME)
 
-    def test_delete_dscinitialisation(self):
+    def test_delete_dscinitialization(self):
         """Step 4: Delete DSCInitialization/default-dsci."""
         dsci_crd = "dscinitializations.dscinitialization.opendatahub.io"
         if not _crd_exists(dsci_crd):
             log.info("DSCI CRD not found, skipping DSCI delete")
             return
-        if not _resource_exists("dsciinitialization", DSCI_NAME):
+        if not _resource_exists("dscinitialization", DSCI_NAME):
             log.info("DSCI/%s already absent, skipping delete", DSCI_NAME)
             return
 
         log.info("Deleting DSCInitialization/%s", DSCI_NAME)
-        _delete_resource("dsciinitialization", DSCI_NAME, timeout_s=180)
-        _wait_for_not_found("dsciinitialization", DSCI_NAME, timeout=UNINSTALL_TIMEOUT)
+        _delete_resource("dscinitialization", DSCI_NAME, timeout_s=180)
+        _wait_for_not_found("dscinitialization", DSCI_NAME, timeout=UNINSTALL_TIMEOUT)
         log.info("DSCInitialization/%s deleted", DSCI_NAME)
 
     def test_no_maas_workloads_remain(self):
