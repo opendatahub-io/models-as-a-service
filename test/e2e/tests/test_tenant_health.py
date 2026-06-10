@@ -198,18 +198,27 @@ class TestTenantManagedResources:
             f"in namespace {DEPLOYMENT_NAMESPACE}, found {len(items)}: {names}"
         )
 
-    @pytest.mark.parametrize("kind,min_count", [
-        ("httproute.gateway.networking.k8s.io", 1),
-        ("authpolicy.kuadrant.io", 1),
-    ])
-    def test_networking_resources_exist(self, kind, min_count):
-        """Gateway API and policy resources must exist."""
-        items = _list_resources_by_label(kind, namespace=DEPLOYMENT_NAMESPACE)
-        assert items is not None, f"Resource type '{kind}' not available on cluster"
+    def test_httproute_exists(self):
+        """HTTPRoute must exist in the deployment namespace."""
+        items = _list_resources_by_label("httproute.gateway.networking.k8s.io", namespace=DEPLOYMENT_NAMESPACE)
+        assert items is not None, "HTTPRoute CRD (gateway.networking.k8s.io) not available on cluster"
         names = [item["metadata"]["name"] for item in items]
-        assert len(items) >= min_count, (
-            f"Expected >= {min_count} {kind}(s) with label {TENANT_LABEL_SELECTOR} "
+        assert len(items) >= 1, (
+            f"Expected >= 1 HTTPRoute with label {TENANT_LABEL_SELECTOR} "
             f"in namespace {DEPLOYMENT_NAMESPACE}, found {len(items)}: {names}"
+        )
+
+    def test_authpolicy_exists(self):
+        """AuthPolicy must exist (may be in gateway namespace, not deployment namespace)."""
+        items = _list_resources_by_label("authpolicy.kuadrant.io", namespace=DEPLOYMENT_NAMESPACE)
+        if items:
+            return
+        items = _list_resources_by_label("authpolicy.kuadrant.io")
+        assert items is not None, "AuthPolicy CRD (kuadrant.io) not available on cluster"
+        names = [item["metadata"]["name"] for item in items]
+        assert len(items) >= 1, (
+            f"Expected >= 1 AuthPolicy with label {TENANT_LABEL_SELECTOR}, "
+            f"found {len(items)}: {names}"
         )
 
     @pytest.mark.parametrize("kind,min_count", [
