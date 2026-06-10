@@ -769,7 +769,9 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"selector": "auth.identity.user.groups.@tostr",
+							"expression": `has(auth.identity.groups) ?` +
+								` '["system:authenticated","' + auth.identity.groups.join('","') + '"]'` +
+								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
 						},
 						"key":      "X-MaaS-Group",
 						"metrics":  false,
