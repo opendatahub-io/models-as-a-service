@@ -6,9 +6,9 @@ metadata:
   annotations:
     config.kubernetes.io/local-config: "true"
 
-# Change this to deploy to a different namespace (e.g. for ODH or RHOAI).
-# All resources and ClusterRoleBinding subjects will follow automatically.
-namespace: loki-stack-namespace
+# Default: kuadrant-system (MaaS gateway namespace).
+# Override via overlay for RHOAI (redhat-ods-monitoring) or other environments.
+namespace: kuadrant-system
 
 resources:
   - proxy-source-configmap.yaml
@@ -16,6 +16,7 @@ resources:
   - service.yaml
   - deployment-user.yaml
   - networkpolicy.yaml
+  - loki-secret.yaml
 
 replacements:
   - source:

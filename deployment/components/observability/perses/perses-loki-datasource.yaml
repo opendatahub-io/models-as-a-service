@@ -1,11 +1,8 @@
-# Perses Datasource for Loki (admin — direct to LokiStack Gateway)
-#
-# Admin dashboards access Loki directly via the gateway with SA token + mTLS.
-# No proxy needed — admins see all application logs without filtering.
-#
-# Deployed to openshift-operators for Platform Admin / AI Engineer dashboards.
+# Admin LokiDatasource — direct to LokiStack, no user filtering.
+# NAMING: The scoped datasource is "scoped-loki" (NOT "loki-scoped") because
+# the monitoring-console-plugin uses prefix matching on datasource names.
 ---
-apiVersion: perses.dev/v1alpha2
+apiVersion: perses.dev/v1alpha1
 kind: PersesDatasource
 metadata:
   name: loki
@@ -15,20 +12,22 @@ metadata:
 spec:
   config:
     display:
-      name: "Loki (MaaS Structured Logs)"
-    default: false
+      name: "Loki (Admin)"
+    default: true
     plugin:
       kind: "LokiDatasource"
       spec:
         proxy:
           kind: HTTPProxy
           spec:
-            url: https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application
-            secret: "loki-secret"
+            url: https://lokistack-sample-gateway-http.logging4.svc.cluster.local:8080/api/logs/v1/application
             allowedEndpoints:
-              - endpointPattern: /loki/api/v1/.*
+              - endpointPattern: "/loki/api/v1/.*"
                 method: GET
+            secret: "loki-secret"
   client:
+    kubernetesAuth:
+      enable: true
     tls:
       enable: true
       insecureSkipVerify: false

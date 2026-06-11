@@ -20,7 +20,7 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: loki-query-proxy
-  namespace: loki-stack-namespace
+  namespace: kuadrant-system
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
@@ -51,4 +51,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: loki-query-proxy
-  namespace: loki-stack-namespace
+  namespace: kuadrant-system

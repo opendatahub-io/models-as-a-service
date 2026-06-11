@@ -1,9 +1,5 @@
 # Perses Kustomization for MaaS Observability
 #
-# Targets openshift-operators (where the UIPlugin creates Perses).
-# For full deployment use: ./scripts/observability/install-perses-dashboards.sh
-# which also handles the tenant-scoped Usage Dashboard in kuadrant-system.
-#
 # Direct kustomize usage:
 #   kustomize build deployment/components/observability/perses | kubectl apply -f -
 #
@@ -21,15 +17,14 @@ resources:
   # Prometheus datasource (Thanos Querier)
   - perses-thanos-ca.yaml
   - perses-datasource.yaml
-  # Loki datasource (structured logs via LokiStack Gateway)
+  # Loki RBAC (SA + ClusterRoleBinding for reading logs)
   - perses-loki-ca.yaml
-  - perses-loki-datasource.yaml
   - perses-loki-rbac.yaml
-  # Admin dashboards (openshift-operators)
+  # Admin dashboards
   - dashboards/dashboard-ai-engineer.yaml
   - dashboards/dashboard-platform-admin.yaml
-  # dashboard-usage.yaml is tenant-scoped (kuadrant-system) — deployed by install-perses-dashboards.sh
-  # Tenant-scoped resources (datasource-scoped, rbac-scoped) and UIPlugin also applied by that script
+  - dashboards/usage-admin-dashboard.yaml
+  - dashboards/usage-user-scoped-dashboard.yaml
 
 labels:
   - pairs:

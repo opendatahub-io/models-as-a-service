@@ -154,8 +154,11 @@ def main() -> int:
 
     resource = Resource.create(
         {
-            # Collector upserts service.name anyway; keep logger identity obvious in traces of export issues.
-            "service.name": "maas-synthetic-log-injector",
+            # Must match the real gateway's service.name so Loki indexes it
+            # under the same stream label (service_name=maas-gateway).
+            "service.name": "maas-gateway",
+            "log_type": "application",
+            "kubernetes_namespace_name": "opendatahub",
         }
     )
     exporter = OTLPLogExporter(endpoint=args.endpoint, insecure=bool(args.insecure))

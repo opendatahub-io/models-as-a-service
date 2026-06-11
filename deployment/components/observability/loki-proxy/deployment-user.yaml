@@ -40,9 +40,8 @@ spec:
           value: "8080"
         - name: ISOLATION_MODE
           value: "user"
-        # Loki gateway FQDN — namespace portion is replaced by sed/overlay
         - name: LOKI_UPSTREAM_URL
-          value: "https://maas-loki-gateway-http.loki-stack-namespace.svc:8080/api/logs/v1/application"
+          value: "https://maas-loki-gateway-http.openshift-logging.svc:8080/api/logs/v1/application"
         - name: HOME
           value: "/tmp"
         - name: GOPATH
@@ -57,13 +56,13 @@ spec:
           httpGet:
             path: /health
             port: 8080
-          initialDelaySeconds: 15
+          initialDelaySeconds: 120
           periodSeconds: 30
         readinessProbe:
           httpGet:
             path: /ready
             port: 8080
-          initialDelaySeconds: 10
+          initialDelaySeconds: 90
           periodSeconds: 10
         resources:
           requests:

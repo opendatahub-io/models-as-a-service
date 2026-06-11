@@ -19,7 +19,6 @@ data:
     package main
 
     import (
-        "bytes"
         "crypto/tls"
         "crypto/x509"
         "encoding/json"
@@ -69,7 +68,7 @@ data:
         }
 
         httpClient = &http.Client{
-            Timeout: 30 * time.Second,
+            Timeout: 60 * time.Second,
             Transport: &http.Transport{TLSClientConfig: &tls.Config{
                 RootCAs:    caCertPool,
                 MinVersion: tls.VersionTLS12,
@@ -99,6 +98,17 @@ data:
         fmt.Fprintln(w, "OK")
     }
 
+    func jsonError(w http.ResponseWriter, msg string, code int) {
+        w.Header().Set("Content-Type", "application/json")
+        w.WriteHeader(code)
+        json.NewEncoder(w).Encode(map[string]interface{}{
+            "status":    "error",
+            "error":     msg,
+            "errorType": "proxy",
+            "data":      nil,
+        })
+    }
+
     var adminGroups = map[string]bool{
         "system:cluster-admins": true,
         "system:masters":        true,
@@ -113,8 +123,6 @@ data:
         return false
     }
 
-    // allowedPaths lists Loki API paths that non-admin users may access.
-    // All of these accept a "query" parameter that gets user_id injected.
     var allowedPaths = map[string]bool{
         "/loki/api/v1/query":       true,
         "/loki/api/v1/query_range": true,
@@ -127,13 +135,15 @@ data:
     }
 
     func proxyHandler(w http.ResponseWriter, r *http.Request) {
+        log.Printf("REQ %s %s", r.Method, r.URL.Path)
+
         var username string
         if cfg.IsolationMode == "user" {
             authHeader := r.Header.Get("Authorization")
             userInfo, err := extractFromBearerToken(authHeader)
             if err != nil {
                 log.Printf("Auth extraction failed: %v", err)
-                http.Error(w, "Unauthorized", http.StatusUnauthorized)
+                jsonError(w, "Unauthorized", http.StatusUnauthorized)
                 return
             }
             if isAdmin(userInfo.Groups) {
@@ -143,75 +153,25 @@ data:
                 log.Printf("User mode: filtering by user_id=%s", username)
                 if !allowedPaths[r.URL.Path] {
                     log.Printf("Blocked non-admin access to %s for user=%s", r.URL.Path, username)
-                    http.Error(w, "Forbidden: endpoint not available for non-admin users", http.StatusForbidden)
+                    jsonError(w, "Forbidden: endpoint not available for non-admin users", http.StatusForbidden)
                     return
                 }
             }
         }
 
-        query := r.URL.Query()
-        var bodyToForward io.Reader = r.Body
+        if r.Method != http.MethodGet {
+            jsonError(w, "Method not allowed", http.StatusMethodNotAllowed)
+            return
+        }
 
-        var contentLength int64 = -1
+        query := r.URL.Query()
 
         if username != "" {
             if query.Has("query") {
                 originalQuery := query.Get("query")
                 rewrittenQuery := injectUserFilter(originalQuery, username)
                 query.Set("query", rewrittenQuery)
-                log.Printf("Query rewrite (URL): %s -> %s", originalQuery, rewrittenQuery)
-            }
-            if r.Method == http.MethodPost {
-                ct := r.Header.Get("Content-Type")
-                if strings.HasPrefix(ct, "application/x-www-form-urlencoded") {
-                    bodyBytes, err := io.ReadAll(r.Body)
-                    if err != nil {
-                        log.Printf("Failed to read request body: %v", err)
-                        http.Error(w, "Bad request", http.StatusBadRequest)
-                        return
-                    }
-                    form, err := url.ParseQuery(string(bodyBytes))
-                    if err != nil {
-                        log.Printf("Failed to parse form body: %v", err)
-                        http.Error(w, "Bad request", http.StatusBadRequest)
-                        return
-                    }
-                    if form.Has("query") {
-                        originalQuery := form.Get("query")
-                        rewrittenQuery := injectUserFilter(originalQuery, username)
-                        form.Set("query", rewrittenQuery)
-                        log.Printf("Query rewrite (POST body): %s -> %s", originalQuery, rewrittenQuery)
-                    }
-                    encoded := form.Encode()
-                    bodyToForward = strings.NewReader(encoded)
-                    contentLength = int64(len(encoded))
-                } else if strings.HasPrefix(ct, "application/json") {
-                    bodyBytes, err := io.ReadAll(r.Body)
-                    if err != nil {
-                        log.Printf("Failed to read JSON body: %v", err)
-                        http.Error(w, "Bad request", http.StatusBadRequest)
-                        return
-                    }
-                    var payload map[string]interface{}
-                    if err := json.Unmarshal(bodyBytes, &payload); err != nil {
-                        log.Printf("Failed to parse JSON body: %v", err)
-                        http.Error(w, "Bad request", http.StatusBadRequest)
-                        return
-                    }
-                    if q, ok := payload["query"].(string); ok && q != "" {
-                        rewritten := injectUserFilter(q, username)
-                        payload["query"] = rewritten
-                        log.Printf("Query rewrite (JSON body): %s -> %s", q, rewritten)
-                    }
-                    reencoded, err := json.Marshal(payload)
-                    if err != nil {
-                        log.Printf("Failed to re-encode JSON body: %v", err)
-                        http.Error(w, "Internal server error", http.StatusInternalServerError)
-                        return
-                    }
-                    bodyToForward = bytes.NewReader(reencoded)
-                    contentLength = int64(len(reencoded))
-                }
+                log.Printf("Query rewrite: %s -> %s", originalQuery, rewrittenQuery)
             }
         }
 
@@ -219,10 +179,10 @@ data:
         upstreamURL.Path = upstreamURL.Path + r.URL.Path
         upstreamURL.RawQuery = query.Encode()
 
-        proxyReq, err := http.NewRequest(r.Method, upstreamURL.String(), bodyToForward)
+        proxyReq, err := http.NewRequest(http.MethodGet, upstreamURL.String(), nil)
         if err != nil {
             log.Printf("Failed to create upstream request: %v", err)
-            http.Error(w, "Internal server error", http.StatusInternalServerError)
+            jsonError(w, "Internal server error", http.StatusInternalServerError)
             return
         }
 
@@ -242,9 +202,6 @@ data:
         }
         proxyReq.Host = lokiUpstream.Host
         proxyReq.Header.Set("X-Scope-OrgID", "application")
-        if contentLength >= 0 {
-            proxyReq.ContentLength = contentLength
-        }
 
         if tokenBytes, err := os.ReadFile(saTokenPath); err == nil {
             proxyReq.Header.Set("Authorization", "Bearer "+strings.TrimSpace(string(tokenBytes)))
@@ -253,10 +210,37 @@ data:
         resp, err := httpClient.Do(proxyReq)
         if err != nil {
             log.Printf("Upstream request failed: %v", err)
-            http.Error(w, "Bad gateway", http.StatusBadGateway)
+            jsonError(w, "Bad gateway: "+err.Error(), http.StatusBadGateway)
             return
         }
         defer resp.Body.Close()
+
+        respBody, readErr := io.ReadAll(resp.Body)
+        if readErr != nil {
+            log.Printf("Failed to read upstream response: %v", readErr)
+            jsonError(w, "Failed to read upstream response", http.StatusBadGateway)
+            return
+        }
+
+        log.Printf("RESP %s %d (%d bytes)", r.URL.Path, resp.StatusCode, len(respBody))
+
+        isJSON := len(respBody) > 0 && (respBody[0] == '{' || respBody[0] == '[')
+        if resp.StatusCode >= 400 && !isJSON {
+            errMsg := strings.TrimSpace(string(respBody))
+            if errMsg == "" {
+                errMsg = fmt.Sprintf("Loki returned HTTP %d", resp.StatusCode)
+            }
+            log.Printf("Upstream non-JSON error %d: %s", resp.StatusCode, errMsg)
+            w.Header().Set("Content-Type", "application/json")
+            w.WriteHeader(resp.StatusCode)
+            json.NewEncoder(w).Encode(map[string]interface{}{
+                "status":    "error",
+                "error":     errMsg,
+                "errorType": "upstream",
+                "data":      nil,
+            })
+            return
+        }
 
         for key, values := range resp.Header {
             for _, value := range values {
@@ -264,9 +248,7 @@ data:
             }
         }
         w.WriteHeader(resp.StatusCode)
-        if _, err := io.Copy(w, resp.Body); err != nil {
-            log.Printf("Failed to copy response body: %v", err)
-        }
+        w.Write(respBody)
     }
 
   auth.go: |

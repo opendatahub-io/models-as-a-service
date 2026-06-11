@@ -1,50 +1,29 @@
-# Perses Dashboard: Usage Dashboard
-# All per-user panels query Loki structured logs via LogQL.
+# Perses Dashboard: Usage User Dashboard
+# User-scoped view — queries go through the loki-query-proxy which injects
+# a user_id filter based on the logged-in user's Kubernetes token.
+# The proxy uses TokenReview to resolve the caller's identity automatically.
 #
-# $__range is a Perses built-in variable (since v0.40.0) that binds to the native
-# time picker, so all LogQL windows track the dashboard time range automatically.
-#
-# user_id, tokens_total, response_code, method, etc. are Loki structured metadata —
-# accessible via pipeline filters (| user_id=~"..." | unwrap tokens_total) without | json.
-# Stream labels (verified 2026-05-19 via /api/v1/series): kubernetes_namespace_name,
-# log_type, service_name, subscription, model. response_code is NOT a stream label.
-#
-# Subscription and Model dropdowns use StaticListVariable because Perses has no
-# LokiLabelValuesVariable plugin yet. To add new values, update the YAML;
-# default $__all still includes all models/subscriptions in aggregates.
-#
-# Token consumption: Perses ``stack: all`` + ``areaOpacity: 1`` when the console honors it.
-# **Filled-line mock (Grafana):** ``docs/samples/dashboards/grafana-usage-loki-token-mock.json``.
-# **View by** (``view_by``): ``model`` | ``subscription`` drives the chart via ``sum by (${view_by:raw})``.
-# Table uses hardcoded ``sum by (model, subscription)`` — both columns always filled.
-# Perses ``columnSettings`` renders headers for labels absent from data (Limitation E in plan doc),
-# so driving the table with ``${view_by:raw}`` leaves an empty Model or Subscription column.
-#
-# user_id!="-" filters out health-check / probe traffic (user_id="-").
+# Same panels and layout as usage-admin-dashboard.yaml but every query targets
+# the scoped-loki datasource instead of the direct loki datasource.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
-  name: usage-dashboard
+  name: usage-user-scoped-dashboard
   labels:
     app: perses
     app.kubernetes.io/part-of: maas-observability
   annotations:
-    maas.observability/visual-revision: "2026-05-19-simplify-token-queries"
+    maas.observability/visual-revision: "2026-06-10-user-scoped"
 spec:
   display:
-    name: "Usage Dashboard"
+    name: "Usage User Dashboard"
     description: >-
-      Token consumption overview (RHOAI mock): chart + usage breakdown table. Filled chart reference:
-      docs/samples/dashboards/grafana-usage-loki-token-mock.json.
+      Personal view of MaaS API usage. Shows your token consumption, request
+      counts, and rate limiting. Queries are automatically filtered to your
+      user identity via the Loki query proxy.
   duration: 1h
 
   variables:
-    - kind: TextVariable
-      spec:
-        name: user
-        display:
-          name: "User ID"
-        value: ".+"
     - kind: ListVariable
       spec:
         name: subscription
@@ -57,9 +36,11 @@ spec:
           kind: StaticListVariable
           spec:
             values:
+              - "dev-subscription-a"
+              - "dev-subscription-b"
+              - "facebook-opt-125m-subscription"
               - "simulator-subscription"
               - "standard-subscription"
-              - "sh-older-subscription"
     - kind: ListVariable
       spec:
         name: model
@@ -73,10 +54,10 @@ spec:
           spec:
             values:
               - "facebook/opt-125m"
-              # Friendly label in the UI; LogQL still uses value the-best-gpt-3.5-m
-              - value: "the-best-gpt-3.5-m"
-                label: "My model"
               - "meta-llama/Llama-3.2-1B-Instruct"
+              - "test-model"
+              - "test/e2e-distinct-model-2"
+              - "the-best-gpt-3.5-m"
     - kind: ListVariable
       spec:
         name: view_by
@@ -117,11 +98,11 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum(sum_over_time({service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-"
+                    | user_id!="-"
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
@@ -147,18 +128,18 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$__range]))
+                    | user_id!="-" [$__range]))
                     or vector(0)
 
-    totalErrors:
+    totalRateLimited:
       kind: Panel
       spec:
         display:
-          name: "Total Errors"
+          name: "Total Rate Limited"
           description: "Total rate-limited requests over the selected time window."
         plugin:
           kind: StatChart
@@ -176,11 +157,11 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | response_code="429" | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code="429" | user_id!="-" [$__range]))
                     or vector(0)
 
     successRate:
@@ -204,43 +185,16 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | response_code=~"2.." | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code=~"2.." | user_id!="-" [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
                     subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="-" [$__range])))
+                    | user_id!="-" [$__range])))
                     or vector(1)
-
-    activeUsers:
-      kind: Panel
-      spec:
-        display:
-          name: "Active Users"
-          description: "Distinct users with API activity over the selected time window."
-        plugin:
-          kind: StatChart
-          spec:
-            calculation: last
-            format:
-              unit: decimal
-        queries:
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: LokiTimeSeriesQuery
-                spec:
-                  datasource:
-                    kind: LokiDatasource
-                    name: loki
-                  query: >-
-                    count(sum by (user_id) (count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range])))
-                    or vector(0)
 
     tokenConsumptionOverTime:
       kind: Panel
@@ -248,11 +202,7 @@ spec:
         display:
           name: "Token consumption"
           description: >-
-            Grafana filled mock: docs/samples/dashboards/grafana-usage-loki-token-mock.json (import + Loki).
-            Tokens from successful requests (2xx) over time by model or subscription
-            **View by** drives chart ``sum by (${view_by:raw})``. Table uses hardcoded ``sum by (model, subscription)``.
-            LogQL ``[30m]`` is the range window for ``sum_over_time`` (Perses time-series step).
-            Visual: OpenShift Perses pattern — ``line`` + ``areaOpacity: 1`` + ``stack: all``.
+            Tokens from successful requests (2xx) over time by model or subscription.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -280,11 +230,11 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum by (${view_by:raw}) (sum_over_time({service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-"
+                    | user_id!="-"
                     | unwrap tokens_total [30m]))
 
     tokenConsumptionTable:
@@ -336,12 +286,12 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum by (model, subscription) (sum_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="-"
+                    | user_id!="-"
                     | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
@@ -350,12 +300,12 @@ spec:
                 spec:
                   datasource:
                     kind: LokiDatasource
-                    name: loki
+                    name: scoped-loki
                   query: >-
                     sum by (model, subscription) (count_over_time(
                     {service_name="maas-gateway",
                     subscription=~"$subscription", model=~"$model"}
-                    | response_code=~"2.." | user_id=~"$user" | user_id!="-" [$__range]))
+                    | response_code=~"2.." | user_id!="-" [$__range]))
 
   layouts:
     - kind: Grid
@@ -367,34 +317,28 @@ spec:
         items:
           - x: 0
             "y": 0
-            width: 5
+            width: 6
             height: 5
             content:
               "$ref": "#/spec/panels/totalTokens"
-          - x: 5
+          - x: 6
             "y": 0
-            width: 5
+            width: 6
             height: 5
             content:
               "$ref": "#/spec/panels/totalRequests"
-          - x: 10
+          - x: 12
             "y": 0
-            width: 5
+            width: 6
             height: 5
             content:
-              "$ref": "#/spec/panels/totalErrors"
-          - x: 15
+              "$ref": "#/spec/panels/totalRateLimited"
+          - x: 18
             "y": 0
-            width: 5
+            width: 6
             height: 5
             content:
               "$ref": "#/spec/panels/successRate"
-          - x: 20
-            "y": 0
-            width: 4
-            height: 5
-            content:
-              "$ref": "#/spec/panels/activeUsers"
 
     - kind: Grid
       spec:
