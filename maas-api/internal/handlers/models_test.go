@@ -192,7 +192,7 @@ func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, re
 	return server
 }
 
-func TestListingModels(t *testing.T) {
+func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test with many scenarios
 	testLogger := logger.Development()
 	strptr := func(s string) *string { return &s }
 
