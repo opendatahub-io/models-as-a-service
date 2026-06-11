@@ -1231,7 +1231,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	}
 
 	t.Run("without OIDC", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", map[string]modelSubjectAllowlist{})
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1254,7 +1254,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 			IssuerURL: "https://keycloak.example.com/realms/test",
 			ClientID:  "maas-client",
 		}
-		spec := r.buildGatewayAuthPolicySpec("{}", oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec("{}", oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway", map[string]modelSubjectAllowlist{})
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1274,7 +1274,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-info has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", map[string]modelSubjectAllowlist{})
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
@@ -1295,7 +1295,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-valid has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", map[string]modelSubjectAllowlist{})
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
@@ -1316,7 +1316,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", map[string]modelSubjectAllowlist{})
 		obj := gwSpecToUnstructured(t, spec)
 
 		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
@@ -1357,6 +1357,365 @@ func contains(s, substr string) bool {
 			}
 			return false
 		}())
+}
+
+func TestBuildPublicPathsRegex(t *testing.T) {
+	tests := []struct {
+		name       string
+		allowlists map[string]modelSubjectAllowlist
+		want       string
+	}{
+		{
+			name:       "empty allowlists",
+			allowlists: map[string]modelSubjectAllowlist{},
+			want:       "",
+		},
+		{
+			name: "no public paths configured",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm": {Users: []string{"alice"}, Groups: []string{"devs"}},
+			},
+			want: "",
+		},
+		{
+			name: "single model single path",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm": {PublicPaths: []string{"/docs"}},
+			},
+			want: `^/default/llm/docs$`,
+		},
+		{
+			name: "single model multiple paths",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm": {PublicPaths: []string{"/docs", "/openapi.json"}},
+			},
+			want: `^/default/llm/docs$|^/default/llm/openapi\.json$`,
+		},
+		{
+			name: "multiple models with paths",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm":  {PublicPaths: []string{"/docs"}},
+				"prod/gpt":     {PublicPaths: []string{"/openapi.json"}},
+				"staging/bert": {Users: []string{"bob"}},
+			},
+			want: `^/default/llm/docs$|^/prod/gpt/openapi\.json$`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildPublicPathsRegex(tt.allowlists)
+			if got != tt.want {
+				t.Errorf("buildPublicPathsRegex() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildPublicPathsCELPredicate(t *testing.T) {
+	tests := []struct {
+		name       string
+		allowlists map[string]modelSubjectAllowlist
+		want       string
+	}{
+		{
+			name:       "empty allowlists",
+			allowlists: map[string]modelSubjectAllowlist{},
+			want:       "",
+		},
+		{
+			name: "single model single path",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm": {PublicPaths: []string{"/docs"}},
+			},
+			want: `request.path != "/default/llm/docs"`,
+		},
+		{
+			name: "single model multiple paths",
+			allowlists: map[string]modelSubjectAllowlist{
+				"default/llm": {PublicPaths: []string{"/docs", "/openapi.json"}},
+			},
+			want: `request.path != "/default/llm/docs" && request.path != "/default/llm/openapi.json"`,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := buildPublicPathsCELPredicate(tt.allowlists)
+			if got != tt.want {
+				t.Errorf("buildPublicPathsCELPredicate() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestApplyPublicPathsCELToRules(t *testing.T) {
+	rules := map[string]any{
+		"apiKeyValidation": map[string]any{
+			"when": []any{
+				map[string]any{"selector": "request.headers.authorization"},
+			},
+			"metrics": false,
+		},
+		"subscription-info": map[string]any{
+			"metrics": false,
+		},
+	}
+	applyPublicPathsCELToRules(rules, `request.path != "/default/llm/docs"`)
+
+	for name, evaluator := range rules {
+		eval, ok := evaluator.(map[string]any)
+		if !ok {
+			t.Fatalf("evaluator %q: expected map[string]any", name)
+		}
+		when, ok := eval["when"].([]any)
+		if !ok {
+			t.Fatalf("evaluator %q: when should be []any", name)
+		}
+		lastWhen, ok := when[len(when)-1].(map[string]any)
+		if !ok {
+			t.Fatalf("evaluator %q: last when entry should be map[string]any", name)
+		}
+		pred, ok := lastWhen["predicate"].(string)
+		if !ok || pred != `request.path != "/default/llm/docs"` {
+			t.Errorf("evaluator %q: last when predicate = %v, want %q", name, lastWhen, `request.path != "/default/llm/docs"`)
+		}
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_PublicPaths(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "gateway-ns",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	gwSpecToUnstructured := func(t *testing.T, spec map[string]any) *unstructured.Unstructured {
+		t.Helper()
+		return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+	}
+
+	t.Run("without public paths no anonymous auth rule", func(t *testing.T) {
+		allowlists := map[string]modelSubjectAllowlist{
+			"default/llm": {Users: []string{"alice"}, Groups: []string{"devs"}},
+		}
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", allowlists)
+		obj := gwSpecToUnstructured(t, spec)
+
+		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
+		if err != nil || !found {
+			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+		}
+		if _, exists := auth["anonymous-public-paths"]; exists {
+			t.Error("anonymous-public-paths should NOT be present when no model has publicPaths")
+		}
+	})
+
+	t.Run("with public paths adds anonymous auth rule", func(t *testing.T) {
+		allowlists := map[string]modelSubjectAllowlist{
+			"default/llm": {
+				Users:       []string{"alice"},
+				Groups:      []string{"devs"},
+				PublicPaths: []string{"/docs"},
+			},
+		}
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", allowlists)
+		obj := gwSpecToUnstructured(t, spec)
+
+		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
+		if err != nil || !found {
+			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+		}
+		anonRule, exists := auth["anonymous-public-paths"]
+		if !exists {
+			t.Fatal("anonymous-public-paths should be present when a model has publicPaths")
+		}
+		anonMap, ok := anonRule.(map[string]any)
+		if !ok {
+			t.Fatal("anonymous-public-paths should be a map")
+		}
+		if _, hasAnon := anonMap["anonymous"]; !hasAnon {
+			t.Error("anonymous-public-paths should have an 'anonymous' key")
+		}
+	})
+
+	t.Run("public paths adds CEL skip predicates to metadata evaluators", func(t *testing.T) {
+		allowlists := map[string]modelSubjectAllowlist{
+			"default/llm": {
+				PublicPaths: []string{"/docs"},
+			},
+		}
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", allowlists)
+		obj := gwSpecToUnstructured(t, spec)
+
+		metadata, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "metadata")
+		if err != nil || !found {
+			t.Fatalf("metadata block missing: found=%v err=%v", found, err)
+		}
+		for evalName, evaluator := range metadata {
+			eval, ok := evaluator.(map[string]any)
+			if !ok {
+				continue
+			}
+			when, ok := eval["when"].([]any)
+			if !ok || len(when) == 0 {
+				t.Errorf("metadata evaluator %q should have when predicates", evalName)
+				continue
+			}
+			lastWhen, ok := when[len(when)-1].(map[string]any)
+			if !ok {
+				t.Errorf("metadata evaluator %q: last when entry should be a map", evalName)
+				continue
+			}
+			pred, ok := lastWhen["predicate"].(string)
+			if !ok || !strings.Contains(pred, `request.path != "/default/llm/docs"`) {
+				t.Errorf("metadata evaluator %q: last when predicate should contain public path skip, got %v", evalName, lastWhen)
+			}
+		}
+	})
+
+	t.Run("public paths adds CEL skip predicates to authorization evaluators", func(t *testing.T) {
+		allowlists := map[string]modelSubjectAllowlist{
+			"default/llm": {
+				PublicPaths: []string{"/docs"},
+			},
+		}
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway", allowlists)
+		obj := gwSpecToUnstructured(t, spec)
+
+		authz, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authorization")
+		if err != nil || !found {
+			t.Fatalf("authorization block missing: found=%v err=%v", found, err)
+		}
+		for evalName, evaluator := range authz {
+			eval, ok := evaluator.(map[string]any)
+			if !ok {
+				continue
+			}
+			when, ok := eval["when"].([]any)
+			if !ok || len(when) == 0 {
+				t.Errorf("authorization evaluator %q should have when predicates", evalName)
+				continue
+			}
+			lastWhen, ok := when[len(when)-1].(map[string]any)
+			if !ok {
+				t.Errorf("authorization evaluator %q: last when entry should be a map", evalName)
+				continue
+			}
+			pred, ok := lastWhen["predicate"].(string)
+			if !ok || !strings.Contains(pred, `request.path != "/default/llm/docs"`) {
+				t.Errorf("authorization evaluator %q: last when predicate should contain public path skip, got %v", evalName, lastWhen)
+			}
+		}
+	})
+}
+
+func TestMaaSAuthPolicyReconciler_PublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		httpRouteName  = modelName
+		maasPolicyName = "policy-public"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: maasPolicyName, Namespace: namespace},
+		Spec: maasv1alpha1.MaaSAuthPolicySpec{
+			ModelRefs:   []maasv1alpha1.ModelRef{{Name: modelName, Namespace: namespace}},
+			Subjects:    maasv1alpha1.SubjectSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}}},
+			PublicPaths: []maasv1alpha1.PublicPath{maasv1alpha1.PublicPathDocs, maasv1alpha1.PublicPathOpenAPI},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	auth, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "authentication")
+	if err != nil || !found {
+		t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+	}
+	if _, exists := auth["anonymous-public-paths"]; !exists {
+		t.Error("gateway AuthPolicy should contain anonymous-public-paths authentication rule")
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_NoPublicPaths(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		httpRouteName  = modelName
+		maasPolicyName = "policy-no-public"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	auth, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "authentication")
+	if err != nil || !found {
+		t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+	}
+	if _, exists := auth["anonymous-public-paths"]; exists {
+		t.Error("gateway AuthPolicy should NOT contain anonymous-public-paths when no publicPaths are set")
+	}
 }
 
 // TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase verifies that an auth policy
