@@ -183,11 +183,15 @@ After creating the database Secret and Gateways, create or update your DataScien
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
     | `spec.externalOIDC.issuerUrl` | OIDC issuer URL for external identity provider (optional; enables OIDC on the maas-api AuthPolicy). |
     | `spec.externalOIDC.clientId` | OIDC client ID (required when `issuerUrl` is set). |
+    | `spec.externalOIDC.ttl` | JWKS refresh interval in seconds (default `300`, minimum `30`). Controls how often Authorino fetches fresh JWKS from the IdP. |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
     | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
+
+    !!! info "External OIDC Configuration"
+        For detailed OIDC setup including IdP configuration, JWKS caching behavior, key rotation strategies, and operator alerting, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
     Example (patch common values):
 

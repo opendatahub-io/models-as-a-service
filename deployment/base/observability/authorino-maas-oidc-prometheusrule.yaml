@@ -1,0 +1,52 @@
+# PrometheusRule: alert when Authorino OIDC/JWT authentication fails often or becomes slow.
+#
+# Scraped metrics come from Authorino /server-metrics (see authorino-server-metrics-servicemonitor.yaml).
+# Requires Tenant.spec.externalOIDC configured (MaaS controller creates AuthConfig with JWT auth).
+#
+# Deployed by: scripts/observability/install-observability.sh → kustomize build deployment/base/observability
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: authorino-maas-oidc-authentication-high-failure-rate
+  namespace: kuadrant-system
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/component: alerting
+spec:
+  groups:
+  - name: maas.authorino.oidc
+    rules:
+    - alert: MaaSAuthorinoOIDCAuthenticationHighFailureRate
+      annotations:
+        summary: Authorino OIDC/JWT authentication is failing often
+        description: >-
+          Over the last 5 minutes, more than 10% of Authorino OIDC/JWT authentication attempts
+          resulted in UNAUTHENTICATED status. Investigate IdP (Keycloak/OIDC provider) health,
+          JWKS endpoint reachability, JWKS cache TTL configuration, and token validity.
+      expr: |
+        (
+          sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system",status="UNAUTHENTICATED"}[5m]))
+          /
+          sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system"}[5m]))
+        ) > 0.10
+        and
+        sum(rate(auth_server_authconfig_response_status{namespace=~"rh-connectivity-link|kuadrant-system"}[5m])) > 0.001
+      for: 5m
+      labels:
+        severity: warning
+    - alert: MaaSAuthorinoOIDCAuthenticationHighLatency
+      annotations:
+        summary: Authorino OIDC/JWT authentication latency is high
+        description: >-
+          Over the last 5 minutes, P95 latency for Authorino OIDC/JWT authentication
+          exceeded 2 seconds. Investigate IdP performance, network latency to JWKS endpoint,
+          and consider increasing JWKS cache TTL if IdP is slow but reliable.
+      expr: |
+        histogram_quantile(0.95,
+          sum(rate(auth_server_authconfig_duration_seconds_bucket{namespace=~"rh-connectivity-link|kuadrant-system"}[5m])) by (le)
+        ) > 2
+        and
+        sum(rate(auth_server_authconfig_duration_seconds_count{namespace=~"rh-connectivity-link|kuadrant-system"}[5m])) > 0.001
+      for: 5m
+      labels:
+        severity: warning
