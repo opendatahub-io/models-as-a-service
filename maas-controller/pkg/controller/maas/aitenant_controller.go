@@ -32,6 +32,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -189,6 +190,9 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 	}
 	if r.AppNamespace != "" && tenantNamespace == r.AppNamespace {
 		return fmt.Errorf("derived tenant namespace must not be the protected application namespace %q", r.AppNamespace)
+	}
+	if errs := validation.IsDNS1123Label(tenantNamespace); len(errs) > 0 {
+		return fmt.Errorf("derived tenant namespace %q is invalid: %s", tenantNamespace, strings.Join(errs, "; "))
 	}
 	return nil
 }

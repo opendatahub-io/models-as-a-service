@@ -20,7 +20,7 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 ## Tenant Namespace
 
-For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
+For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. The derived namespace must be a valid Kubernetes DNS label, so the `AITenant` name can be at most 53 characters for non-default tenants. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
 
 The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
 
