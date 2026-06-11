@@ -28,5 +28,6 @@ const (
 	AnnotationGenAIUseCase  = "opendatahub.io/genai-use-case"
 	AnnotationDescription   = "openshift.io/description"
 	AnnotationDisplayName   = "openshift.io/display-name"
-	AnnotationContextWindow = "opendatahub.io/context-window"
+	AnnotationContextWindow     = "opendatahub.io/context-window"
+	AnnotationModelCapabilities = "opendatahub.io/model-capabilities"
 )
