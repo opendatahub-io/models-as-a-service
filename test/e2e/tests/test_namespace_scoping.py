@@ -40,6 +40,7 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _revoke_api_key,
+    _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
@@ -114,8 +115,14 @@ def _create_external_model(name: str,
     })
 
 
-def _create_namespace(name: str):
-    """Create namespace if it doesn't exist."""
+def _create_namespace(name: str, tenant_enabled: bool = False):
+    """Create namespace if it doesn't exist.
+
+    Args:
+        name: Namespace name
+        tenant_enabled: If True, create Tenant CR to allow MaaS tenant resources
+                       (MaaSSubscription, MaaSAuthPolicy). Required for webhook validation.
+    """
     result = subprocess.run(
         ["oc", "create", "namespace", name],
         capture_output=True,
@@ -123,6 +130,15 @@ def _create_namespace(name: str):
     )
     if result.returncode != 0 and "already exists" not in result.stderr:
         raise RuntimeError(f"Failed to create namespace {name}: {result.stderr}")
+
+    if tenant_enabled:
+        # Create Tenant CR to enable tenant resources in this namespace
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "Tenant",
+            "metadata": {"name": "default-tenant", "namespace": name},
+            "spec": {},
+        })
 
 
 def _delete_namespace(name: str):
@@ -218,7 +234,9 @@ class TestMaaSAPIWatchNamespace:
         """
         sub_name = f"e2e-api-hidden-{uuid.uuid4().hex[:6]}"
         other_ns = "e2e-api-unwatched-ns"
-        _create_namespace(other_ns)
+        # Label namespace as tenant-enabled to satisfy webhook validation.
+        # Test validates API namespace scoping (API only sees its configured namespace).
+        _create_namespace(other_ns, tenant_enabled=True)
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -248,8 +266,7 @@ class TestMaaSControllerWatchNamespace:
     """Verifies MaaS controller only reconciles MaaSAuthPolicy and MaaSSubscription in the subscription namespace."""
 
     def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
-        and should appear in the AuthPolicy and TRLP annotations for the model."""
+        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled."""
         ns = _ns()
         try:
             _apply_cr({
@@ -271,17 +288,15 @@ class TestMaaSControllerWatchNamespace:
                 },
             })
             _wait_reconcile(15)
-
-            auth_name = f"maas-auth-{MODEL_REF}"
-            auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert "e2e-watched-auth" in auth_policies, (
-                f"AuthPolicy {auth_name} not found or MaaSAuthPolicy e2e-watched-auth not reconciled"
-            )
+            _wait_for_maas_auth_policy_phase("e2e-watched-auth", timeout=90)
+            _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns, timeout=90)
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert "e2e-watched-sub" in subscriptions, (
-                f"TRLP {trlp_name} not found or MaaSSubscription e2e-watched-sub not reconciled"
+            expected_sub = f"{ns}/e2e-watched-sub"
+            assert expected_sub in subscriptions, (
+                f"TRLP {trlp_name} not found or MaaSSubscription e2e-watched-sub not reconciled, "
+                f"expected '{expected_sub}' in {subscriptions}"
             )
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-watched-auth", ns)
@@ -290,9 +305,15 @@ class TestMaaSControllerWatchNamespace:
 
     def test_authpolicy_and_subscription_in_another_namespace(self):
         """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
-        and should not appear in the AuthPolicy and TRLP annotations for the model."""
+        and should not appear in the AuthPolicy and TRLP annotations for the model.
+
+        TODO: When multi-tenancy is fully implemented with controller watching all tenant namespaces,
+        this test will need to be redesigned to validate cross-namespace isolation differently.
+        """
         ns = "e2e-unwatched-ns"
-        _create_namespace(ns)
+        # Label namespace as tenant-enabled to satisfy webhook validation.
+        # Test validates controller namespace scoping (controller only watches MAAS_SUBSCRIPTION_NAMESPACE).
+        _create_namespace(ns, tenant_enabled=True)
         try:
             _apply_cr({
                 "apiVersion": "maas.opendatahub.io/v1alpha1",
@@ -316,14 +337,18 @@ class TestMaaSControllerWatchNamespace:
 
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert "e2e-unwatched-auth" not in auth_policies, (
-                "MaaSAuthPolicy e2e-unwatched-auth reconciled"
+            unwatched_auth = f"{ns}/e2e-unwatched-auth"
+            assert unwatched_auth not in auth_policies, (
+                f"MaaSAuthPolicy e2e-unwatched-auth from {ns} should not be reconciled, "
+                f"but '{unwatched_auth}' found in {auth_policies}"
             )
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert "e2e-unwatched-sub" not in subscriptions, (
-                "MaaSSubscription e2e-unwatched-sub reconciled"
+            unwatched_sub = f"{ns}/e2e-unwatched-sub"
+            assert unwatched_sub not in subscriptions, (
+                f"MaaSSubscription e2e-unwatched-sub from {ns} should not be reconciled, "
+                f"but '{unwatched_sub}' found in {subscriptions}"
             )
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-unwatched-auth", ns)
@@ -381,27 +406,27 @@ class TestModelRef:
 
             _wait_reconcile(15)
 
+            _wait_for_maas_auth_policy_phase(policy_name, timeout=90)
+
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_name_other = f"maas-auth-{other_model_ref}"
 
-            # Verify: policy is reconciled into MODEL_REF's AuthPolicy in MODEL_NAMESPACE
-            auth_policies_reconciled = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            assert policy_name in auth_policies_reconciled, (
-                f"MaaSAuthPolicy {policy_name} should be in AuthPolicy {auth_name} in {MODEL_NAMESPACE}, got: {auth_policies_reconciled}"
-            )
-
-            # Verify: MODEL_REF's AuthPolicy in the new namespace does not exist
+            # Gateway-only mode: no per-model AuthPolicies should exist in any namespace.
             auth_in_other_ns = _get_cr("AuthPolicy", auth_name, other_ns)
             assert auth_in_other_ns is None, (
                 f"AuthPolicy {auth_name} should NOT exist in {other_ns}"
             )
 
-            # Verify: other model's AuthPolicy in MODEL_NAMESPACE does not exist
+            auth_in_model_ns = _get_cr("AuthPolicy", auth_name, MODEL_NAMESPACE)
+            assert auth_in_model_ns is None, (
+                f"AuthPolicy {auth_name} should NOT exist in {MODEL_NAMESPACE} in gateway-only mode"
+            )
+
             auth_other_in_model_ns = _get_cr("AuthPolicy", auth_name_other, MODEL_NAMESPACE)
             assert auth_other_in_model_ns is None, (
-                f"AuthPolicy {auth_name_other} should NOT exist in {MODEL_NAMESPACE} (policy references MODEL_REF only)"
+                f"AuthPolicy {auth_name_other} should NOT exist in {MODEL_NAMESPACE}"
             )
-            log.info("✓ MaaSAuthPolicy reconciled into MODEL_REF in MODEL_NAMESPACE only; other AuthPolicies do not exist")
+            log.info("✓ MaaSAuthPolicy reconciled and no per-model AuthPolicies were created (gateway-only mode)")
         finally:
             _delete_cr("MaaSAuthPolicy", policy_name, ns)
             _delete_cr("MaaSModelRef", MODEL_REF, other_ns)
@@ -464,8 +489,10 @@ class TestModelRef:
 
             # Verify: subscription is reconciled into MODEL_REF's TRLP in MODEL_NAMESPACE
             subscriptions_in_model_ns = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
-            assert sub_name in subscriptions_in_model_ns, (
-                f"MaaSSubscription {sub_name} should be in TRLP {trlp_name} in {MODEL_NAMESPACE}, got: {subscriptions_in_model_ns}"
+            expected_sub = f"{ns}/{sub_name}"
+            assert expected_sub in subscriptions_in_model_ns, (
+                f"MaaSSubscription {sub_name} should be in TRLP {trlp_name} in {MODEL_NAMESPACE}, "
+                f"expected '{expected_sub}' in {subscriptions_in_model_ns}"
             )
 
             # Verify: MODEL_REF's TRLP in the new namespace does not exist

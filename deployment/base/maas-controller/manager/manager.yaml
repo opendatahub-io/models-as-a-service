@@ -32,6 +32,7 @@ spec:
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
+          - --aitenant-namespace=$(AITENANT_NAMESPACE)
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
         env:
@@ -45,6 +46,8 @@ spec:
                 fieldPath: metadata.namespace
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
+          - name: AITENANT_NAMESPACE
+            value: "redhat-ai-gateway-infra"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
@@ -93,5 +96,14 @@ spec:
           requests:
             cpu: 10m
             memory: 64Mi
+        volumeMounts:
+        - mountPath: /tmp/k8s-webhook-server/serving-certs
+          name: webhook-cert
+          readOnly: true
+      volumes:
+      - name: webhook-cert
+        secret:
+          defaultMode: 420
+          secretName: maas-controller-webhook-cert
       serviceAccountName: maas-controller
       terminationGracePeriodSeconds: 30

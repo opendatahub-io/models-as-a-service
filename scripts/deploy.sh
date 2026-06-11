@@ -549,7 +549,7 @@ main() {
     [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
-    local cm_payload_processing_image="quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
 
     log_info "  Ensuring maas-parameters ConfigMap..."
@@ -642,6 +642,12 @@ EOF
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
     if ! configure_maas_api_authpolicy; then
       log_error "configure_maas_api_authpolicy failed — set OIDC_ISSUER_URL / OIDC_CLIENT_ID (or overlay params) and retry"
+      return 1
+    fi
+    # Patch Tenant CR with externalOIDC so the MaaSAuthPolicy controller adds
+    # oidc-identities to the gateway-level AuthPolicy (maas-gateway-auth).
+    if ! configure_tenant_external_oidc; then
+      log_error "configure_tenant_external_oidc failed — gateway AuthPolicy will not include OIDC auth"
       return 1
     fi
   fi
@@ -1505,6 +1511,43 @@ configure_maas_api_authpolicy() {
   fi
 
   log_info "  AuthPolicy patched successfully"
+}
+
+# configure_tenant_external_oidc
+#   Patches the default-tenant Tenant CR with spec.externalOIDC so the
+#   MaaSAuthPolicy controller adds oidc-identities authentication to the
+#   gateway-level AuthPolicy (maas-gateway-auth).
+configure_tenant_external_oidc() {
+  local tenant_name="default-tenant"
+  local tenant_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+
+  log_info "Configuring Tenant CR with external OIDC..."
+
+  if ! kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
+    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping OIDC config"
+    return 0
+  fi
+
+  local oidc_issuer_url
+  oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
+    log_error "External OIDC requested but no OIDC_ISSUER_URL was configured"
+    return 1
+  }
+
+  local oidc_client_id
+  oidc_client_id="$(resolve_external_oidc_client_id)" || {
+    log_error "External OIDC requested but no OIDC_CLIENT_ID was configured"
+    return 1
+  }
+
+  log_info "  Patching Tenant '$tenant_name' with externalOIDC (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
+  if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p \
+    "{\"spec\":{\"externalOIDC\":{\"issuerUrl\":\"$oidc_issuer_url\",\"clientId\":\"$oidc_client_id\"}}}"; then
+    log_error "  Failed to patch Tenant CR with external OIDC"
+    return 1
+  fi
+
+  log_info "  Tenant CR patched with externalOIDC successfully"
 }
 
 #──────────────────────────────────────────────────────────────

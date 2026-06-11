@@ -37,9 +37,16 @@ const (
 	LabelK8sPartOf       = "app.kubernetes.io/part-of"
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
+	// LabelAIGatewayTenant is the ADR-defined tenant marker on tenant admin namespaces.
+	LabelAIGatewayTenant = "ai-gateway.opendatahub.io/tenant"
+
+	// LabelManagedByAITenant is set to "true" on namespaces created/adopted
+	// by the AITenant reconciler (S11). The subscription/auth-policy controllers
+	// use this label to discover tenant namespaces dynamically.
+	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 

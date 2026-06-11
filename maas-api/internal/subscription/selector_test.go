@@ -883,3 +883,86 @@ func createSubscriptionWithTRLPStatus(name string, groups []string, phase string
 	}
 	return obj
 }
+
+func createMaaSModelRef(name, namespace, kind string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "maas.opendatahub.io/v1alpha1",
+			"kind":       "MaaSModelRef",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"spec": map[string]any{
+				"modelRef": map[string]any{
+					"kind": kind,
+					"name": name,
+				},
+			},
+		},
+	}
+}
+
+func TestEnrichModelRefsSource(t *testing.T) {
+	tests := []struct {
+		name           string
+		modelRefKind   string
+		expectedSource string
+	}{
+		{
+			name:           "ExternalModel kind maps to external",
+			modelRefKind:   "ExternalModel",
+			expectedSource: "external",
+		},
+		{
+			name:           "LLMInferenceService kind maps to internal",
+			modelRefKind:   "LLMInferenceService",
+			expectedSource: "internal",
+		},
+		{
+			name:           "empty kind leaves source empty",
+			modelRefKind:   "",
+			expectedSource: "",
+		},
+		{
+			name:           "unknown kind leaves source empty",
+			modelRefKind:   "SomeNewKind",
+			expectedSource: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := logger.New(false)
+
+			sub := createSubscription("test-sub", []string{"g1"}, nil, 1, defaultTestTokenRateLimit, "", "")
+
+			modelRef := createMaaSModelRef("test-model", "", tt.modelRefKind)
+			modelLister := &fakeModelLister{items: []*unstructured.Unstructured{modelRef}}
+
+			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}
+			selector := subscription.NewSelector(log, lister, modelLister)
+
+			accessible, err := selector.GetAllAccessible([]string{"g1"}, "")
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if len(accessible) == 0 {
+				t.Fatal("Expected at least one accessible subscription")
+			}
+
+			found := false
+			for _, ref := range accessible[0].ModelRefs {
+				if ref.Name == "test-model" {
+					found = true
+					if ref.Source != tt.expectedSource {
+						t.Errorf("Expected source %q, got %q", tt.expectedSource, ref.Source)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("test-model not found in model refs")
+			}
+		})
+	}
+}

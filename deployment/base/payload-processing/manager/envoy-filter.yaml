@@ -25,7 +25,7 @@ spec:
           name: envoy.filters.http.ext_proc.bbr-pre
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
-            failure_mode_allow: false
+            failure_mode_allow: true
             allow_mode_override: true
             processing_mode:
               request_header_mode: "SEND"
@@ -64,3 +64,34 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+    # Disable ext_proc on non-inference routes (maas-api /v1/models).
+    # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: "PLACEHOLDER.maas-api-route.0"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.ext_proc.bbr-pre:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+    # Disable ext_proc on non-inference routes (maas-api /maas-api/*).
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: "PLACEHOLDER.maas-api-route.1"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.ext_proc.bbr-pre:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
