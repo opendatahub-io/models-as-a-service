@@ -104,6 +104,10 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 			r.SetNamespace(params.GatewayNamespace)
 		case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
 			r.SetNamespace(params.GatewayNamespace)
+		case gvk == GVKConfigMap && name == MaaSParametersConfigMapName:
+			if err := patchMaaSParametersConfigMap(r, params); err != nil {
+				return err
+			}
 		case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 			if err := patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace); err != nil {
 				return err
@@ -369,6 +373,40 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
+}
+
+func hasRenderedConfigMap(resources []unstructured.Unstructured, name string) bool {
+	for i := range resources {
+		if resources[i].GroupVersionKind() == GVKConfigMap && resources[i].GetName() == name {
+			return true
+		}
+	}
+	return false
+}
+
+func patchMaaSParametersConfigMap(r *unstructured.Unstructured, params PlatformParams) error {
+	data, _, _ := unstructured.NestedStringMap(r.Object, "data")
+	if data == nil {
+		data = make(map[string]string)
+	}
+	data["api-key-max-expiration-days"] = params.APIKeyMaxExpirationDays
+	return unstructured.SetNestedStringMap(r.Object, data, "data")
+}
+
+func buildMaaSParametersConfigMap(params PlatformParams, appNamespace string) unstructured.Unstructured {
+	return unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      MaaSParametersConfigMapName,
+				"namespace": appNamespace,
+			},
+			"data": map[string]any{
+				"api-key-max-expiration-days": params.APIKeyMaxExpirationDays,
+			},
+		},
+	}
 }
 
 func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {
