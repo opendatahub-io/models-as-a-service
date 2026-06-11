@@ -53,8 +53,10 @@ const (
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
 
-	// DefaultMaaSAPINamespace is the infrastructure namespace where maas-api workloads run.
-	DefaultMaaSAPINamespace = "redhat-ai-gateway-infra"
+	// DefaultMaaSAPINamespace is the fallback namespace for maas-api workloads when
+	// --maas-api-namespace flag is not specified (kustomize standalone deployments).
+	// Production deployments use the controller's namespace via fieldRef.
+	DefaultMaaSAPINamespace = "opendatahub"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
