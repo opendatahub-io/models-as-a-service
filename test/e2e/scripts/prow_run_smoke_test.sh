@@ -290,6 +290,8 @@ deploy_maas_platform() {
 
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
+    # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
+    export DB_SSLMODE="${DB_SSLMODE:-disable}"
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
