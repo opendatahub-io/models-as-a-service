@@ -99,6 +99,14 @@ AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+# Use clusterip gateway mode by default in e2e to avoid cloud LB provisioning delays/failures.
+# Can be overridden by setting INGRESS_MODE=route explicitly.
+INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+export INGRESS_MODE
+# Gateway programming can lag during fresh cluster bring-up; allow a generous timeout.
+GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 # OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
 OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
 
@@ -115,6 +123,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+wait_for_gateway_programmed() {
+    local gateway_name="${1:-$GATEWAY_NAME}"
+    local gateway_ns="${2:-$GATEWAY_NAMESPACE}"
+    local timeout="${3:-$GATEWAY_PROGRAMMED_TIMEOUT}"
+
+    echo "Waiting for Gateway ${gateway_ns}/${gateway_name} to be Programmed=True (timeout: ${timeout}s)..."
+
+    if oc wait "gateway/${gateway_name}" -n "${gateway_ns}" --for=condition=Programmed --timeout="${timeout}s"; then
+        echo "✅ Gateway ${gateway_ns}/${gateway_name} is Programmed"
+        return 0
+    fi
+
+    echo "❌ ERROR: Gateway ${gateway_ns}/${gateway_name} did not reach Programmed=True within ${timeout}s"
+    echo "Gateway diagnostics:"
+    oc get "gateway/${gateway_name}" -n "${gateway_ns}" -o wide || true
+    oc describe "gateway/${gateway_name}" -n "${gateway_ns}" || true
+    return 1
 }
 
 # When EXTERNAL_OIDC=true and OIDC_* are not set, use Keycloak test realm (tenant-a) on this cluster.
@@ -181,6 +208,7 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
+    echo "Gateway ingress mode for deploy.sh: ${INGRESS_MODE}"
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     fi
@@ -308,6 +336,12 @@ deploy_maas_platform() {
 
 deploy_models() {
     echo "Deploying MaaS system (free + premium: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)"
+    # LLMInferenceService readiness depends on Gateway Programmed=True. On fresh clusters this can
+    # lag behind deploy.sh completion, causing deterministic model readiness failures.
+    if ! wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" "$GATEWAY_PROGRAMMED_TIMEOUT"; then
+        exit 1
+    fi
+
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -350,6 +384,11 @@ deploy_models() {
     if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
         dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
+        exit 1
+    fi
+    if ! oc wait llminferenceservice/e2e-unconfigured-facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for e2e-unconfigured simulator to be ready"
+        dump_llmis_diagnostics "e2e-unconfigured-facebook-opt-125m-simulated" "llm"
         exit 1
     fi
     echo "✅ Simulator models ready"
@@ -396,12 +435,12 @@ wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
+    # Always include the gateway namespace where maas-gateway-auth lives.
+    # Also include any namespaces that contain LLMInferenceServices.
+    local llm_namespaces
+    llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
     local namespaces
-    namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
-    if [[ -z "$namespaces" ]]; then
-        echo "  No LLMInferenceService namespaces found, skipping AuthPolicy wait"
-        return 0
-    fi
+    namespaces=$(printf '%s\n%s\n' "${GATEWAY_NAMESPACE:-openshift-ingress}" "$llm_namespaces" | sort -u | xargs)
 
     local deadline=$((SECONDS + timeout))
     while [[ $SECONDS -lt $deadline ]]; do
@@ -652,9 +691,9 @@ run_e2e_tests() {
     if [[ "${EXTERNAL_OIDC}" == "true" ]] && [[ -n "${OIDC_TOKEN_URL:-}" ]]; then
         # Fail fast if cluster AuthPolicy was not patched with the same issuer as this job (no 180s of 401).
         if [[ -n "${OIDC_ISSUER_URL:-}" ]]; then
-            echo "Checking maas-api AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
-            if ! verify_maas_api_oidc_authpolicy "$DEPLOYMENT_NAMESPACE"; then
-                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see validate-deployment.sh / deployment-helpers.sh verify_maas_api_oidc_authpolicy"
+            echo "Checking gateway AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
+            if ! verify_gateway_oidc_authpolicy "${GATEWAY_NAMESPACE:-openshift-ingress}"; then
+                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see deployment-helpers.sh verify_gateway_oidc_authpolicy"
                 exit 1
             fi
         fi
@@ -685,7 +724,7 @@ run_e2e_tests() {
             if [[ $SECONDS -ge $oidc_deadline ]]; then
                 echo "⚠️  WARNING: OIDC gateway readiness failed after ${oidc_timeout}s (still HTTP 401)."
                 echo "   Issuer check already passed; suspect JWKS/network from kuadrant-system to Keycloak or token signature."
-                echo "   kubectl get authpolicy maas-api-auth-policy -n ${DEPLOYMENT_NAMESPACE} -o yaml | grep -A30 oidc"
+                echo "   kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml | grep -A30 oidc"
                 echo "   kubectl logs -n ${AUTHORINO_NAMESPACE} -l app=authorino --tail=80"
                 if [[ "${OIDC_READINESS_STRICT}" == "true" ]]; then
                     echo "❌ ERROR: OIDC_READINESS_STRICT=true — exiting before pytest."
@@ -712,6 +751,7 @@ run_e2e_tests() {
         "$test_dir/tests/test_models_endpoint.py" \
         "$test_dir/tests/test_external_models.py" \
         "$test_dir/tests/test_tenant.py" \
+        "$test_dir/tests/test_aitenant_lifecycle.py" \
         "$test_dir/tests/test_config_tenant.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"

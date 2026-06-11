@@ -39,6 +39,7 @@ import os
 import time
 import uuid
 import logging
+from urllib.parse import urlparse
 
 import pytest
 import requests
@@ -355,9 +356,14 @@ class TestOIDCModelAccess:
         items = models_response.json().get("data") or models_response.json().get("models") or []
         assert items, f"Expected at least one model from /v1/models, got: {models_response.text}"
 
-        # Inference
+        # Inference — use GATEWAY_HOST to build the URL so this works from
+        # outside the cluster (the "url" field contains an in-cluster address).
         model_id = items[0]["id"]
-        model_url = items[0]["url"].rstrip("/")
+        raw_url = items[0]["url"].rstrip("/")
+        model_path = urlparse(raw_url).path
+        gateway_host = os.environ.get("GATEWAY_HOST", "")
+        scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
+        model_url = f"{scheme}://{gateway_host}{model_path}" if gateway_host else raw_url
         inference_response = requests.post(
             f"{model_url}/v1/chat/completions",
             headers=headers,

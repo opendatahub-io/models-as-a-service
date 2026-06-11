@@ -161,6 +161,8 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 
 Online Documentation: [https://opendatahub-io.github.io/models-as-a-service/](https://opendatahub-io.github.io/models-as-a-service/)
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
+
 ## 🤝 Contributing
 
 We welcome contributions! Please:

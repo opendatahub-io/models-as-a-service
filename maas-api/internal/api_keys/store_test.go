@@ -64,7 +64,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, "sub-1", nil, false)
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, "sub-1", "", nil, false)
 		require.NoError(t, err)
 
 		// Verify key was added by fetching it
@@ -105,7 +105,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	// matching PostgreSQL behavior: only keys with status='active' can be revoked.
 	t.Run("RevokeAlreadyRevokedKey", func(t *testing.T) {
 		// Create a fresh key, revoke it, then try revoking again
-		err := store.AddKey(ctx, "user3", "key-revoke-twice", "hash-revoke-twice", "revoke-twice", "", nil, "sub-1", nil, false)
+		err := store.AddKey(ctx, "user3", "key-revoke-twice", "hash-revoke-twice", "revoke-twice", "", nil, "sub-1", "", nil, false)
 		require.NoError(t, err)
 
 		err = store.Revoke(ctx, "key-revoke-twice")
@@ -118,7 +118,7 @@ func TestAPIKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, "sub-2", nil, false)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, "sub-2", "", nil, false)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
@@ -143,11 +143,11 @@ func TestInvalidateAll(t *testing.T) {
 		// Add 3 keys for alice, 2 for bob
 		for i := range 3 {
 			id := "alice-key-" + string(rune('a'+i))
-			require.NoError(t, store.AddKey(ctx, "alice", id, "ahash"+id, "key-"+id, "", nil, "sub-1", nil, false))
+			require.NoError(t, store.AddKey(ctx, "alice", id, "ahash"+id, "key-"+id, "", nil, "sub-1", "", nil, false))
 		}
 		for i := range 2 {
 			id := "bob-key-" + string(rune('a'+i))
-			require.NoError(t, store.AddKey(ctx, "bob", id, "bhash"+id, "key-"+id, "", nil, "sub-1", nil, false))
+			require.NoError(t, store.AddKey(ctx, "bob", id, "bhash"+id, "key-"+id, "", nil, "sub-1", "", nil, false))
 		}
 
 		count, err := store.InvalidateAll(ctx, "alice")
@@ -184,9 +184,9 @@ func TestInvalidateAll(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "carol", "c1", "ch1", "k1", "", nil, "sub-1", nil, false))
-		require.NoError(t, s.AddKey(ctx, "carol", "c2", "ch2", "k2", "", nil, "sub-1", nil, false))
-		require.NoError(t, s.AddKey(ctx, "carol", "c3", "ch3", "k3", "", nil, "sub-1", nil, false))
+		require.NoError(t, s.AddKey(ctx, "carol", "c1", "ch1", "k1", "", nil, "sub-1", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "carol", "c2", "ch2", "k2", "", nil, "sub-1", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "carol", "c3", "ch3", "k3", "", nil, "sub-1", "", nil, false))
 
 		// Revoke one key manually first
 		require.NoError(t, s.Revoke(ctx, "c3"))
@@ -203,7 +203,7 @@ func TestInvalidateAll(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "dan", "d1", "dh1", "k1", "", nil, "sub-1", nil, false))
+		require.NoError(t, s.AddKey(ctx, "dan", "d1", "dh1", "k1", "", nil, "sub-1", "", nil, false))
 
 		count, err := s.InvalidateAll(ctx, "dan")
 		require.NoError(t, err)
@@ -216,3 +216,35 @@ func TestInvalidateAll(t *testing.T) {
 	})
 }
 
+func TestAddKeyWithTenant(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	t.Run("TenantRoundTripsViaGet", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-1", "thash1", "tenant-key", "", nil, "sub-1", "acme-corp", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.Get(ctx, "tenant-key-1")
+		require.NoError(t, err)
+		assert.Equal(t, "acme-corp", key.Tenant)
+	})
+
+	t.Run("EmptyTenantSentinel", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-2", "thash2", "no-tenant-key", "", nil, "sub-1", "", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.Get(ctx, "tenant-key-2")
+		require.NoError(t, err)
+		assert.Empty(t, key.Tenant)
+	})
+
+	t.Run("TenantRoundTripsViaGetByHash", func(t *testing.T) {
+		err := store.AddKey(ctx, "user1", "tenant-key-3", "thash3", "hash-tenant-key", "", nil, "sub-1", "tenant-xyz", nil, false)
+		require.NoError(t, err)
+
+		key, err := store.GetByHash(ctx, "thash3")
+		require.NoError(t, err)
+		assert.Equal(t, "tenant-xyz", key.Tenant)
+	})
+}
