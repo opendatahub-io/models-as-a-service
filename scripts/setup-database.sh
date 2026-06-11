@@ -255,7 +255,7 @@ EOF
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
 : "${DB_SSLMODE:=require}"
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
-create_maas_db_config_secret "$NAMESPACE" "$DB_CONNECTION_URL"
+create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
 
 echo "  Waiting for PostgreSQL to be ready..."
 if ! kubectl wait -n "$INFRA_NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
