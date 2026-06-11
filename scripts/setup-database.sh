@@ -15,6 +15,8 @@
 #   POSTGRES_USER      Database user (default: maas)
 #   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
+#   DB_SSLMODE         PostgreSQL sslmode (default: require). Set to "disable"
+#                      for CI environments where the Postgres pod lacks TLS.
 #
 # Usage:
 #   ./scripts/setup-database.sh
@@ -251,10 +253,9 @@ EOF
 # than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
 # Uses od (POSIX) instead of xxd which may not be available in all environments.
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
-
-# Use FQDN for cross-namespace access (maas-api pods in redhat-ai-gateway-infra connect to postgres)
-DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres.${INFRA_NAMESPACE}.svc.cluster.local:5432/${POSTGRES_DB}?sslmode=disable"
-create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
+: "${DB_SSLMODE:=require}"
+DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
+create_maas_db_config_secret "$NAMESPACE" "$DB_CONNECTION_URL"
 
 echo "  Waiting for PostgreSQL to be ready..."
 if ! kubectl wait -n "$INFRA_NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
