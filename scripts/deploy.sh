@@ -639,16 +639,10 @@ EOF
     return 1
   fi
 
-  # External OIDC: merge-patch maas-api-auth-policy with Keycloak (or other IdP) JWT rules.
-  # The Tenant reconciler creates the base AuthPolicy; this must run after it exists.
+  # External OIDC: Patch Tenant CR with externalOIDC so the MaaSAuthPolicy controller
+  # adds oidc-identities authentication to the gateway-level AuthPolicy (maas-gateway-auth).
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    if ! configure_maas_api_authpolicy; then
-      log_error "configure_maas_api_authpolicy failed — set OIDC_ISSUER_URL / OIDC_CLIENT_ID (or overlay params) and retry"
-      return 1
-    fi
-    # Patch Tenant CR with externalOIDC so the MaaSAuthPolicy controller adds
-    # oidc-identities to the gateway-level AuthPolicy (maas-gateway-auth).
     if ! configure_tenant_external_oidc; then
       log_error "configure_tenant_external_oidc failed — gateway AuthPolicy will not include OIDC auth"
       return 1
@@ -1453,75 +1447,6 @@ MANIFEST_EOF
   rm -f "$manifest"
   return $rc
 }
-
-# configure_maas_api_authpolicy
-#   Ensures the live maas-api AuthPolicy keeps API key support and, when
-#   enabled, layers external OIDC JWT validation on top.
-configure_maas_api_authpolicy() {
-  log_info "Configuring MaaS API AuthPolicy..."
-
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_error "Could not determine project root for AuthPolicy patching"
-    return 1
-  }
-
-  local authpolicy_name="maas-api-auth-policy"
-  local authpolicy_namespace="redhat-ai-gateway-infra"  # AuthPolicy deploys with maas-api in infrastructure namespace
-  local wait_timeout=120
-  local elapsed=0
-
-  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
-  while [[ $elapsed -lt $wait_timeout ]]; do
-    if kubectl get authpolicy "$authpolicy_name" -n "$authpolicy_namespace" &>/dev/null; then
-      log_info "  Found AuthPolicy '$authpolicy_name'"
-      break
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-
-  if ! kubectl get authpolicy "$authpolicy_name" -n "$authpolicy_namespace" &>/dev/null; then
-    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
-    return 0
-  fi
-
-  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
-  kubectl annotate authpolicy "$authpolicy_name" -n "$authpolicy_namespace" \
-    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-
-  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
-    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
-    return 0
-  fi
-
-  local oidc_issuer_url
-  oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
-    log_error "External OIDC requested but no real oidc-issuer-url was configured"
-    return 1
-  }
-
-  local oidc_client_id
-  oidc_client_id="$(resolve_external_oidc_client_id)" || {
-    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
-    return 1
-  }
-
-  # Resolve cluster audience for TokenReview (HyperShift/ROSA use non-standard audiences).
-  local cluster_aud
-  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "https://kubernetes.default.svc")
-  log_info "  Cluster audience: $cluster_aud"
-
-  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
-  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$authpolicy_namespace" "$oidc_issuer_url" "$oidc_client_id" "$cluster_aud"; then
-    log_error "  Failed to patch AuthPolicy with external OIDC configuration"
-    return 1
-  fi
-
-  log_info "  AuthPolicy patched successfully"
-}
-
 # configure_tenant_external_oidc
 #   Patches the default-tenant Tenant CR with spec.externalOIDC so the
 #   MaaSAuthPolicy controller adds oidc-identities authentication to the
