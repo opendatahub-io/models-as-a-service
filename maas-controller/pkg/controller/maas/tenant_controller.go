@@ -61,6 +61,10 @@ type TenantReconciler struct {
 	GatewayNamespace string
 	// cleanupOnce ensures legacy maas-api cleanup runs at most once per controller lifetime
 	cleanupOnce sync.Once
+	// cleanupMu protects cleanupCompleted
+	cleanupMu sync.Mutex
+	// cleanupCompleted tracks whether legacy cleanup succeeded
+	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
 }
