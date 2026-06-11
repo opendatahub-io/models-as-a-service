@@ -23,7 +23,9 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     env_bool,
     get_api_key_at,
+    redact_sensitive,
     require_tenant_api_base_urls,
+    response_summary,
     search_api_keys_at,
     select_subscription_at,
     validate_api_key_at,
@@ -95,7 +97,7 @@ def tenant_api_keys(tenant_auth_setup):
             subscription=tenant_auth_setup["subscription"],
         )
         assert response.status_code in (200, 201), (
-            f"create key for {tenant['name']} failed: {response.status_code} {response.text}"
+            f"create key for {tenant['name']} failed: {response_summary(response)}"
         )
         created[key_name] = response.json()
     return created
@@ -111,7 +113,7 @@ class TestTenantAuthIsolation:
             tenant = tenant_auth_setup[tenant_key]
             key_id = tenant_api_keys[key_name]["id"]
             response = get_api_key_at(tenant["base_url"], oc_token, key_id)
-            assert response.status_code == 200, f"GET key in {tenant['name']} failed: {response.status_code} {response.text}"
+            assert response.status_code == 200, f"GET key in {tenant['name']} failed: {response_summary(response)}"
             data = response.json()
             if data.get("tenant") is not None:
                 assert data["tenant"] == tenant["name"]
@@ -122,7 +124,7 @@ class TestTenantAuthIsolation:
         response = validate_api_key_at(tenant_auth_setup["tenant_a"]["base_url"], tenant_api_keys["a"]["key"])
         assert response.status_code == 200
         data = response.json()
-        assert data.get("valid") is True, data
+        assert data.get("valid") is True, redact_sensitive(data)
         assert data.get("subscription") == tenant_auth_setup["subscription"]
 
     def test_api_key_rejected_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
@@ -130,7 +132,7 @@ class TestTenantAuthIsolation:
         response = validate_api_key_at(tenant_auth_setup["tenant_b"]["base_url"], tenant_api_keys["a"]["key"])
         assert response.status_code == 200
         data = response.json()
-        assert data.get("valid") is False, data
+        assert data.get("valid") is False, redact_sensitive(data)
 
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""
@@ -141,11 +143,11 @@ class TestTenantAuthIsolation:
 
         tenant_a, tenant_b = tenant_env
         response_a = search_api_keys_at(tenant_a["base_url"], token_a)
-        assert response_a.status_code != 401, f"Tenant A rejected its OIDC token: {response_a.status_code} {response_a.text}"
+        assert response_a.status_code != 401, f"Tenant A rejected its OIDC token: {response_summary(response_a)}"
 
         cross_response = search_api_keys_at(tenant_b["base_url"], token_a)
         assert cross_response.status_code in (401, 403), (
-            f"Tenant B should reject Tenant A OIDC token, got {cross_response.status_code}: {cross_response.text}"
+            f"Tenant B should reject Tenant A OIDC token: {response_summary(cross_response)}"
         )
 
     def test_api_key_list_scoped_to_tenant(self, tenant_auth_setup, tenant_api_keys):
@@ -156,7 +158,7 @@ class TestTenantAuthIsolation:
             oc_token,
             subscription=tenant_auth_setup["subscription"],
         )
-        assert response_a.status_code == 200, f"Tenant A search failed: {response_a.status_code} {response_a.text}"
+        assert response_a.status_code == 200, f"Tenant A search failed: {response_summary(response_a)}"
         ids_a = {item["id"] for item in response_a.json().get("data", [])}
         assert tenant_api_keys["a"]["id"] in ids_a
         assert tenant_api_keys["b"]["id"] not in ids_a
@@ -166,7 +168,7 @@ class TestTenantAuthIsolation:
             oc_token,
             subscription=tenant_auth_setup["subscription"],
         )
-        assert response_b.status_code == 200, f"Tenant B search failed: {response_b.status_code} {response_b.text}"
+        assert response_b.status_code == 200, f"Tenant B search failed: {response_summary(response_b)}"
         ids_b = {item["id"] for item in response_b.json().get("data", [])}
         assert tenant_api_keys["b"]["id"] in ids_b
         assert tenant_api_keys["a"]["id"] not in ids_b
@@ -183,5 +185,5 @@ class TestTenantAuthIsolation:
         )
         assert response.status_code == 200
         data = response.json()
-        assert data.get("error") is None, data
+        assert data.get("error") is None, redact_sensitive(data)
         assert data.get("namespace") == tenant_auth_setup["tenant_a"]["namespace"]

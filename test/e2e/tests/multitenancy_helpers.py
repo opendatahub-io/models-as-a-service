@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import time
@@ -46,6 +47,15 @@ DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
+SENSITIVE_FIELD_RE = re.compile(
+    r"(password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session|dsn|uri|url)",
+    re.IGNORECASE,
+)
+SENSITIVE_VALUE_PATTERNS = (
+    re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
+    re.compile(r"\bsk-oai-[A-Za-z0-9._-]+", re.IGNORECASE),
+    re.compile(r"\bpostgres(?:ql)?://[^\s\"']+", re.IGNORECASE),
+)
 
 
 def _oc_bin() -> str:
@@ -76,6 +86,39 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in {"1", "true", "yes", "y", "on"}
+
+
+def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
+    """Return a short string safe enough for CI assertion messages."""
+    text = str(value)
+    for pattern in SENSITIVE_VALUE_PATTERNS:
+        text = pattern.sub("<redacted>", text)
+    text = re.sub(
+        r'("(?:[^"]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session)[^"]*)"\s*:\s*)"[^"]*"',
+        r'\1"<redacted>"',
+        text,
+        flags=re.IGNORECASE,
+    )
+    text = re.sub(
+        r"('(?:[^']*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session)[^']*)'\s*:\s*)'[^']*'",
+        r"\1'<redacted>'",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if len(text) > max_length:
+        return f"{text[:max_length]}...<truncated>"
+    return text
+
+
+def redact_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
+    return {
+        key: "<redacted>" if SENSITIVE_FIELD_RE.search(key) else value
+        for key, value in sorted(mapping.items())
+    }
+
+
+def response_summary(response: requests.Response, *, max_body: int = 300) -> str:
+    return f"status={response.status_code} body={redact_sensitive(response.text, max_length=max_body)}"
 
 
 def _apply(obj: dict) -> None:

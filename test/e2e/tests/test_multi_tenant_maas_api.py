@@ -27,6 +27,7 @@ from multitenancy_helpers import (
     http_route_parent_refs,
     new_named_tenant_case,
     per_tenant_maas_api_names,
+    redact_mapping,
     require_aitenant_crd,
     wait_for_deployment_available,
     wait_for_json,
@@ -89,7 +90,7 @@ class TestPerTenantMaaSAPI:
             names = _tenant_api_names(case)
             env = deployment_env(names["deployment"], DEPLOYMENT_NAMESPACE)
             assert env.get("TENANT_NAME") == _tenant_name(case), (
-                f"{names['deployment']} should set TENANT_NAME={_tenant_name(case)!r}, got {env!r}"
+                f"{names['deployment']} should set TENANT_NAME={_tenant_name(case)!r}, got {redact_mapping(env)!r}"
             )
 
     def test_service_routing_isolation(self, tenant_cases):

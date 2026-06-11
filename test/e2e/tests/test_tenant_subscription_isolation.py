@@ -18,7 +18,9 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     env_bool,
     list_subscriptions_at,
+    redact_sensitive,
     require_tenant_api_base_urls,
+    response_summary,
     select_subscription_at,
     wait_for_status_phase,
 )
@@ -88,7 +90,7 @@ def _create_key_for_subscription(tenant: dict[str, str], subscription: str) -> s
         subscription=subscription,
     )
     assert response.status_code in (200, 201), (
-        f"create API key for {tenant['name']} failed: {response.status_code} {response.text}"
+        f"create API key for {tenant['name']} failed: {response_summary(response)}"
     )
     return response.json()["key"]
 
@@ -104,13 +106,13 @@ class TestTenantSubscriptionIsolation:
         key_b = _create_key_for_subscription(tenant_b, tenant_subscriptions["tenant_b_only"])
 
         response_a = list_subscriptions_at(tenant_a["base_url"], key_a)
-        assert response_a.status_code == 200, f"Tenant A list failed: {response_a.status_code} {response_a.text}"
+        assert response_a.status_code == 200, f"Tenant A list failed: {response_summary(response_a)}"
         ids_a = {item["subscription_id_header"] for item in response_a.json()}
         assert tenant_subscriptions["tenant_a_only"] in ids_a
         assert tenant_subscriptions["tenant_b_only"] not in ids_a
 
         response_b = list_subscriptions_at(tenant_b["base_url"], key_b)
-        assert response_b.status_code == 200, f"Tenant B list failed: {response_b.status_code} {response_b.text}"
+        assert response_b.status_code == 200, f"Tenant B list failed: {response_summary(response_b)}"
         ids_b = {item["subscription_id_header"] for item in response_b.json()}
         assert tenant_subscriptions["tenant_b_only"] in ids_b
         assert tenant_subscriptions["tenant_a_only"] not in ids_b
@@ -134,7 +136,7 @@ class TestTenantSubscriptionIsolation:
         )
         assert response_a.status_code == 200
         data_a = response_a.json()
-        assert data_a.get("error") is None, data_a
+        assert data_a.get("error") is None, redact_sensitive(data_a)
         assert data_a.get("name") == shared
         assert data_a.get("namespace") == tenant_a["namespace"]
 
@@ -148,6 +150,6 @@ class TestTenantSubscriptionIsolation:
         )
         assert response_b.status_code == 200
         data_b = response_b.json()
-        assert data_b.get("error") is None, data_b
+        assert data_b.get("error") is None, redact_sensitive(data_b)
         assert data_b.get("name") == shared
         assert data_b.get("namespace") == tenant_b["namespace"]

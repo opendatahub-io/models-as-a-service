@@ -22,6 +22,7 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     env_bool,
     require_tenant_api_base_urls,
+    response_summary,
     wait_for_status_phase,
 )
 from test_helper import (
@@ -88,14 +89,14 @@ def tenant_rate_limit_setup(tenant_env):
             f"e2e-rate-a-{suffix}",
             subscription=sub_a,
         )
-        assert key_a_response.status_code in (200, 201), key_a_response.text
+        assert key_a_response.status_code in (200, 201), response_summary(key_a_response)
         key_b_response = create_api_key_at(
             tenant_b["base_url"],
             oc_token,
             f"e2e-rate-b-{suffix}",
             subscription=sub_b,
         )
-        assert key_b_response.status_code in (200, 201), key_b_response.text
+        assert key_b_response.status_code in (200, 201), response_summary(key_b_response)
 
         yield {
             "tenant_a": tenant_a,
@@ -141,7 +142,7 @@ def _exhaust_until_429(api_base_url: str, api_key: str, *, attempts: int = 8) ->
         elif last.status_code == 429:
             return successes, last
         else:
-            raise AssertionError(f"unexpected inference status {last.status_code}: {last.text[:300]}")
+            raise AssertionError(f"unexpected inference response: {response_summary(last)}")
         time.sleep(0.1)
     assert last is not None
     return successes, last
@@ -154,9 +155,9 @@ class TestTenantRateLimitIsolation:
         """5.1: Tenant A's low quota is enforced on Tenant A traffic."""
         tenant_a = tenant_rate_limit_setup["tenant_a"]
         successes, response = _exhaust_until_429(tenant_a["base_url"], tenant_rate_limit_setup["key_a"])
-        assert successes > 0, f"Tenant A hit 429 before any successful inference: {response.text[:300]}"
+        assert successes > 0, f"Tenant A hit 429 before any successful inference: {response_summary(response)}"
         assert response.status_code == 429, (
-            f"expected Tenant A to hit rate limit, got {response.status_code} after {successes} successes: {response.text[:300]}"
+            f"expected Tenant A to hit rate limit after {successes} successes: {response_summary(response)}"
         )
 
     def test_independent_tenant_rate_limits(self, tenant_rate_limit_setup):
@@ -168,5 +169,5 @@ class TestTenantRateLimitIsolation:
 
         tenant_b_response = _inference_at(tenant_b["base_url"], tenant_rate_limit_setup["key_b"])
         assert tenant_b_response.status_code == 200, (
-            f"Tenant B should still have independent quota, got {tenant_b_response.status_code}: {tenant_b_response.text[:300]}"
+            f"Tenant B should still have independent quota: {response_summary(tenant_b_response)}"
         )
