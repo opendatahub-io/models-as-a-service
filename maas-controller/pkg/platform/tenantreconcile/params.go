@@ -53,7 +53,10 @@ func firstNonEmpty(values ...string) string {
 
 func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
 	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		return strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+		v := *tenant.Spec.APIKeys.MaxExpirationDays
+		if v > 0 {
+			return strconv.FormatInt(int64(v), 10)
+		}
 	}
 	return DefaultAPIKeyMaxExpirationDays
 }
@@ -375,9 +378,11 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 	return fmt.Errorf("container %q not found", containerName)
 }
 
-func hasRenderedConfigMap(resources []unstructured.Unstructured, name string) bool {
+func hasRenderedConfigMap(resources []unstructured.Unstructured, name, namespace string) bool {
 	for i := range resources {
-		if resources[i].GroupVersionKind() == GVKConfigMap && resources[i].GetName() == name {
+		if resources[i].GroupVersionKind() == GVKConfigMap &&
+			resources[i].GetName() == name &&
+			resources[i].GetNamespace() == namespace {
 			return true
 		}
 	}

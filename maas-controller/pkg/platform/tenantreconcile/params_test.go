@@ -71,6 +71,28 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
+
+	t.Run("zero maxExpirationDays falls back to default", func(t *testing.T) {
+		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+		zero := int32(0)
+		tenant := &maasv1alpha1.Tenant{
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+				APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+					MaxExpirationDays: &zero,
+				},
+			},
+		}
+
+		got := BuildPlatformParams(tenant, "opendatahub", "")
+		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
+	})
 }
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
