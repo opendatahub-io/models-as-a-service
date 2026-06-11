@@ -1582,6 +1582,46 @@ verify_maas_api_oidc_authpolicy() {
   return 0
 }
 
+# verify_gateway_oidc_authpolicy <gateway_namespace>
+# When OIDC_ISSUER_URL is set, verify the gateway-level maas-gateway-auth AuthPolicy
+# contains oidc-identities authentication with the correct issuer URL.
+# This is the consolidated gateway AuthPolicy that replaces the per-route
+# maas-api-auth-policy for OIDC configuration.
+# Returns 0 if skipped (no OIDC_ISSUER_URL) or match; 1 on failure.
+verify_gateway_oidc_authpolicy() {
+  local ns="${1:-openshift-ingress}"
+  if [[ -z "${OIDC_ISSUER_URL:-}" ]]; then
+    return 0
+  fi
+  if ! command -v jq &>/dev/null; then
+    echo "verify_gateway_oidc_authpolicy: jq not found; skipping OIDC issuer check" >&2
+    return 0
+  fi
+  local json
+  if ! json=$(kubectl get authpolicy maas-gateway-auth -n "$ns" -o json 2>/dev/null); then
+    echo "verify_gateway_oidc_authpolicy: could not read authpolicy/maas-gateway-auth in namespace $ns" >&2
+    return 1
+  fi
+  local policy_issuer
+  policy_issuer=$(echo "$json" | jq -r '.spec.defaults.rules.authentication["oidc-identities"].jwt.issuerUrl // empty')
+  if [[ -z "$policy_issuer" ]]; then
+    echo "verify_gateway_oidc_authpolicy: maas-gateway-auth has no oidc-identities authentication rule" >&2
+    echo "  Ensure Tenant CR has spec.externalOIDC configured and MaaSAuthPolicy controller has reconciled." >&2
+    return 1
+  fi
+  local exp got
+  exp="${OIDC_ISSUER_URL%/}"
+  got="${policy_issuer%/}"
+  if [[ "$exp" != "$got" ]]; then
+    echo "verify_gateway_oidc_authpolicy: OIDC issuer mismatch." >&2
+    echo "  Expected (OIDC_ISSUER_URL):          $exp" >&2
+    echo "  Live maas-gateway-auth issuerUrl:   $got" >&2
+    echo "  Fix: ensure Tenant CR spec.externalOIDC.issuerUrl matches OIDC_ISSUER_URL." >&2
+    return 1
+  fi
+  return 0
+}
+
 # ==========================================
 # Database Secret Helpers
 # ==========================================

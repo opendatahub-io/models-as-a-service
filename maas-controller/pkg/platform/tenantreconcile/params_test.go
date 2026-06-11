@@ -113,18 +113,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, firstParentRef["namespace"])
 	assert.Equal(t, params.GatewayName, firstParentRef["name"])
 
-	authPolicy := requireResource(t, resources, GVKAuthPolicy, MaaSAPIAuthPolicyName)
-	audiences, found, err := unstructured.NestedSlice(authPolicy.Object,
-		"spec", "rules", "authentication", "openshift-identities", "kubernetesTokenReview", "audiences")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotEmpty(t, audiences)
-	assert.Equal(t, params.ClusterAudience, audiences[0])
-	validationURL, found, err := unstructured.NestedString(authPolicy.Object,
-		"spec", "rules", "metadata", "apiKeyValidation", "http", "url")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Contains(t, validationURL, "."+params.AppNamespace+".")
+	// maas-api-auth-policy is no longer rendered by kustomize; auth for maas-api-route
+	// is handled by the singleton maas-gateway-auth AuthPolicy (managed by the controller).
 
 	maasAPIDestinationRule := requireResource(t, resources, GVKDestinationRule, GatewayDestinationRuleName)
 	assert.Equal(t, params.GatewayNamespace, maasAPIDestinationRule.GetNamespace())

@@ -163,11 +163,15 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		WithObjects(ns, tenant, model, route, policy).
 		Build()
 
+	const gwNamespace = "team-a-gateway-ns"
 	r := &MaaSAuthPolicyReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
 		TenantNamespace:                 "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     "team-a-gateway",
+		GatewayNamespace:                gwNamespace,
+		MaaSAPINamespace:                "opendatahub",
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}
@@ -176,10 +180,10 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		t.Fatalf("Reconcile error: %v", err)
 	}
 
-	authPolicy := &unstructured.Unstructured{}
-	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-auth-" + modelName, Namespace: namespace}, authPolicy); err != nil {
-		t.Errorf("AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
+	gatewayAP := &unstructured.Unstructured{}
+	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
+		t.Errorf("Gateway AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
 	}
 }
 

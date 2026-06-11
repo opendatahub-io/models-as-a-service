@@ -1,6 +1,7 @@
 import os
 import socket
 import subprocess
+from urllib.parse import urlparse
 import pytest
 import requests
 
@@ -120,7 +121,8 @@ def model_base_url(model_catalog: dict, model_id: str, gateway_url: str) -> str:
     if match:
         url = match.get("url")
         if url:
-            return url.rstrip("/")
+            path = urlparse(url).path
+            return f"{gateway_url}{path}".rstrip("/")
     return f"{gateway_url}/llm/{model_id}".rstrip("/")
 
 @pytest.fixture(scope="session")
