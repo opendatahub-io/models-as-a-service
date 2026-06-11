@@ -31,7 +31,6 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=ait
-// +kubebuilder:validation:XValidation:rule="self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name",message="spec.tenantNamespace.name is immutable"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.tenantNamespace`,description="Tenant namespace"
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
@@ -50,9 +49,6 @@ type AITenant struct {
 
 // AITenantSpec defines the tenant bootstrap contract.
 type AITenantSpec struct {
-	// TenantNamespace identifies the namespace where tenant administrators manage MaaS objects.
-	TenantNamespace AITenantTenantNamespace `json:"tenantNamespace"`
-
 	// Gateway references the network-admin-provisioned Gateway API Gateway for this tenant.
 	// +kubebuilder:validation:Optional
 	Gateway *AITenantGatewayRef `json:"gateway,omitempty"`
@@ -66,20 +62,6 @@ type AITenantSpec struct {
 	// RBAC configures tenant-admin access to the tenant namespace and this AITenant object.
 	// +kubebuilder:validation:Optional
 	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
-}
-
-// AITenantTenantNamespace defines how the tenant namespace is handled.
-type AITenantTenantNamespace struct {
-	// Name is the namespace where tenant-scoped MaaS objects are created.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=63
-	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
-	Name string `json:"name"`
-
-	// Create controls whether the controller creates the namespace if missing.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:default=true
-	Create *bool `json:"create,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
