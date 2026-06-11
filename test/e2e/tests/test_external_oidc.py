@@ -116,12 +116,12 @@ def _request_oidc_token(
 
 
 def _decode_jwt_payload(token: str) -> dict:
-    """Decode the payload of a JWT (no signature verification)."""
+    """Decode the payload of a JWT (no signature verification — TEST ONLY)."""
     parts = token.split(".")
-    assert len(parts) == 3, f"Token is not a valid JWT (expected 3 parts, got {len(parts)})"
-    # JWT base64url → standard base64
-    payload_b64 = parts[1] + "=" * (4 - len(parts[1]) % 4)
-    return json.loads(base64.urlsafe_b64decode(payload_b64))
+    if len(parts) != 3:
+        raise ValueError(f"Invalid JWT format: expected 3 parts, got {len(parts)}")
+    padding = "=" * (-len(parts[1]) % 4)
+    return json.loads(base64.urlsafe_b64decode(parts[1] + padding))
 
 
 def _oidc_request_with_retry(method, url, oidc_token, label="OIDC request",
@@ -178,6 +178,28 @@ def _create_oidc_api_key(
     data = response.json()
     assert data.get("key", "").startswith("sk-oai-"), f"Unexpected API key payload: {data}"
     return data
+
+
+def _wait_for_api_key_revocation(
+    maas_api_base_url: str,
+    api_key: str,
+    timeout: int = 10,
+    poll_interval: float = 0.5,
+) -> None:
+    """Poll until API key revocation is enforced by the gateway."""
+    start = time.time()
+    while time.time() - start < timeout:
+        response = requests.get(
+            f"{maas_api_base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        if response.status_code in (401, 403, 500):
+            log.info("Revocation enforced after %.1fs (status=%d)", time.time() - start, response.status_code)
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(f"API key revocation not enforced after {timeout}s")
 
 
 def _tenant_b_token_url() -> str:
@@ -400,7 +422,7 @@ class TestOIDCModelAccess:
         )
 
         # Wait for revocation to propagate through gateway
-        time.sleep(3)
+        _wait_for_api_key_revocation(maas_api_base_url, api_key, timeout=10)
 
         # Attempt to use the revoked key
         response = requests.get(
