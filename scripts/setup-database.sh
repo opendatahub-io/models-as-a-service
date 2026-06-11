@@ -29,8 +29,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
-# Infrastructure namespace where all maas-api instances deploy
-INFRA_NAMESPACE="redhat-ai-gateway-infra"
+# Infrastructure namespace where maas-api and postgres deploy (uses operator namespace)
+INFRA_NAMESPACE="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
 
 # Legacy namespaces to check for existing postgres (upgrade detection)
 LEGACY_NAMESPACES=("opendatahub" "redhat-ods-applications")

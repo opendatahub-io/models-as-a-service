@@ -614,7 +614,7 @@ EOF
   # All maas-api instances deploy to redhat-ai-gateway-infra infrastructure namespace.
   log_info ""
   log_info "Waiting for Tenant reconciler to deploy maas-api..."
-  local maas_api_namespace="redhat-ai-gateway-infra"
+  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do
@@ -765,8 +765,8 @@ validate_postgres_connection() {
 }
 
 deploy_postgresql() {
-  # Infrastructure namespace where maas-api instances run
-  local infra_ns="redhat-ai-gateway-infra"
+  # Namespace where maas-api and postgres run (operator namespace)
+  local infra_ns="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
 
   if [[ -n "$POSTGRES_CONNECTION" ]]; then
     validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1
@@ -1538,8 +1538,8 @@ configure_tls_backend() {
   # Restart deployments to pick up TLS config
   log_info "Restarting deployments to pick up TLS configuration..."
 
-  # maas-api deploys to infrastructure namespace (all tenants)
-  local maas_api_namespace="redhat-ai-gateway-infra"
+  # maas-api deploys to operator namespace
+  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
   kubectl rollout restart deployment/maas-api -n "$maas_api_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
   kubectl rollout restart deployment/authorino -n "$authorino_namespace" 2>/dev/null || log_debug "authorino deployment not found or not yet ready"
   

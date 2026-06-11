@@ -25,7 +25,7 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
-MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-redhat-ai-gateway-infra}"  # maas-api deploys to infrastructure namespace (S24 multi-tenancy)
+MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # maas-api deploys to operator namespace
 
 # Show help if requested
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -59,7 +59,7 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "Environment Variables:"
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
-    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: redhat-ai-gateway-infra)"
+    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
     echo "  OIDC_ISSUER_URL           When set, validates maas-api-auth-policy jwt.issuerUrl matches"
     echo "                            (external OIDC; avoids deploy vs test issuer drift / HTTP 401)"
     echo "  OIDC_CLIENT_ID            When set with OIDC_ISSUER_URL, checks oidc-client-bound client id"
