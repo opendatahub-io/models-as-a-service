@@ -941,7 +941,7 @@ func TestEnrichModelRefsSource(t *testing.T) {
 			modelLister := &fakeModelLister{items: []*unstructured.Unstructured{modelRef}}
 
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}
-			selector := subscription.NewSelector(log, lister, modelLister)
+			selector := subscription.NewSelector(log, lister, modelLister, nil)
 
 			accessible, err := selector.GetAllAccessible([]string{"g1"}, "")
 			if err != nil {
