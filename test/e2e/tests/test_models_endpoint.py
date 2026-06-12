@@ -73,20 +73,26 @@ GATEWAY_PROPAGATION_DELAY = 5  # seconds
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+    """Make an HTTP request, retrying on transient gateway propagation errors.
 
-    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
-    backoff and returns the last response — the caller's assertion will
-    surface the failure clearly if the gateway never becomes ready.
+    Retryable signals:
+    - Empty 403: Envoy hasn't loaded the AuthPolicy yet.
+    - 500 with AUTH_FAILURE: Authorino forwarded the request but hasn't
+      injected identity headers yet (race between policy cache and request).
+
+    Retries with backoff and returns the last response — the caller's
+    assertion will surface the failure clearly if the gateway never becomes ready.
     """
     for attempt in range(1, retries + 1):
         r = method(url, timeout=TIMEOUT, verify=TLS_VERIFY, **kwargs)
-        if r.status_code == 403 and not r.text.strip():
-            if attempt < retries:
-                log.info(f"Gateway returned empty 403 (attempt {attempt}/{retries}), "
-                         f"retrying in {GATEWAY_PROPAGATION_DELAY}s...")
-                time.sleep(GATEWAY_PROPAGATION_DELAY)
-                continue
+        is_empty_403 = r.status_code == 403 and not r.text.strip()
+        is_auth_propagation_500 = (r.status_code == 500
+                                   and "AUTH_FAILURE" in r.text)
+        if (is_empty_403 or is_auth_propagation_500) and attempt < retries:
+            log.info(f"Gateway not ready (HTTP {r.status_code}, attempt {attempt}/{retries}), "
+                     f"retrying in {GATEWAY_PROPAGATION_DELAY}s...")
+            time.sleep(GATEWAY_PROPAGATION_DELAY)
+            continue
         return r
     return r  # last attempt's response — assertion will catch the failure
 
@@ -1016,16 +1022,15 @@ class TestModelsEndpoint:
 
             _wait_reconcile()
 
-            # Query /v1/models
+            # Query /v1/models (use retry helper for gateway/Authorino propagation)
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
