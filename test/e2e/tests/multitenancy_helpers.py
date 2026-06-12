@@ -47,14 +47,18 @@ DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
+SENSITIVE_FIELD_PATTERN = (
+    r"password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session|dsn|uri|url"
+)
 SENSITIVE_FIELD_RE = re.compile(
-    r"(password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session|dsn|uri|url)",
+    rf"({SENSITIVE_FIELD_PATTERN})",
     re.IGNORECASE,
 )
 SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"\bsk-oai-[A-Za-z0-9._-]+", re.IGNORECASE),
     re.compile(r"\bpostgres(?:ql)?://[^\s\"']+", re.IGNORECASE),
+    re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@\"'<>]+:[^@\s/\"'<>]+@[^\s\"'<>]+", re.IGNORECASE),
 )
 
 
@@ -94,13 +98,13 @@ def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
     for pattern in SENSITIVE_VALUE_PATTERNS:
         text = pattern.sub("<redacted>", text)
     text = re.sub(
-        r'("(?:[^"]*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session)[^"]*)"\s*:\s*)"[^"]*"',
+        rf'("(?:[^"]*(?:{SENSITIVE_FIELD_PATTERN})[^"]*)"\s*:\s*)"[^"]*"',
         r'\1"<redacted>"',
         text,
         flags=re.IGNORECASE,
     )
     text = re.sub(
-        r"('(?:[^']*(?:password|passwd|pwd|secret|token|api[_-]?key|apikey|key|credential|authorization|cookie|session)[^']*)'\s*:\s*)'[^']*'",
+        rf"('(?:[^']*(?:{SENSITIVE_FIELD_PATTERN})[^']*)'\s*:\s*)'[^']*'",
         r"\1'<redacted>'",
         text,
         flags=re.IGNORECASE,
