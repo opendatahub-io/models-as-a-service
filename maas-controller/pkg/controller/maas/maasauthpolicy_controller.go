@@ -761,7 +761,7 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.groups.@tostr",
+							"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),

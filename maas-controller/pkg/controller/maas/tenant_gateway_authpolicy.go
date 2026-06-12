@@ -235,7 +235,7 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 								},
 							},
 							"plain": map[string]any{
-								"selector": "auth.metadata.apiKeyValidation.groups.@tostr",
+								"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
 							},
 							"priority": int64(0),
 						},
@@ -246,7 +246,7 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 								},
 							},
 							"plain": map[string]any{
-								"selector": "auth.identity.user.groups.@tostr",
+								"expression": `size(auth.identity.user.groups) > 0 ? '["' + auth.identity.user.groups.join('","') + '"]' : '[]'`,
 							},
 							"key":      "X-MaaS-Group",
 							"priority": int64(1),
