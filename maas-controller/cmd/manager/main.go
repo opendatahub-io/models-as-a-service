@@ -448,7 +448,9 @@ func main() {
 		"Enable leader election for controller manager.")
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
-	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
+	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "",
+		"The namespace where maas-api and platform workloads deploy. "+
+			"Defaults to APPLICATIONS_NAMESPACE or MAAS_API_NAMESPACE when unset.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", maas.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
@@ -462,6 +464,13 @@ func main() {
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	maasAPINamespace = resolveApplicationsNamespace(maasAPINamespace)
+	if maasAPINamespace == "" {
+		setupLog.Error(stderrors.New("applications namespace is required"),
+			"set --maas-api-namespace or APPLICATIONS_NAMESPACE (or run in-cluster with MAAS_API_NAMESPACE from downward API)")
+		os.Exit(1)
+	}
 
 	if gatewayName == "" || gatewayNamespace == "" {
 		setupLog.Error(stderrors.New("invalid gateway configuration"),
