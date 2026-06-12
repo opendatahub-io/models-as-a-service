@@ -35,6 +35,7 @@ spec:
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
+          - --monitoring-namespace=$(MONITORING_NAMESPACE)
         env:
           - name: GATEWAY_NAME
             value: "maas-default-gateway"
@@ -64,6 +65,12 @@ spec:
             valueFrom:
               configMapKeyRef:
                 key: maas-api-key-cleanup-image
+                name: maas-parameters
+                optional: true
+          - name: MONITORING_NAMESPACE
+            valueFrom:
+              configMapKeyRef:
+                key: monitoring-namespace
                 name: maas-parameters
                 optional: true
         image: maas-controller

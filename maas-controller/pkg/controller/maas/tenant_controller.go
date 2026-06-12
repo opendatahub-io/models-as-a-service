@@ -18,7 +18,6 @@ package maas
 
 import (
 	"context"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -80,7 +79,6 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
 // clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
 // ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
@@ -125,20 +123,6 @@ func crdLabeledForMaaSComponent() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		l := o.GetLabels()
 		return l != nil && l[key] == "true"
-	})
-}
-
-// crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups
-// (e.g. perses.dev from COO). CRD names follow the pattern "<plural>.<group>", so a
-// suffix check is sufficient to identify the group without parsing the spec.
-func crdInOptionalAPIGroup() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		for group := range tenantreconcile.OptionalAPIGroups {
-			if strings.HasSuffix(o.GetName(), "."+group) {
-				return true
-			}
-		}
-		return false
 	})
 }
 
@@ -194,13 +178,6 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
-		).
-		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
-		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(crdInOptionalAPIGroup()),
 		).
 		Watches(
 			&corev1.Secret{},
