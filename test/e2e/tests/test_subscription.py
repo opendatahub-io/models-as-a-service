@@ -1956,7 +1956,6 @@ class TestStatusReporting:
             # Step 1: Scale down Kuadrant controller BEFORE creating subscription
             log.info("Step 1: Scaling down Kuadrant controller...")
             _scale_kuadrant_controller_down()
-            time.sleep(5)  # Give time for controller to fully stop
 
             # Step 2: Create auth policy and subscription
             log.info("Step 2: Creating subscription with Kuadrant controller down...")
@@ -1989,14 +1988,13 @@ class TestStatusReporting:
             log.info("Step 4: Creating API key and verifying inference is blocked...")
             api_key = _create_api_key(sa_token, name="e2e-trlp-test-key", subscription=subscription_name)
 
-            resp = _inference(api_key, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID)
+            resp = _poll_status(api_key, 403, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
             assert resp.status_code == 403, f"Expected 403 Forbidden for Degraded subscription with TRLP not ready, got {resp.status_code}: {resp.text}"
             log.info("✅ Inference blocked for Degraded subscription with TRLP not ready")
 
             # Step 5: Scale Kuadrant controller back up
             log.info("Step 5: Scaling Kuadrant controller back up...")
             _scale_kuadrant_controller_up()
-            time.sleep(10)  # Give time for TRLP to reconcile and be accepted
 
             # Step 6: Wait for subscription to reach Active phase with TRLP ready
             log.info("Step 6: Waiting for subscription to reach Active phase (TRLP ready)...")
@@ -2012,9 +2010,9 @@ class TestStatusReporting:
             assert all(trlp.get("ready") for trlp in trlp_statuses), "Expected all TRLPs to be ready"
             log.info("✅ Subscription returned to Active phase with all TRLPs ready")
 
-            # Step 7: Verify inference works
+            # Step 7: Verify inference works (poll to allow Envoy config propagation)
             log.info("Step 7: Verifying inference works with Active subscription...")
-            resp = _inference(api_key, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID)
+            resp = _poll_status(api_key, 200, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
             assert resp.status_code == 200, f"Expected 200 OK for Active subscription, got {resp.status_code}: {resp.text}"
             log.info("✅ Inference works with Active subscription after Kuadrant recovery")
 
