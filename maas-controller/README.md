@@ -499,5 +499,6 @@ The controller accepts the following command-line flags:
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
 - **MaaS subscription namespace**: Default is `models-as-a-service`. Override via the `--maas-subscription-namespace` flag.
 - **AITenant infrastructure namespace**: Default is `redhat-ai-gateway-infra`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
+- **AITenant tenant namespace**: For non-default tenants, the controller derives the tenant namespace as `ai-tenant-<aitenant-name>`. The default tenant keeps the configured MaaS subscription namespace, usually `models-as-a-service`.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
 - **Gateway name/namespace**: Legacy/default Tenant routing uses `spec.gatewayRef` with controller defaults. `AITenant` validates an existing tenant Gateway in `--gateway-namespace`; `spec.gateway.name` defaults to the `AITenant` name.

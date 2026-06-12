@@ -124,7 +124,7 @@ def _new_aitenant_case():
     suffix = uuid.uuid4().hex[:8]
     aitenant_name = f"e2e-ait-{suffix}"
     return {
-        "tenant_ns": f"e2e-aitenant-{suffix}",
+        "tenant_ns": f"ai-tenant-e2e-ait-{suffix}",
         "aitenant_name": aitenant_name,
         "gateway_name": aitenant_name,
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
@@ -175,9 +175,6 @@ def _apply_aitenant(case):
                 "namespace": AITENANT_NAMESPACE,
             },
             "spec": {
-                "tenantNamespace": {
-                    "name": case["tenant_ns"],
-                },
                 "rbac": {
                     "admins": [
                         {
