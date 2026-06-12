@@ -29,7 +29,7 @@ type Service struct {
 }
 
 func (s *Service) GetMaxExpirationDays() int {
-	if s.config.APIKeyMaxExpirationDays > 0 {
+	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
 		return s.config.APIKeyMaxExpirationDays
 	}
 	return constant.DefaultAPIKeyMaxExpirationDays
@@ -78,10 +78,7 @@ func (s *Service) CreateAPIKey(
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string,
 ) (*CreateAPIKeyResponse, error) {
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
-	maxDays := constant.DefaultAPIKeyMaxExpirationDays
-	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-		maxDays = s.config.APIKeyMaxExpirationDays
-	}
+	maxDays := s.GetMaxExpirationDays()
 	maxRegularDuration := time.Duration(maxDays) * 24 * time.Hour
 
 	// Default expiration if not provided
