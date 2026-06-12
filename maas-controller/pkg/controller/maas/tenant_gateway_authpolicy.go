@@ -382,6 +382,10 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 							},
 						},
 					},
+					// Identity filters for rate limiting
+					"filters": map[string]any{
+						"identity": r.buildIdentityFilters(tenantID),
+					},
 				},
 			},
 		},
