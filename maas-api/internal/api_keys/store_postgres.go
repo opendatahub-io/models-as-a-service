@@ -192,6 +192,7 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 func (s *PostgresStore) Search(
 	ctx context.Context,
 	username string,
+	tenant string,
 	filters *SearchFilters,
 	sort *SortParams,
 	pagination *PaginationParams,
@@ -208,6 +209,11 @@ func (s *PostgresStore) Search(
 	var whereClauses []string
 	var args []any
 	argPos := 1
+
+	// Tenant scoping is mandatory
+	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
+	args = append(args, tenant)
+	argPos++
 
 	// Exclude ephemeral keys by default
 	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
@@ -431,10 +437,10 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 
 // InvalidateAll revokes all active keys for a user.
 // Returns the count of keys that were revoked.
-func (s *PostgresStore) InvalidateAll(ctx context.Context, username string) (int, error) {
-	query := `UPDATE api_keys SET status = 'revoked' WHERE username = $1 AND status = 'active'`
+func (s *PostgresStore) InvalidateAll(ctx context.Context, username string, tenant string) (int, error) {
+	query := `UPDATE api_keys SET status = 'revoked' WHERE username = $1 AND tenant = $2 AND status = 'active'`
 
-	result, err := s.db.ExecContext(ctx, query, username)
+	result, err := s.db.ExecContext(ctx, query, username, tenant)
 	if err != nil {
 		return 0, fmt.Errorf("failed to revoke keys: %w", err)
 	}
