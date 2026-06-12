@@ -79,6 +79,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Handle delete before Unmanaged idle. Config anchor lifecycle is owned by the operator /
 	// ModelsAsService GC and the lifecycle reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
+		// Clean up gateway AuthPolicy before allowing deletion
+		if err := r.cleanupGatewayAuthPolicy(ctx, log, &tenant); err != nil {
+			log.Error(err, "failed to cleanup gateway AuthPolicy")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -205,6 +210,26 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+
+	// Reconcile gateway AuthPolicy after successful platform deployment
+	// Extract tenant identifier for correct tenant isolation
+	tenantID, err := tenantreconcile.TenantIdentifierFor(&tenant)
+	if err != nil {
+		log.Error(err, "failed to determine tenant identifier")
+		if err2 := r.patchStatus(ctx, &tenant, "Failed", metav1.ConditionFalse, "TenantIDResolutionFailed", err.Error()); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if err := r.reconcileGatewayAuthPolicy(ctx, &tenant, tenantID, appNs); err != nil {
+		log.Error(err, "failed to reconcile gateway AuthPolicy", "tenantID", tenantID)
+		setDeploymentsAvailableCondition(&tenant, false, "AuthPolicyReconcileFailed", err.Error())
+		if err2 := r.patchStatus(ctx, &tenant, "Degraded", metav1.ConditionFalse, "AuthPolicyReconcileFailed", err.Error()); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	// Clean up legacy maas-api deployment from opendatahub/redhat-ods-applications namespace
