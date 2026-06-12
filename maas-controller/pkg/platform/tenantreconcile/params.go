@@ -53,7 +53,10 @@ func firstNonEmpty(values ...string) string {
 
 func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
 	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		return strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+		v := *tenant.Spec.APIKeys.MaxExpirationDays
+		if v > 0 {
+			return strconv.FormatInt(int64(v), 10)
+		}
 	}
 	return DefaultAPIKeyMaxExpirationDays
 }
@@ -104,6 +107,10 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 			r.SetNamespace(params.GatewayNamespace)
 		case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
 			r.SetNamespace(params.GatewayNamespace)
+		case gvk == GVKConfigMap && name == MaaSParametersConfigMapName:
+			if err := patchMaaSParametersConfigMap(r, params); err != nil {
+				return err
+			}
 		case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 			if err := patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace); err != nil {
 				return err
@@ -369,6 +376,42 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
+}
+
+func hasRenderedConfigMap(resources []unstructured.Unstructured, name, namespace string) bool {
+	for i := range resources {
+		if resources[i].GroupVersionKind() == GVKConfigMap &&
+			resources[i].GetName() == name &&
+			resources[i].GetNamespace() == namespace {
+			return true
+		}
+	}
+	return false
+}
+
+func patchMaaSParametersConfigMap(r *unstructured.Unstructured, params PlatformParams) error {
+	data, _, _ := unstructured.NestedStringMap(r.Object, "data")
+	if data == nil {
+		data = make(map[string]string)
+	}
+	data["api-key-max-expiration-days"] = params.APIKeyMaxExpirationDays
+	return unstructured.SetNestedStringMap(r.Object, data, "data")
+}
+
+func buildMaaSParametersConfigMap(params PlatformParams, appNamespace string) unstructured.Unstructured {
+	return unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata": map[string]any{
+				"name":      MaaSParametersConfigMapName,
+				"namespace": appNamespace,
+			},
+			"data": map[string]any{
+				"api-key-max-expiration-days": params.APIKeyMaxExpirationDays,
+			},
+		},
+	}
 }
 
 func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {

@@ -62,6 +62,7 @@ const (
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
+	MaaSParametersConfigMapName                   = "maas-parameters"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName = "maas-controller"

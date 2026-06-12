@@ -71,6 +71,28 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
+
+	t.Run("zero maxExpirationDays falls back to default", func(t *testing.T) {
+		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+		zero := int32(0)
+		tenant := &maasv1alpha1.Tenant{
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+				APIKeys: &maasv1alpha1.TenantAPIKeysConfig{
+					MaxExpirationDays: &zero,
+				},
+			},
+		}
+
+		got := BuildPlatformParams(tenant, "opendatahub", "")
+		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
+	})
 }
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
@@ -217,6 +239,92 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	firstSubject, ok := subjects[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
+}
+
+func TestPatchMaaSParametersConfigMap(t *testing.T) {
+	t.Run("patches existing ConfigMap data with resolved value", func(t *testing.T) {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": MaaSParametersConfigMapName},
+				"data": map[string]any{
+					"api-key-max-expiration-days": "90",
+					"maas-api-image":              "quay.io/example/maas-api:v1",
+				},
+			},
+		}
+		params := PlatformParams{APIKeyMaxExpirationDays: "365"}
+
+		err := patchMaaSParametersConfigMap(cm, params)
+		require.NoError(t, err)
+
+		data, found, err := unstructured.NestedStringMap(cm.Object, "data")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "365", data["api-key-max-expiration-days"])
+		assert.Equal(t, "quay.io/example/maas-api:v1", data["maas-api-image"])
+	})
+
+	t.Run("initializes data map when ConfigMap has no data", func(t *testing.T) {
+		cm := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata":   map[string]any{"name": MaaSParametersConfigMapName},
+			},
+		}
+		params := PlatformParams{APIKeyMaxExpirationDays: "180"}
+
+		err := patchMaaSParametersConfigMap(cm, params)
+		require.NoError(t, err)
+
+		data, found, err := unstructured.NestedStringMap(cm.Object, "data")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, "180", data["api-key-max-expiration-days"])
+	})
+}
+
+func TestApplyPlatformParamsWithMaaSParametersConfigMap(t *testing.T) {
+	cm := unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "v1",
+			"kind":       "ConfigMap",
+			"metadata":   map[string]any{"name": MaaSParametersConfigMapName, "namespace": "tenant-ns"},
+			"data": map[string]any{
+				"api-key-max-expiration-days": "90",
+			},
+		},
+	}
+	resources := []unstructured.Unstructured{cm}
+	params := PlatformParams{APIKeyMaxExpirationDays: "365"}
+
+	err := applyPlatformParams(logr.Discard(), resources, params)
+	require.NoError(t, err)
+
+	data, found, err := unstructured.NestedStringMap(resources[0].Object, "data")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "365", data["api-key-max-expiration-days"])
+}
+
+func TestBuildMaaSParametersConfigMap(t *testing.T) {
+	params := PlatformParams{
+		AppNamespace:            "tenant-ns",
+		APIKeyMaxExpirationDays: "365",
+	}
+
+	cm := buildMaaSParametersConfigMap(params, "tenant-ns")
+
+	assert.Equal(t, "ConfigMap", cm.GetKind())
+	assert.Equal(t, MaaSParametersConfigMapName, cm.GetName())
+	assert.Equal(t, "tenant-ns", cm.GetNamespace())
+
+	data, found, err := unstructured.NestedStringMap(cm.Object, "data")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, "365", data["api-key-max-expiration-days"])
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

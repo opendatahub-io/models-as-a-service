@@ -53,6 +53,9 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
 	}
+	if !hasRenderedConfigMap(filteredResources, MaaSParametersConfigMapName, params.AppNamespace) {
+		filteredResources = append(filteredResources, buildMaaSParametersConfigMap(params, params.AppNamespace))
+	}
 	_ = ctx
 	return filteredResources, nil
 }
