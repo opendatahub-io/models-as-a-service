@@ -27,6 +27,7 @@ func ParseDurationWithDays(s string) (time.Duration, error) {
 type UserContext struct {
 	Username string   `json:"username"`
 	Groups   []string `json:"groups"`
+	Tenant   string   `json:"tenant"`
 }
 
 type Token struct {

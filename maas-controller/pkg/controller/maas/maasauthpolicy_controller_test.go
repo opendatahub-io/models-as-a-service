@@ -1140,6 +1140,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		requiredHeaders := []string{
 			"X-MaaS-Username", "X-MaaS-Username-Token",
 			"X-MaaS-Group", "X-MaaS-Group-Token",
+			"X-MaaS-Tenant", "X-MaaS-Tenant-Token",
 			"X-MaaS-Subscription",
 		}
 		for _, header := range requiredHeaders {
