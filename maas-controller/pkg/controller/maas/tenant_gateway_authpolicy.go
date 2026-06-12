@@ -37,6 +37,39 @@ const (
 	tenantGatewayAuthPolicyFinalizer = "maas.opendatahub.io/tenant-gateway-authpolicy"
 )
 
+// fetchOIDCConfigFromTenant fetches OIDC configuration from a Tenant CR.
+// Returns nil if the Tenant doesn't have externalOIDC configured.
+// TODO: Consolidate with maasauthpolicy_controller.go fetchOIDCConfig - these are duplicates.
+func (r *TenantReconciler) fetchOIDCConfigFromTenant(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) *oidcConfig {
+	// Extract spec.externalOIDC if present
+	if tenant.Spec.ExternalOIDC == nil {
+		log.V(1).Info("Tenant CR has no externalOIDC configuration")
+		return nil
+	}
+
+	issuerURL := tenant.Spec.ExternalOIDC.IssuerURL
+	clientID := tenant.Spec.ExternalOIDC.ClientID
+
+	if issuerURL == "" {
+		log.V(1).Info("Tenant externalOIDC has no issuerUrl")
+		return nil
+	}
+
+	if clientID == "" {
+		log.Error(nil, "Tenant externalOIDC has no clientId - audience validation is required for security")
+		return nil
+	}
+
+	log.Info("OIDC configuration loaded from Tenant CR",
+		"issuerUrl", issuerURL,
+		"clientId", clientID)
+
+	return &oidcConfig{
+		IssuerURL: issuerURL,
+		ClientID:  clientID,
+	}
+}
+
 // reconcileGatewayAuthPolicy creates or updates the Gateway-level AuthPolicy for this tenant's gateway.
 // Each tenant has its own Gateway (user-created) and needs its own AuthPolicy with the correct tenant identifier.
 func (r *TenantReconciler) reconcileGatewayAuthPolicy(ctx context.Context, tenant *maasv1alpha1.Tenant, tenantID, appNamespace string) error {
@@ -59,8 +92,11 @@ func (r *TenantReconciler) reconcileGatewayAuthPolicy(ctx context.Context, tenan
 		"tenantID", tenantID,
 		"appNamespace", appNamespace)
 
+	// Fetch OIDC configuration if present
+	oidc := r.fetchOIDCConfigFromTenant(ctx, log, tenant)
+
 	// Build the AuthPolicy spec
-	spec := r.buildGatewayAuthPolicySpec(tenantID, appNamespace, gatewayNS, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(tenantID, appNamespace, gatewayNS, gatewayName, oidc)
 
 	// Create the AuthPolicy resource
 	authPolicy := &unstructured.Unstructured{}
@@ -119,9 +155,86 @@ func (r *TenantReconciler) reconcileGatewayAuthPolicy(ctx context.Context, tenan
 	return nil
 }
 
+// buildAuthenticationSection builds the authentication section of an AuthPolicy.
+// Includes API keys (priority 0), OIDC if configured (priority 1), and K8s tokens (priority 2).
+// TODO: Consolidate with MaaSAuthPolicyReconciler authentication building logic.
+func (r *TenantReconciler) buildAuthenticationSection(oidc *oidcConfig) map[string]any {
+	auth := map[string]any{
+		// API key authentication - highest priority
+		"api-keys": map[string]any{
+			"when": []any{
+				map[string]any{
+					"selector": "request.headers.authorization",
+					"operator": "matches",
+					"value":    "^Bearer sk-oai-.*",
+				},
+			},
+			"credentials": map[string]any{
+				"authorizationHeader": map[string]any{
+					"prefix": "Bearer",
+				},
+			},
+			"plain": map[string]any{
+				"selector": "request.headers.authorization",
+			},
+			"metrics":  false,
+			"priority": int64(0),
+		},
+	}
+
+	// Add OIDC authentication if configured
+	if oidc != nil {
+		auth["oidc-identities"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+				},
+			},
+			"jwt": map[string]any{
+				"issuerUrl": oidc.IssuerURL,
+			},
+			"credentials": map[string]any{
+				"authorizationHeader": map[string]any{
+					"prefix": "Bearer",
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+		}
+		// K8s tokens have lower priority when OIDC is present
+		auth["openshift-identities"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+				},
+			},
+			"kubernetesTokenReview": map[string]any{
+				"audiences": []any{r.ClusterAudience},
+			},
+			"priority": int64(2),
+		}
+	} else {
+		// No OIDC - K8s tokens are priority 1
+		auth["openshift-identities"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+				},
+			},
+			"kubernetesTokenReview": map[string]any{
+				"audiences": []any{r.ClusterAudience},
+			},
+			"priority": int64(1),
+		}
+	}
+
+	return auth
+}
+
 // buildGatewayAuthPolicySpec builds the AuthPolicy spec for a tenant's gateway.
 // This is similar to MaaSAuthPolicyReconciler.buildGatewayAuthPolicySpec but scoped to one tenant.
-func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, gatewayNS, gatewayName string) map[string]any {
+// TODO: Consolidate gateway AuthPolicy building logic between TenantReconciler and MaaSAuthPolicyReconciler.
+func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, gatewayNS, gatewayName string, oidc *oidcConfig) map[string]any {
 	// API key validation URL points to the per-tenant maas-api service
 	// Default tenant (models-as-a-service): maas-api
 	// AITenant-managed tenants: maas-api-{tenantID}
@@ -138,40 +251,7 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 			"name":  gatewayName,
 		},
 		"rules": map[string]any{
-			"authentication": map[string]any{
-				// API key authentication
-				"api-keys": map[string]any{
-					"when": []any{
-						map[string]any{
-							"selector": "request.headers.authorization",
-							"operator": "matches",
-							"value":    "^Bearer sk-oai-.*",
-						},
-					},
-					"credentials": map[string]any{
-						"authorizationHeader": map[string]any{
-							"prefix": "Bearer",
-						},
-					},
-					"plain": map[string]any{
-						"selector": "request.headers.authorization",
-					},
-					"metrics":  false,
-					"priority": int64(0),
-				},
-				// OpenShift/K8s token authentication
-				"openshift-identities": map[string]any{
-					"when": []any{
-						map[string]any{
-							"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-						},
-					},
-					"kubernetesTokenReview": map[string]any{
-						"audiences": []any{r.ClusterAudience},
-					},
-					"priority": int64(1),
-				},
-			},
+			"authentication": r.buildAuthenticationSection(oidc),
 			"metadata": map[string]any{
 				// API key validation
 				"apiKeyValidation": map[string]any{
