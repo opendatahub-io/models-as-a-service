@@ -65,15 +65,19 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
-		log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
-			"tenantNamespace", tenant.Namespace,
-			"configuredTenantNamespace", r.TenantNamespace)
-		return ctrl.Result{}, nil
-	}
+	// When tenant namespace discovery is disabled, only reconcile the default tenant
+	// in the configured TenantNamespace. When enabled, reconcile all Tenant CRs cluster-wide.
+	if !r.TenantNamespaceDiscoveryEnabled {
+		if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
+			log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
+				"tenantNamespace", tenant.Namespace,
+				"configuredTenantNamespace", r.TenantNamespace)
+			return ctrl.Result{}, nil
+		}
 
-	if tenant.Name != maasv1alpha1.TenantInstanceName {
-		return ctrl.Result{}, nil
+		if tenant.Name != maasv1alpha1.TenantInstanceName {
+			return ctrl.Result{}, nil
+		}
 	}
 
 	// Handle delete before Unmanaged idle. Config anchor lifecycle is owned by the operator /
