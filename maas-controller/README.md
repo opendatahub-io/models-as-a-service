@@ -486,7 +486,7 @@ The controller accepts the following command-line flags:
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
 | `--gateway-namespace` | `openshift-ingress` | The namespace of the default Gateway resource and existing Gateways referenced by AITenant resources. |
-| `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
+| `--maas-api-namespace` | *(resolved at runtime)* | The namespace where maas-api service is deployed. If not set, resolved from `APPLICATIONS_NAMESPACE` or `MAAS_API_NAMESPACE` environment variables. Controller exits if no value is available from any source. |
 | `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and Tenant CRs. |
 | `--aitenant-namespace` | `redhat-ai-gateway-infra` | The infrastructure namespace where AITenant CRs are accepted. |
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
