@@ -14,6 +14,8 @@ spec:
           value: /etc/maas-api/tls/tls.crt
         - name: TLS_KEY
           value: /etc/maas-api/tls/tls.key
+        - name: SSL_CERT_DIR
+          value: /etc/ssl/certs:/etc/ssl/certs/openshift-service-ca
         ports:
         - $patch: replace
         - containerPort: 8443
@@ -22,6 +24,9 @@ spec:
         volumeMounts:
         - name: maas-api-tls
           mountPath: /etc/maas-api/tls
+          readOnly: true
+        - name: openshift-service-ca
+          mountPath: /etc/ssl/certs/openshift-service-ca
           readOnly: true
         livenessProbe:
           httpGet:
@@ -37,4 +42,7 @@ spec:
       - name: maas-api-tls
         secret:
           secretName: maas-api-serving-cert
+      - name: openshift-service-ca
+        configMap:
+          name: openshift-service-ca.crt
 

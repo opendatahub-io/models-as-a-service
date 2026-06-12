@@ -40,6 +40,7 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _revoke_api_key,
+    _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
@@ -265,8 +266,7 @@ class TestMaaSControllerWatchNamespace:
     """Verifies MaaS controller only reconciles MaaSAuthPolicy and MaaSSubscription in the subscription namespace."""
 
     def test_authpolicy_and_subscription_in_maas_subscription_namespace(self):
-        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled
-        and should appear in the AuthPolicy and TRLP annotations for the model."""
+        """MaaSAuthPolicy and MaaSSubscription in MaaS subscription namespace should be reconciled."""
         ns = _ns()
         try:
             _apply_cr({
@@ -288,14 +288,8 @@ class TestMaaSControllerWatchNamespace:
                 },
             })
             _wait_reconcile(15)
-
-            auth_name = f"maas-auth-{MODEL_REF}"
-            auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            expected_auth = f"{ns}/e2e-watched-auth"
-            assert expected_auth in auth_policies, (
-                f"AuthPolicy {auth_name} not found or MaaSAuthPolicy e2e-watched-auth not reconciled, "
-                f"expected '{expected_auth}' in {auth_policies}"
-            )
+            _wait_for_maas_auth_policy_phase("e2e-watched-auth", timeout=90)
+            _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns, timeout=90)
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             subscriptions = [x.strip() for x in (_get_cr_annotation("tokenratelimitpolicy", trlp_name, MODEL_NAMESPACE, "maas.opendatahub.io/subscriptions") or "").split(",") if x.strip()]
@@ -412,29 +406,27 @@ class TestModelRef:
 
             _wait_reconcile(15)
 
+            _wait_for_maas_auth_policy_phase(policy_name, timeout=90)
+
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_name_other = f"maas-auth-{other_model_ref}"
 
-            # Verify: policy is reconciled into MODEL_REF's AuthPolicy in MODEL_NAMESPACE
-            auth_policies_reconciled = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
-            expected_policy = f"{ns}/{policy_name}"
-            assert expected_policy in auth_policies_reconciled, (
-                f"MaaSAuthPolicy {policy_name} should be in AuthPolicy {auth_name} in {MODEL_NAMESPACE}, "
-                f"expected '{expected_policy}' in {auth_policies_reconciled}"
-            )
-
-            # Verify: MODEL_REF's AuthPolicy in the new namespace does not exist
+            # Gateway-only mode: no per-model AuthPolicies should exist in any namespace.
             auth_in_other_ns = _get_cr("AuthPolicy", auth_name, other_ns)
             assert auth_in_other_ns is None, (
                 f"AuthPolicy {auth_name} should NOT exist in {other_ns}"
             )
 
-            # Verify: other model's AuthPolicy in MODEL_NAMESPACE does not exist
+            auth_in_model_ns = _get_cr("AuthPolicy", auth_name, MODEL_NAMESPACE)
+            assert auth_in_model_ns is None, (
+                f"AuthPolicy {auth_name} should NOT exist in {MODEL_NAMESPACE} in gateway-only mode"
+            )
+
             auth_other_in_model_ns = _get_cr("AuthPolicy", auth_name_other, MODEL_NAMESPACE)
             assert auth_other_in_model_ns is None, (
-                f"AuthPolicy {auth_name_other} should NOT exist in {MODEL_NAMESPACE} (policy references MODEL_REF only)"
+                f"AuthPolicy {auth_name_other} should NOT exist in {MODEL_NAMESPACE}"
             )
-            log.info("✓ MaaSAuthPolicy reconciled into MODEL_REF in MODEL_NAMESPACE only; other AuthPolicies do not exist")
+            log.info("✓ MaaSAuthPolicy reconciled and no per-model AuthPolicies were created (gateway-only mode)")
         finally:
             _delete_cr("MaaSAuthPolicy", policy_name, ns)
             _delete_cr("MaaSModelRef", MODEL_REF, other_ns)

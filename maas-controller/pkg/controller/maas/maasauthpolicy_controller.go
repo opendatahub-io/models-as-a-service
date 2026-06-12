@@ -90,10 +90,6 @@ type oidcConfig struct {
 	ClientID  string
 }
 
-func (r *MaaSAuthPolicyReconciler) clusterAudience() string {
-	return r.ClusterAudience
-}
-
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
 // Authorization cache entries must not outlive their dependent metadata cache entries,
 // otherwise stale metadata can lead to incorrect authorization decisions.
@@ -228,21 +224,44 @@ const (
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
 )
 
-// subscriptionCacheKeySelector builds the CEL cache-key expression for subscription-info
-// and subscription-valid evaluators: "userId|groups|subscription|namespace/name".
-func subscriptionCacheKeySelector(ns, name string) string {
+// celModelIdentity extracts model identity (namespace/name) from the request at gateway level.
+// For path-routed inference (/llm/<ns>/<name>/...), extract from URL.
+// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc).
+// For listing endpoints like /v1/models where no model target exists, returns empty string
+// so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
+const celModelIdentity = `(request.path.startsWith("/llm/")` +
+	` ? request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1]` +
+	` : ("x-gateway-model-name" in request.headers` +
+	` ? request.headers["x-gateway-model-name"]` +
+	` : ""))`
+
+// maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
+// All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
+const maasGatewayAuthPolicyName = "maas-gateway-auth"
+
+// gatewayDefaultAuthPolicyName is the static deny-all AuthPolicy deployed by the Tenant
+// reconciler. It must be deleted when maas-gateway-auth is created (two gateway-level
+// AuthPolicies on the same target conflict in Kuadrant), and restored when the last
+// MaaSAuthPolicy is removed so unconfigured models remain denied.
+const gatewayDefaultAuthPolicyName = "gateway-default-auth"
+
+// gatewayAuthzCacheKeySelector builds the cache-key expression for gateway-level
+// model authorization checks: "userId|groups|modelIdentity".
+// This prevents authz cache collisions across different model targets.
+func gatewayAuthzCacheKeySelector() string {
 	return fmt.Sprintf(
-		`(%s) + "|" + (%s).join(",") + "|" + (%s) + "|%s/%s"`,
-		celUserID, celGroups, celSubscription, ns, name,
+		`(%s) + "|" + (%s).join(",") + "|" + %s`,
+		celUserID, celGroups, celModelIdentity,
 	)
 }
 
-// authzCacheKeySelector builds the CEL cache-key expression for authorization evaluators
-// (require-group-membership): "userId|groups|namespace/name".
-func authzCacheKeySelector(ns, name string) string {
+// subscriptionGatewayCacheKeySelector builds the cache-key expression for the gateway-level
+// subscription-info and subscription-valid evaluators: "userId|groups|subscription|modelIdentity".
+// Model identity is derived dynamically from X-Gateway-Model-Name header or request path.
+func subscriptionGatewayCacheKeySelector() string {
 	return fmt.Sprintf(
-		`(%s) + "|" + (%s).join(",") + "|%s/%s"`,
-		celUserID, celGroups, ns, name,
+		`(%s) + "|" + (%s).join(",") + "|" + (%s) + "|" + %s`,
+		celUserID, celGroups, celSubscription, celModelIdentity,
 	)
 }
 
@@ -287,11 +306,6 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	// Fetch OIDC configuration from the Tenant CR in the same namespace
-	// as the policy being reconciled. Each tenant namespace has its own
-	// Tenant/default-tenant with per-tenant OIDC settings.
-	oidcConfig := r.fetchOIDCConfig(ctx, log, req.Namespace)
-
 	// Handle no spec (e.g. legacy resources created before spec was required).
 	// No finalizer needed — there are no AuthPolicies to clean up.
 	if reflect.DeepEqual(policy.Spec, maasv1alpha1.MaaSAuthPolicySpec{}) {
@@ -313,10 +327,32 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Track missing models to include in status even when reconciliation skips them
 	missingModels := r.findMissingModelRefs(ctx, policy)
 
-	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy, oidcConfig)
+	modelAllowlists, err := r.aggregateModelSubjectAllowlists(ctx, policy.Namespace)
+	if err != nil {
+		log.Error(err, "failed to aggregate per-model subjects for gateway AuthPolicy")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to aggregate per-model access rules: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+	modelAllowlistsJSON, err := json.Marshal(modelAllowlists)
+	if err != nil {
+		log.Error(err, "failed to marshal per-model subject aggregation")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to serialize per-model access rules: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+
+	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
+
+	// Reconcile the singleton gateway-level AuthPolicy first, then the per-model group policies.
+	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc); err != nil {
+		log.Error(err, "failed to reconcile gateway AuthPolicy")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+
+	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
 
 	if err != nil {
-		log.Error(err, "failed to reconcile model AuthPolicies")
+		log.Error(err, "failed to reconcile model group AuthPolicies")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
@@ -412,15 +448,13 @@ func (r *MaaSAuthPolicyReconciler) deriveAuthPolicyPhase(policy *maasv1alpha1.Ma
 		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are missing", missingCount, totalModels)
 	}
 
-	// All models valid but some AuthPolicies unhealthy -> Degraded
+	// All models valid but some group AuthPolicies unhealthy -> Degraded
 	if unhealthyPolicies > 0 {
-		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d AuthPolicies not accepted/enforced", unhealthyPolicies, len(policy.Status.AuthPolicies))
+		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d group AuthPolicies not accepted/enforced", unhealthyPolicies, len(policy.Status.AuthPolicies))
 	}
 
-	// No AuthPolicies generated yet -> Degraded
-	if healthyPolicies == 0 {
-		return maasv1alpha1.PhaseDegraded, "no generated AuthPolicies attached to models"
-	}
+	// healthyPolicies == 0 is acceptable: models without subjects are protected solely by the
+	// singleton gateway-level AuthPolicy, so no per-model group policy is needed.
 
 	return maasv1alpha1.PhaseActive, "successfully reconciled"
 }
@@ -432,405 +466,330 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
-func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, oidcConfig *oidcConfig) ([]authPolicyRef, error) {
-	var refs []authPolicyRef
-	gatewayRef, err := tenantGatewayRefForNamespace(ctx, r.Client, policy.Namespace, r.TenantNamespace, r.GatewayName, r.GatewayNamespace, r.TenantNamespaceDiscoveryEnabled)
-	if err != nil {
-		return nil, err
-	}
-	// Model-centric approach: for each model referenced by this auth policy,
-	// find ALL auth policies for that model and build a single aggregated AuthPolicy.
-	// Kuadrant only allows one AuthPolicy per HTTPRoute target.
-	for _, ref := range policy.Spec.ModelRefs {
-		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
-		if err != nil {
-			if errors.Is(err, ErrModelNotFound) {
-				log.Info("model not found, cleaning up generated AuthPolicy", "model", ref.Namespace+"/"+ref.Name)
-				if delErr := r.deleteModelAuthPolicy(ctx, log, ref.Namespace, ref.Name); delErr != nil {
-					return nil, fmt.Errorf("failed to clean up AuthPolicy for missing model %s/%s: %w", ref.Namespace, ref.Name, delErr)
-				}
-				continue
-			}
-			if errors.Is(err, ErrHTTPRouteNotFound) {
-				// HTTPRoute doesn't exist yet - skip for now. HTTPRoute watch will trigger reconciliation when route is created.
-				log.Info("HTTPRoute not found for model, skipping AuthPolicy creation", "model", ref.Namespace+"/"+ref.Name)
-				continue
-			}
-			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
-		}
-		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
-			return nil, fmt.Errorf("model %s/%s is not attached to tenant gateway: %w", ref.Namespace, ref.Name, err)
-		}
+type modelSubjectAllowlist struct {
+	Users  []string `json:"users"`
+	Groups []string `json:"groups"`
+}
 
-		// Validate model namespace and name for CEL injection prevention
-		if err := validateCELValue(ref.Namespace, "model namespace"); err != nil {
-			return nil, fmt.Errorf("invalid model namespace in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
-		}
-		if err := validateCELValue(ref.Name, "model name"); err != nil {
-			return nil, fmt.Errorf("invalid model name in modelRef %s/%s: %w", ref.Namespace, ref.Name, err)
-		}
+// buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
+// Gateway-level policy. Model identity is resolved dynamically via CEL on every request
+// rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig) map[string]any {
+	apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
+	subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
 
-		// Find ALL auth policies for this model (not just the current one)
-		allPolicies, err := findAllAuthPoliciesForModel(ctx, r.Client, ref.Namespace, ref.Name)
-		if err != nil {
-			return nil, fmt.Errorf("failed to list auth policies for model %s/%s: %w", ref.Namespace, ref.Name, err)
-		}
-		allPolicies = filterAuthPoliciesByTenantNamespace(ctx, r.Client, allPolicies, r.TenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-		if err := r.validateAuthPolicyTenantGatewaysForRoute(ctx, allPolicies, httpRouteName, httpRouteNS, ref.Namespace, ref.Name); err != nil {
-			return nil, err
-		}
-
-		// Aggregate allowed groups and users from ALL auth policies
-		// Will be checked in OPA policy that handles both API keys and K8s tokens
-		// Initialize as empty slices (not nil) so json.Marshal produces [] instead of null
-		allowedGroups := []string{}
-		allowedUsers := []string{}
-		var policyNames []string
-		for _, ap := range allPolicies {
-			policyNames = append(policyNames, qualifiedName(ap.Namespace, ap.Name))
-			for _, group := range ap.Spec.Subjects.Groups {
-				if err := validateCELValue(group.Name, "group name"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", qualifiedName(ap.Namespace, ap.Name), err)
-				}
-				allowedGroups = append(allowedGroups, group.Name)
-			}
-			for _, user := range ap.Spec.Subjects.Users {
-				if err := validateCELValue(user, "username"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s: %w", qualifiedName(ap.Namespace, ap.Name), err)
-				}
-				allowedUsers = append(allowedUsers, user)
-			}
-		}
-
-		// Deduplicate and sort to ensure stable output across reconciles
-		// (Kubernetes List order is not guaranteed to be deterministic)
-		policyNames = deduplicateAndSort(policyNames)
-		allowedGroups = deduplicateAndSort(allowedGroups)
-		allowedUsers = deduplicateAndSort(allowedUsers)
-
-		// Construct API URLs using configured namespace
-		apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-		subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
-
-		rule := map[string]any{
-			"metadata": map[string]any{
-				// API Key Validation - validates the API key and returns user identity + groups
-				// Only runs for API key requests (sk-oai-* prefix), not K8s tokens
-				"apiKeyValidation": map[string]any{
-					"when": []any{
-						map[string]any{
-							"selector": "request.headers.authorization",
-							"operator": "matches",
-							"value":    "^Bearer sk-oai-.*",
-						},
-					},
-					"http": map[string]any{
-						"url":         apiKeyValidationURL,
-						"contentType": "application/json",
-						"method":      "POST",
-						"body": map[string]any{
-							"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
-						},
-					},
-					// Cache API key validation results keyed by the API key itself.
-					// Key format: "api-key-value"
-					// This prevents repeated validation calls for the same API key within the TTL window.
-					"cache": map[string]any{
-						"key": map[string]any{
-							"selector": `request.headers.authorization.replace("Bearer ", "")`,
-						},
-						"ttl": r.MetadataCacheTTL,
-					},
-					// Enables auth_server_evaluator_* metrics for this HTTP metadata evaluator (Authorino opt-in).
-					"metrics":  true,
-					"priority": int64(0),
-				},
-				// Resolve subscription via maas-api
-				// For API keys: uses subscription bound to the key at mint time
-				// For K8s tokens: uses X-MaaS-Subscription header if provided, otherwise finds all accessible
-				// Priority 1 ensures this runs after apiKeyValidation (priority 0).
-				"subscription-info": map[string]any{
-					"http": map[string]any{
-						"url":         subscriptionSelectorURL,
-						"contentType": "application/json",
-						"method":      "POST",
-						"body": map[string]any{
-							"expression": fmt.Sprintf(`{
+	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
+	subscriptionInfoBody := fmt.Sprintf(`{
   "groups": %s,
   "username": %s,
   "requestedSubscription": `+celSubscription+`,
-  "requestedModel": "%s/%s"
-}`, celGroups, celUsername, ref.Namespace, ref.Name),
-						},
-					},
-					// Cache subscription selection results keyed by user ID, groups, requested subscription, and model.
-					// Each model has its own cache entry since subscription validation is model-specific.
-					// Key format: "userId|groups|requested-subscription|model-namespace/model-name"
-					// For API keys: userId is database-assigned UUID (collision-resistant)
-					// For K8s tokens: userId is validated username (system:serviceaccount:namespace:sa-name)
-					// Groups are joined with commas to create a stable string representation.
-					"cache": map[string]any{
-						"key": map[string]any{
-							"selector": subscriptionCacheKeySelector(ref.Namespace, ref.Name),
-						},
-						"ttl": r.MetadataCacheTTL,
-					},
-					"metrics":  true,
-					"priority": int64(1),
+  "requestedModel": %s
+}`, celGroups, celUsername, celModelIdentity)
+
+	authenticationRules := map[string]any{
+		"api-keys": map[string]any{
+			"plain": map[string]any{
+				"selector": "request.headers.authorization",
+			},
+			"when": []any{
+				map[string]any{
+					"selector": "request.headers.authorization",
+					"operator": "matches",
+					"value":    "^Bearer sk-oai-.*",
 				},
 			},
-			"authentication": map[string]any{
-				// API Keys - plain authentication, actual validation in metadata layer
-				// Only processes tokens with sk-oai- prefix (OpenAI-compatible API keys)
-				"api-keys": map[string]any{
-					"plain": map[string]any{
-						"selector": "request.headers.authorization",
-					},
-					"when": []any{
-						map[string]any{
-							"selector": "request.headers.authorization",
-							"operator": "matches",
-							"value":    "^Bearer sk-oai-.*",
-						},
-					},
-					"metrics":  false,
-					"priority": int64(0),
-				},
-				// Kubernetes/OpenShift tokens - validated via TokenReview API
-				// Only enabled for /v1/models endpoint (read-only model listing)
-				// Inferencing endpoints require API keys for billing/tracking
-				// The api-keys authentication (priority 0) runs first and will consume API key requests,
-				// so we don't need to explicitly exclude them here
-				"kubernetes-tokens": map[string]any{
-					"kubernetesTokenReview": map[string]any{
-						"audiences": []any{r.clusterAudience()},
-					},
-					"when": []any{
-						map[string]any{
-							"selector": "request.url_path",
-							"operator": "matches",
-							"value":    ".*/v1/models$",
-						},
-						map[string]any{
-							"selector": "request.headers.authorization",
-							"operator": "neq",
-							"value":    "",
-						},
-					},
-					"metrics":  false,
-					"priority": int64(1),
+			"metrics":  false,
+			"priority": int64(0),
+		},
+		"openshift-identities": map[string]any{
+			"kubernetesTokenReview": map[string]any{
+				"audiences": []any{r.ClusterAudience},
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 				},
 			},
+			"metrics":  false,
+			"priority": int64(2),
+		},
+	}
+
+	if oidc != nil {
+		authenticationRules["oidc-identities"] = map[string]any{
+			"jwt": map[string]any{
+				"issuerUrl": oidc.IssuerURL,
+				"ttl":       int64(300),
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
 		}
+	}
 
-		// Add OIDC authentication if configured in Tenant CR
-		if oidcConfig != nil && oidcConfig.IssuerURL != "" {
-			authenticationRules, ok := rule["authentication"].(map[string]any)
-			if !ok {
-				return nil, errors.New("failed to convert authentication rules to map[string]any")
-			}
+	authValidCacheKey := `"api-key|" + request.headers.authorization.replace("Bearer ", "") + "|" + ` + celModelIdentity
 
-			// Build JWT config with issuer URL and audience (both required)
-			// The JWT's aud claim must match the OIDC client ID for security
-			jwtConfig := map[string]any{
-				"issuerUrl": oidcConfig.IssuerURL,
-				"audiences": []any{oidcConfig.ClientID},
-			}
+	// tenantGatewayIsolationRule is a stub that always allows. It will be replaced with a real
+	// maas-api call to verify the API key's tenant matches the gateway hostname when multi-tenant
+	// hostname routing is productised (prevents a Coke key from working on a Pepsi gateway).
+	tenantGatewayIsolationRule := map[string]any{
+		"priority": int64(0),
+		"metrics":  false,
+		"opa": map[string]any{
+			"rego": `# Tenant hostname isolation stub.
+# Replace with a real maas-api call to validate that the API key's tenant
+# matches the gateway hostname (prevents Coke key on Pepsi gateway).
+allow { true }`,
+		},
+	}
 
-			authenticationRules["oidc-identities"] = map[string]any{
-				"jwt": jwtConfig,
+	requireGroupMembershipRego := fmt.Sprintf(`
+model_access := %s
+
+request_path := object.get(input.context.request.http, "path", "")
+request_headers := object.get(input.context.request.http, "headers", {})
+
+path_parts := [p | p := split(request_path, "/")[_]; p != ""]
+
+path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
+	count(path_parts) >= 2
+}
+
+header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
+
+model_identity := path_model_identity {
+	startswith(request_path, "/llm/")
+} else := header_model_identity {
+	header_model_identity != ""
+} else := ""
+
+username := input.auth.metadata.apiKeyValidation.username
+	{ object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
+else := input.auth.identity.preferred_username
+	{ object.get(input.auth, "identity", {}).preferred_username != "" }
+else := input.auth.identity.sub
+	{ object.get(input.auth, "identity", {}).sub != "" }
+else := input.auth.identity.user.username
+	{ object.get(input.auth, "identity", {}).user.username != "" }
+else := ""
+
+groups := input.auth.metadata.apiKeyValidation.groups
+	{ object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
+else := input.auth.identity.groups
+	{ object.get(input.auth, "identity", {}).groups != [] }
+else := input.auth.identity.user.groups
+	{ object.get(input.auth, "identity", {}).user.groups != [] }
+else := []
+
+model_rules := object.get(model_access, model_identity, null)
+
+# Management endpoints (e.g. /v1/models, /v1/api-keys) carry no model context.
+# Allow them here; subscription and rate-limit checks are gated by the /llm/ when-condition.
+allow {
+	model_identity == ""
+}
+
+# Inference path: deny by default when no MaaSAuthPolicy covers this model.
+# Allow only when the caller's username or a group is explicitly listed.
+allow {
+	model_rules != null
+	model_rules.users[_] == username
+}
+
+allow {
+	model_rules != null
+	g := groups[_]
+	model_rules.groups[_] == g
+}
+`, modelAccessJSON)
+
+	defaultsRules := map[string]any{
+		"metadata": map[string]any{
+			"apiKeyValidation": map[string]any{
 				"when": []any{
-					// Only for /v1/models endpoint
 					map[string]any{
-						"selector": "request.url_path",
+						"selector": "request.headers.authorization",
 						"operator": "matches",
-						"value":    ".*/v1/models$",
+						"value":    "^Bearer sk-oai-.*",
 					},
-					// JWT pattern match (exclude API keys)
-					map[string]any{
-						"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+				},
+				"http": map[string]any{
+					"url":         apiKeyValidationURL,
+					"contentType": "application/json",
+					"method":      "POST",
+					"body": map[string]any{
+						"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
 					},
+				},
+				"cache": map[string]any{
+					"key": map[string]any{
+						"selector": `request.headers.authorization.replace("Bearer ", "")`,
+					},
+					"ttl": r.MetadataCacheTTL,
 				},
 				"metrics":  false,
-				"priority": int64(2), // After kubernetes-tokens (priority 1)
-			}
-		}
-
-		// Build authorization rules
-		authRules := make(map[string]any)
-
-		// Validate authentication: API key must be valid, OR K8s token must be authenticated, OR OIDC token must be authenticated
-		// For API keys: check apiKeyValidation.valid == true (boolean)
-		// For K8s tokens: check that identity.username exists (TokenReview succeeded)
-		// For OIDC tokens: check that identity.sub exists (JWT validated)
-		authRules["auth-valid"] = map[string]any{
-			"metrics":  false,
-			"priority": int64(0),
-			"opa": map[string]any{
-				"rego": `# API key authentication: validate the key
-allow {
-  object.get(input.auth.metadata, "apiKeyValidation", {})
-  input.auth.metadata.apiKeyValidation.valid == true
-}
-
-# Kubernetes token authentication: check identity exists
-allow {
-  object.get(input.auth.identity, "user", {}).username != ""
-}
-
-# OIDC token authentication: check JWT subject exists
-allow {
-  object.get(input.auth.identity, "sub", "") != ""
-}`,
+				"priority": int64(0),
 			},
-			// Cache authorization result keyed by authentication source and identity.
-			// For API keys: uses the API key value
-			// For OIDC tokens: uses the JWT subject (sub claim)
-			// For K8s tokens: uses the username
-			// Key format: "auth-type|identity|model"
-			// TTL cannot exceed metadata TTL (auth-valid depends on apiKeyValidation metadata)
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": fmt.Sprintf(
-						`(has(auth.metadata.apiKeyValidation) ? "api-key|" + `+
-							`request.headers.authorization.replace("Bearer ", "") : `+
-							`(has(auth.identity.sub) ? "oidc|" + auth.identity.sub : `+
-							`"k8s-token|" + auth.identity.user.username)) + "|%s/%s"`,
-						ref.Namespace, ref.Name),
+			"subscription-info": map[string]any{
+				"when": []any{
+					map[string]any{
+						"predicate": `request.path.startsWith("/llm/") || "x-gateway-model-name" in request.headers`,
+					},
 				},
-				"ttl": r.authzCacheTTL(),
-			},
-		}
-
-		// Fail-close: require successful subscription selection AND health checks
-		// Allowlist approach: only Active and Degraded phases are permitted
-		// Rejects Failed, Pending, empty (unreconciled), unknown phases, and deleting subscriptions
-		authRules["subscription-valid"] = map[string]any{
-			"metrics":  false,
-			"priority": int64(0),
-			"opa": map[string]any{
-				"rego": `allow {
-	# Subscription name must be present (selector succeeded)
-	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
-	# Error field must be empty (no validation errors from selector)
-	object.get(input.auth.metadata["subscription-info"], "error", "") == ""
-	# Allowlist: phase must be exactly "Active" or "Degraded" (reject empty/unreconciled)
-	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
-	any([phase == "Active", phase == "Degraded"])
-	# Subscription must not be deleting
-	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
-}`,
-			},
-			// Cache authorization result keyed by subscription selection inputs.
-			// Uses same key dimensions as subscription-info metadata to ensure cache coherence.
-			// Key format: "userId|groups|requested-subscription|model"
-			// For API keys: userId is database UUID. For K8s tokens: validated username.
-			// TTL cannot exceed metadata TTL (subscription-valid depends on subscription-info metadata)
-			"cache": map[string]any{
-				"key": map[string]any{
-					"selector": subscriptionCacheKeySelector(ref.Namespace, ref.Name),
+				"http": map[string]any{
+					"url":         subscriptionSelectorURL,
+					"contentType": "application/json",
+					"method":      "POST",
+					"body": map[string]any{
+						"expression": subscriptionInfoBody,
+					},
 				},
-				"ttl": r.authzCacheTTL(),
+				"cache": map[string]any{
+					"key": map[string]any{
+						"selector": subscriptionGatewayCacheKeySelector(),
+					},
+					"ttl": r.MetadataCacheTTL,
+				},
+				"metrics":  false,
+				"priority": int64(1),
 			},
-		}
-
-		// Build aggregated authorization rule from ALL auth policies' subjects
-		// Uses OPA to check membership for both API keys and K8s tokens
-		if len(allowedGroups) > 0 || len(allowedUsers) > 0 {
-			groupsJSON, err := json.Marshal(allowedGroups)
-			if err != nil {
-				return nil, fmt.Errorf("marshal allowedGroups: %w", err)
-			}
-			usersJSON, err := json.Marshal(allowedUsers)
-			if err != nil {
-				return nil, fmt.Errorf("marshal allowedUsers: %w", err)
-			}
-			authRules["require-group-membership"] = map[string]any{
+		},
+		"authentication": authenticationRules,
+		"authorization": map[string]any{
+			"tenant-gateway-isolation": tenantGatewayIsolationRule,
+			"auth-valid": map[string]any{
 				"metrics":  false,
 				"priority": int64(0),
 				"opa": map[string]any{
-					"rego": fmt.Sprintf(`
-# Allowed groups and users from all MaaSAuthPolicies
-allowed_groups := %s
-allowed_users := %s
-
-# Extract username from API key, OIDC, or K8s token
-username := input.auth.metadata.apiKeyValidation.username
-    { object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
-else := input.auth.identity.preferred_username
-    { object.get(input.auth, "identity", {}).preferred_username != "" }
-else := input.auth.identity.sub
-    { object.get(input.auth, "identity", {}).sub != "" }
-else := input.auth.identity.user.username
-    { object.get(input.auth, "identity", {}).user.username != "" }
-else := ""
-
-# Extract groups from API key, OIDC, or K8s token
-groups := input.auth.metadata.apiKeyValidation.groups
-    { object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
-else := input.auth.identity.groups
-    { object.get(input.auth, "identity", {}).groups != [] }
-else := input.auth.identity.user.groups
-    { object.get(input.auth, "identity", {}).user.groups != [] }
-else := []
-
-# Allow if user is in allowed users
-allow {
-    username == allowed_users[_]
+					"rego": `allow {
+  object.get(input.auth.metadata, "apiKeyValidation", {})
+  input.auth.metadata.apiKeyValidation.valid == true
 }
-
-# Allow if any user group is in allowed groups
 allow {
-    groups[_] == allowed_groups[_]
-}
-`, string(groupsJSON), string(usersJSON)),
+  not input.auth.metadata.apiKeyValidation
+}`,
 				},
-				// Cache authorization result keyed by user ID, groups, and model.
-				// The allowed groups/users are baked into the OPA rego, so the cache is per-model-policy.
-				// Key format: "userId|groups|model"
-				// For API keys: userId is database UUID. For K8s tokens: validated username.
-				// TTL cannot exceed metadata TTL (require-group-membership depends on apiKeyValidation metadata for groups)
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": authzCacheKeySelector(ref.Namespace, ref.Name),
+						"selector": authValidCacheKey,
 					},
 					"ttl": r.authzCacheTTL(),
 				},
-			}
-		}
-
-		if len(authRules) > 0 {
-			rule["authorization"] = authRules
-		}
-
-		// Pass ALL user groups unfiltered in the response so TokenRateLimitPolicy predicates can
-		// match against subscription groups (which may differ from auth policy groups).
-		// Also inject subscription metadata from subscription-info for Limitador metrics.
-		// For API keys: username/groups come from apiKeyValidation metadata
-		// Identity headers intentionally removed for defense-in-depth:
-		// User identity, groups, and key IDs are not forwarded to upstream model workloads
-		// to prevent accidental disclosure in logs or dumps. All identity information remains
-		// available to TRLP and telemetry via auth.identity and filters.identity below.
-		// Exception: X-MaaS-Subscription is injected for Istio Telemetry (per-subscription latency tracking).
-		rule["response"] = map[string]any{
+			},
+			"subscription-valid": map[string]any{
+				"when": []any{
+					map[string]any{
+						"predicate": `request.path.startsWith("/llm/") || "x-gateway-model-name" in request.headers`,
+					},
+				},
+				"metrics":  false,
+				"priority": int64(0),
+				"opa": map[string]any{
+					"rego": `allow {
+	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
+	object.get(input.auth.metadata["subscription-info"], "error", "") == ""
+	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
+	any([phase == "Active", phase == "Degraded"])
+	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
+}`,
+				},
+				"cache": map[string]any{
+					"key": map[string]any{
+						"selector": subscriptionGatewayCacheKeySelector(),
+					},
+					"ttl": r.authzCacheTTL(),
+				},
+			},
+			"require-group-membership": map[string]any{
+				"metrics":  false,
+				"priority": int64(0),
+				"opa": map[string]any{
+					"rego": requireGroupMembershipRego,
+				},
+				"cache": map[string]any{
+					"key": map[string]any{
+						"selector": gatewayAuthzCacheKeySelector(),
+					},
+					"ttl": r.authzCacheTTL(),
+				},
+			},
+		},
+		"response": map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{
-					// Strip Authorization header to prevent token exfiltration to model backends
-					// Both API keys and OpenShift tokens are validated by Authorino, but should
-					// not be forwarded to model services to prevent credential theft
-					"Authorization": map[string]any{
-						"plain": map[string]any{
-							"value": "",
+					"X-MaaS-Username": map[string]any{
+						"when": []any{
+							map[string]any{
+								"selector": "request.headers.authorization",
+								"operator": "matches",
+								"value":    "^Bearer sk-oai-.*",
+							},
 						},
-						"key":      "authorization",
+						"plain": map[string]any{
+							"selector": "auth.metadata.apiKeyValidation.username",
+						},
 						"metrics":  false,
 						"priority": int64(0),
 					},
-					// Subscription bound to API key (only for API keys)
-					// For K8s tokens, this header is not injected (empty string)
-					"X-MaaS-Subscription": map[string]any{
+					"X-MaaS-Username-Token": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+							},
+						},
 						"plain": map[string]any{
-							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ""`,
+							"expression": `has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)`,
+						},
+						"key":      "X-MaaS-Username",
+						"metrics":  false,
+						"priority": int64(1),
+					},
+					"X-MaaS-Group": map[string]any{
+						"when": []any{
+							map[string]any{
+								"selector": "request.headers.authorization",
+								"operator": "matches",
+								"value":    "^Bearer sk-oai-.*",
+							},
+						},
+						"plain": map[string]any{
+							"selector": "auth.metadata.apiKeyValidation.groups.@tostr",
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-Group-Token": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `has(auth.identity.groups) ?` +
+								` '["system:authenticated","' + auth.identity.groups.join('","') + '"]'` +
+								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
+						},
+						"key":      "X-MaaS-Group",
+						"metrics":  false,
+						"priority": int64(1),
+					},
+					// Only inject X-MaaS-Subscription when there is a real value to inject.
+					// An empty string injected for K8s tokens without a subscription header
+					// causes maas-api to filter by an empty subscription name and return 0 models.
+					// The old maas-api-auth-policy never injected this header for K8s tokens —
+					// only for API keys with a non-empty subscription field.
+					"X-MaaS-Subscription": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": celSubscription,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -840,35 +799,31 @@ allow {
 					"identity": map[string]any{
 						"json": map[string]any{
 							"properties": map[string]any{
-								"groups":     map[string]any{"expression": "auth.metadata.apiKeyValidation.groups"},
-								"groups_str": map[string]any{"expression": `auth.metadata.apiKeyValidation.groups.join(",")`},
+								"groups":     map[string]any{"expression": celGroups},
+								"groups_str": map[string]any{"expression": fmt.Sprintf(`(%s).join(",")`, celGroups)},
 								"userid": map[string]any{
-									"selector": "auth.metadata.apiKeyValidation.username",
+									"expression": celUsername,
 								},
 								"keyId": map[string]any{
-									"selector": "auth.metadata.apiKeyValidation.keyId",
+									"expression": `has(auth.metadata.apiKeyValidation) ? auth.metadata.apiKeyValidation.keyId : ""`,
 								},
-								// Subscription metadata from /internal/v1/subscriptions/select endpoint
 								"selected_subscription": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
-								// Model-scoped subscription key for TRLP isolation: namespace/name@modelNamespace/modelName
+								// Model-scoped subscription key: namespace/name@modelIdentity
+								// modelIdentity is dynamic (header or path), so this is always current
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`has(auth.metadata["subscription-info"].namespace) && `+
 											`has(auth.metadata["subscription-info"].name) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
-											`+ auth.metadata["subscription-info"].name + "@%s/%s" : ""`,
-										ref.Namespace, ref.Name,
+											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
+										celModelIdentity,
 									),
 								},
-								// Full subscription-info object from subscription-select endpoint
-								// Contains: name, namespace, labels, organizationId, costCenter, error, message
-								// Consumers should access nested fields (e.g., subscription_info.organizationId)
 								"subscription_info": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
 								},
-								// Error information (for debugging - only populated when selection fails)
 								"subscription_error": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : ""`,
 								},
@@ -881,7 +836,6 @@ allow {
 					},
 				},
 			},
-			// Custom denial responses that include subscription error details
 			"unauthenticated": map[string]any{
 				"code": int64(401),
 				"message": map[string]any{
@@ -902,89 +856,133 @@ allow {
 					},
 				},
 			},
-		}
+		},
+	}
 
-		// Build the aggregated AuthPolicy (one per model, covering all MaaSAuthPolicies)
-		authPolicyName := fmt.Sprintf("maas-auth-%s", ref.Name)
-		authPolicy := &unstructured.Unstructured{}
-		authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		authPolicy.SetName(authPolicyName)
-		authPolicy.SetNamespace(httpRouteNS)
-		authPolicy.SetLabels(map[string]string{
-			"maas.opendatahub.io/model":           ref.Name,
-			"maas.opendatahub.io/model-namespace": ref.Namespace,
-			"app.kubernetes.io/managed-by":        "maas-controller",
-			"app.kubernetes.io/part-of":           "maas-auth-policy",
-			"app.kubernetes.io/component":         "auth-policy",
-		})
-		authPolicy.SetAnnotations(map[string]string{
-			"maas.opendatahub.io/auth-policies": strings.Join(policyNames, ","),
-		})
-
-		refs = append(refs, authPolicyRef{Name: authPolicyName, Namespace: httpRouteNS, Model: ref.Name, ModelNamespace: ref.Namespace})
-
-		spec := map[string]any{
-			"targetRef": map[string]any{
-				"group": "gateway.networking.k8s.io",
-				"kind":  "HTTPRoute",
-				"name":  httpRouteName,
+	return map[string]any{
+		"targetRef": map[string]any{
+			"group":     "gateway.networking.k8s.io",
+			"kind":      "Gateway",
+			"name":      r.GatewayName,
+			"namespace": r.GatewayNamespace,
+		},
+		// "when" must live inside "defaults" (not at spec level) because Kuadrant treats
+		// top-level "when" as implicit defaults, which conflicts with explicit "defaults".
+		"defaults": map[string]any{
+			// Skip auth for the health readiness probe so unauthenticated GET /maas-api/health
+			// returns 200 without triggering Authorino. Previously handled by maas-api-auth-policy;
+			// now that the route-level policy is removed this condition lives at the gateway level.
+			"when": []any{
+				map[string]any{
+					"predicate": `request.path != "/maas-api/health" || request.method != "GET"`,
+				},
 			},
-			"rules": rule,
+			"rules": defaultsRules,
+		},
+	}
+}
+
+// reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
+// the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig) error {
+	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", r.GatewayNamespace, "gatewayName", r.GatewayName)
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc)
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	gwPolicy.SetName(maasGatewayAuthPolicyName)
+	gwPolicy.SetNamespace(r.GatewayNamespace)
+	gwPolicy.SetLabels(map[string]string{
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-gateway-auth",
+		"app.kubernetes.io/component":  "gateway-auth",
+	})
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(gwPolicy.GroupVersionKind())
+	err := r.Get(ctx, client.ObjectKeyFromObject(gwPolicy), existing)
+	if apierrors.IsNotFound(err) {
+		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
+			return fmt.Errorf("failed to set gateway AuthPolicy spec: %w", err)
 		}
-		if err := unstructured.SetNestedMap(authPolicy.Object, spec, "spec"); err != nil {
-			return nil, fmt.Errorf("failed to set spec: %w", err)
+		if err := r.Create(ctx, gwPolicy); err != nil {
+			return fmt.Errorf("failed to create gateway AuthPolicy: %w", err)
+		}
+		log.Info("gateway AuthPolicy created", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+		r.deleteGatewayDefaultAuthPolicy(ctx, log)
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
+	}
+
+	if !isManaged(existing) {
+		log.Info("gateway AuthPolicy opted out of management, skipping", "name", maasGatewayAuthPolicyName)
+		return nil
+	}
+
+	snapshot := existing.DeepCopy()
+	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+		return fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
+	}
+	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+		log.Info("gateway AuthPolicy unchanged, skipping update", "name", maasGatewayAuthPolicyName)
+		r.deleteGatewayDefaultAuthPolicy(ctx, log)
+		return nil
+	}
+	if err := r.Update(ctx, existing); err != nil {
+		return fmt.Errorf("failed to update gateway AuthPolicy: %w", err)
+	}
+	log.Info("gateway AuthPolicy updated", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+	r.deleteGatewayDefaultAuthPolicy(ctx, log)
+	return nil
+}
+
+// reconcileModelAuthPolicies creates or updates the per-model group-membership AuthPolicy for
+// each model referenced by the given MaaSAuthPolicy. These lightweight policies use the Kuadrant
+// `defaults` strategy so they chain with the singleton gateway-level AuthPolicy without replacing it.
+//
+// Each per-model policy contains ONLY the require-group-membership authorization rule, which enforces
+// the subject allowlist (groups/users) configured via MaaSAuthPolicy.Spec.Subjects. Auth, subscription
+// validation, and response shaping are all handled by the singleton gateway-level AuthPolicy.
+//
+// If a model has no subjects configured across ALL MaaSAuthPolicies that reference it, no per-model
+// group policy is created (or the existing one is deleted). The gateway policy alone is sufficient.
+func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) ([]authPolicyRef, error) {
+	var refs []authPolicyRef
+	for _, ref := range policy.Spec.ModelRefs {
+		httpRouteName, httpRouteNS, err := findHTTPRouteForModel(ctx, r.Client, ref.Namespace, ref.Name)
+		if err != nil {
+			if errors.Is(err, ErrModelNotFound) {
+				log.Info("model not found, cleaning up generated AuthPolicy", "model", ref.Namespace+"/"+ref.Name)
+				if delErr := r.deleteModelAuthPolicy(ctx, log, ref.Namespace, ref.Name); delErr != nil {
+					return nil, fmt.Errorf("failed to clean up AuthPolicy for missing model %s/%s: %w", ref.Namespace, ref.Name, delErr)
+				}
+				continue
+			}
+			if errors.Is(err, ErrHTTPRouteNotFound) {
+				log.Info("HTTPRoute not found for model, skipping AuthPolicy creation", "model", ref.Namespace+"/"+ref.Name)
+				continue
+			}
+			return nil, fmt.Errorf("failed to resolve HTTPRoute for model %s/%s: %w", ref.Namespace, ref.Name, err)
 		}
 
-		// Create or update AuthPolicy
-		existing := &unstructured.Unstructured{}
-		existing.SetGroupVersionKind(authPolicy.GroupVersionKind())
-		err = r.Get(ctx, client.ObjectKeyFromObject(authPolicy), existing)
-		if apierrors.IsNotFound(err) {
-			if err := r.Create(ctx, authPolicy); err != nil {
-				return nil, fmt.Errorf("failed to create AuthPolicy for model %s/%s: %w", ref.Namespace, ref.Name, err)
+		// Gateway-level AuthPolicy is the only enforced policy. Remove any legacy per-model
+		// group policy to avoid route-level AuthPolicy composition issues on model HTTPRoutes.
+		exists, err := r.modelAuthPolicyExists(ctx, httpRouteNS, ref.Name)
+		if err != nil {
+			return nil, fmt.Errorf("failed to check legacy group policy for model %s/%s: %w", ref.Namespace, ref.Name, err)
+		}
+		if exists {
+			if err := r.deleteModelAuthPolicy(ctx, log, httpRouteNS, ref.Name); err != nil {
+				return nil, fmt.Errorf("failed to delete legacy group policy for model %s/%s: %w", ref.Namespace, ref.Name, err)
 			}
-			log.Info("AuthPolicy created", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name, "policies", policyNames)
-		} else if err != nil {
-			return nil, fmt.Errorf("failed to get existing AuthPolicy: %w", err)
+			log.Info("deleted legacy per-model AuthPolicy", "model", ref.Namespace+"/"+ref.Name, "route", httpRouteName)
 		} else {
-			if !isManaged(existing) {
-				log.Info("AuthPolicy opted out, skipping", "name", authPolicyName)
-			} else {
-				// Snapshot the existing object before modifications so we can detect
-				// no-op updates.
-				snapshot := existing.DeepCopy()
-
-				mergedAnnotations := existing.GetAnnotations()
-				if mergedAnnotations == nil {
-					mergedAnnotations = make(map[string]string)
-				}
-				for k, v := range authPolicy.GetAnnotations() {
-					mergedAnnotations[k] = v
-				}
-				existing.SetAnnotations(mergedAnnotations)
-
-				mergedLabels := existing.GetLabels()
-				if mergedLabels == nil {
-					mergedLabels = make(map[string]string)
-				}
-				for k, v := range authPolicy.GetLabels() {
-					mergedLabels[k] = v
-				}
-				existing.SetLabels(mergedLabels)
-				if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
-					return nil, fmt.Errorf("failed to update spec: %w", err)
-				}
-
-				if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-					log.Info("AuthPolicy unchanged, skipping update", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name)
-				} else {
-					if err := r.Update(ctx, existing); err != nil {
-						return nil, fmt.Errorf("failed to update AuthPolicy for model %s/%s: %w", ref.Namespace, ref.Name, err)
-					}
-					log.Info("AuthPolicy updated", "name", authPolicyName, "model", ref.Namespace+"/"+ref.Name, "policies", policyNames)
-				}
-			}
+			log.V(1).Info("no legacy per-model AuthPolicy found", "model", ref.Namespace+"/"+ref.Name, "route", httpRouteName)
 		}
+		log.V(1).Info("gateway policy-only mode: skipping per-model AuthPolicy generation", "model", ref.Namespace+"/"+ref.Name, "route", httpRouteName)
+		continue
 	}
 	if err := r.cleanupStaleAuthPolicies(ctx, log, policy); err != nil {
 		return nil, err
@@ -993,46 +991,54 @@ allow {
 	return refs, nil
 }
 
-func (r *MaaSAuthPolicyReconciler) validateAuthPolicyTenantGatewaysForRoute(
-	ctx context.Context,
-	policies []maasv1alpha1.MaaSAuthPolicy,
-	httpRouteName string,
-	httpRouteNS string,
-	modelNamespace string,
-	modelName string,
-) error {
-	validatedTenantNamespaces := make(map[string]struct{})
-	validatedGateways := make(map[string]struct{})
-	for _, ap := range policies {
-		if _, ok := validatedTenantNamespaces[ap.Namespace]; ok {
+func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.Context, policyNamespace string) (map[string]modelSubjectAllowlist, error) {
+	var policies maasv1alpha1.MaaSAuthPolicyList
+	if err := r.List(ctx, &policies, client.InNamespace(policyNamespace)); err != nil {
+		return nil, fmt.Errorf("failed to list MaaSAuthPolicies for gateway aggregation: %w", err)
+	}
+
+	aggregate := make(map[string]modelSubjectAllowlist)
+	for _, p := range policies.Items {
+		if !p.GetDeletionTimestamp().IsZero() {
 			continue
 		}
-		validatedTenantNamespaces[ap.Namespace] = struct{}{}
-
-		gatewayRef, err := tenantGatewayRefForNamespace(
-			ctx,
-			r.Client,
-			ap.Namespace,
-			r.TenantNamespace,
-			r.GatewayName,
-			r.GatewayNamespace,
-			r.TenantNamespaceDiscoveryEnabled,
-		)
-		if err != nil {
-			return err
-		}
-		gatewayKey := qualifiedName(gatewayRef.Namespace, gatewayRef.Name)
-		if _, ok := validatedGateways[gatewayKey]; ok {
-			continue
-		}
-		validatedGateways[gatewayKey] = struct{}{}
-
-		if err := validateHTTPRouteReferencesGateway(ctx, r.Client, httpRouteName, httpRouteNS, gatewayRef); err != nil {
-			return fmt.Errorf("model %s/%s is not attached to tenant gateway for auth policy %s: %w",
-				modelNamespace, modelName, qualifiedName(ap.Namespace, ap.Name), err)
+		for _, ref := range p.Spec.ModelRefs {
+			key := ref.Namespace + "/" + ref.Name
+			entry := aggregate[key]
+			for _, group := range p.Spec.Subjects.Groups {
+				if err := validateCELValue(group.Name, "group name"); err != nil {
+					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s/%s: %w", p.Namespace, p.Name, err)
+				}
+				entry.Groups = append(entry.Groups, group.Name)
+			}
+			for _, user := range p.Spec.Subjects.Users {
+				if err := validateCELValue(user, "username"); err != nil {
+					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s/%s: %w", p.Namespace, p.Name, err)
+				}
+				entry.Users = append(entry.Users, user)
+			}
+			entry.Groups = deduplicateAndSort(entry.Groups)
+			entry.Users = deduplicateAndSort(entry.Users)
+			aggregate[key] = entry
 		}
 	}
-	return nil
+
+	return aggregate, nil
+}
+
+func (r *MaaSAuthPolicyReconciler) modelAuthPolicyExists(ctx context.Context, modelNamespace, modelName string) (bool, error) {
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	authPolicyName := fmt.Sprintf("maas-auth-%s", modelName)
+
+	err := r.Get(ctx, types.NamespacedName{Name: authPolicyName, Namespace: modelNamespace}, authPolicy)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // cleanupStaleAuthPolicies deletes aggregated AuthPolicies for models that this
@@ -1122,23 +1128,146 @@ func (r *MaaSAuthPolicyReconciler) deleteModelAuthPolicy(ctx context.Context, lo
 func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(policy, maasAuthPolicyFinalizer) {
 		for _, ref := range policy.Spec.ModelRefs {
-			log.Info("Deleting model AuthPolicy so remaining policies can rebuild it", "model", ref.Namespace+"/"+ref.Name)
+			log.Info("Deleting model group AuthPolicy so remaining policies can rebuild it", "model", ref.Namespace+"/"+ref.Name)
 			if err := r.deleteModelAuthPolicy(ctx, log, ref.Namespace, ref.Name); err != nil {
-				log.Error(err, "failed to clean up AuthPolicy, will retry", "model", ref.Namespace+"/"+ref.Name)
+				log.Error(err, "failed to clean up group AuthPolicy, will retry", "model", ref.Namespace+"/"+ref.Name)
 				return ctrl.Result{}, err
 			}
 		}
-		// Also clean up stale AuthPolicies from modelRefs that were removed
+		// Also clean up stale group AuthPolicies from modelRefs that were removed
 		// before the CR was deleted (edge case: edit + delete before reconcile).
 		if err := r.cleanupStaleAuthPolicies(ctx, log, policy); err != nil {
 			return ctrl.Result{}, err
 		}
+
+		// If this is the last MaaSAuthPolicy, also delete the singleton gateway-level AuthPolicy.
+		remaining := &maasv1alpha1.MaaSAuthPolicyList{}
+		if err := r.List(ctx, remaining); err != nil {
+			log.Error(err, "failed to list remaining MaaSAuthPolicies for gateway cleanup check")
+			return ctrl.Result{}, err
+		}
+		// Count policies not being deleted and not the current one
+		liveCount := 0
+		for _, p := range remaining.Items {
+			if p.Name == policy.Name && p.Namespace == policy.Namespace {
+				continue
+			}
+			if p.GetDeletionTimestamp().IsZero() {
+				liveCount++
+			}
+		}
+		if liveCount == 0 {
+			if err := r.deleteGatewayAuthPolicy(ctx, log); err != nil {
+				log.Error(err, "failed to delete gateway AuthPolicy")
+				return ctrl.Result{}, err
+			}
+			if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
+				log.Error(err, "failed to restore gateway-default-auth")
+				return ctrl.Result{}, err
+			}
+		}
+
 		controllerutil.RemoveFinalizer(policy, maasAuthPolicyFinalizer)
 		if err := r.Update(ctx, policy); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 	return ctrl.Result{}, nil
+}
+
+// deleteGatewayAuthPolicy removes the singleton Gateway-level AuthPolicy when no
+// MaaSAuthPolicy CRs remain.
+func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger) error {
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	gwPolicy.SetName(maasGatewayAuthPolicyName)
+	gwPolicy.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, gwPolicy); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete gateway AuthPolicy %s/%s: %w", r.GatewayNamespace, maasGatewayAuthPolicyName, err)
+	}
+	log.Info("gateway AuthPolicy deleted (no remaining MaaSAuthPolicies)", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+	return nil
+}
+
+// deleteGatewayDefaultAuthPolicy removes the static deny-all gateway-default-auth policy
+// so it does not conflict with the dynamic maas-gateway-auth policy on the same Gateway.
+func (r *MaaSAuthPolicyReconciler) deleteGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) {
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	policy.SetName(gatewayDefaultAuthPolicyName)
+	policy.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, policy); err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to delete gateway-default-auth (non-fatal)", "name", gatewayDefaultAuthPolicyName)
+		}
+		return
+	}
+	log.Info("deleted gateway-default-auth (superseded by maas-gateway-auth)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
+}
+
+// ensureGatewayDefaultAuthPolicy recreates the static deny-all gateway-default-auth policy
+// after the last MaaSAuthPolicy is removed, so unconfigured model routes remain denied.
+func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) error {
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	policy.SetName(gatewayDefaultAuthPolicyName)
+	policy.SetNamespace(r.GatewayNamespace)
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(policy.GroupVersionKind())
+	if err := r.Get(ctx, client.ObjectKeyFromObject(policy), existing); err == nil {
+		log.V(1).Info("gateway-default-auth already exists, skipping recreation", "name", gatewayDefaultAuthPolicyName)
+		return nil
+	}
+
+	policy.SetLabels(map[string]string{
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-controller",
+		"app.kubernetes.io/component":  "default-policy",
+	})
+	spec := map[string]any{
+		"targetRef": map[string]any{
+			"group": "gateway.networking.k8s.io",
+			"kind":  "Gateway",
+			"name":  r.GatewayName,
+		},
+		"defaults": map[string]any{
+			"rules": map[string]any{
+				"authentication": map[string]any{},
+				"authorization": map[string]any{
+					"deny-unconfigured-models": map[string]any{
+						"metrics":  false,
+						"priority": int64(0),
+						"patternMatching": map[string]any{
+							"patterns": []any{
+								map[string]any{
+									"operator": "eq",
+									"selector": "context.request.http.method",
+									"value":    "__deny_unconfigured_models__",
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+	if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
+		return fmt.Errorf("failed to set gateway-default-auth spec: %w", err)
+	}
+	if err := r.Create(ctx, policy); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to create gateway-default-auth: %w", err)
+	}
+	log.Info("restored gateway-default-auth (no remaining MaaSAuthPolicies)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
+	return nil
 }
 
 func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, refs []authPolicyRef) {
