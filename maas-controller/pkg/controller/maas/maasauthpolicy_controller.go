@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -798,7 +799,7 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"expression": fmt.Sprintf(`"%s"`, r.MaaSAPINamespace),
+							"expression": strconv.Quote(r.MaaSAPINamespace),
 						},
 						"key":      "X-MaaS-Tenant",
 						"metrics":  false,
