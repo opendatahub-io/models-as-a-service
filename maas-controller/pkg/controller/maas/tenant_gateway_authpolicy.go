@@ -330,7 +330,9 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 								},
 							},
 							"plain": map[string]any{
-								"expression": `size(auth.identity.user.groups) > 0 ? '["' + auth.identity.user.groups.join('","') + '"]' : '[]'`,
+								"expression": `has(auth.identity.groups) ?` +
+									` '["system:authenticated","' + auth.identity.groups.join('","') + '"]'` +
+									` : '["' + auth.identity.user.groups.join('","') + '"]'`,
 							},
 							"key":      "X-MaaS-Group",
 							"priority": int64(1),
