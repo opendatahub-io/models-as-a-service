@@ -597,5 +597,7 @@ func (r *TenantReconciler) buildIdentityFilters(tenantID string) map[string]any 
 				},
 			},
 		},
+		"metrics":  true,
+		"priority": int64(0),
 	}
 }
