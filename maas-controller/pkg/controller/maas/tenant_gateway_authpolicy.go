@@ -118,10 +118,14 @@ func (r *TenantReconciler) reconcileGatewayAuthPolicy(ctx context.Context, tenan
 // buildGatewayAuthPolicySpec builds the AuthPolicy spec for a tenant's gateway.
 // This is similar to MaaSAuthPolicyReconciler.buildGatewayAuthPolicySpec but scoped to one tenant.
 func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, gatewayNS, gatewayName string) map[string]any {
-	// API key validation URL points to the maas-api service
-	// For per-tenant deployments, this would be maas-api-{tenantID} but we'll use the generic name for now
-	// since the service selector will route to the correct tenant's maas-api instance
-	apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", appNamespace)
+	// API key validation URL points to the per-tenant maas-api service
+	// Default tenant: maas-api
+	// Other tenants: maas-api-{tenantID}
+	serviceName := "maas-api"
+	if tenantID != "" {
+		serviceName = fmt.Sprintf("maas-api-%s", tenantID)
+	}
+	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", serviceName, appNamespace)
 
 	return map[string]any{
 		"targetRef": map[string]any{
