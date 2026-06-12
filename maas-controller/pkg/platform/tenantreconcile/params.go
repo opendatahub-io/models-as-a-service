@@ -143,12 +143,13 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	// Set TENANT_NAME environment variable for per-tenant maas-api instances.
 	// This value is used by maas-api for logging context and will be used for
 	// database tenant_id filtering.
-	// Value: "models-as-a-service" for default tenant, tenant name (e.g., "redteam") for AITenant-managed tenants.
-	// maas-api uses this for database queries: WHERE tenant = $TENANT_NAME
+	// Value: Empty string ("") for default tenant, tenant name (e.g., "redteam") for AITenant-managed tenants.
+	// TODO: Ensure maas-api code uses this for database queries: WHERE tenant_id = $TENANT_NAME
 	tenantName := params.TenantIdentifier
 	if tenantName == "" {
-		// Default tenant uses "models-as-a-service" as its tenant identifier
-		tenantName = "models-as-a-service"
+		// TODO: When DB migration changes default tenant_id from "" to "models-as-a-service",
+		// update this to set TENANT_NAME="models-as-a-service" for the default tenant.
+		tenantName = ""
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "TENANT_NAME", tenantName); err != nil {
 		return fmt.Errorf("patch TENANT_NAME: %w", err)

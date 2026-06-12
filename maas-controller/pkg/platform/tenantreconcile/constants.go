@@ -222,8 +222,7 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 		return tenantName, nil
 	}
 
-	// Default tenant uses "models-as-a-service" as its tenant identifier
-	// This matches the database default tenant name and ensures consistency
-	// across database queries, AuthPolicy headers, and deployment configuration
-	return "models-as-a-service", nil
+	// Legacy/default tenant - return empty string for backward compatibility
+	// TODO: Change to return "models-as-a-service" when DB migration is done
+	return "", nil
 }
