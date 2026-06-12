@@ -58,7 +58,7 @@ SENSITIVE_VALUE_PATTERNS = (
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]+", re.IGNORECASE),
     re.compile(r"\bsk-oai-[A-Za-z0-9._-]+", re.IGNORECASE),
     re.compile(r"\bpostgres(?:ql)?://[^\s\"']+", re.IGNORECASE),
-    re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@\"'<>]+:[^@\s/\"'<>]+@[^\s\"'<>]+", re.IGNORECASE),
+    re.compile(r"\b[a-z][a-z0-9+.-]*://[^/\s:@\"'<>]+(?::[^@\s/\"'<>]+)?@[^\s\"'<>]+", re.IGNORECASE),
 )
 
 
@@ -334,7 +334,7 @@ def patch_controller_tenant_namespace_discovery(*, enabled: bool = True) -> None
 
 
 def require_tenant_namespace_discovery():
-    if os.environ.get("ENABLE_TENANT_NAMESPACE_DISCOVERY", "").lower() == "true":
+    if env_bool("ENABLE_TENANT_NAMESPACE_DISCOVERY"):
         if not controller_has_tenant_namespace_discovery():
             pytest.fail(
                 "ENABLE_TENANT_NAMESPACE_DISCOVERY=true but maas-controller is missing "
@@ -395,7 +395,12 @@ def admin_subject() -> str:
     whoami = _oc_run(["whoami"])
     if whoami.returncode == 0 and whoami.stdout.strip():
         return whoami.stdout.strip()
-    return "system:authenticated"
+    raise RuntimeError(
+        "oc whoami failed: "
+        f"returncode={whoami.returncode} "
+        f"stdout={whoami.stdout.strip()!r} "
+        f"stderr={whoami.stderr.strip()!r}"
+    )
 
 
 def ensure_namespace(name: str, *, labels: Optional[dict[str, str]] = None) -> None:
