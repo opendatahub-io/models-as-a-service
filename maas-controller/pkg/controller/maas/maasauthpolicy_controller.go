@@ -344,10 +344,13 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 
 	// Reconcile the singleton gateway-level AuthPolicy first, then the per-model group policies.
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc); err != nil {
-		log.Error(err, "failed to reconcile gateway AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+	// SKIP when TenantNamespaceDiscoveryEnabled - TenantReconciler owns all gateway AuthPolicies.
+	if !r.TenantNamespaceDiscoveryEnabled {
+		if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc); err != nil {
+			log.Error(err, "failed to reconcile gateway AuthPolicy")
+			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
+			return ctrl.Result{}, err
+		}
 	}
 
 	refs, err := r.reconcileModelAuthPolicies(ctx, log, policy)
