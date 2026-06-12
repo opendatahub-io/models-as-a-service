@@ -149,6 +149,10 @@ func (r *TenantReconciler) buildGatewayAuthPolicySpec(tenantID, appNamespace, ga
 							"prefix": "Bearer",
 						},
 					},
+					"plain": map[string]any{
+						"selector": "request.headers.authorization",
+					},
+					"metrics":  false,
 					"priority": int64(0),
 				},
 				// OpenShift/K8s token authentication
