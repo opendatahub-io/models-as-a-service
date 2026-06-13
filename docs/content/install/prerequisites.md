@@ -42,14 +42,22 @@ component enabled (KServe) and properly configured for deploying models with
 
 A specific requirement for MaaS v0.1.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
 
-## Optional: Observability Prerequisites
+## Observability Prerequisites (Recommended)
 
-If you plan to use MaaS dashboards, showback, or usage metrics, additional platform configuration is required:
+Observability is not required for a minimal install, but is recommended. If you skip it, metrics collection, dashboards, and usage tracking will not function. You can enable observability at any time after the initial install.
+
+!!! warning "Consequences of skipping observability"
+    Without observability configured, ServiceMonitors will not be processed, Prometheus will not scrape MaaS components, and dashboards will have no data. Some Tenant condition checks may also be affected. See [Enable Observability](maas-setup.md#enable-observability) for the setup steps and tradeoffs.
+
+The following platform components are required for observability:
 
 - **User Workload Monitoring** — Required for Prometheus to scrape metrics from MaaS components
 - **Kuadrant Observability** — Required for rate-limiting and usage metrics (e.g., `authorized_calls`, `limited_calls`)
+- **Telemetry on the Tenant CR** — Enabled by default; deploys TelemetryPolicy and Istio Telemetry for per-subscription latency tracking
 
-See [Observability Setup](../observability/setup.md) for detailed configuration steps.
+See [Observability Setup](../observability/setup.md) for detailed configuration steps, the `scripts/observability/install-observability.sh` script, and Grafana dashboard deployment.
+
+For RHOAI-specific observability, see [Managing observability in RHOAI](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
 
 ### RHOAI Dashboard Observability Tab
 
