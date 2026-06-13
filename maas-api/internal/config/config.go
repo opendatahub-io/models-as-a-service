@@ -77,7 +77,10 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 
-	tenantName := env.GetString("TENANT_NAME", "models-as-a-service")
+	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
+	if tenantName == "" {
+		panic("TENANT_NAME environment variable must be non-empty (tenant isolation required)")
+	}
 
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),

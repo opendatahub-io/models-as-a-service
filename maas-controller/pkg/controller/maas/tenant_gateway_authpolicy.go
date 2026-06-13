@@ -187,7 +187,9 @@ func (r *TenantReconciler) buildAuthenticationSection(oidc *oidcConfig) map[stri
 		auth["oidc-identities"] = map[string]any{
 			"when": []any{
 				map[string]any{
-					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+					// Match JWT-shaped tokens only (three dot-separated segments: header.payload.signature)
+					// This prevents service account tokens from hitting JWT validation
+					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
 				},
 			},
 			"jwt": map[string]any{

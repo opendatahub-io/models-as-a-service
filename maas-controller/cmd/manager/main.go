@@ -471,6 +471,11 @@ func main() {
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
 		os.Exit(1)
 	}
+	if strings.TrimSpace(controllerNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid controller namespace configuration"),
+			"--controller-namespace must be non-empty")
+		os.Exit(1)
+	}
 	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
 		setupLog.Error(stderrors.New("invalid MaaS subscription namespace configuration"),
 			"--maas-subscription-namespace must be non-empty")
