@@ -53,6 +53,7 @@
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
+#   E2E_RUN_UNINSTALL - Run destructive uninstall test after all other tests (default: false)
 #
 # TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
 #   Customize for CI/CD environments or slow clusters:
@@ -766,6 +767,29 @@ run_e2e_tests() {
     echo "✅ E2E tests completed"
     echo " - JUnit XML : ${xml}"
     echo " - HTML      : ${html}"
+
+    # Run uninstall test (destructive - must run LAST after all other tests).
+    # Skipped by default; set E2E_RUN_UNINSTALL=true to enable in CI.
+    if [[ "${E2E_RUN_UNINSTALL:-false}" == "true" ]]; then
+        local uninstall_html="$ARTIFACTS_DIR/e2e-uninstall-${user}.html"
+        local uninstall_xml="$ARTIFACTS_DIR/e2e-uninstall-${user}.xml"
+        echo ""
+        echo "-- Uninstall E2E Test (destructive) --"
+        if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
+            -v --maxfail=1 --disable-warnings \
+            --junitxml="$uninstall_xml" \
+            --html="$uninstall_html" --self-contained-html \
+            --capture=tee-sys --show-capture=all --log-level=INFO \
+            "$test_dir/tests/test_uninstall.py" ; then
+            echo "❌ ERROR: Uninstall E2E test failed"
+            exit 1
+        fi
+        echo "✅ Uninstall E2E test completed"
+        echo " - JUnit XML : ${uninstall_xml}"
+        echo " - HTML      : ${uninstall_html}"
+    else
+        echo "⏭️  Skipping uninstall test (set E2E_RUN_UNINSTALL=true to enable)"
+    fi
 }
 
 
