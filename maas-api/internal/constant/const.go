@@ -25,8 +25,9 @@ const (
 	DefaultSARCacheMaxSize = 8192
 
 	// LLMInferenceService annotation keys for model metadata.
-	AnnotationGenAIUseCase  = "opendatahub.io/genai-use-case"
-	AnnotationDescription   = "openshift.io/description"
-	AnnotationDisplayName   = "openshift.io/display-name"
-	AnnotationContextWindow = "opendatahub.io/context-window"
+	AnnotationGenAIUseCase      = "opendatahub.io/genai-use-case"
+	AnnotationDescription       = "openshift.io/description"
+	AnnotationDisplayName       = "openshift.io/display-name"
+	AnnotationContextWindow     = "opendatahub.io/context-window"
+	AnnotationModelCapabilities = "opendatahub.io/model-capabilities"
 )
