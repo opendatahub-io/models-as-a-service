@@ -342,15 +342,17 @@ func (m *MockStore) Search(
 	allKeys := m.filterKeys(username, tenant, filters.Status, includeEphemeral, now)
 
 	// Filter by subscription
-	if filters.Subscription != nil && *filters.Subscription != "" {
+	if filters.Subscription != nil {
 		sub := strings.TrimSpace(*filters.Subscription)
-		filtered := allKeys[:0]
-		for _, k := range allKeys {
-			if k.Subscription == sub {
-				filtered = append(filtered, k)
+		if sub != "" {
+			filtered := allKeys[:0]
+			for _, k := range allKeys {
+				if k.Subscription == sub {
+					filtered = append(filtered, k)
+				}
 			}
+			allKeys = filtered
 		}
-		allKeys = filtered
 	}
 
 	// Sort keys

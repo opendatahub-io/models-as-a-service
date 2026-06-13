@@ -241,10 +241,13 @@ func (s *PostgresStore) Search(
 	}
 
 	// Filter by subscription name
-	if filters.Subscription != nil && *filters.Subscription != "" {
-		whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
-		args = append(args, strings.TrimSpace(*filters.Subscription))
-		argPos++
+	if filters.Subscription != nil {
+		sub := strings.TrimSpace(*filters.Subscription)
+		if sub != "" {
+			whereClauses = append(whereClauses, fmt.Sprintf("subscription = $%d", argPos))
+			args = append(args, sub)
+			argPos++
+		}
 	}
 
 	// Build final WHERE clause
