@@ -65,20 +65,29 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
-		log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
-			"tenantNamespace", tenant.Namespace,
-			"configuredTenantNamespace", r.TenantNamespace)
-		return ctrl.Result{}, nil
-	}
+	// When tenant namespace discovery is disabled, only reconcile the default tenant
+	// in the configured TenantNamespace. When enabled, reconcile all Tenant CRs cluster-wide.
+	if !r.TenantNamespaceDiscoveryEnabled {
+		if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
+			log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
+				"tenantNamespace", tenant.Namespace,
+				"configuredTenantNamespace", r.TenantNamespace)
+			return ctrl.Result{}, nil
+		}
 
-	if tenant.Name != maasv1alpha1.TenantInstanceName {
-		return ctrl.Result{}, nil
+		if tenant.Name != maasv1alpha1.TenantInstanceName {
+			return ctrl.Result{}, nil
+		}
 	}
 
 	// Handle delete before Unmanaged idle. Config anchor lifecycle is owned by the operator /
 	// ModelsAsService GC and the lifecycle reconciler; the Tenant reconciler does not delete Config.
 	if !tenant.DeletionTimestamp.IsZero() {
+		// Clean up gateway AuthPolicy before allowing deletion
+		if err := r.cleanupGatewayAuthPolicy(ctx, log, &tenant); err != nil {
+			log.Error(err, "failed to cleanup gateway AuthPolicy")
+			return ctrl.Result{}, err
+		}
 		return ctrl.Result{}, nil
 	}
 
@@ -205,6 +214,30 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+
+	// Reconcile gateway AuthPolicy after successful platform deployment
+	// Extract tenant identifier for correct tenant isolation
+	tenantID, err := tenantreconcile.TenantIdentifierFor(&tenant)
+	if err != nil {
+		log.Error(err, "failed to determine tenant identifier")
+		if err2 := r.patchStatus(ctx, &tenant, "Failed", metav1.ConditionFalse, "TenantIDResolutionFailed", err.Error()); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	// TEMPORARY: Skip gateway AuthPolicy - let MaaSAuthPolicyReconciler handle it to debug rate limiting
+	_ = tenantID // avoid unused var error
+	if false {
+		if err := r.reconcileGatewayAuthPolicy(ctx, &tenant, tenantID, appNs); err != nil {
+			log.Error(err, "failed to reconcile gateway AuthPolicy", "tenantID", tenantID)
+			setDeploymentsAvailableCondition(&tenant, false, "AuthPolicyReconcileFailed", err.Error())
+			if err2 := r.patchStatus(ctx, &tenant, "Degraded", metav1.ConditionFalse, "AuthPolicyReconcileFailed", err.Error()); err2 != nil {
+				return ctrl.Result{}, err2
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
 	}
 
 	// Clean up legacy maas-api deployment from opendatahub/redhat-ods-applications namespace

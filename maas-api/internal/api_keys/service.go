@@ -70,6 +70,15 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string,
 ) (*CreateAPIKeyResponse, error) {
+	// Validate group names don't contain characters that would break JSON encoding in headers
+	// (CWE-116/CWE-74 mitigation). AuthPolicy uses CEL to build JSON arrays from groups,
+	// and CEL lacks JSON escaping functions, so we reject unsafe characters on write.
+	for _, group := range userGroups {
+		if strings.ContainsAny(group, `"\`) {
+			return nil, fmt.Errorf("group name %q contains invalid characters (quotes or backslashes are not allowed)", group)
+		}
+	}
+
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
 	maxDays := constant.DefaultAPIKeyMaxExpirationDays
 	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {

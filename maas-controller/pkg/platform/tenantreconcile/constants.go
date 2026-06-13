@@ -226,3 +226,30 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 	// TODO: Change to return "models-as-a-service" when DB migration is done
 	return "", nil
 }
+
+// TenantNameFor returns the tenant name used for database queries, AuthPolicy headers,
+// and maas-api TENANT_NAME environment variable. This is distinct from TenantIdentifierFor,
+// which is used for resource naming.
+//
+// Returns:
+//   - "models-as-a-service" for the default tenant (matches DB default and TENANT_NAME env var)
+//   - The tenant name for AITenant-managed tenants
+func TenantNameFor(tenant *maasv1alpha1.Tenant) (string, error) {
+	if tenant == nil {
+		return "models-as-a-service", nil
+	}
+
+	// Check if this Tenant is managed by AITenant controller
+	labels := tenant.GetLabels()
+	if labels != nil && labels[LabelManagedByAITenant] == "true" {
+		tenantName := labels[LabelTenantName]
+		if tenantName == "" {
+			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
+				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+		}
+		return tenantName, nil
+	}
+
+	// Default tenant uses "models-as-a-service" for database/headers
+	return "models-as-a-service", nil
+}

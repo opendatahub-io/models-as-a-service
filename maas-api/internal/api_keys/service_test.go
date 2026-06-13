@@ -292,11 +292,9 @@ func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
 	svc, store := createTestService(t)
 
 	// Create 3 keys for alice in tenant-a
-	tenantAIDs := make([]string, 3)
 	for i := range 3 {
 		_, hash := createTestAPIKey(t)
 		id := "tenant-a-key-" + string(rune('a'+i))
-		tenantAIDs[i] = id
 		err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false)
 		require.NoError(t, err)
 	}

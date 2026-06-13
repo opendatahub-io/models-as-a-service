@@ -35,7 +35,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
 				return nil, err
 			}
-		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName(tenantID):
+		case gvk == GVKDestinationRule && resource.GetName() == baseGatewayDestinationRuleName:
 			configureDestinationRule(log, resource, gatewayNamespace)
 		}
 
