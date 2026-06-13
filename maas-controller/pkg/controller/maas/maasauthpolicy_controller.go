@@ -888,8 +888,8 @@ allow {
 								// modelIdentity is dynamic (header or path), so this is always current
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
-										`has(auth.metadata["subscription-info"].namespace) && `+
-											`has(auth.metadata["subscription-info"].name) `+
+										`(has(auth.metadata["subscription-info"].namespace) && `+
+											`has(auth.metadata["subscription-info"].name)) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
 										celModelIdentity,
