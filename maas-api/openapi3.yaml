@@ -791,7 +791,7 @@ components:
                     example: premium
                 subscription_description:
                     type: string
-                    description: Human-readable description (from description annotation, falls back to display-name, then name)
+                    description: Human-readable description from the openshift.io/description annotation. May be empty if not set.
                     example: Premium Plan
                 display_name:
                     type: string
@@ -824,7 +824,6 @@ components:
                         env: production
             required:
                 - subscription_id_header
-                - subscription_description
                 - priority
                 - model_refs
 
