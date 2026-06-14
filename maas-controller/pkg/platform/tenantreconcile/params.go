@@ -20,6 +20,10 @@ type PlatformParams struct {
 	GatewayName      string
 	ClusterAudience  string
 
+	// TenantIdentifier is the tenant name used for per-tenant resource naming.
+	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
+	TenantIdentifier string
+
 	MaaSAPIImage           string
 	PayloadProcessingImage string
 	MaaSAPIKeyCleanupImage string
@@ -29,17 +33,23 @@ type PlatformParams struct {
 
 // BuildPlatformParams resolves all runtime parameters from the Tenant CR,
 // cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) PlatformParams {
+func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) (PlatformParams, error) {
+	tenantID, err := TenantIdentifierFor(tenant)
+	if err != nil {
+		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
+	}
+
 	return PlatformParams{
 		AppNamespace:            appNamespace,
 		GatewayNamespace:        tenant.Spec.GatewayRef.Namespace,
 		GatewayName:             tenant.Spec.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
+		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
-	}
+	}, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -61,54 +71,56 @@ func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
 // applyPlatformParams patches all dynamic values into rendered resources.
 func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured, params PlatformParams) error {
 	for i := range resources {
-		r := &resources[i]
-		gvk := r.GroupVersionKind()
-		name := r.GetName()
-
-		switch {
-		case gvk == GVKDeployment && name == MaaSAPIDeploymentName:
-			if err := patchMaaSAPIDeployment(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKDeployment && name == PayloadProcessingName:
-			if err := patchPayloadProcessingDeployment(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKCronJob && name == MaaSAPIKeyCleanupCronJobName:
-			if err := patchCleanupCronJobImage(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKHTTPRoute && name == MaaSAPIRouteName:
-			if err := patchHTTPRoute(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKDestinationRule && name == GatewayDestinationRuleName:
-			if err := patchMaaSAPIDestinationRule(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
-			if err := patchPayloadDestinationRule(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
-			if err := patchPayloadProcessingEnvoyFilter(log, r, params); err != nil {
-				return err
-			}
-		case gvk == GVKDeployment && name == PayloadPreProcessingName:
-			if err := patchPreProcessingDeployment(r, params); err != nil {
-				return err
-			}
-		case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
-			r.SetNamespace(params.GatewayNamespace)
-		case gvk == GVKServiceAccount && name == PayloadProcessingName:
-			r.SetNamespace(params.GatewayNamespace)
-		case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
-			r.SetNamespace(params.GatewayNamespace)
-		case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
-			if err := patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace); err != nil {
-				return err
-			}
+		if err := patchResource(log, &resources[i], params); err != nil {
+			return err
 		}
+	}
+	return nil
+}
+
+// patchResource applies tenant-specific patches to a single resource.
+func patchResource(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	gvk := r.GroupVersionKind()
+	name := r.GetName()
+	tenantID := params.TenantIdentifier
+
+	switch {
+	case gvk == GVKDeployment && name == baseMaaSAPIDeploymentName:
+		// Rename and patch maas-api Deployment for this tenant
+		r.SetName(MaaSAPIDeploymentName(tenantID))
+		return patchMaaSAPIDeployment(log, r, params)
+	case gvk == GVKDeployment && name == PayloadProcessingName:
+		return patchPayloadProcessingDeployment(log, r, params)
+	case gvk == GVKCronJob && name == baseMaaSAPIKeyCleanupCronJobName:
+		// Rename and patch cleanup CronJob for this tenant
+		r.SetName(MaaSAPIKeyCleanupCronJobName(tenantID))
+		return patchCleanupCronJobImage(log, r, params)
+	case gvk == GVKHTTPRoute && name == baseMaaSAPIRouteName:
+		// Rename and patch HTTPRoute for this tenant
+		r.SetName(MaaSAPIRouteName(tenantID))
+		return patchHTTPRoute(log, r, params)
+	case gvk == GVKDestinationRule && name == baseGatewayDestinationRuleName:
+		// Rename and patch DestinationRule for this tenant
+		r.SetName(GatewayDestinationRuleName(tenantID))
+		return patchMaaSAPIDestinationRule(log, r, params)
+	case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
+		return patchPayloadDestinationRule(log, r, params)
+	case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
+		return patchPayloadProcessingEnvoyFilter(log, r, params)
+	case gvk == GVKDeployment && name == PayloadPreProcessingName:
+		return patchPreProcessingDeployment(r, params)
+	case gvk == GVKService && name == baseMaaSAPIServiceName:
+		// Rename and patch maas-api Service for this tenant
+		r.SetName(MaaSAPIServiceName(tenantID))
+		return patchMaaSAPIService(log, r, params)
+	case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
+		r.SetNamespace(params.GatewayNamespace)
+	case gvk == GVKServiceAccount && name == PayloadProcessingName:
+		r.SetNamespace(params.GatewayNamespace)
+	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
+		r.SetNamespace(params.GatewayNamespace)
+	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
+		return patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace)
 	}
 	return nil
 }
@@ -126,6 +138,40 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+
+	// Set TENANT_NAME environment variable for per-tenant maas-api instances.
+	// This value is used by maas-api for logging context and will be used for
+	// database tenant_id filtering.
+	// Value: Empty string ("") for default tenant, tenant name (e.g., "redteam") for AITenant-managed tenants.
+	// TODO: Ensure maas-api code uses this for database queries: WHERE tenant_id = $TENANT_NAME
+	tenantName := params.TenantIdentifier
+	if tenantName == "" {
+		// TODO: When DB migration changes default tenant_id from "" to "models-as-a-service",
+		// update this to set TENANT_NAME="models-as-a-service" for the default tenant.
+		tenantName = ""
+	}
+	if err := setOrAddEnvVar(r, "maas-api", "TENANT_NAME", tenantName); err != nil {
+		return fmt.Errorf("patch TENANT_NAME: %w", err)
+	}
+
+	// Add tenant-instance label to pod template for unique Service selector matching.
+	// This ensures each tenant's Service only routes to its own pods.
+	// Use deployment name as the label value since it's already unique per tenant.
+	deploymentName := MaaSAPIDeploymentName(params.TenantIdentifier)
+	if err := addPodTemplateLabel(r, "maas.opendatahub.io/tenant-instance", deploymentName); err != nil {
+		return fmt.Errorf("patch tenant-instance label: %w", err)
+	}
+
+	return nil
+}
+
+func patchMaaSAPIService(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	// Add tenant-instance label to Service selector to ensure it only routes to its own pods.
+	// This matches the label we added to the Deployment's pod template.
+	deploymentName := MaaSAPIDeploymentName(params.TenantIdentifier)
+	if err := addServiceSelectorLabel(r, "maas.opendatahub.io/tenant-instance", deploymentName); err != nil {
+		return fmt.Errorf("patch tenant-instance selector: %w", err)
 	}
 	return nil
 }
@@ -154,6 +200,43 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 	if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
 		return fmt.Errorf("patch cleanup CronJob image: %w", err)
 	}
+
+	// Patch the cleanup command to use tenant-specific service name
+	containers, found, err := unstructured.NestedSlice(r.Object,
+		"spec", "jobTemplate", "spec", "template", "spec", "containers")
+	if err != nil {
+		return fmt.Errorf("read cleanup CronJob containers: %w", err)
+	}
+	if found && len(containers) > 0 {
+		container, ok := containers[0].(map[string]any)
+		if !ok {
+			return errors.New("cleanup CronJob container is not a map")
+		}
+		command, ok := container["command"].([]any)
+		if ok && len(command) > 0 {
+			tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
+			// Look for the curl command with maas-api:8443
+			modified := false
+			for i, cmdInterface := range command {
+				if cmd, ok := cmdInterface.(string); ok && strings.Contains(cmd, "maas-api:8443") {
+					// Replace maas-api with tenant-specific service name
+					newCmd := strings.ReplaceAll(cmd, "maas-api:8443", tenantServiceName+":8443")
+					command[i] = newCmd
+					modified = true
+					log.V(4).Info("Patching cleanup CronJob command URL", "old", "maas-api:8443", "new", tenantServiceName+":8443")
+				}
+			}
+			if modified {
+				container["command"] = command
+				containers[0] = container
+				if err := unstructured.SetNestedSlice(r.Object, containers,
+					"spec", "jobTemplate", "spec", "template", "spec", "containers"); err != nil {
+					return fmt.Errorf("write cleanup CronJob containers: %w", err)
+				}
+			}
+		}
+	}
+
 	return nil
 }
 
@@ -176,6 +259,58 @@ func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params Platfo
 	if err := unstructured.SetNestedSlice(r.Object, parentRefs, "spec", "parentRefs"); err != nil {
 		return fmt.Errorf("write HTTPRoute parentRefs: %w", err)
 	}
+
+	// Patch backendRefs to point to the per-tenant maas-api Service.
+	// The HTTPRoute has multiple rules (for /v1/models and /maas-api paths),
+	// and each rule has backendRefs that need to be updated.
+	tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
+	rules, found, err := unstructured.NestedSlice(r.Object, "spec", "rules")
+	if err != nil {
+		return fmt.Errorf("read HTTPRoute rules: %w", err)
+	}
+	if !found {
+		return errors.New("HTTPRoute rules not found")
+	}
+
+	for i, ruleRaw := range rules {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			return fmt.Errorf("HTTPRoute rule[%d] is not an object", i)
+		}
+		backendRefs, found, err := unstructured.NestedSlice(rule, "backendRefs")
+		if err != nil {
+			return fmt.Errorf("read HTTPRoute rule[%d] backendRefs: %w", i, err)
+		}
+		if !found {
+			return fmt.Errorf("HTTPRoute rule[%d] has no backendRefs", i)
+		}
+		rewritten := false
+		for j, backendRefRaw := range backendRefs {
+			backendRef, ok := backendRefRaw.(map[string]any)
+			if !ok {
+				return fmt.Errorf("HTTPRoute rule[%d] backendRef[%d] is not an object", i, j)
+			}
+			// Update the Service name to the per-tenant Service
+			if name, exists := backendRef["name"]; exists && name == "maas-api" {
+				backendRef["name"] = tenantServiceName
+				backendRefs[j] = backendRef
+				rewritten = true
+			}
+		}
+		if !rewritten {
+			return fmt.Errorf("HTTPRoute rule[%d] has no \"maas-api\" backendRef to rewrite", i)
+		}
+		if err := unstructured.SetNestedSlice(rule, backendRefs, "backendRefs"); err != nil {
+			return fmt.Errorf("write HTTPRoute rule[%d] backendRefs: %w", i, err)
+		}
+		rules[i] = rule
+	}
+
+	if err := unstructured.SetNestedSlice(r.Object, rules, "spec", "rules"); err != nil {
+		return fmt.Errorf("write HTTPRoute rules: %w", err)
+	}
+
+	log.V(4).Info("Patched HTTPRoute backendRefs", "service", tenantServiceName)
 	return nil
 }
 
@@ -189,7 +324,7 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 		return errors.New("maas-api DestinationRule host not found")
 	}
 	if host != "" {
-		newHost := replaceHostNamespace(host, params.AppNamespace)
+		newHost := fmt.Sprintf("%s.%s.svc.cluster.local", MaaSAPIServiceName(params.TenantIdentifier), params.AppNamespace)
 		log.V(4).Info("Patching maas-api DestinationRule host", "old", host, "new", newHost)
 		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
 			return fmt.Errorf("write maas-api DestinationRule host: %w", err)
@@ -284,7 +419,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
 		}
 		if err := unstructured.SetNestedField(patch,
-			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName, i-2),
+			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2),
 			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
 			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
 		}
@@ -384,4 +519,32 @@ func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image
 		}
 	}
 	return fmt.Errorf("container %q not found", containerName)
+}
+
+// addPodTemplateLabel adds a label to the Deployment's pod template spec.
+// This label will be set on all pods created by the Deployment.
+func addPodTemplateLabel(r *unstructured.Unstructured, key, value string) error {
+	labels, found, err := unstructured.NestedStringMap(r.Object, "spec", "template", "metadata", "labels")
+	if err != nil {
+		return fmt.Errorf("read pod template labels: %w", err)
+	}
+	if !found || labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[key] = value
+	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "template", "metadata", "labels")
+}
+
+// addServiceSelectorLabel adds a label to the Service selector.
+// This ensures the Service only routes to pods with matching labels.
+func addServiceSelectorLabel(r *unstructured.Unstructured, key, value string) error {
+	selector, found, err := unstructured.NestedStringMap(r.Object, "spec", "selector")
+	if err != nil {
+		return fmt.Errorf("read service selector: %w", err)
+	}
+	if !found || selector == nil {
+		selector = make(map[string]string)
+	}
+	selector[key] = value
+	return unstructured.SetNestedStringMap(r.Object, selector, "spec", "selector")
 }
