@@ -27,11 +27,11 @@ import (
 
 func TestAITenantValidator_ValidateCreate(t *testing.T) {
 	tests := []struct {
-		name               string
-		validator          *AITenantValidator
-		aitenant           *maasv1alpha1.AITenant
-		wantErr            bool
-		errContains        string
+		name        string
+		validator   *AITenantValidator
+		aitenant    *maasv1alpha1.AITenant
+		wantErr     bool
+		errContains string
 	}{
 		{
 			name: "allow aitenant in configured namespace",
@@ -86,7 +86,7 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 			errContains: "webhook validator not configured",
 		},
 		{
-			name: "reject when configured namespace is empty",
+			name:      "reject when configured namespace is empty",
 			validator: &AITenantValidator{},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
