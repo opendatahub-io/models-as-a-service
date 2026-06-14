@@ -125,16 +125,16 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 		return fmt.Errorf("no volumes found in deployment")
 	}
 
-	// Find and update the tls-cert volume's secret name
+	// Find and update the maas-api-tls volume's secret name
 	for i, vol := range volumes {
 		volMap, ok := vol.(map[string]any)
 		if !ok {
 			continue
 		}
 		name, _, _ := unstructured.NestedString(volMap, "name")
-		if name == "tls-cert" {
+		if name == "maas-api-tls" {
 			if err := unstructured.SetNestedField(volMap, secretName, "secret", "secretName"); err != nil {
-				return fmt.Errorf("failed to set tls-cert secret name: %w", err)
+				return fmt.Errorf("failed to set maas-api-tls secret name: %w", err)
 			}
 			volumes[i] = volMap
 			break
