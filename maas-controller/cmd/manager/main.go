@@ -674,9 +674,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup validating webhooks for MaaSSubscription and MaaSAuthPolicy to ensure they are only
-	// created in tenant-enabled namespaces. This prevents users from creating resources in
-	// random namespaces where they will be silently ignored.
+	// Setup validating webhooks for placement-sensitive MaaS resources.
+	if err := (&webhook.AITenantValidator{
+		AITenantNamespace: aitenantNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "AITenant")
+		os.Exit(1)
+	}
+
+	// MaaSSubscription and MaaSAuthPolicy must be created in tenant-enabled namespaces.
+	// This prevents users from creating resources in random namespaces where they
+	// would be silently ignored.
 	tenantValidator := &webhook.TenantNamespaceValidator{
 		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
 	}
