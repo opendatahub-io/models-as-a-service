@@ -2,7 +2,7 @@
 
 Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
-`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 ---
 
@@ -20,7 +20,7 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 ## Tenant Namespace
 
-For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. The derived namespace must be a valid Kubernetes DNS label, so the `AITenant` name can be at most 53 characters for non-default tenants. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
+For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. `AITenant` names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
 
 The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
 
@@ -78,7 +78,7 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: red-team
-  namespace: redhat-ai-gateway-infra
+  namespace: ai-tenants
 spec:
   gateway:
     name: red-team

@@ -31,6 +31,8 @@ const (
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Namespaced,shortName=ait
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.size() <= 41",message="AITenant name must be at most 41 characters (required for per-tenant resource naming with 63-character Kubernetes limit)"
+// +kubebuilder:validation:XValidation:rule="self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')",message="AITenant name must be a valid DNS-1123 label (lowercase alphanumeric and hyphens, starting and ending with alphanumeric)"
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Tenant Namespace",type=string,JSONPath=`.status.tenantNamespace`,description="Tenant namespace"
 // +kubebuilder:printcolumn:name="Gateway",type=string,JSONPath=`.status.gatewayRef.name`,description="Gateway name"
@@ -39,6 +41,11 @@ const (
 // AITenant bootstraps one tenant slice: a tenant namespace, an existing
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
 // and tenant-admin RBAC.
+//
+// The AITenant name is used as a suffix for per-tenant maas-api resources
+// (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
+// resource name limit while using the longest base name ("maas-api-auth-policy" = 21 chars),
+// AITenant names are restricted to 41 characters maximum (21 + 1 separator + 41 = 63).
 type AITenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -25,6 +25,8 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -157,7 +159,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	setDependenciesCondition(&tenant, true, "")
 
-	appNs := r.appNamespaceForTenant(&tenant)
+	appNs := r.appNamespaceForTenant()
 	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
 	setPrerequisiteConditionsFromReport(&tenant, rep)
 	if len(rep.Blocking) > 0 {
@@ -203,6 +205,25 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 20 * time.Second}, nil
+	}
+
+	// Clean up legacy maas-api deployment from opendatahub/redhat-ods-applications namespace
+	// after successful deployment to the infrastructure namespace. Use sync.Once + boolean flag
+	// to retry on transient failures while avoiding redundant GET requests after success.
+	r.cleanupMu.Lock()
+	if !r.cleanupCompleted {
+		r.cleanupMu.Unlock()
+		r.cleanupOnce.Do(func() {
+			if err := r.cleanupLegacyMaaSAPIDeployment(ctx, log); err != nil {
+				log.V(1).Info("failed to clean up legacy maas-api deployment (will retry)", "error", err)
+				return
+			}
+			r.cleanupMu.Lock()
+			r.cleanupCompleted = true
+			r.cleanupMu.Unlock()
+		})
+	} else {
+		r.cleanupMu.Unlock()
 	}
 
 	tenant.Status.Phase = "Active"
@@ -283,11 +304,10 @@ func (r *TenantReconciler) operatorNamespace() string {
 	return os.Getenv("WATCH_NAMESPACE")
 }
 
-func (r *TenantReconciler) appNamespaceForTenant(tenant *maasv1alpha1.Tenant) string {
-	if r.AppNamespace != "" {
-		return r.AppNamespace
-	}
-	return tenant.Namespace
+func (r *TenantReconciler) appNamespaceForTenant() string {
+	// All maas-api instances deploy to the operator namespace (opendatahub for ODH,
+	// redhat-ods-applications for RHOAI). The shared database secret also lives in this namespace.
+	return tenantreconcile.DefaultMaaSAPINamespace
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {
@@ -326,4 +346,62 @@ func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1
 		LastTransitionTime: metav1.Now(),
 	})
 	return r.Status().Update(ctx, tenant)
+}
+
+func (r *TenantReconciler) cleanupLegacyMaaSAPIDeployment(ctx context.Context, log logr.Logger) error {
+	// Clean up maas-api resources from legacy namespaces.
+	// Currently no legacy namespaces - maas-api deploys to operator namespace
+	// (opendatahub for ODH, redhat-ods-applications for RHOAI).
+	legacyNamespaces := []string{}
+
+	for _, ns := range legacyNamespaces {
+		// Check if legacy Deployment exists
+		var dep appsv1.Deployment
+		err := r.Get(ctx, types.NamespacedName{Namespace: ns, Name: "maas-api"}, &dep)
+		if err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check for legacy maas-api deployment in %s: %w", ns, err)
+		}
+
+		if err == nil {
+			// Found legacy deployment - verify it's ours before deleting
+			labels := dep.GetLabels()
+			if labels == nil || labels["app.kubernetes.io/part-of"] != "models-as-a-service" {
+				log.Info("Skipping deletion of maas-api deployment - not owned by MaaS", "namespace", ns)
+				continue
+			}
+
+			// Found legacy deployment - clean up all related resources
+			log.Info("Cleaning up legacy maas-api resources", "namespace", ns)
+
+			// Delete Deployment
+			if err := r.Delete(ctx, &dep); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete legacy maas-api deployment from %s: %w", ns, err)
+			}
+
+			// Delete Service
+			if err := r.Delete(ctx, &corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "maas-api", Namespace: ns},
+			}); err != nil && !apierrors.IsNotFound(err) {
+				log.V(1).Info("failed to delete legacy Service (non-fatal)", "namespace", ns, "error", err)
+			}
+
+			// Delete HTTPRoute
+			if err := r.Delete(ctx, &gwapiv1.HTTPRoute{
+				ObjectMeta: metav1.ObjectMeta{Name: "maas-api-route", Namespace: ns},
+			}); err != nil && !apierrors.IsNotFound(err) {
+				log.V(1).Info("failed to delete legacy HTTPRoute (non-fatal)", "namespace", ns, "error", err)
+			}
+
+			// Delete ConfigMap (if any)
+			if err := r.Delete(ctx, &corev1.ConfigMap{
+				ObjectMeta: metav1.ObjectMeta{Name: "maas-api-config", Namespace: ns},
+			}); err != nil && !apierrors.IsNotFound(err) {
+				log.V(1).Info("failed to delete legacy ConfigMap (non-fatal)", "namespace", ns, "error", err)
+			}
+
+			log.Info("Successfully cleaned up legacy maas-api resources", "namespace", ns)
+		}
+	}
+
+	return nil
 }

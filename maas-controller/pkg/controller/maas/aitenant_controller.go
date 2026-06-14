@@ -45,9 +45,6 @@ import (
 )
 
 const (
-	// DefaultAITenantNamespace is the default infrastructure namespace for AITenant CRs.
-	DefaultAITenantNamespace = "redhat-ai-gateway-infra"
-
 	aitenantFinalizer = "maas.opendatahub.io/aitenant-cleanup"
 
 	aitenantManagedLabel = "maas.opendatahub.io/managed-by-aitenant"
@@ -199,7 +196,7 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 
 func (r *AITenantReconciler) aitenantNamespace() string {
 	if r.AITenantNamespace == "" {
-		return DefaultAITenantNamespace
+		return tenantreconcile.DefaultAITenantNamespace
 	}
 	return r.AITenantNamespace
 }
