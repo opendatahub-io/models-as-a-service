@@ -97,7 +97,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayNamespace, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAMESPACE"))
 	assert.Equal(t, params.GatewayName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "GATEWAY_NAME"))
 	assert.Equal(t, params.APIKeyMaxExpirationDays, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS"))
-	assert.Equal(t, tenantID, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "TENANT_NAME"))
+	// TENANT_NAME is "models-as-a-service" for default tenant (empty tenantID), otherwise tenantID
+	expectedTenantName := tenantID
+	if expectedTenantName == "" {
+		expectedTenantName = "models-as-a-service"
+	}
+	assert.Equal(t, expectedTenantName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "TENANT_NAME"))
 
 	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
 	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())

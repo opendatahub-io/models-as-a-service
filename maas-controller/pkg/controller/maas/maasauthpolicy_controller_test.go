@@ -1231,7 +1231,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	}
 
 	t.Run("without OIDC", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "models-as-a-service")
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1254,7 +1254,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 			IssuerURL: "https://keycloak.example.com/realms/test",
 			ClientID:  "maas-client",
 		}
-		spec := r.buildGatewayAuthPolicySpec("{}", oidc)
+		spec := r.buildGatewayAuthPolicySpec("{}", oidc, "models-as-a-service")
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
