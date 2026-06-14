@@ -7,11 +7,11 @@
 # storage; for production use AWS RDS, Crunchy Operator, or Azure Database.
 #
 # Namespace selection:
-#   - Use NAMESPACE environment variable if set
-#   - Default: opendatahub (ODH) or redhat-ods-applications (RHOAI)
+#   - Auto-detects upgrades vs fresh installs
+#   - Upgrades: Keeps postgres in opendatahub/redhat-ods-applications, copies secret to redhat-ai-gateway-infra
+#   - Fresh installs: Creates postgres in redhat-ai-gateway-infra
 #
 # Environment variables:
-#   NAMESPACE          Target namespace (default: opendatahub)
 #   POSTGRES_USER      Database user (default: maas)
 #   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
@@ -20,7 +20,6 @@
 #
 # Usage:
 #   ./scripts/setup-database.sh
-#   NAMESPACE=redhat-ods-applications ./scripts/setup-database.sh
 #
 # Docker alternative: Replace 'kubectl' with 'oc' if using OpenShift.
 #
@@ -32,8 +31,11 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
-# Default namespace for ODH; use redhat-ods-applications for RHOAI
-: "${NAMESPACE:=opendatahub}"
+# Infrastructure namespace where maas-api and postgres deploy (uses operator namespace)
+INFRA_NAMESPACE="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+
+# Legacy namespaces to check for existing postgres (upgrade detection)
+LEGACY_NAMESPACES=("opendatahub" "redhat-ods-applications")
 
 # Fallback image when the RHOAI operator CSV is not available (e.g., vanilla
 # Kubernetes, ODH-only clusters, or dev environments without OLM).
@@ -55,12 +57,61 @@ resolve_postgres_image() {
   fi
 }
 
-# Ensure namespace exists
-if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
-  echo "📦 Creating namespace '$NAMESPACE'..."
-  kubectl create namespace "$NAMESPACE"
+# Detect upgrade vs fresh install by checking for existing postgres in legacy namespaces or infrastructure namespace
+EXISTING_POSTGRES_NS=""
+# Check infrastructure namespace first (current location)
+if kubectl get deployment postgres -n "$INFRA_NAMESPACE" &>/dev/null 2>&1; then
+  EXISTING_POSTGRES_NS="$INFRA_NAMESPACE"
+else
+  # Fall back to checking legacy namespaces for upgrade scenario
+  for ns in "${LEGACY_NAMESPACES[@]}"; do
+    if kubectl get deployment postgres -n "$ns" &>/dev/null 2>&1; then
+      EXISTING_POSTGRES_NS="$ns"
+      break
+    fi
+  done
 fi
 
+if [[ -n "$EXISTING_POSTGRES_NS" ]]; then
+  # UPGRADE PATH: postgres exists in legacy namespace
+  echo ""
+  echo "🔄 Detected existing PostgreSQL in namespace '$EXISTING_POSTGRES_NS'"
+  echo "  Upgrade mode: Keeping postgres in place, ensuring secret exists in infrastructure namespace"
+  echo ""
+
+  # Get existing connection URL and update to use FQDN
+  if ! kubectl get secret maas-db-config -n "$EXISTING_POSTGRES_NS" &>/dev/null; then
+    echo "❌ Error: postgres exists but maas-db-config secret not found in $EXISTING_POSTGRES_NS" >&2
+    exit 1
+  fi
+
+  EXISTING_URL=$(kubectl get secret maas-db-config -n "$EXISTING_POSTGRES_NS" -o jsonpath='{.data.DB_CONNECTION_URL}' | base64 -d)
+
+  # Replace short hostname with FQDN for cross-namespace access.
+  # Extract the service name from the connection URL and append the namespace FQDN.
+  # Handles URLs like: postgresql://user:pass@postgres:5432/db or @postgres-primary:5432/db
+  # Only append FQDN if the hostname doesn't already contain dots (not already a FQDN)
+  FQDN_URL=$(echo "$EXISTING_URL" | sed -E "s|@([^.:/@]+)(:[0-9]+)|@\1.${EXISTING_POSTGRES_NS}.svc.cluster.local\2|")
+
+  # Ensure infrastructure namespace exists
+  if ! kubectl get namespace "$INFRA_NAMESPACE" >/dev/null 2>&1; then
+    echo "📦 Creating infrastructure namespace '$INFRA_NAMESPACE'..."
+    kubectl create namespace "$INFRA_NAMESPACE"
+  fi
+
+  # Create/update secret in infrastructure namespace with FQDN
+  echo "  Creating maas-db-config secret in '$INFRA_NAMESPACE' with FQDN connection string"
+  create_maas_db_config_secret "$INFRA_NAMESPACE" "$FQDN_URL"
+
+  echo ""
+  echo "✅ Upgrade complete"
+  echo "  PostgreSQL: $EXISTING_POSTGRES_NS/postgres (unchanged)"
+  echo "  Secret: $INFRA_NAMESPACE/maas-db-config (FQDN connection)"
+  echo ""
+  exit 0
+fi
+
+# FRESH INSTALL PATH: No existing postgres found
 echo ""
 echo "┏━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓"
 echo "┃  ⚠️  WARNING FOR PRODUCTION USE. ⚠️                             ┃"
@@ -70,24 +121,28 @@ echo "┃  For production, use an external database:                      ┃"
 echo "┃    deploy.sh --postgres-connection postgresql://...             ┃"
 echo "┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛"
 echo ""
-echo "🔧 Deploying PostgreSQL for API key storage in namespace '$NAMESPACE'..."
+echo "🔧 Fresh install: Deploying PostgreSQL in infrastructure namespace '$INFRA_NAMESPACE'..."
 
-# Check if PostgreSQL already exists
-if kubectl get deployment postgres -n "$NAMESPACE" &>/dev/null; then
-  echo "  PostgreSQL already deployed in namespace $NAMESPACE"
-  echo "  Service: postgres:5432"
-  echo "  Secret: maas-db-config (contains DB_CONNECTION_URL)"
-  exit 0
+# Ensure infrastructure namespace exists
+if ! kubectl get namespace "$INFRA_NAMESPACE" >/dev/null 2>&1; then
+  echo "📦 Creating infrastructure namespace '$INFRA_NAMESPACE'..."
+  kubectl create namespace "$INFRA_NAMESPACE"
 fi
 
 # PostgreSQL configuration (POC-grade, not for production)
 POSTGRES_USER="${POSTGRES_USER:-maas}"
 POSTGRES_DB="${POSTGRES_DB:-maas}"
 
-# Generate random password if not provided
+# Generate random password if not provided and secret doesn't already exist
 if [[ -z "${POSTGRES_PASSWORD:-}" ]]; then
-  POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
-  echo "  Generated random PostgreSQL password (stored in secret postgres-creds)"
+  # Check if postgres-creds secret already exists (from previous run)
+  if kubectl get secret postgres-creds -n "$INFRA_NAMESPACE" &>/dev/null; then
+    echo "  Using existing postgres-creds secret (password preserved from previous deployment)"
+    POSTGRES_PASSWORD="$(kubectl get secret postgres-creds -n "$INFRA_NAMESPACE" -o jsonpath='{.data.POSTGRES_PASSWORD}' | base64 -d)"
+  else
+    POSTGRES_PASSWORD="$(openssl rand -base64 32 | tr -d '/+=' | cut -c1-32)"
+    echo "  Generated random PostgreSQL password (stored in secret postgres-creds)"
+  fi
 fi
 
 echo "  Creating PostgreSQL deployment..."
@@ -103,7 +158,7 @@ echo "  Image: ${POSTGRES_IMAGE}"
 echo ""
 
 # Deploy PostgreSQL resources
-kubectl apply -n "$NAMESPACE" -f - <<EOF
+kubectl apply -n "$INFRA_NAMESPACE" -f - <<EOF
 apiVersion: v1
 kind: Secret
 metadata:
@@ -200,19 +255,20 @@ EOF
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
 : "${DB_SSLMODE:=require}"
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
-create_maas_db_config_secret "$NAMESPACE" "$DB_CONNECTION_URL"
+create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
 
 echo "  Waiting for PostgreSQL to be ready..."
-if ! kubectl wait -n "$NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
+if ! kubectl wait -n "$INFRA_NAMESPACE" --for=condition=available deployment/postgres --timeout=120s; then
   echo "❌ PostgreSQL deployment failed to become ready" >&2
   exit 1
 fi
 
 echo ""
 echo "✅ PostgreSQL deployed successfully"
+echo "  Namespace: $INFRA_NAMESPACE"
 echo "  Database: $POSTGRES_DB"
 echo "  User: $POSTGRES_USER"
-echo "  Secret: maas-db-config (contains DB_CONNECTION_URL)"
+echo "  Secret: maas-db-config (contains DB_CONNECTION_URL with FQDN)"
 echo ""
 echo "  ⚠️  For production, use AWS RDS, Crunchy Operator, or Azure Database"
 echo "  Note: Schema migrations run automatically when maas-api starts"

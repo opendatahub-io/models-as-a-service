@@ -1,6 +1,6 @@
 # Default namespace: opendatahub (ODH overlay). Override via kustomize.
-# MAAS_API_NAMESPACE uses the pod's namespace (downward API) so maas-api is assumed
-# to run in the same namespace as maas-controller.
+# MAAS_API_NAMESPACE points to the infrastructure namespace where maas-api runs.
+# This is separate from the controller's namespace to support the namespace split architecture.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -28,6 +28,7 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
@@ -36,6 +37,10 @@ spec:
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
         env:
+          - name: CONTROLLER_NAMESPACE
+            valueFrom:
+              fieldRef:
+                fieldPath: metadata.namespace
           - name: GATEWAY_NAME
             value: "maas-default-gateway"
           - name: GATEWAY_NAMESPACE
@@ -47,7 +52,7 @@ spec:
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
-            value: "redhat-ai-gateway-infra"
+            value: "ai-tenants"
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
