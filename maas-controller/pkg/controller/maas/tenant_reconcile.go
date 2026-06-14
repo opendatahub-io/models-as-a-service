@@ -30,6 +30,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -86,6 +88,12 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// Clean up gateway AuthPolicy before allowing deletion
 		if err := r.cleanupGatewayAuthPolicy(ctx, log, &tenant); err != nil {
 			log.Error(err, "failed to cleanup gateway AuthPolicy")
+			return ctrl.Result{}, err
+		}
+
+		// Clean up per-tenant maas-api resources
+		if err := r.cleanupTenantResources(ctx, log, &tenant); err != nil {
+			log.Error(err, "failed to cleanup tenant resources")
 			return ctrl.Result{}, err
 		}
 		return ctrl.Result{}, nil
@@ -434,6 +442,65 @@ func (r *TenantReconciler) cleanupLegacyMaaSAPIDeployment(ctx context.Context, l
 
 			log.Info("Successfully cleaned up legacy maas-api resources", "namespace", ns)
 		}
+	}
+
+	return nil
+}
+
+// cleanupTenantResources deletes per-tenant maas-api resources when the Tenant is being deleted.
+// These resources are owned by Config/default (for lifecycle management), not by the Tenant,
+// so they won't be garbage collected automatically and must be explicitly deleted.
+func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
+	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
+	if err != nil {
+		return err
+	}
+
+	// Skip cleanup for default tenant (tenantID="") - those resources are managed by Config lifecycle
+	if tenantID == "" {
+		return nil
+	}
+
+	appNs := r.appNamespaceForTenant()
+	log.Info("Cleaning up per-tenant maas-api resources", "tenant", tenantID, "namespace", appNs)
+
+	// List of resources to delete (name functions from tenantreconcile package)
+	resourcesToDelete := []struct {
+		gvk  schema.GroupVersionKind
+		name string
+	}{
+		{
+			gvk:  tenantreconcile.GVKDeployment,
+			name: tenantreconcile.MaaSAPIDeploymentName(tenantID),
+		},
+		{
+			gvk:  tenantreconcile.GVKService,
+			name: tenantreconcile.MaaSAPIServiceName(tenantID),
+		},
+		{
+			gvk:  tenantreconcile.GVKHTTPRoute,
+			name: "maas-api-route-" + tenantID,
+		},
+		{
+			gvk:  tenantreconcile.GVKCronJob,
+			name: tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
+		},
+	}
+
+	for _, res := range resourcesToDelete {
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(res.gvk)
+		obj.SetName(res.name)
+		obj.SetNamespace(appNs)
+
+		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+			log.Error(err, "failed to delete tenant resource",
+				"gvk", res.gvk.String(),
+				"name", res.name,
+				"namespace", appNs)
+			return err
+		}
+		log.Info("Deleted tenant resource", "gvk", res.gvk.Kind, "name", res.name)
 	}
 
 	return nil
