@@ -72,15 +72,16 @@ data:
 EOF
 
 # Create Gateway (without hostname field to avoid SNI filtering)
+# Note: Gateway name must match tenant name (AITenant controller defaults gatewayRef.name to tenant name)
 oc apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
 metadata:
-  name: ${TENANT_NAME}-gateway
+  name: ${TENANT_NAME}
   namespace: ${GATEWAY_NAMESPACE}
   labels:
     app.kubernetes.io/component: gateway
-    app.kubernetes.io/instance: ${TENANT_NAME}-gateway
+    app.kubernetes.io/instance: ${TENANT_NAME}
     app.kubernetes.io/name: maas
     opendatahub.io/managed: "false"
   annotations:
@@ -111,26 +112,26 @@ EOF
 # Wait for Gateway to be accepted
 echo "Waiting for Gateway to be accepted..."
 sleep 5
-if oc get gateway "${TENANT_NAME}-gateway" -n "$GATEWAY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True"; then
+if oc get gateway "${TENANT_NAME}" -n "$GATEWAY_NAMESPACE" -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True"; then
     echo "Gateway accepted"
 else
     echo "Warning: Gateway may not be ready yet"
 fi
 
 # Create OpenShift Route for external access
-GATEWAY_SERVICE_NAME="${TENANT_NAME}-gateway-openshift-default"
+GATEWAY_SERVICE_NAME="${TENANT_NAME}-openshift-default"
 
 oc apply -f - <<EOF
 apiVersion: route.openshift.io/v1
 kind: Route
 metadata:
-  name: ${TENANT_NAME}-gateway-route
+  name: ${TENANT_NAME}-route
   namespace: ${GATEWAY_NAMESPACE}
   labels:
     app.kubernetes.io/name: maas
     app.kubernetes.io/component: gateway
-    app.kubernetes.io/instance: ${TENANT_NAME}-gateway
-    gateway.networking.k8s.io/gateway-name: ${TENANT_NAME}-gateway
+    app.kubernetes.io/instance: ${TENANT_NAME}
+    gateway.networking.k8s.io/gateway-name: ${TENANT_NAME}
 spec:
   host: ${GATEWAY_HOSTNAME}
   to:
@@ -145,6 +146,7 @@ spec:
 EOF
 
 # Create AITenant CR
+# Note: gatewayRef is optional - controller defaults to {name: <aitenant-name>, namespace: openshift-ingress}
 oc apply -f - <<EOF
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
@@ -154,9 +156,6 @@ metadata:
 spec:
   tenantNamespace:
     name: ${TENANT_NAMESPACE}
-  gatewayRef:
-    name: ${TENANT_NAME}-gateway
-    namespace: ${GATEWAY_NAMESPACE}
   rbac:
     admins:
     - kind: User
@@ -167,15 +166,15 @@ echo ""
 echo "Tenant creation initiated successfully"
 echo ""
 echo "Resources created:"
-echo "  Gateway:          ${TENANT_NAME}-gateway (${GATEWAY_NAMESPACE})"
-echo "  Route:            ${TENANT_NAME}-gateway-route"
+echo "  Gateway:          ${TENANT_NAME} (${GATEWAY_NAMESPACE})"
+echo "  Route:            ${TENANT_NAME}-route (${GATEWAY_NAMESPACE})"
 echo "  AITenant:         ${TENANT_NAME} (${AITENANT_NAMESPACE})"
 echo ""
 echo "The MaaS controller will automatically create:"
 echo "  Namespace:        ${TENANT_NAMESPACE}"
 echo "  Tenant CR:        default-tenant (${TENANT_NAMESPACE})"
 echo "  Deployment:       maas-api-${TENANT_NAME} (opendatahub)"
-echo "  AuthPolicy:       ${TENANT_NAME}-gateway-maas-auth (${GATEWAY_NAMESPACE})"
+echo "  AuthPolicy:       ${TENANT_NAME}-maas-auth (${GATEWAY_NAMESPACE})"
 echo ""
 echo "Monitor status:"
 echo "  oc get aitenant ${TENANT_NAME} -n ${AITENANT_NAMESPACE} -w"
