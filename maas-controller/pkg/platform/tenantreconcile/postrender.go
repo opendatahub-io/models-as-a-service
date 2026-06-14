@@ -37,6 +37,11 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 			}
 		case gvk == GVKDestinationRule && resource.GetName() == baseGatewayDestinationRuleName:
 			configureDestinationRule(log, resource, gatewayNamespace)
+		case gvk.Group == "" && gvk.Kind == "Service" && resource.GetName() == "maas-api":
+			// Make TLS secret name unique per tenant
+			if err := configureMaaSAPIService(log, resource, tenantID); err != nil {
+				return nil, err
+			}
 		}
 
 		filteredResources = append(filteredResources, *resource)
@@ -78,6 +83,25 @@ func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstr
 func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace string) {
 	log.V(4).Info("Configuring DestinationRule", "name", resource.GetName(), "newNamespace", gatewayNamespace)
 	resource.SetNamespace(gatewayNamespace)
+}
+
+func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
+	// For default tenant (tenantID=""), use "maas-api-serving-cert"
+	// For other tenants, use "maas-api-{tenantID}-serving-cert"
+	secretName := "maas-api-serving-cert"
+	if tenantID != "" {
+		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
+	}
+
+	annotations := resource.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations["service.beta.openshift.io/serving-cert-secret-name"] = secretName
+	resource.SetAnnotations(annotations)
+
+	log.V(4).Info("Configured maas-api Service TLS secret", "tenantID", tenantID, "secretName", secretName)
+	return nil
 }
 
 func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {
