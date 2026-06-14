@@ -108,10 +108,10 @@ func (r *TenantReconciler) reconcileGatewayAuthPolicy(ctx context.Context, tenan
 	authPolicy.SetName(authPolicyName)
 	authPolicy.SetNamespace(gatewayNS)
 	authPolicy.SetLabels(map[string]string{
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-tenant-gateway-auth",
-		"app.kubernetes.io/component":  "gateway-auth",
-		tenantreconcile.LabelTenantName: tenant.Name,
+		"app.kubernetes.io/managed-by":       "maas-controller",
+		"app.kubernetes.io/part-of":          "maas-tenant-gateway-auth",
+		"app.kubernetes.io/component":        "gateway-auth",
+		tenantreconcile.LabelTenantName:      tenant.Name,
 		tenantreconcile.LabelTenantNamespace: tenant.Namespace,
 	})
 

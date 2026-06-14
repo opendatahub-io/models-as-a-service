@@ -386,7 +386,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// SKIP when TenantNamespaceDiscoveryEnabled - TenantReconciler owns all gateway AuthPolicies.
 	// TEMPORARY: Force enable to debug rate limiting - TenantReconciler version is disabled
 	if true {
-		if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID); err != nil{
+		if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID); err != nil {
 			log.Error(err, "failed to reconcile gateway AuthPolicy")
 			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
 			return ctrl.Result{}, err

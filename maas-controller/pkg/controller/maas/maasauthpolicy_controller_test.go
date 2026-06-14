@@ -1274,7 +1274,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-info has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "models-as-a-service")
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
@@ -1295,7 +1295,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-valid has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "models-as-a-service")
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
@@ -1316,7 +1316,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "models-as-a-service")
 		obj := gwSpecToUnstructured(t, spec)
 
 		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
