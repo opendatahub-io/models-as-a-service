@@ -560,8 +560,8 @@ type modelSubjectAllowlist struct {
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, tenantID, gatewayNamespace, gatewayName string) map[string]any {
-	// Construct tenant-specific maas-api service name
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
 	if tenantID != "" {
@@ -894,7 +894,8 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"expression": strconv.Quote(tenantID),
+							// Use tenantName (DB/header value) not tenantID (resource identifier)
+							"expression": strconv.Quote(tenantName),
 						},
 						"key":      "X-MaaS-Tenant",
 						"metrics":  false,
@@ -1009,7 +1010,15 @@ allow {
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, tenantID, gatewayNamespace, gatewayName string) error {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID)
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, gatewayNamespace, gatewayName)
+
+	// Calculate tenantName from tenantID
+	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
+	tenantName := "models-as-a-service"
+	if tenantID != "" {
+		tenantName = tenantID
+	}
+
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, tenantName, gatewayNamespace, gatewayName)
 
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
