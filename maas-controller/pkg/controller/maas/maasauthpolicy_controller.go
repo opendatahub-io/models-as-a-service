@@ -127,28 +127,28 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, lo
 
 	if err := r.Get(ctx, tenantKey, tenant); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.V(1).Info("Tenant not found, using default tenant name",
+			log.V(1).Info("Tenant not found, assuming default tenant (empty identifier)",
 				"tenantName", maasv1alpha1.TenantInstanceName,
 				"tenantNamespace", policyNamespace)
-			// Fallback to default tenant name
-			return "models-as-a-service"
+			// Fallback to default tenant identifier (empty string)
+			return ""
 		}
-		log.Error(err, "failed to get Tenant resource, using default tenant name as fallback",
+		log.Error(err, "failed to get Tenant resource, using default tenant identifier as fallback",
 			"tenantName", maasv1alpha1.TenantInstanceName,
 			"tenantNamespace", policyNamespace)
-		return "models-as-a-service"
+		return ""
 	}
 
-	// Use TenantNameFor instead of TenantIdentifierFor - we need the DB/header name,
-	// not the resource naming identifier
-	tenantName, err := tenantreconcile.TenantNameFor(tenant)
+	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
+	// Returns "" for default tenant, tenantID for others.
+	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
-		log.Error(err, "failed to determine tenant name, using default as fallback")
-		return "models-as-a-service"
+		log.Error(err, "failed to determine tenant identifier, using empty string (default) as fallback")
+		return ""
 	}
 
-	log.V(1).Info("Tenant name resolved", "tenantName", tenantName, "namespace", policyNamespace)
-	return tenantName
+	log.V(1).Info("Tenant identifier resolved", "tenantIdentifier", tenantIdentifier, "namespace", policyNamespace)
+	return tenantIdentifier
 }
 
 // fetchOIDCConfig fetches OIDC configuration from the Tenant CR in the given
