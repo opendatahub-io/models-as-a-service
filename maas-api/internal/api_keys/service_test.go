@@ -1027,3 +1027,54 @@ func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subsc
 	//nolint:unqueryvet // False positive - not a SQL query
 	return m.Select(nil, "", "", "")
 }
+
+func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	validGroups := [][]string{
+		{"system:authenticated"},
+		{"my-group"},
+		{"group.with.dots"},
+		{"group_with_underscores"},
+		{"GROUP123"},
+		{"a:b:c"},
+		{"mix-of_all.types:123"},
+	}
+
+	for _, groups := range validGroups {
+		t.Run("valid_"+groups[0], func(t *testing.T) {
+			_, err := svc.CreateAPIKey(ctx, "user", groups, "test-key", "", nil, false, "", "tenant")
+			require.NoError(t, err, "group %q should be valid", groups[0])
+		})
+	}
+
+	invalidGroups := []struct {
+		group  string
+		reason string
+	}{
+		{`group"with"quotes`, "double quotes"},
+		{`group\with\backslash`, "backslashes"},
+		{`group with spaces`, "spaces"},
+		{"group\nwith\nnewline", "newlines"},
+		{"group\twith\ttab", "tabs"},
+		{"group;with;semicolon", "semicolons"},
+		{"group,with,comma", "commas"},
+		{"group[with]brackets", "brackets"},
+		{"group{with}braces", "braces"},
+		{"group(with)parens", "parentheses"},
+		{"group=with=equals", "equals"},
+		{"group$with$dollar", "dollar signs"},
+		{"group@with@at", "at signs"},
+	}
+
+	for _, tc := range invalidGroups {
+		t.Run("invalid_"+tc.reason, func(t *testing.T) {
+			_, err := svc.CreateAPIKey(ctx, "user", []string{tc.group}, "test-key", "", nil, false, "", "tenant")
+			require.Error(t, err, "group with %s should be rejected", tc.reason)
+			assert.Contains(t, err.Error(), "invalid characters", "error should mention invalid characters")
+		})
+	}
+}
