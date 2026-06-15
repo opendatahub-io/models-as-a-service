@@ -133,11 +133,8 @@ metadata:
   name: {TEST_TENANT_NAME}
   namespace: {AITENANT_NAMESPACE}
 spec:
-  tenantNamespace:
-    name: ai-tenant-{TEST_TENANT_NAME}
-  gatewayRef:
+  gateway:
     name: {test_gateway}
-    namespace: {GATEWAY_NAMESPACE}
 """
 
     result = subprocess.run(
