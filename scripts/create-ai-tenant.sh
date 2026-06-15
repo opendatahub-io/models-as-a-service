@@ -147,6 +147,7 @@ EOF
 
 # Create AITenant CR
 # Note: gatewayRef is optional - controller defaults to {name: <aitenant-name>, namespace: openshift-ingress}
+# Note: tenantNamespace is derived as ai-tenant-<name> for non-default tenants (PR #992)
 oc apply -f - <<EOF
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
@@ -154,8 +155,6 @@ metadata:
   name: ${TENANT_NAME}
   namespace: ${AITENANT_NAMESPACE}
 spec:
-  tenantNamespace:
-    name: ${TENANT_NAMESPACE}
   rbac:
     admins:
     - kind: User
