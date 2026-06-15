@@ -524,7 +524,7 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		},
 		{
 			gvk:  tenantreconcile.GVKHTTPRoute,
-			name: "maas-api-route-" + tenantID,
+			name: fmt.Sprintf("maas-api-%s-route", tenantID),
 		},
 		{
 			gvk:  tenantreconcile.GVKCronJob,

@@ -48,6 +48,11 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 			if err := configureMaaSAPIDeployment(log, resource, tenantID); err != nil {
 				return nil, err
 			}
+		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
+			// Configure per-tenant HTTPRoute
+			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, tenant, params); err != nil {
+				return nil, err
+			}
 		}
 
 		filteredResources = append(filteredResources, *resource)
@@ -369,4 +374,81 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["model"] = "responseBodyJSON(\"/model\")"
 	}
 	return labels
+}
+
+func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, tenant *maasv1alpha1.Tenant, params PlatformParams) error {
+	tenantID := params.TenantIdentifier
+
+	// Rename HTTPRoute for non-default tenants
+	if tenantID != "" {
+		newName := fmt.Sprintf("maas-api-%s-route", tenantID)
+		log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
+		resource.SetName(newName)
+	}
+
+	// Get parentRefs array first
+	parentRefs, found, err := unstructured.NestedSlice(resource.Object, "spec", "parentRefs")
+	if err != nil || !found || len(parentRefs) == 0 {
+		return fmt.Errorf("HTTPRoute has no parentRefs: %w", err)
+	}
+
+	// Update first parentRef
+	parentRefMap, ok := parentRefs[0].(map[string]any)
+	if !ok {
+		return errors.New("parentRefs[0] is not a map")
+	}
+	parentRefMap["name"] = gatewayName
+	parentRefMap["namespace"] = gatewayNamespace
+	parentRefs[0] = parentRefMap
+
+	if err := unstructured.SetNestedSlice(resource.Object, parentRefs, "spec", "parentRefs"); err != nil {
+		return fmt.Errorf("failed to set HTTPRoute parentRefs: %w", err)
+	}
+
+	// Update backendRefs to point to tenant-specific maas-api service
+	serviceName := MaaSAPIServiceName(tenantID)
+
+	// Update both rules (v1/models and /maas-api)
+	rules, found, err := unstructured.NestedSlice(resource.Object, "spec", "rules")
+	if err != nil {
+		return fmt.Errorf("failed to get HTTPRoute rules: %w", err)
+	}
+	if !found || len(rules) == 0 {
+		return errors.New("HTTPRoute has no rules")
+	}
+
+	for i := range rules {
+		ruleMap, ok := rules[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		backendRefs, found, err := unstructured.NestedSlice(ruleMap, "backendRefs")
+		if err != nil || !found || len(backendRefs) == 0 {
+			continue
+		}
+		for j := range backendRefs {
+			backendMap, ok := backendRefs[j].(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := unstructured.SetNestedField(backendMap, serviceName, "name"); err != nil {
+				return fmt.Errorf("failed to set backendRefs[%d].name: %w", j, err)
+			}
+			backendRefs[j] = backendMap
+		}
+		if err := unstructured.SetNestedSlice(ruleMap, backendRefs, "backendRefs"); err != nil {
+			return fmt.Errorf("failed to set rule[%d].backendRefs: %w", i, err)
+		}
+		rules[i] = ruleMap
+	}
+
+	if err := unstructured.SetNestedSlice(resource.Object, rules, "spec", "rules"); err != nil {
+		return fmt.Errorf("failed to set HTTPRoute rules: %w", err)
+	}
+
+	log.V(4).Info("Configured maas-api HTTPRoute",
+		"tenantID", tenantID,
+		"gateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName),
+		"service", serviceName)
+	return nil
 }
