@@ -57,7 +57,7 @@ echo "API Key: ${API_KEY}"
 |-------|----------|-------------|
 | `name` | Yes | Human-friendly name for the key (e.g., "production-bot") |
 | `description` | No | Optional description |
-| `expiresIn` | No | TTL string (e.g., `90d`, `30d`, `1h`). Omit to use configured maximum. |
+| `expiresIn` | No | Key expiration duration. See [Expiration Format](#expiration-format) below. Omit to use configured maximum (typically 90 days). |
 | `subscription` | No | MaaSSubscription name to bind. Omit to auto-select highest priority. |
 | `ephemeral` | No | Set to `true` for short-lived keys (max 1 hour). See [Ephemeral Keys](#ephemeral-keys). |
 
@@ -74,6 +74,62 @@ echo "API Key: ${API_KEY}"
   "ephemeral": false
 }
 ```
+
+### Expiration Format
+
+The `expiresIn` field accepts duration strings in multiple formats:
+
+**String format with units:**
+
+| Unit | Examples | Description |
+|------|----------|-------------|
+| `d` | `"1d"`, `"30d"`, `"90d"`, `"1.5d"` | Days (24 hours each) |
+| `h` | `"1h"`, `"6h"`, `"24h"`, `"2.5h"` | Hours |
+| `m` | `"30m"`, `"90m"`, `"120m"` | Minutes |
+| `s` | `"60s"`, `"3600s"` | Seconds |
+| Combined | `"2h30m"`, `"1h45m30s"` | Multiple units (no spaces) |
+
+**Numeric format (seconds):**
+
+When passed as a JSON number (not a string), the value is interpreted as **seconds**:
+
+```json
+{
+  "expiresIn": 86400  // 86400 seconds = 1 day
+}
+```
+
+**Validation rules:**
+
+- **Minimum**: Any positive duration (e.g., `"1s"` is valid, though not practical)
+- **Maximum for regular keys**: Configured platform maximum (typically 90 days)
+- **Maximum for ephemeral keys**: 1 hour
+- **Omitted**: Defaults to the platform maximum for regular keys, or 1 hour for ephemeral keys
+
+**Examples:**
+
+```bash
+# 30 days
+curl ... -d '{"name": "key-30d", "expiresIn": "30d"}' ...
+
+# 6 hours
+curl ... -d '{"name": "key-6h", "expiresIn": "6h"}' ...
+
+# 90 minutes
+curl ... -d '{"name": "key-90m", "expiresIn": "90m"}' ...
+
+# 1.5 days (36 hours)
+curl ... -d '{"name": "key-1.5d", "expiresIn": "1.5d"}' ...
+
+# Use platform maximum (omit expiresIn)
+curl ... -d '{"name": "key-max"}' ...
+
+# Numeric format: 7 days as seconds
+curl ... -d '{"name": "key-7d", "expiresIn": 604800}' ...
+```
+
+!!! warning "No permanent keys"
+    All API keys must have an expiration. There is no option to create a permanent, never-expiring key. Use the maximum allowed duration for long-lived integrations.
 
 ### Subscription Binding
 
