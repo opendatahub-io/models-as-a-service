@@ -114,6 +114,7 @@ MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
+USE_HELM_DEPS="${USE_HELM_DEPS:-false}"
 
 #──────────────────────────────────────────────────────────────
 # HELP TEXT
@@ -672,23 +673,27 @@ EOF
 deploy_via_operator() {
   log_info "Starting operator-based deployment..."
 
-  # Check for conflicting operators before modifying the cluster
-  check_conflicting_operators
+  if [[ "$USE_HELM_DEPS" == "true" ]]; then
+    log_info "USE_HELM_DEPS=true — skipping operator/CR installation (handled by setup-shared-deps.sh)"
+  else
+    # Check for conflicting operators before modifying the cluster
+    check_conflicting_operators
 
-  # Install optional operators
-  install_optional_operators
+    # Install optional operators
+    install_optional_operators
 
-  # Install rate limiter component
-  install_policy_engine
+    # Install rate limiter component
+    install_policy_engine
 
-  # Install primary operator (creates namespace)
-  if ! install_primary_operator; then
-    log_error "Primary operator installation failed"
-    exit 1
+    # Install primary operator (creates namespace)
+    if ! install_primary_operator; then
+      log_error "Primary operator installation failed"
+      exit 1
+    fi
+
+    # Apply custom resources
+    apply_custom_resources
   fi
-
-  # Apply custom resources
-  apply_custom_resources
 
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
@@ -717,8 +722,12 @@ deploy_via_operator() {
 deploy_via_kustomize() {
   log_info "Starting kustomize-based deployment..."
 
-  # Install rate limiter component (RHCL or Kuadrant)
-  install_policy_engine
+  if [[ "$USE_HELM_DEPS" == "true" ]]; then
+    log_info "USE_HELM_DEPS=true — skipping policy engine installation (handled by setup-shared-deps.sh)"
+  else
+    # Install rate limiter component (RHCL or Kuadrant)
+    install_policy_engine
+  fi
 
   # Create namespace (idempotent - treat AlreadyExists as success to avoid TOCTOU races)
   log_info "Ensuring namespace exists: $NAMESPACE"

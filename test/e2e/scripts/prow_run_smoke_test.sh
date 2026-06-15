@@ -222,17 +222,29 @@ deploy_maas_platform() {
         echo "Using custom ODH operator image: ${OPERATOR_IMAGE}"
     fi
 
-    # 1. Install cert-manager and LeaderWorkerSet (required for KServe/LLMInferenceService)
-    echo "Installing cert-manager and LeaderWorkerSet operators..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-cert-manager-and-lws.sh"; then
-        echo "❌ ERROR: cert-manager/LWS installation failed"
-        exit 1
+    # 1. Install shared dependencies (operators, DSC, gateways, Kuadrant) via odh-gitops Helm chart
+    echo "Installing shared dependencies via setup-shared-deps.sh..."
+    local setup_cmd=(
+        "$PROJECT_ROOT/scripts/setup-shared-deps.sh"
+        --operator-type "${OPERATOR_TYPE:-odh}"
+    )
+    if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
+        setup_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
     fi
-
-    # 2. Install ODH operator with DataScienceCluster (KServe + ModelsAsService)
-    echo "Installing OpenDataHub operator..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
-        echo "❌ ERROR: ODH installation failed"
+    if [[ -n "${OPERATOR_CHANNEL:-}" ]]; then
+        setup_cmd+=(--operator-channel "${OPERATOR_CHANNEL}")
+    fi
+    if [[ -n "${OPERATOR_STARTING_CSV:-}" ]]; then
+        setup_cmd+=(--operator-starting-csv "${OPERATOR_STARTING_CSV}")
+    fi
+    if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
+        setup_cmd+=(--maas-controller-image "${MAAS_CONTROLLER_IMAGE}")
+    fi
+    if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
+        setup_cmd+=(--maas-api-image "${MAAS_API_IMAGE}")
+    fi
+    if ! "${setup_cmd[@]}"; then
+        echo "❌ ERROR: Shared dependencies installation failed"
         exit 1
     fi
 
@@ -244,10 +256,11 @@ deploy_maas_platform() {
         echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
     fi
 
-    # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
-    # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
+    # 2. Deploy MaaS application layer (PostgreSQL, TLS, maas-controller, Keycloak)
+    # Operators and CRs are already installed by setup-shared-deps.sh above.
     # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
     export DB_SSLMODE="${DB_SSLMODE:-disable}"
+    export USE_HELM_DEPS=true
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
