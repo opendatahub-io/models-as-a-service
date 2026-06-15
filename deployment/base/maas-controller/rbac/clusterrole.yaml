@@ -173,6 +173,7 @@ rules:
   - kuadrant.io
   resources:
   - ratelimitpolicies
+  - telemetrypolicies
   verbs:
   - create
   - delete
