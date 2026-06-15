@@ -16,21 +16,25 @@ The release flow moves code through four stages, each mapped to a branch and env
 
 ## How Promotion Works
 
-Promotions between branches are automated via GitHub Actions workflows that create PRs. Each promotion is gated by a review before merge.
+Promotions between branches are automated via GitHub Actions workflows that create PRs. Both workflows perform a strict merge conflict pre-check and will **not** create a PR if conflicts exist — conflicts must be resolved manually before re-running.
 
 ### Stream to Lake (`main` → `stable`)
 
 - **Schedule:** Every Sunday at midnight UTC (also available on-demand)
 - **Workflow:** `promote-main-to-stable.yml`
-- A PR is created from `main` to `stable` listing all new commits
+- Performs a dry-run merge to verify no conflicts exist
+- Creates a PR from `main` to `stable` listing all new commits
 - If an open promotion PR already exists, it is updated in place
+- **Must be merged with a merge commit** (no squash or rebase)
 
 ### Lake to RHOAI (`stable` → `rhoai`)
 
 - **Trigger:** On-demand only (via `workflow_dispatch`)
 - **Workflow:** `promote-stable-to-rhoai.yml`
-- A PR is created from `stable` to `rhoai` listing all new commits
+- Performs a dry-run merge to verify no conflicts exist
+- Creates a PR from `stable` to `rhoai` listing all new commits
 - If an open promotion PR already exists, it is updated in place
+- **Must be merged with a merge commit** (no squash or rebase)
 - A cron schedule can be enabled in the workflow once the release strategy matures
 
 ### RHOAI to Ocean (`rhoai` → downstream)
@@ -46,6 +50,17 @@ Both promotion workflows support `workflow_dispatch`, so they can be triggered o
 3. Click **Run workflow**
 
 This is useful when a fix needs to be fast-tracked without waiting for the next scheduled run.
+
+## Image Tags
+
+Each branch produces and references a specific container image tag:
+
+| Branch | Image Tag | Built By | Manifests |
+|--------|-----------|----------|-----------|
+| `main` | `latest` | Tekton push pipeline (`odh-maas-*-push.yaml`) | `deployment/overlays/dev/` |
+| `stable` | `odh-stable` | Tekton push pipeline (`odh-maas-*-push-stable.yaml`) | `deployment/overlays/odh/` |
+
+The ODH operator consumes manifests from `deployment/overlays/odh/` on the `stable` branch.
 
 ## Release Notes
 

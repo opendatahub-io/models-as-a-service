@@ -25,7 +25,7 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
-MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # Default namespace for MaaS API (use --namespace to override)
+MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # maas-api deploys to operator namespace
 
 # Show help if requested
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -60,6 +60,9 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
     echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo "  OIDC_ISSUER_URL           When set, validates maas-api-auth-policy jwt.issuerUrl matches"
+    echo "                            (external OIDC; avoids deploy vs test issuer drift / HTTP 401)"
+    echo "  OIDC_CLIENT_ID            When set with OIDC_ISSUER_URL, checks oidc-client-bound client id"
     echo ""
     echo "Note: This script uses connection timeouts from curl (10s connect, 30s max)"
     echo "      For cluster-level timeouts, see deployment-helpers.sh timeout constants"
@@ -394,7 +397,7 @@ print_header "3️⃣ Policy Status"
 print_check "AuthPolicy"
 AUTHPOLICY_COUNT=$(kubectl get authpolicy -A --no-headers 2>/dev/null | wc -l || echo "0")
 if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
-    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress gateway-default-auth -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
+    AUTHPOLICY_STATUS=$(kubectl get authpolicy -n openshift-ingress maas-gateway-auth -o jsonpath='{.status.conditions[?(@.type=="Accepted")].status}' 2>/dev/null || echo "NotFound")
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else
@@ -402,6 +405,18 @@ if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
     fi
 else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
+fi
+
+if [ -n "${OIDC_ISSUER_URL:-}" ]; then
+    print_check "maas-gateway-auth AuthPolicy OIDC issuer (OIDC_ISSUER_URL)"
+    if verify_gateway_oidc_authpolicy "${GATEWAY_NAMESPACE:-openshift-ingress}"; then
+        print_success "maas-gateway-auth jwt.issuerUrl matches OIDC_ISSUER_URL"
+    else
+        print_fail "maas-gateway-auth AuthPolicy OIDC config does not match OIDC_ISSUER_URL / OIDC_CLIENT_ID" \
+            "Authorino will reject Keycloak JWTs (HTTP 401) until issuers align" \
+            "Deploy with the same OIDC_ISSUER_URL as tests: ./scripts/deploy.sh ... --external-oidc" \
+            "Check: kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml"
+    fi
 fi
 
 print_check "TokenRateLimitPolicy"
@@ -446,18 +461,32 @@ else
     fi
 
     # Create a MaaS API key using the OC token
+    # Retry on empty 403 (gateway propagation delay — Envoy may not have loaded AuthPolicy yet)
     if [ -n "$OC_TOKEN" ]; then
         print_check "MaaS API key creation"
         API_KEY_NAME="validate-test-$(date +%s)"
-        API_KEY_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 \
-            -H "Authorization: Bearer $OC_TOKEN" \
-            -H "Content-Type: application/json" \
-            -X POST \
-            -d "{\"expiresIn\": \"1h\", \"name\": \"$API_KEY_NAME\"}" \
-            -w "\n%{http_code}" \
-            "${HOST}/maas-api/v1/api-keys" 2>/dev/null || echo "")
-        API_KEY_HTTP_CODE=$(echo "$API_KEY_RESPONSE" | tail -n1)
-        API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
+        mint_retries=6
+        mint_delay=5
+        for mint_attempt in $(seq 1 $mint_retries); do
+            API_KEY_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 \
+                -H "Authorization: Bearer $OC_TOKEN" \
+                -H "Content-Type: application/json" \
+                -X POST \
+                -d "{\"expiresIn\": \"1h\", \"name\": \"$API_KEY_NAME\"}" \
+                -w "\n%{http_code}" \
+                "${HOST}/maas-api/v1/api-keys" 2>/dev/null || echo "")
+            API_KEY_HTTP_CODE=$(echo "$API_KEY_RESPONSE" | tail -n1)
+            API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
+            # Empty 403 = gateway propagation delay, retry
+            if [[ "$API_KEY_HTTP_CODE" == "403" ]] && [[ -z "$(echo "$API_KEY_BODY" | tr -d '[:space:]')" ]]; then
+                if [[ $mint_attempt -lt $mint_retries ]]; then
+                    echo "  Gateway returned empty 403 (attempt $mint_attempt/$mint_retries), retrying in ${mint_delay}s..."
+                    sleep $mint_delay
+                    continue
+                fi
+            fi
+            break
+        done
 
         if [ "$API_KEY_HTTP_CODE" = "201" ]; then
             TOKEN=$(echo "$API_KEY_BODY" | jq -r '.key // empty' 2>/dev/null)
@@ -558,6 +587,15 @@ else
                 
                 # Set the inference endpoint if we have a valid model
                 if [ -n "$MODEL_CHAT" ] && [ "$MODEL_CHAT" != "null" ]; then
+                    # The URL returned by /v1/models is the in-cluster service URL
+                    # (e.g. https://<service>.svc.cluster.local/llm/<model>).
+                    # When running from outside the cluster (CI/Prow) rewrite it to
+                    # use the external gateway hostname so the request is routable.
+                    if echo "$MODEL_CHAT" | grep -q "\.svc\.cluster\.local"; then
+                        MODEL_PATH=$(echo "$MODEL_CHAT" | sed 's|https\?://[^/]*||')
+                        MODEL_CHAT="${HOST}${MODEL_PATH}"
+                        print_info "Rewrote internal model URL to external gateway: $MODEL_CHAT"
+                    fi
                     # Use custom model path if provided, otherwise use endpoint
                     if [ -n "$CUSTOM_MODEL_PATH" ]; then
                         MODEL_CHAT_ENDPOINT="${MODEL_CHAT}${CUSTOM_MODEL_PATH}"

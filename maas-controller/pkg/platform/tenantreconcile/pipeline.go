@@ -36,7 +36,17 @@ func CheckDependencies(ctx context.Context, c client.Client) error {
 
 // RunPlatform runs kustomize render, apply, and deployment readiness after dependencies and prerequisites
 // have succeeded and gateway ref is valid (caller validates gateway existence).
-func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, appNs string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
+func RunPlatform(
+	ctx context.Context,
+	log logr.Logger,
+	c client.Client,
+	scheme *runtime.Scheme,
+	tenant *maasv1alpha1.Tenant,
+	manifestPath string,
+	appNs string,
+	clusterAudience string,
+	mcfg *maasv1alpha1.Config,
+) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest path: %w", err)
@@ -57,12 +67,9 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 		return nil, fmt.Errorf("gateway lookup: %w", err)
 	}
 
-	audience, err := GetClusterServiceAccountIssuer(ctx, c)
+	params, err := BuildPlatformParams(tenant, appNs, clusterAudience)
 	if err != nil {
-		return nil, fmt.Errorf("cluster audience: %w", err)
-	}
-	if err := CustomizeParams(manifestPath, tenant, appNs, audience); err != nil {
-		return nil, fmt.Errorf("customize params: %w", err)
+		return nil, fmt.Errorf("build params: %w", err)
 	}
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
@@ -70,7 +77,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 		return nil, fmt.Errorf("kustomize: %w", err)
 	}
 
-	resources, err := PostRender(ctx, log, tenant, rendered)
+	resources, err := PostRender(ctx, log, tenant, rendered, params)
 	if err != nil {
 		return nil, fmt.Errorf("post-render: %w", err)
 	}
@@ -79,7 +86,11 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
-	ready, detail, err := MaasAPIDeploymentReady(ctx, c, appNs)
+	tenantID, err := TenantIdentifierFor(tenant)
+	if err != nil {
+		return nil, fmt.Errorf("resolve tenant identifier: %w", err)
+	}
+	ready, detail, err := MaasAPIDeploymentReady(ctx, c, appNs, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
@@ -91,7 +102,7 @@ func RunPlatform(ctx context.Context, log logr.Logger, c client.Client, scheme *
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
 // The application namespace is derived from tenant.Namespace (Tenant CR is co-located with workloads).
-func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
+func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, manifestPath string, clusterAudience string, mcfg *maasv1alpha1.Config) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
 	if err != nil {
 		return nil, fmt.Errorf("manifest path: %w", err)
@@ -110,16 +121,17 @@ func Run(ctx context.Context, log logr.Logger, c client.Client, scheme *runtime.
 		return nil, fmt.Errorf("prerequisites: %w", err)
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, manifestPath, appNs, mcfg)
+	return RunPlatform(ctx, log, c, scheme, tenant, manifestPath, appNs, clusterAudience, mcfg)
 }
 
 // MaasAPIDeploymentReady mirrors ODH deployments action for maas-api.
-func MaasAPIDeploymentReady(ctx context.Context, c client.Client, appNamespace string) (ready bool, detail string, err error) {
+func MaasAPIDeploymentReady(ctx context.Context, c client.Client, appNamespace, tenantID string) (ready bool, detail string, err error) {
 	dep := &appsv1.Deployment{}
-	key := types.NamespacedName{Namespace: appNamespace, Name: MaaSAPIDeploymentName}
+	deploymentName := MaaSAPIDeploymentName(tenantID)
+	key := types.NamespacedName{Namespace: appNamespace, Name: deploymentName}
 	if err := c.Get(ctx, key, dep); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, fmt.Sprintf("deployment %s/%s not found", appNamespace, MaaSAPIDeploymentName), nil
+			return false, fmt.Sprintf("deployment %s/%s not found", appNamespace, deploymentName), nil
 		}
 		return false, "", err
 	}

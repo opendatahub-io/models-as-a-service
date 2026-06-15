@@ -273,7 +273,7 @@ func TestGetAllAccessible(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeLister{subscriptions: tt.subscriptions}
-			selector := subscription.NewSelector(log, lister)
+			selector := subscription.NewSelector(log, lister, nil)
 
 			result, err := selector.GetAllAccessible(tt.groups, tt.username)
 
@@ -333,7 +333,7 @@ func TestGetAllAccessible_ErrorHandling(t *testing.T) {
 
 	t.Run("requires groups or username", func(t *testing.T) {
 		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{}}
-		selector := subscription.NewSelector(log, lister)
+		selector := subscription.NewSelector(log, lister, nil)
 
 		_, err := selector.GetAllAccessible(nil, "")
 		if err == nil {
@@ -353,7 +353,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("low-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, "L", "d1"),
 			createSubscription("high-sub", []string{"g1"}, nil, 50, defaultTestTokenRateLimit, "H", "d2"),
 		}}
-		sel := subscription.NewSelector(log, lister)
+		sel := subscription.NewSelector(log, lister, nil)
 		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
@@ -368,7 +368,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("sub-a", []string{"g1"}, nil, 10, 10, "", ""),
 			createSubscription("sub-b", []string{"g1"}, nil, 10, 20, "", ""),
 		}}
-		sel := subscription.NewSelector(log, lister)
+		sel := subscription.NewSelector(log, lister, nil)
 		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
@@ -383,7 +383,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("zebra", []string{"g1"}, nil, 5, defaultTestTokenRateLimit, "", ""),
 			createSubscription("alpha", []string{"g1"}, nil, 5, defaultTestTokenRateLimit, "", ""),
 		}}
-		sel := subscription.NewSelector(log, lister)
+		sel := subscription.NewSelector(log, lister, nil)
 		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
@@ -397,7 +397,7 @@ func TestSelectHighestPriority(t *testing.T) {
 		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
 			createSubscription("other", []string{"other-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
 		}}
-		sel := subscription.NewSelector(log, lister)
+		sel := subscription.NewSelector(log, lister, nil)
 		_, err := sel.SelectHighestPriority([]string{"g1"}, "")
 		if err == nil {
 			t.Fatal("expected error")
@@ -553,7 +553,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{tt.subscription}}
-			selector := subscription.NewSelector(log, lister)
+			selector := subscription.NewSelector(log, lister, nil)
 
 			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 			result, err := selector.Select([]string{"g1"}, "", "", "")
@@ -597,7 +597,7 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 	}
 
 	lister := &fakeLister{subscriptions: subscriptions}
-	selector := subscription.NewSelector(log, lister)
+	selector := subscription.NewSelector(log, lister, nil)
 
 	results, err := selector.GetAllAccessible([]string{"g1"}, "")
 	if err != nil {
@@ -788,7 +788,7 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{tt.subscription}}
-			selector := subscription.NewSelector(log, lister)
+			selector := subscription.NewSelector(log, lister, nil)
 
 			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
 			result, err := selector.Select([]string{"g1"}, "", "", tt.requestedModel)
@@ -882,4 +882,87 @@ func createSubscriptionWithTRLPStatus(name string, groups []string, phase string
 		},
 	}
 	return obj
+}
+
+func createMaaSModelRef(name, namespace, kind string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "maas.opendatahub.io/v1alpha1",
+			"kind":       "MaaSModelRef",
+			"metadata": map[string]any{
+				"name":      name,
+				"namespace": namespace,
+			},
+			"spec": map[string]any{
+				"modelRef": map[string]any{
+					"kind": kind,
+					"name": name,
+				},
+			},
+		},
+	}
+}
+
+func TestEnrichModelRefsSource(t *testing.T) {
+	tests := []struct {
+		name           string
+		modelRefKind   string
+		expectedSource string
+	}{
+		{
+			name:           "ExternalModel kind maps to external",
+			modelRefKind:   "ExternalModel",
+			expectedSource: "external",
+		},
+		{
+			name:           "LLMInferenceService kind maps to internal",
+			modelRefKind:   "LLMInferenceService",
+			expectedSource: "internal",
+		},
+		{
+			name:           "empty kind leaves source empty",
+			modelRefKind:   "",
+			expectedSource: "",
+		},
+		{
+			name:           "unknown kind leaves source empty",
+			modelRefKind:   "SomeNewKind",
+			expectedSource: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			log := logger.New(false)
+
+			sub := createSubscription("test-sub", []string{"g1"}, nil, 1, defaultTestTokenRateLimit, "", "")
+
+			modelRef := createMaaSModelRef("test-model", "", tt.modelRefKind)
+			modelLister := &fakeModelLister{items: []*unstructured.Unstructured{modelRef}}
+
+			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}
+			selector := subscription.NewSelector(log, lister, modelLister)
+
+			accessible, err := selector.GetAllAccessible([]string{"g1"}, "")
+			if err != nil {
+				t.Fatalf("Unexpected error: %v", err)
+			}
+			if len(accessible) == 0 {
+				t.Fatal("Expected at least one accessible subscription")
+			}
+
+			found := false
+			for _, ref := range accessible[0].ModelRefs {
+				if ref.Name == "test-model" {
+					found = true
+					if ref.Source != tt.expectedSource {
+						t.Errorf("Expected source %q, got %q", tt.expectedSource, ref.Source)
+					}
+				}
+			}
+			if !found {
+				t.Fatal("test-model not found in model refs")
+			}
+		})
+	}
 }

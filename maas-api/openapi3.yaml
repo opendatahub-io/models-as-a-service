@@ -835,10 +835,21 @@ components:
                     type: string
                     description: Name of the MaaSModelRef
                     example: free-model-ref
-                namespace:
+                display_name:
                     type: string
-                    description: Namespace where the MaaSModelRef lives
-                    example: llm
+                    description: Human-readable display name from the openshift.io/display-name annotation on the MaaSModelRef
+                    example: Free Model
+                description:
+                    type: string
+                    description: Description from the openshift.io/description annotation on the MaaSModelRef
+                    example: A free-tier model for general use
+                source:
+                    type: string
+                    description: "Classification of the model: internal (on-cluster) or external (third-party API)"
+                    enum:
+                        - internal
+                        - external
+                    example: internal
                 token_rate_limits:
                     type: array
                     items:

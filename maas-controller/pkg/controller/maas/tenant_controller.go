@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -29,7 +30,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -48,10 +48,25 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default opendatahub).
+	// AppNamespace is the protected application namespace (--maas-api-namespace, default opendatahub).
+	// NOTE: This field is ONLY used for namespace protection checks (isProtectedNamespace).
+	// The actual maas-api deployment namespace is determined by appNamespaceForTenant(), which
+	// hardcodes redhat-ai-gateway-infra regardless of this field's value.
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
+	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
+	GatewayName string
+	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
+	GatewayNamespace string
+	// cleanupOnce ensures legacy maas-api cleanup runs at most once per controller lifetime
+	cleanupOnce sync.Once
+	// cleanupMu protects cleanupCompleted
+	cleanupMu sync.Mutex
+	// cleanupCompleted tracks whether legacy cleanup succeeded
+	cleanupCompleted bool
+	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
+	ClusterAudience string
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -74,7 +89,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
 // clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
@@ -148,7 +163,7 @@ func secretNamedMaaSDB() predicate.Predicate {
 func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		ns := o.GetNamespace()
-		return ns == r.AppNamespace || ns == r.operatorNamespace()
+		return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.operatorNamespace()
 	})
 }
 
@@ -162,24 +177,6 @@ func configResourceDefault() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == maasv1alpha1.ConfigInstanceName
 	})
-}
-
-// deletedConfigMapOnly mirrors ODH: unmanaged ConfigMaps are recreated when deleted.
-func deletedConfigMapOnly() predicate.Predicate {
-	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool {
-			return false
-		},
-		UpdateFunc: func(event.UpdateEvent) bool {
-			return false
-		},
-		DeleteFunc: func(event.DeleteEvent) bool {
-			return true
-		},
-		GenericFunc: func(event.GenericEvent) bool {
-			return false
-		},
-	}
 }
 
 // SetupWithManager registers the Tenant controller.
@@ -214,11 +211,6 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdInOptionalAPIGroup()),
-		).
-		Watches(
-			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(deletedConfigMapOnly(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&corev1.Secret{},

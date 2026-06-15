@@ -46,6 +46,7 @@ from test_helper import (
     MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
+    _apply_cr,
     _create_api_key,
     _create_api_key_raw,
     _create_sa_token,
@@ -64,6 +65,50 @@ from test_helper import (
 )
 
 log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Gateway propagation retry helper
+# ---------------------------------------------------------------------------
+# Kuadrant gateway propagation can lag behind MaaS CR readiness.
+# MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
+# but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
+GATEWAY_PROPAGATION_RETRIES = 6
+GATEWAY_PROPAGATION_DELAY = 5  # seconds
+
+
+def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
+    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+
+    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
+    backoff and returns the last response — the caller's assertion will
+    surface the failure clearly if the gateway never becomes ready.
+    """
+    for attempt in range(1, retries + 1):
+        r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
+        if r.status_code == 403 and not r.text.strip():
+            if attempt < retries:
+                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
+                         attempt, retries, GATEWAY_PROPAGATION_DELAY)
+                time.sleep(GATEWAY_PROPAGATION_DELAY)
+                continue
+        return r
+    return r  # last attempt's response — assertion will catch the failure
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _warm_gateway(api_keys_base_url: str, headers: dict):
+    """Wait for the gateway to start forwarding requests before running tests.
+
+    Makes a single request with gateway retry to absorb the propagation delay.
+    All subsequent tests can then make requests directly without retry logic.
+    """
+    r = _request_with_gateway_retry(
+        requests.post,
+        api_keys_base_url,
+        headers=headers,
+        json={"name": "e2e-gateway-warmup"},
+    )
+    log.info("Gateway warm-up completed: HTTP %d", r.status_code)
 
 
 @pytest.fixture
@@ -858,7 +903,13 @@ class TestEphemeralKeyCleanup:
 
     @pytest.fixture
     def deployment_namespace(self) -> str:
-        return os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+        """Return the namespace where maas-api is deployed.
+
+        Controlled by E2E_MAAS_API_DEPLOYMENT_NAMESPACE env var,
+        defaults to DEPLOYMENT_NAMESPACE/opendatahub.
+        """
+        from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+        return MAAS_API_DEPLOYMENT_NAMESPACE
 
     def test_cronjob_exists_and_configured(self, deployment_namespace: str):
         """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
@@ -1299,25 +1350,47 @@ class TestAPIKeySubscriptionPhases:
         """
         API key creation is rejected for unreconciled subscription (empty phase).
 
-        This test scales down the controller to ensure deterministic behavior.
+        Note: Temporarily sets webhook failurePolicy to Ignore to allow creating
+        resources while controller is down, then restores to Fail.
         """
         ns = _ns()
         subscription_name = "e2e-apikey-unreconciled-sub"
         auth_name = "e2e-apikey-unreconciled-auth"
         sa_name = "e2e-apikey-unreconciled-sa"
+        webhook_name = "maas-validating-webhook-configuration"
 
         try:
-            # Scale down controller to prevent reconciliation
-            _scale_controller_down()
-
+            # Create service account and get token
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
+            # Temporarily set webhook failurePolicy to Ignore
+            # This allows creates to succeed when controller/webhook is unavailable
+            # Find webhook indices dynamically by name to avoid brittleness
+            result = subprocess.run(
+                ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                capture_output=True, text=True, check=True
+            )
+            webhook_config = json.loads(result.stdout)
+            patch_ops = []
+            for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                    patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Ignore"})
+
+            subprocess.run(
+                ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                 "--type=json", "-p", json.dumps(patch_ops)],
+                capture_output=True, text=True, check=True
+            )
+
+            # Scale down controller to prevent reconciliation
+            _scale_controller_down()
+
+            # Create resources (webhook unavailable but Ignore policy allows creates)
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            # Create subscription (won't reconcile with controller scaled down)
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
-            # Verify subscription is unreconciled
+            # Verify subscription is unreconciled (empty phase)
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase", "")
             assert phase == "", f"Expected empty phase, got: {phase}"
@@ -1346,9 +1419,192 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key creation rejected for unreconciled subscription")
 
         finally:
-            # Scale controller back up
+            # Restore webhook failurePolicy to Fail
+            # Wrap in try/except to guarantee controller scale-up and cleanup happen
+            webhook_restore_error = None
+            try:
+                result = subprocess.run(
+                    ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to get webhook configuration {webhook_name} for restoration: {result.stderr}"
+                    )
+
+                webhook_config = json.loads(result.stdout)
+                patch_ops = []
+                for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                    if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                        patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
+
+                if not patch_ops:
+                    raise RuntimeError(
+                        f"No matching webhooks found to restore in {webhook_name}. "
+                        f"Expected vmaassubscription.kb.io and vmaasauthpolicy.kb.io. "
+                        f"Found: {[w.get('name') for w in webhook_config.get('webhooks', [])]}"
+                    )
+
+                restore_result = subprocess.run(
+                    ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                     "--type=json", "-p", json.dumps(patch_ops)],
+                    capture_output=True, text=True
+                )
+                if restore_result.returncode != 0:
+                    raise RuntimeError(
+                        f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
+                        f"with patch_ops {patch_ops}: {restore_result.stderr}"
+                    )
+            except Exception as e:
+                webhook_restore_error = e
+                log.error(f"Exception during webhook restoration: {e}")
+
+            # Always scale controller back up and cleanup, even if webhook restore failed
             _scale_controller_up()
+
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
+
+            # Only raise webhook restore error after cleanup is complete
+            if webhook_restore_error:
+                raise webhook_restore_error
+
+
+class TestAPIKeySubscriptionFilter:
+    """Tests for POST /api-keys/search subscription filter.
+
+    Verifies that the subscription filter scopes search results to keys
+    bound to a specific subscription, and that omitting it returns all keys.
+    """
+
+    def test_search_filters_by_subscription(self, api_keys_base_url: str, headers: dict):
+        """Search with subscription filter returns only keys bound to that subscription."""
+        sub_a = f"e2e-filter-sub-a-{os.urandom(4).hex()}"
+        sub_b = f"e2e-filter-sub-b-{os.urandom(4).hex()}"
+        ns = _ns()
+        sa_name = f"e2e-filter-sa-{os.urandom(4).hex()}"
+
+        key_ids_a = []
+        key_ids_b = []
+        try:
+            # Create one SA authorized for both subscriptions so that
+            # exclusion in search results is attributable to the subscription
+            # filter, not user-scoping.
+            oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
+            sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
+            sa_headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+
+            _create_test_auth_policy(f"{sub_a}-auth", MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub_a, MODEL_REF, users=[sa_user])
+            _wait_for_maas_subscription_phase(sub_a, namespace=ns)
+
+            _create_test_auth_policy(f"{sub_b}-auth", MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub_b, MODEL_REF, users=[sa_user])
+            _wait_for_maas_subscription_phase(sub_b, namespace=ns)
+
+            # Create 2 keys bound to sub_a
+            for i in range(2):
+                r = requests.post(
+                    api_keys_base_url,
+                    headers=sa_headers,
+                    json={"name": f"e2e-filter-a-{i}", "subscription": sub_a},
+                    timeout=TIMEOUT,
+                    verify=TLS_VERIFY,
+                )
+                assert r.status_code in (200, 201), f"Failed to create key for {sub_a}: {r.text}"
+                key_ids_a.append(r.json()["id"])
+
+            # Create 1 key bound to sub_b
+            r_b = requests.post(
+                api_keys_base_url,
+                headers=sa_headers,
+                json={"name": "e2e-filter-b-0", "subscription": sub_b},
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            assert r_b.status_code in (200, 201), f"Failed to create key for {sub_b}: {r_b.text}"
+            key_ids_b.append(r_b.json()["id"])
+
+            # Search with subscription filter for sub_b — same principal
+            r_search = requests.post(
+                f"{api_keys_base_url}/search",
+                headers=sa_headers,
+                json={
+                    "filters": {"status": ["active"], "subscription": sub_b},
+                    "pagination": {"limit": 50, "offset": 0},
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            assert r_search.status_code == 200, f"Search failed: {r_search.status_code} {r_search.text}"
+            items = r_search.json().get("items") or r_search.json().get("data") or []
+            result_ids = [item["id"] for item in items]
+
+            # sub_b key should be present
+            for kid in key_ids_b:
+                assert kid in result_ids, (
+                    f"Key {kid} (subscription={sub_b}) should appear in filtered results"
+                )
+
+            # sub_a keys should NOT be present — since the same user owns
+            # both, exclusion proves the subscription filter works.
+            for kid in key_ids_a:
+                assert kid not in result_ids, (
+                    f"Key {kid} (subscription={sub_a}) should NOT appear when filtering by {sub_b}"
+                )
+
+            log.info("subscription filter correctly scoped search results")
+
+        finally:
+            for kid in key_ids_a + key_ids_b:
+                requests.delete(f"{api_keys_base_url}/{kid}", headers=sa_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+            _delete_cr("maassubscription", sub_b, namespace=ns)
+            _delete_cr("maasauthpolicy", f"{sub_b}-auth", namespace=ns)
+            _delete_cr("maassubscription", sub_a, namespace=ns)
+            _delete_cr("maasauthpolicy", f"{sub_a}-auth", namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            _wait_reconcile()
+
+    def test_search_without_subscription_returns_all(self, api_keys_base_url: str, headers: dict):
+        """Search without subscription filter returns keys across all subscriptions."""
+        key_ids = []
+        try:
+            # Create keys with explicit subscription binding
+            for i in range(2):
+                r = requests.post(
+                    api_keys_base_url,
+                    headers=headers,
+                    json={"name": f"e2e-nofilter-{i}", "subscription": SIMULATOR_SUBSCRIPTION},
+                    timeout=TIMEOUT,
+                    verify=TLS_VERIFY,
+                )
+                assert r.status_code in (200, 201), f"Failed to create key: {r.text}"
+                key_ids.append(r.json()["id"])
+
+            # Search without subscription filter
+            r_search = requests.post(
+                f"{api_keys_base_url}/search",
+                headers=headers,
+                json={
+                    "filters": {"status": ["active"]},
+                    "pagination": {"limit": 50, "offset": 0},
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+            assert r_search.status_code == 200, f"Search failed: {r_search.status_code} {r_search.text}"
+            items = r_search.json().get("items") or r_search.json().get("data") or []
+            result_ids = [item["id"] for item in items]
+
+            for kid in key_ids:
+                assert kid in result_ids, (
+                    f"Key {kid} should appear in unfiltered search results"
+                )
+
+            log.info("unfiltered search returns all keys (no regression)")
+
+        finally:
+            for kid in key_ids:
+                requests.delete(f"{api_keys_base_url}/{kid}", headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)

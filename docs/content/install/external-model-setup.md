@@ -34,6 +34,8 @@ The Inference Payload Processor (IPP) component (ext-proc) handles API key injec
 
 IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.
 
+MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
+
 !!! note
     If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
 
@@ -58,8 +60,9 @@ kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/desti
 kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/envoy-filter.yaml
 
 # Deployment (substitute the image placeholder)
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/overlays/odh/params.env" | cut -d= -f2-)}"
 cat ${PROJECT_DIR}/deployment/base/payload-processing/manager/deployment.yaml | \
-  sed 's|image: payload-processing|image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable|' | \
+  sed "s|image: payload-processing|image: ${PAYLOAD_PROCESSING_IMAGE}|" | \
   kubectl apply -f -
 
 # Verify

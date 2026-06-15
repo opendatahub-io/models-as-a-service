@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -22,12 +23,25 @@ import (
 	. "github.com/onsi/gomega"
 )
 
+var (
+	testTenantGatewayName      = "maas-default-gateway"
+	testTenantGatewayNamespace = "openshift-ingress"
+)
+
 func tenantTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func tenantTestNamespace(name string) client.Object {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
 }
 
 func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
@@ -53,9 +67,11 @@ func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: testNS}}
@@ -87,9 +103,11 @@ func TestTenantReconcile_NonSingletonNameIsNoOp(t *testing.T) {
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -118,13 +136,15 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -162,13 +182,15 @@ func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -216,13 +238,15 @@ func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -256,13 +280,15 @@ func TestTenantReconcile_ManagementStateUnmanagedSetsIdle(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -296,13 +322,15 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -334,13 +362,15 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -377,13 +407,15 @@ func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -423,13 +455,15 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: testNS,
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -445,6 +479,22 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
 }
 
+func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManagedTenant(t *testing.T) {
+	g := NewWithT(t)
+	r := &TenantReconciler{AppNamespace: "opendatahub"}
+
+	// All tenants deploy maas-api to operator namespace
+	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+}
+
+func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
+	g := NewWithT(t)
+	r := &TenantReconciler{AppNamespace: "opendatahub"}
+
+	// All tenants deploy maas-api to operator namespace
+	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+}
+
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
@@ -454,9 +504,11 @@ func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 		Build()
 
 	r := &TenantReconciler{
-		Client:       cl,
-		Scheme:       s,
-		AppNamespace: "models-as-a-service",
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     "models-as-a-service",
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{

@@ -82,12 +82,10 @@ func serve() error {
 	// Use gin.New() instead of gin.Default() to control middleware order
 	router := gin.New()
 
-	// Add request ID middleware first so it's available to logger
-	router.Use(middleware.RequestID())
-
-	// Add Logger and Recovery middleware after RequestID
-	router.Use(gin.Logger())
+	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.RequestID())
+	router.Use(middleware.AccessLogger())
 
 	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
@@ -194,7 +192,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	v1Routes := router.Group("/v1")
 
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
+	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister)
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
 	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
@@ -308,11 +306,12 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		cancel()
 	})
 	if watchErr != nil {
-		log.Info("Could not start TLS profile watcher", "error", watchErr)
+		log.Warn("Could not start TLS profile watcher", "error", watchErr)
 	} else {
 		go func() {
 			if err := watcher.Start(ctx.Done()); err != nil {
-				log.Error("TLS profile watcher failed", "error", err)
+				log.Error("TLS profile watcher failed, initiating graceful shutdown to restart", "error", err)
+				cancel()
 			}
 		}()
 	}

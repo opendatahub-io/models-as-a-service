@@ -53,8 +53,8 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Check HTTPRoute configuration and status
 
 7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
-      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
-      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
 
       ```bash
@@ -88,13 +88,37 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       is not deployed or Perses is not running. The most common causes are missing operators (COO,
       OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
 
-      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+      See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
 10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
 11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+12. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+
+      MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
+
+      - [ ] Check controller pod status:
+
+      ```bash
+      kubectl get pods -n models-as-a-service -l control-plane=maas-controller
+      ```
+
+      - [ ] Check webhook service endpoints:
+
+      ```bash
+      kubectl get endpoints maas-controller-webhook-service -n models-as-a-service
+      ```
+
+      - [ ] Check controller logs for errors:
+
+      ```bash
+      kubectl logs -n models-as-a-service deployment/maas-controller
+      ```
+
+      Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
 ## Conflicting AuthPolicy Detection
 
@@ -211,5 +235,5 @@ For detailed TLS configuration options, see [TLS Configuration](../configuration
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
-- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
+- [Observability Guide](../observability/index.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation

@@ -1,119 +1,23 @@
 package tenantreconcile
 
 import (
-	"bufio"
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 const ssaFieldOwner = "maas-controller"
-
-func parseParams(fileName string) (map[string]string, error) {
-	paramsEnv, err := os.Open(fileName)
-	if err != nil {
-		return nil, err
-	}
-	defer paramsEnv.Close()
-
-	paramsEnvMap := make(map[string]string)
-	scanner := bufio.NewScanner(paramsEnv)
-	for scanner.Scan() {
-		line := scanner.Text()
-		key, value, found := strings.Cut(line, "=")
-		if found {
-			paramsEnvMap[key] = value
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return paramsEnvMap, nil
-}
-
-func writeParamsToTmp(params map[string]string, tmpDir string) (string, error) {
-	tmp, err := os.CreateTemp(tmpDir, "params.env-")
-	if err != nil {
-		return "", err
-	}
-	defer tmp.Close()
-
-	writer := bufio.NewWriter(tmp)
-	for key, value := range params {
-		if _, err := fmt.Fprintf(writer, "%s=%s\n", key, value); err != nil {
-			return "", err
-		}
-	}
-	if err := writer.Flush(); err != nil {
-		return "", fmt.Errorf("failed to write to file: %w", err)
-	}
-
-	return tmp.Name(), nil
-}
-
-func updateMap(m *map[string]string, key, val string) int {
-	old := (*m)[key]
-	if old == val {
-		return 0
-	}
-	(*m)[key] = val
-	return 1
-}
-
-// ApplyParams mirrors opendatahub-operator/pkg/deploy.ApplyParams for params.env substitution.
-func ApplyParams(componentPath, file string, imageParamsMap map[string]string, extraParamsMaps ...map[string]string) error {
-	paramsFile := filepath.Join(componentPath, file)
-
-	paramsEnvMap, err := parseParams(paramsFile)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-
-	updated := 0
-	for i := range paramsEnvMap {
-		relatedImageValue := os.Getenv(imageParamsMap[i])
-		if relatedImageValue != "" {
-			updated |= updateMap(&paramsEnvMap, i, relatedImageValue)
-		}
-	}
-	for _, extraParamsMap := range extraParamsMaps {
-		for eKey, eValue := range extraParamsMap {
-			updated |= updateMap(&paramsEnvMap, eKey, eValue)
-		}
-	}
-
-	if updated == 0 {
-		return nil
-	}
-
-	tmp, err := writeParamsToTmp(paramsEnvMap, componentPath)
-	if err != nil {
-		return err
-	}
-
-	if err = os.Rename(tmp, paramsFile); err != nil {
-		_ = os.Remove(tmp)
-		return fmt.Errorf("failed rename %s to %s: %w", tmp, paramsFile, err)
-	}
-
-	return nil
-}
 
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
@@ -132,13 +36,31 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	for i := range objs {
 		u := objs[i].DeepCopy()
 
+		// Skip resources whose live cluster copy has opendatahub.io/managed=false,
+		// allowing operators to opt specific resources out of reconciliation.
+		if isLiveResourceUnmanaged(ctx, c, u) {
+			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
+				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
+			continue
+		}
+
+		// Skip resources whose live cluster copy is already owned by a different
+		// controller (e.g. ODH operator's ModelsAsService component). SSA-applying
+		// over them would fail on immutable fields like spec.selector and produce
+		// conflicting controller:true ownerReferences.
+		if isOwnedByExternalController(ctx, c, u, mcfg.UID) {
+			ctrl.LoggerFrom(ctx).Info("Skipping SSA: resource owned by external controller",
+				"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName())
+			continue
+		}
+
 		if skipConfigControllerOwnerRef(u, appNs) {
 			setTenantTrackingLabels(u, tenant)
 		} else {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
-					log.FromContext(ctx).Info("skipping Config controller reference: object already owned by another controller",
+					ctrl.LoggerFrom(ctx).Info("skipping Config controller reference: object already owned by another controller",
 						"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName(),
 						"existingOwner", already)
 				} else {
@@ -158,7 +80,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 				// installed by COO which may not be present yet). Skip so the rest of the
 				// platform manifests are applied and Tenant reconcile does not fail.
 				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				log.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", u.GroupVersionKind().Group, "kind", u.GetKind(),
 					"name", u.GetName(), "namespace", u.GetNamespace())
 				continue
@@ -176,12 +98,6 @@ type configOwnerRefSkip func(u *unstructured.Unstructured, appNs string) bool
 // configOwnerRefSkips is evaluated in order; add new predicates here for additional exceptions.
 var configOwnerRefSkips = []configOwnerRefSkip{
 	isMaaSControllerDeployment,
-	func(u *unstructured.Unstructured, appNs string) bool {
-		if appNs == "" || u.GetNamespace() != appNs {
-			return false
-		}
-		return strings.EqualFold(u.GetKind(), "ConfigMap") && u.GetName() == MaaSParametersConfigMapName
-	},
 }
 
 func skipConfigControllerOwnerRef(u *unstructured.Unstructured, appNs string) bool {
@@ -198,6 +114,44 @@ func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool
 		return false
 	}
 	return strings.EqualFold(u.GetKind(), "Deployment") && u.GetName() == MaaSControllerDeploymentName
+}
+
+func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *unstructured.Unstructured) bool {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(rendered.GroupVersionKind())
+	key := client.ObjectKeyFromObject(rendered)
+	if key.Name == "" {
+		return false
+	}
+	if err := c.Get(ctx, key, live); err != nil {
+		return false
+	}
+	ann := live.GetAnnotations()
+	return ann != nil && ann[AnnotationManaged] == "false"
+}
+
+// isOwnedByExternalController returns true when the live cluster copy of the
+// rendered resource has a controller:true ownerReference whose UID differs from
+// the given Config UID. This prevents the Tenant reconciler from SSA-applying
+// over resources the ODH operator's ModelsAsService component already owns,
+// which would fail on immutable fields (spec.selector) and produce conflicting
+// controller ownerReferences.
+func isOwnedByExternalController(ctx context.Context, c client.Client, rendered *unstructured.Unstructured, configUID types.UID) bool {
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(rendered.GroupVersionKind())
+	key := client.ObjectKeyFromObject(rendered)
+	if key.Name == "" {
+		return false
+	}
+	if err := c.Get(ctx, key, live); err != nil {
+		return false
+	}
+	for _, ref := range live.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
+			return true
+		}
+	}
+	return false
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {

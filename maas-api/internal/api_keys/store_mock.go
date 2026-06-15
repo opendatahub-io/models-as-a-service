@@ -41,7 +41,7 @@ var _ MetadataStore = (*MockStore)(nil)
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (m *MockStore) AddKey(
-	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool,
+	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
@@ -68,6 +68,7 @@ func (m *MockStore) AddKey(
 			Name:         name,
 			Description:  description,
 			Subscription: subscription,
+			Tenant:       tenant,
 			Groups:       userGroups,
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
@@ -164,11 +165,16 @@ func (m *MockStore) List(ctx context.Context, username string, params Pagination
 	}, nil
 }
 
-// filterKeys applies username, status, and ephemeral filters to API keys.
-func (m *MockStore) filterKeys(username string, statusFilters []string, includeEphemeral bool, now time.Time) []ApiKey {
+// filterKeys applies tenant, username, status, and ephemeral filters to API keys.
+func (m *MockStore) filterKeys(username string, tenant string, statusFilters []string, includeEphemeral bool, now time.Time) []ApiKey {
 	filtered := make([]ApiKey, 0, len(m.keys))
 
 	for _, k := range m.keys {
+		// Tenant scoping is mandatory
+		if k.metadata.Tenant != tenant {
+			continue
+		}
+
 		// Filter ephemeral keys unless explicitly included
 		if !includeEphemeral && k.ephemeral {
 			continue
@@ -312,6 +318,7 @@ func applyPagination(keys []ApiKey, offset, limit int) ([]ApiKey, bool) {
 func (m *MockStore) Search(
 	ctx context.Context,
 	username string,
+	tenant string,
 	filters *SearchFilters,
 	sortParams *SortParams,
 	pagination *PaginationParams,
@@ -330,9 +337,21 @@ func (m *MockStore) Search(
 	// Determine if ephemeral keys should be included
 	includeEphemeral := filters.IncludeEphemeral != nil && *filters.IncludeEphemeral
 
-	// Filter keys by username, status, and ephemeral
+	// Filter keys by tenant, username, status, and ephemeral
 	now := time.Now().UTC()
-	allKeys := m.filterKeys(username, filters.Status, includeEphemeral, now)
+	allKeys := m.filterKeys(username, tenant, filters.Status, includeEphemeral, now)
+
+	// Filter by subscription
+	if filters.Subscription != nil && *filters.Subscription != "" {
+		sub := strings.TrimSpace(*filters.Subscription)
+		filtered := allKeys[:0]
+		for _, k := range allKeys {
+			if k.Subscription == sub {
+				filtered = append(filtered, k)
+			}
+		}
+		allKeys = filtered
+	}
 
 	// Sort keys
 	sort.Slice(allKeys, func(i, j int) bool {
@@ -406,13 +425,13 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, err
 	return nil, ErrKeyNotFound
 }
 
-func (m *MockStore) InvalidateAll(ctx context.Context, username string) (int, error) {
+func (m *MockStore) InvalidateAll(ctx context.Context, username string, tenant string) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	count := 0
 	for _, k := range m.keys {
-		if k.username == username && k.metadata.Status == StatusActive {
+		if k.username == username && k.metadata.Tenant == tenant && k.metadata.Status == StatusActive {
 			k.metadata.Status = StatusRevoked
 			count++
 		}

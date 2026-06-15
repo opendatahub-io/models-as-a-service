@@ -477,7 +477,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ### CLI Flags
 
-The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` for ODH operator deployments):
+The controller accepts the following command-line flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -485,52 +485,19 @@ The controller accepts the following command-line flags (configured via `deploym
 | `--health-probe-bind-address` | `:8081` | The address the probe endpoint binds to. |
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
-| `--gateway-namespace` | `openshift-ingress` | The namespace of the Gateway resource. |
+| `--gateway-namespace` | `openshift-ingress` | The namespace of the default Gateway resource and existing Gateways referenced by AITenant resources. |
 | `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
-| `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy and MaaSSubscription CRs. |
-| `--cluster-audience` | `https://kubernetes.default.svc` | **The OIDC audience of the cluster for TokenReview.** HyperShift/ROSA clusters use a custom OIDC provider URL and must override this value. |
+| `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and Tenant CRs. |
+| `--aitenant-namespace` | `redhat-ai-gateway-infra` | The infrastructure namespace where AITenant CRs are accepted. |
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
 | `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
-
-### Configuring for HyperShift/ROSA Clusters
-
-HyperShift and ROSA clusters use custom OIDC provider URLs. You **must** configure `cluster-audience` to match your cluster's OIDC audience.
-
-**Find your cluster's OIDC issuer:**
-
-```bash
-kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
-```
-
-Use this issuer URL as the `cluster-audience` value.
-
-**Configure via `maas-parameters` ConfigMap (running cluster):**
-
-```bash
-# Replace 'opendatahub' with your controller namespace if different
-CONTROLLER_NS=opendatahub
-
-kubectl patch configmap maas-parameters -n $CONTROLLER_NS \
-  --type merge \
-  -p '{"data":{"cluster-audience":"https://your-cluster-oidc-issuer"}}'
-
-# Restart controller to pick up new config
-kubectl rollout restart deployment/maas-controller -n $CONTROLLER_NS
-```
-
-**Configure via `deployment/overlays/odh/params.env` (changing source defaults):**
-
-Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
-
-```env
-cluster-audience=https://your-cluster-oidc-issuer
-```
-
-The ODH operator reads this file at install time and injects the value into the `maas-parameters` ConfigMap.
+| `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
+| `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile the configured `--maas-subscription-namespace` plus tenant namespaces labeled `ai-gateway.opendatahub.io/tenant` or `maas.opendatahub.io/managed-by-aitenant=true`. |
 
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.
-- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `deployment/overlays/odh/params.env` (ODH operator).
-- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `deployment/overlays/odh/params.env` (ODH operator) or patch `maas-parameters` ConfigMap directly.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override via the `--maas-subscription-namespace` flag.
+- **AITenant infrastructure namespace**: Default is `redhat-ai-gateway-infra`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
+- **Gateway name/namespace**: Legacy/default Tenant routing uses `spec.gatewayRef` with controller defaults. `AITenant` validates an existing tenant Gateway in `--gateway-namespace`; `spec.gateway.name` defaults to the `AITenant` name.

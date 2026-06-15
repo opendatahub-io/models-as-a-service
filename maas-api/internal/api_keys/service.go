@@ -68,7 +68,7 @@ type CreateAPIKeyResponse struct {
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
-	expiresIn *time.Duration, ephemeral bool, requestedSubscription string,
+	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string,
 ) (*CreateAPIKeyResponse, error) {
 	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
 	maxDays := constant.DefaultAPIKeyMaxExpirationDays
@@ -143,7 +143,7 @@ func (s *Service) CreateAPIKey(
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
 	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, &expiresAt, ephemeral); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, tenant, &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -267,6 +267,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		KeyID:        metadata.ID,
 		Groups:       groups, // Original user groups for subscription-based authorization
 		Subscription: metadata.Subscription,
+		Tenant:       metadata.Tenant,
 	}, nil
 }
 
@@ -279,20 +280,21 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 func (s *Service) Search(
 	ctx context.Context,
 	username string,
+	tenant string,
 	filters *SearchFilters,
 	sort *SortParams,
 	pagination *PaginationParams,
 ) (*PaginatedResult, error) {
-	return s.store.Search(ctx, username, filters, sort, pagination)
+	return s.store.Search(ctx, username, tenant, filters, sort, pagination)
 }
 
 // BulkRevokeAPIKeys revokes all active keys for a user
 // Returns count of revoked keys.
-func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string) (int, error) {
+func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant string) (int, error) {
 	if username == "" {
 		return 0, errors.New("username is required")
 	}
-	return s.store.InvalidateAll(ctx, username)
+	return s.store.InvalidateAll(ctx, username, tenant)
 }
 
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.

@@ -25,6 +25,7 @@ type ApiKey struct {
 	Description    string   `json:"description,omitempty"`
 	Username       string   `json:"username,omitempty"`
 	Subscription   string   `json:"subscription,omitempty"`   // MaaSSubscription name bound at mint time
+	Tenant         string   `json:"tenant,omitempty"`
 	Groups         []string `json:"groups,omitempty"`         // User's groups at creation (immutable snapshot for authorization)
 	CreationDate   string   `json:"creationDate"`
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
@@ -41,6 +42,7 @@ type ValidationResult struct {
 	KeyID        string   `json:"keyId,omitempty"`
 	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
 	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
+	Tenant       string   `json:"tenant,omitempty"`       // Tenant bound at key creation (Authorino → tenant context)
 	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
 }
 
@@ -87,6 +89,9 @@ type SearchFilters struct {
 	// Phase 4: Boolean filters (future)
 	HasExpiration *bool `json:"hasExpiration,omitempty"` // true = expiring, false = permanent
 	HasBeenUsed   *bool `json:"hasBeenUsed,omitempty"`   // true = used, false = never used
+
+	// Subscription filter
+	Subscription *string `json:"subscription,omitempty"` // Filter by bound subscription name
 
 	// Ephemeral key filter
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)

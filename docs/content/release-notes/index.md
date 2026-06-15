@@ -4,6 +4,37 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 
 ---
 
+## v0.1.2
+
+**Release Date:** TBD
+
+### Breaking Changes
+
+**Gateway-level AuthPolicy (RHOAIENG-62571)**
+- The `maas-controller` now creates a single `AuthPolicy/maas-gateway-auth` in the gateway namespace (`openshift-ingress`) instead of one per-model `AuthPolicy` in each model namespace.
+- Per-model `AuthPolicy` objects managed by the controller are deleted on the first reconcile after upgrade.
+- `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
+- New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `Tenant` CR.
+- **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
+- **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
+
+### New Features
+
+**Singleton gateway AuthPolicy**
+- All per-model allowlists aggregated into one CEL expression in `maas-gateway-auth`
+- Dynamic model identity extracted from `X-Gateway-Model-Name` header with `request.path` fallback
+- Model-aware cache keys prevent subscription result pollution across models
+- Response header injection: `X-MaaS-Subscription`, `userId`, `username`, `groups`
+
+**Admission webhooks**
+- Validating webhooks for `MaaSAuthPolicy` and `MaaSSubscription` enforce namespace tenancy requirements
+
+### Known Limitations
+
+- **`tenant-gateway-isolation` rule is a stub.** The gateway policy includes an always-allow placeholder for multi-gateway tenant isolation. This will be replaced with a real hostname check in a future release.
+
+---
+
 ## v0.1.1
 
 **Release Date:** 2026-05-01
