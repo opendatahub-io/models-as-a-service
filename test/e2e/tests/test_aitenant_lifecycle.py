@@ -234,7 +234,7 @@ def _delete_aitenant(case):
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
-    def test_aitenant_rejected_outside_infra_namespace(self):
+    def test_aitenant_rejected_outside_ai_tenants_namespace(self):
         suffix = uuid.uuid4().hex[:8]
         wrong_ns = f"e2e-ait-wrong-{suffix}"
         tenant_ns = f"e2e-ait-wrong-tenant-{suffix}"
