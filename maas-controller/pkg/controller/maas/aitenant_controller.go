@@ -54,6 +54,7 @@ const (
 	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
 
+	defaultAITenantName   = "models-as-a-service"
 	tenantNamespacePrefix = "ai-tenant-"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
@@ -202,17 +203,28 @@ func (r *AITenantReconciler) aitenantNamespace() string {
 }
 
 func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant) string {
-	if r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace {
-		return r.TenantNamespace
+	if r.isDefaultAITenant(aitenant) {
+		return r.defaultTenantNamespace()
 	}
-	return tenantNamespaceName(aitenant)
+	return derivedTenantNamespaceName(aitenant.Name)
 }
 
-func tenantNamespaceName(aitenant *maasv1alpha1.AITenant) string {
-	if aitenant.Name == "models-as-a-service" {
-		return aitenant.Name
+func (r *AITenantReconciler) isDefaultAITenant(aitenant *maasv1alpha1.AITenant) bool {
+	if aitenant.Name == defaultAITenantName {
+		return true
 	}
-	return tenantNamespacePrefix + aitenant.Name
+	return r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace
+}
+
+func (r *AITenantReconciler) defaultTenantNamespace() string {
+	if r.TenantNamespace != "" {
+		return r.TenantNamespace
+	}
+	return defaultAITenantName
+}
+
+func derivedTenantNamespaceName(aitenantName string) string {
+	return tenantNamespacePrefix + aitenantName
 }
 
 func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {

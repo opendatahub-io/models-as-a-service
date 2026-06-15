@@ -543,6 +543,47 @@ func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *tes
 	g.Expect(tenant.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "models-as-a-service"))
 }
 
+func TestAITenantReconcile_DefaultAITenantUsesConfiguredTenantNamespace(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "models-as-a-service",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "maas-default-gateway"},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, existingAITenantGateway("maas-default-gateway")).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "custom-maas",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantTwice(t, r, key)
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	g.Expect(updated.Status.TenantNamespace).To(Equal("custom-maas"))
+
+	var tenant maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "custom-maas"}, &tenant)).To(Succeed())
+	g.Expect(tenant.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "models-as-a-service"))
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "models-as-a-service"}, &maasv1alpha1.Tenant{}))).To(BeTrue())
+}
+
 func TestAITenantReconcile_IdempotentWhenActive(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
@@ -870,7 +911,7 @@ func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
 		},
 	}
 	err := r.upsert(context.Background(), configMap, aitenant, func(obj client.Object) error {
-		applyAITenantMetadata(obj, aitenant, tenantNamespaceName(aitenant))
+		applyAITenantMetadata(obj, aitenant, derivedTenantNamespaceName(aitenant.Name))
 		cm, ok := obj.(*corev1.ConfigMap)
 		g.Expect(ok).To(BeTrue())
 		cm.Data = map[string]string{"fresh": "true"}
