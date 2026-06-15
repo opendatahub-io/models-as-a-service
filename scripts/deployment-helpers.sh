@@ -1188,7 +1188,6 @@ wait_for_validating_webhooks() {
     local end=$((SECONDS+timeout))
 
     echo "⏳ Waiting for validating webhooks in namespace $namespace (timeout: ${timeout}s)..."
-    return 0
 
     while [ $SECONDS -lt $end ]; do
         local not_ready=0
