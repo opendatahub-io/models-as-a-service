@@ -92,6 +92,17 @@ def env_bool(name: str, default: bool = False) -> bool:
     return value.lower() in {"1", "true", "yes", "y", "on"}
 
 
+def external_oidc_from_env() -> Optional[dict[str, str]]:
+    """Return the deployed OIDC config used by the default tenant, when enabled."""
+    issuer = os.environ.get("OIDC_ISSUER_URL", "")
+    if not env_bool("EXTERNAL_OIDC") or not issuer:
+        return None
+    return {
+        "issuerUrl": issuer,
+        "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client"),
+    }
+
+
 def redact_sensitive(value: Any, *, max_length: int = 300) -> str:
     """Return a short string safe enough for CI assertion messages."""
     text = str(value)
@@ -460,6 +471,8 @@ def apply_tenant_cr(
             "namespace": gateway_namespace,
         }
     }
+    if external_oidc is None and gateway_name == DEFAULT_GATEWAY_NAME:
+        external_oidc = external_oidc_from_env()
     if external_oidc:
         spec["externalOIDC"] = external_oidc
     _apply(
@@ -491,18 +504,23 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
 
 
 def apply_aitenant(case: dict[str, str]) -> None:
+    spec: dict[str, Any] = {
+        "tenantNamespace": {"name": case["tenant_ns"]},
+        "gateway": {"name": case["gateway_name"]},
+        "rbac": {
+            "admins": [{"kind": "User", "name": admin_subject()}],
+        },
+    }
+    oidc = external_oidc_from_env()
+    if oidc:
+        spec["oidc"] = oidc
+
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "AITenant",
             "metadata": {"name": case["tenant_label_name"], "namespace": AITENANT_NAMESPACE},
-            "spec": {
-                "tenantNamespace": {"name": case["tenant_ns"]},
-                "gateway": {"name": case["gateway_name"]},
-                "rbac": {
-                    "admins": [{"kind": "User", "name": admin_subject()}],
-                },
-            },
+            "spec": spec,
         }
     )
 
