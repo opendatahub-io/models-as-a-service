@@ -14,7 +14,7 @@ Environment variables (all optional unless noted):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (auto-derived from GATEWAY_HOST if not set)
   - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
-  - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api workloads run (default: redhat-ai-gateway-infra)
+  - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api workloads run (default: DEPLOYMENT_NAMESPACE/opendatahub)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
