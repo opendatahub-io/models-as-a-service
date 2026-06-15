@@ -120,7 +120,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
-13. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `redhat-ai-gateway-infra`).
+13. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
 
       - [ ] Check which namespace the controller is configured to accept:
 
@@ -131,7 +131,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Create the `AITenant` in that namespace instead of the target tenant namespace:
 
       ```bash
-      kubectl get namespace redhat-ai-gateway-infra
+      kubectl get namespace ai-tenants
       ```
 
       - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.

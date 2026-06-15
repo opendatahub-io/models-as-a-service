@@ -36,12 +36,12 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 		{
 			name: "allow aitenant in configured namespace",
 			validator: &AITenantValidator{
-				AITenantNamespace: "redhat-ai-gateway-infra",
+				AITenantNamespace: "ai-tenants",
 			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "team-a",
-					Namespace: "redhat-ai-gateway-infra",
+					Namespace: "ai-tenants",
 				},
 			},
 			wantErr: false,
@@ -49,7 +49,7 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 		{
 			name: "reject aitenant outside configured namespace",
 			validator: &AITenantValidator{
-				AITenantNamespace: "redhat-ai-gateway-infra",
+				AITenantNamespace: "ai-tenants",
 			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -58,7 +58,7 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 				},
 			},
 			wantErr:     true,
-			errContains: `configured AITenant infrastructure namespace "redhat-ai-gateway-infra"`,
+			errContains: `configured AITenant infrastructure namespace "ai-tenants"`,
 		},
 		{
 			name: "allow aitenant in custom configured namespace",
@@ -79,7 +79,7 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "team-a",
-					Namespace: "redhat-ai-gateway-infra",
+					Namespace: "ai-tenants",
 				},
 			},
 			wantErr:     true,
@@ -91,7 +91,7 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "team-a",
-					Namespace: "redhat-ai-gateway-infra",
+					Namespace: "ai-tenants",
 				},
 			},
 			wantErr:     true,
@@ -116,19 +116,19 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 
 func TestAITenantValidator_ValidateUpdate(t *testing.T) {
 	validator := &AITenantValidator{
-		AITenantNamespace: "redhat-ai-gateway-infra",
+		AITenantNamespace: "ai-tenants",
 	}
 
 	oldAITenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-a",
-			Namespace: "redhat-ai-gateway-infra",
+			Namespace: "ai-tenants",
 		},
 	}
 	newAITenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-a",
-			Namespace: "redhat-ai-gateway-infra",
+			Namespace: "ai-tenants",
 		},
 	}
 
@@ -140,13 +140,13 @@ func TestAITenantValidator_ValidateUpdate(t *testing.T) {
 
 func TestAITenantValidator_ValidateDelete(t *testing.T) {
 	validator := &AITenantValidator{
-		AITenantNamespace: "redhat-ai-gateway-infra",
+		AITenantNamespace: "ai-tenants",
 	}
 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "team-a",
-			Namespace: "redhat-ai-gateway-infra",
+			Namespace: "ai-tenants",
 		},
 	}
 

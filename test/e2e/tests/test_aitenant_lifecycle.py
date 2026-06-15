@@ -264,12 +264,13 @@ class TestAITenantLifecycle:
             )
 
             assert result.returncode != 0, "Expected webhook to reject AITenant outside the configured infra namespace"
-            assert "admission webhook" in result.stderr.lower(), \
-                f"Expected webhook rejection, got: {result.stderr}"
-            assert "configured AITenant infrastructure namespace" in result.stderr, \
-                f"Expected namespace placement error, got: {result.stderr}"
-            assert AITENANT_NAMESPACE in result.stderr, \
-                f"Expected configured infra namespace in error, got: {result.stderr}"
+            combined = f"{result.stderr or ''}\n{result.stdout or ''}"
+            assert "admission webhook" in combined.lower(), \
+                f"Expected webhook rejection, got: {combined}"
+            assert "configured AITenant infrastructure namespace" in combined, \
+                f"Expected namespace placement error, got: {combined}"
+            assert AITENANT_NAMESPACE in combined, \
+                f"Expected configured infra namespace in error, got: {combined}"
 
             assert _get_json_or_none(AITENANT_KIND, aitenant_name, wrong_ns) is None
 
