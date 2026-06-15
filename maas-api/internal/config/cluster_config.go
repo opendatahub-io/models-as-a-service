@@ -22,9 +22,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
 
-// infoLogger interface for logging (matches logger.Logger methods we need)
+// infoLogger interface for logging (matches logger.Logger methods we need).
 type infoLogger interface {
-	Info(msg string, keysAndValues ...interface{})
+	Info(msg string, keysAndValues ...any)
 }
 
 type ClusterConfig struct {
@@ -95,7 +95,10 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
-func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger) (*ClusterConfig, error) {
+func NewClusterConfig(
+	_ string, subscriptionNamespace string, resyncPeriod time.Duration,
+	sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger,
+) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
