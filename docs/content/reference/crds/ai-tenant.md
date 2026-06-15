@@ -1,8 +1,8 @@
 # AITenant
 
-Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
+Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
-`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `redhat-ai-gateway-infra`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
+`AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 ---
 
@@ -12,19 +12,15 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| tenantNamespace | AITenantTenantNamespace | Yes | Tenant namespace where tenant administrators manage MaaS objects. |
 | gateway | AITenantGatewayRef | No | Existing Gateway to reference. If omitted, the Gateway name defaults to the `AITenant` name. |
 | oidc | TenantExternalOIDCConfig | No | OIDC settings mirrored into the temporary `Tenant/default-tenant` config object while the MaaS config CR rename is pending. |
 | rbac | AITenantRBACConfig | No | Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this `AITenant`. |
 
 ---
 
-## AITenantTenantNamespace
+## Tenant Namespace
 
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| name | string | Yes | — | Namespace for tenant-scoped MaaS objects. Immutable after creation. |
-| create | bool | No | `true` | Whether the controller creates the namespace if it does not exist. |
+For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. `AITenant` names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
 
 The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
 
@@ -82,10 +78,8 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: AITenant
 metadata:
   name: red-team
-  namespace: redhat-ai-gateway-infra
+  namespace: ai-tenants
 spec:
-  tenantNamespace:
-    name: red-team-maas
   gateway:
     name: red-team
   oidc:

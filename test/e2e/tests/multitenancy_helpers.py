@@ -380,7 +380,7 @@ def new_discovery_case(*, use_default_gateway: bool = False) -> dict[str, str]:
     tenant_name = f"e2e-mt-{suffix}"
     return {
         "suffix": suffix,
-        "tenant_ns": f"e2e-mt-{suffix}",
+        "tenant_ns": f"ai-tenant-{tenant_name}",
         "tenant_label_name": tenant_name,
         "gateway_name": DEFAULT_GATEWAY_NAME if use_default_gateway else tenant_name,
         "policy_name": f"e2e-policy-{suffix}",
@@ -394,7 +394,7 @@ def new_named_tenant_case(prefix: str) -> dict[str, str]:
     tenant_name = f"{prefix}-{suffix}"
     return {
         "suffix": suffix,
-        "tenant_ns": f"{tenant_name}-ns",
+        "tenant_ns": f"ai-tenant-{tenant_name}",
         "tenant_label_name": tenant_name,
         "gateway_name": tenant_name,
         "policy_name": f"{tenant_name}-policy",
@@ -505,7 +505,6 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
 
 def apply_aitenant(case: dict[str, str]) -> None:
     spec: dict[str, Any] = {
-        "tenantNamespace": {"name": case["tenant_ns"]},
         "gateway": {"name": case["gateway_name"]},
         "rbac": {
             "admins": [{"kind": "User", "name": admin_subject()}],
