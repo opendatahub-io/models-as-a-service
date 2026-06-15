@@ -124,7 +124,7 @@ def _new_aitenant_case():
     suffix = uuid.uuid4().hex[:8]
     aitenant_name = f"e2e-ait-{suffix}"
     return {
-        "tenant_ns": f"e2e-aitenant-{suffix}",
+        "tenant_ns": f"ai-tenant-e2e-ait-{suffix}",
         "aitenant_name": aitenant_name,
         "gateway_name": aitenant_name,
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
@@ -175,9 +175,6 @@ def _apply_aitenant(case):
                 "namespace": AITENANT_NAMESPACE,
             },
             "spec": {
-                "tenantNamespace": {
-                    "name": case["tenant_ns"],
-                },
                 "rbac": {
                     "admins": [
                         {
@@ -234,16 +231,6 @@ def _delete_aitenant(case):
     _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
 
 
-def _aitenant_failed_invalid_placement(obj):
-    status = obj.get("status") or {}
-    if status.get("phase") != "Failed":
-        return False
-    return any(
-        cond.get("type") == "Ready" and cond.get("reason") == "InvalidPlacement"
-        for cond in status.get("conditions") or []
-    )
-
-
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
@@ -290,11 +277,12 @@ class TestAITenantLifecycle:
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
-    def test_aitenant_rejects_models_as_a_service_for_non_default_tenant(self):
+    def test_aitenant_derives_non_default_tenant_namespace(self):
         """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
         suffix = uuid.uuid4().hex[:8]
-        aitenant_name = f"e2e-invalid-{suffix}"
+        aitenant_name = f"e2e-derive-{suffix}"
         reserved_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+        expected_ns = f"ai-tenant-{aitenant_name}"
         gateway_name = aitenant_name
 
         try:
@@ -305,7 +293,6 @@ class TestAITenantLifecycle:
                     "kind": "AITenant",
                     "metadata": {"name": aitenant_name, "namespace": AITENANT_NAMESPACE},
                     "spec": {
-                        "tenantNamespace": {"name": reserved_ns, "create": True},
                         "rbac": {"admins": [{"kind": "User", "name": _admin_subject()}]},
                     },
                 }
@@ -314,14 +301,13 @@ class TestAITenantLifecycle:
                 AITENANT_KIND,
                 aitenant_name,
                 AITENANT_NAMESPACE,
-                predicate=_aitenant_failed_invalid_placement,
+                predicate=_aitenant_ready,
                 timeout=120,
             )
-            ready = next(
-                (c for c in (aitenant.get("status") or {}).get("conditions") or [] if c.get("type") == "Ready"),
-                {},
-            )
-            assert ready.get("reason") == "InvalidPlacement"
+            assert aitenant["status"]["tenantNamespace"] == expected_ns
+            assert aitenant["status"]["tenantNamespace"] != reserved_ns
+            assert _get_json_or_none("tenant", TENANT_NAME, expected_ns) is not None
         finally:
             _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE)
             _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
+            _delete_best_effort("namespace", expected_ns, timeout="90s")

@@ -139,27 +139,6 @@ spec:
                     maxItems: 128
                     type: array
                 type: object
-              tenantNamespace:
-                description: TenantNamespace identifies the namespace where tenant
-                  administrators manage MaaS objects.
-                properties:
-                  create:
-                    default: true
-                    description: Create controls whether the controller creates the
-                      namespace if missing.
-                    type: boolean
-                  name:
-                    description: Name is the namespace where tenant-scoped MaaS objects
-                      are created.
-                    maxLength: 63
-                    minLength: 1
-                    pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
-                    type: string
-                required:
-                - name
-                type: object
-            required:
-            - tenantNamespace
             type: object
           status:
             description: AITenantStatus defines the observed tenant bootstrap state.
@@ -249,8 +228,6 @@ spec:
             type: object
         type: object
         x-kubernetes-validations:
-        - message: spec.tenantNamespace.name is immutable
-          rule: self.spec.tenantNamespace.name == oldSelf.spec.tenantNamespace.name
         - message: AITenant name must be at most 41 characters (required for per-tenant
             resource naming with 63-character Kubernetes limit)
           rule: self.metadata.name.size() <= 41
