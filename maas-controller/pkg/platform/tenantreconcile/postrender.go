@@ -16,6 +16,7 @@ import (
 func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
+	tenantID := params.TenantIdentifier
 
 	var filteredResources []unstructured.Unstructured
 	for i := range resources {
@@ -30,11 +31,11 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 
 		gvk := resource.GroupVersionKind()
 		switch {
-		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == GatewayTokenRateLimitDefaultDenyPolicyName:
+		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == baseGatewayTokenRateLimitDefaultDenyPolicyName:
 			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
 				return nil, err
 			}
-		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName:
+		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName(tenantID):
 			configureDestinationRule(log, resource, gatewayNamespace)
 		}
 
@@ -44,10 +45,10 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources); err != nil {
+	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, tenantID); err != nil {
 		return nil, err
 	}
-	if err := configureIstioTelemetryResources(log, tenant, &filteredResources); err != nil {
+	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, tenantID); err != nil {
 		return nil, err
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
@@ -161,7 +162,7 @@ func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	return *t.Enabled
 }
 
-func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured) error {
+func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
@@ -174,7 +175,7 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 			"apiVersion": "extensions.kuadrant.io/v1alpha1",
 			"kind":       "TelemetryPolicy",
 			"metadata": map[string]any{
-				"name":      TelemetryPolicyName,
+				"name":      TelemetryPolicyName(tenantID),
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
@@ -196,12 +197,13 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 			},
 		},
 	}
-	log.V(2).Info("Appending TelemetryPolicy", "name", TelemetryPolicyName, "namespace", gatewayNamespace)
+	telemetryPolicyName := TelemetryPolicyName(tenantID)
+	log.V(2).Info("Appending TelemetryPolicy", "name", telemetryPolicyName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *tp)
 	return nil
 }
 
-func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured) error {
+func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
@@ -212,7 +214,7 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 			"apiVersion": "telemetry.istio.io/v1",
 			"kind":       "Telemetry",
 			"metadata": map[string]any{
-				"name":      IstioTelemetryName,
+				"name":      IstioTelemetryName(tenantID),
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
@@ -245,7 +247,8 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 			},
 		},
 	}
-	log.V(2).Info("Appending Istio Telemetry", "name", IstioTelemetryName, "namespace", gatewayNamespace)
+	istioTelemetryName := IstioTelemetryName(tenantID)
+	log.V(2).Info("Appending Istio Telemetry", "name", istioTelemetryName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *istioTelemetry)
 	return nil
 }

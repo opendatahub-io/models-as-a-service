@@ -246,6 +246,8 @@ deploy_maas_platform() {
 
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
+    # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
+    export DB_SSLMODE="${DB_SSLMODE:-disable}"
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
@@ -467,13 +469,16 @@ wait_for_auth_policies_enforced() {
 
 validate_deployment() {
     echo "Deployment Validation"
-    echo "Using namespace: $DEPLOYMENT_NAMESPACE"
-    
+    echo "Using controller namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using maas-api namespace: redhat-ai-gateway-infra"
+
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+        # maas-api deploys to operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI)
+        # validate-deployment.sh uses MAAS_API_NAMESPACE env var or defaults to opendatahub
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi
