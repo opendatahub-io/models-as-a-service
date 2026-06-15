@@ -2,6 +2,7 @@ package tenantreconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -122,7 +123,7 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 		return fmt.Errorf("failed to get volumes: %w", err)
 	}
 	if !found {
-		return fmt.Errorf("no volumes found in deployment")
+		return errors.New("no volumes found in deployment")
 	}
 
 	// Find and update the maas-api-tls volume's secret name
