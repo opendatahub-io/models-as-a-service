@@ -66,7 +66,10 @@ func TestNewTLSConfigFromProfile(t *testing.T) {
 	}
 
 	applyTLSConfig, unsupported := NewTLSConfigFromProfile(spec)
-	cfg := &tls.Config{NextProtos: []string{"h2"}}
+	cfg := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		NextProtos: []string{"h2"},
+	}
 	applyTLSConfig(cfg)
 
 	assert.Empty(t, unsupported)
