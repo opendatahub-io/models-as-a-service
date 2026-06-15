@@ -52,7 +52,7 @@
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
 #   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller with discovery flag before pytest (default: true)
-#   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: redhat-ai-gateway-infra)
+#   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
 #
@@ -113,7 +113,7 @@ GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
 # Multi-tenancy Phase 1: patch maas-controller for tenant namespace discovery E2E.
 ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
-AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-redhat-ai-gateway-infra}"
+AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
@@ -514,7 +514,8 @@ wait_for_auth_policies_enforced() {
 validate_deployment() {
     echo "Deployment Validation"
     echo "Using controller namespace: $DEPLOYMENT_NAMESPACE"
-    echo "Using maas-api namespace: redhat-ai-gateway-infra"
+    echo "Using maas-api namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using AITenant namespace: $AITENANT_NAMESPACE"
 
     if [ "$SKIP_VALIDATION" = false ]; then
         # maas-api deploys to operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI)

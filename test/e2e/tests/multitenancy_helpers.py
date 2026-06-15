@@ -39,7 +39,7 @@ FINALIZER_AUTHPOLICY = "maas.opendatahub.io/authpolicy-cleanup"
 
 GATEWAY_AUTH_POLICY_NAME = "maas-gateway-auth"
 
-AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "redhat-ai-gateway-infra")
+AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
