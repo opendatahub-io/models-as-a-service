@@ -231,6 +231,16 @@ def _delete_aitenant(case):
     _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
 
 
+def _aitenant_failed_invalid_placement(obj):
+    status = obj.get("status") or {}
+    if status.get("phase") != "Failed":
+        return False
+    return any(
+        cond.get("type") == "Ready" and cond.get("reason") == "InvalidPlacement"
+        for cond in status.get("conditions") or []
+    )
+
+
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
@@ -276,3 +286,39 @@ class TestAITenantLifecycle:
             _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
+
+    def test_aitenant_rejects_models_as_a_service_for_non_default_tenant(self):
+        """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
+        suffix = uuid.uuid4().hex[:8]
+        aitenant_name = f"e2e-invalid-{suffix}"
+        reserved_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+        gateway_name = aitenant_name
+
+        try:
+            _apply_gateway_fixture({"gateway_name": gateway_name, "aitenant_name": aitenant_name})
+            _apply(
+                {
+                    "apiVersion": "maas.opendatahub.io/v1alpha1",
+                    "kind": "AITenant",
+                    "metadata": {"name": aitenant_name, "namespace": AITENANT_NAMESPACE},
+                    "spec": {
+                        "tenantNamespace": {"name": reserved_ns, "create": True},
+                        "rbac": {"admins": [{"kind": "User", "name": _admin_subject()}]},
+                    },
+                }
+            )
+            aitenant = _wait_for_json(
+                AITENANT_KIND,
+                aitenant_name,
+                AITENANT_NAMESPACE,
+                predicate=_aitenant_failed_invalid_placement,
+                timeout=120,
+            )
+            ready = next(
+                (c for c in (aitenant.get("status") or {}).get("conditions") or [] if c.get("type") == "Ready"),
+                {},
+            )
+            assert ready.get("reason") == "InvalidPlacement"
+        finally:
+            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE)
+            _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)

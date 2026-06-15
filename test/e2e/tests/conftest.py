@@ -8,6 +8,39 @@ import requests
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 
+# When using port-forward (GATEWAY_HOST=127.0.0.1:PORT), set GATEWAY_ROUTE_HOST to the
+# real route hostname so OpenShift gateway routing matches the Host header.
+_GATEWAY_ROUTE_HOST = os.environ.get("GATEWAY_ROUTE_HOST", "")
+
+
+def _maybe_inject_gateway_route_host(method, url, kwargs):
+    if not _GATEWAY_ROUTE_HOST:
+        return kwargs
+    url_str = str(url)
+    if "127.0.0.1" in url_str or "localhost" in url_str:
+        headers = dict(kwargs.get("headers") or {})
+        headers.setdefault("Host", _GATEWAY_ROUTE_HOST)
+        kwargs["headers"] = headers
+    return kwargs
+
+
+if _GATEWAY_ROUTE_HOST:
+    _orig_request = requests.api.request
+
+    def _request(method, url, **kwargs):
+        kwargs = _maybe_inject_gateway_route_host(method, url, kwargs)
+        return _orig_request(method, url, **kwargs)
+
+    requests.api.request = _request
+
+    _orig_session_request = requests.Session.request
+
+    def _session_request(self, method, url, **kwargs):
+        kwargs = _maybe_inject_gateway_route_host(method, url, kwargs)
+        return _orig_session_request(self, method, url, **kwargs)
+
+    requests.Session.request = _session_request
+
 
 @pytest.fixture(scope="session")
 def gateway_host() -> str:
@@ -43,8 +76,13 @@ def _verify_gateway_dns(gateway_host: str):
     early instead of producing cryptic ConnectionError stack traces
     in every test.
     """
+    host_port = gateway_host.rsplit(":", 1)
+    if len(host_port) == 2 and host_port[1].isdigit():
+        host, port = host_port[0], int(host_port[1])
+    else:
+        host, port = gateway_host, None
     try:
-        socket.getaddrinfo(gateway_host, None)
+        socket.getaddrinfo(host, port or 0)
     except socket.gaierror:
         pytest.skip(
             f"Gateway hostname '{gateway_host}' does not resolve "
