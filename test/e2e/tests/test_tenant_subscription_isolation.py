@@ -29,7 +29,8 @@ from multitenancy_helpers import GATEWAY_NAMESPACE
 @pytest.fixture(scope="module")
 def tenant_env(shared_test_tenants):
     """Adapter fixture with tenant-specific models."""
-    case_a, case_b = shared_test_tenants
+    # Shallow copy to avoid mutating session-scoped shared_test_tenants
+    case_a, case_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
 
     # Create models in each tenant namespace
     for case in (case_a, case_b):

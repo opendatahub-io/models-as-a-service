@@ -290,7 +290,13 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
                     f"Failed to get route for gateway {case['gateway_name']}: {result.stderr.strip()}"
                 )
             route = json.loads(result.stdout)
-            host = route["spec"]["host"]
+            try:
+                host = route["spec"]["host"]
+            except KeyError as e:
+                raise RuntimeError(
+                    f"Route {case['gateway_name']}-route missing expected field: {e}. "
+                    f"Route structure: {route}"
+                ) from e
             case["base_url"] = f"{scheme}://{host}/maas-api"
 
         yield case_a, case_b

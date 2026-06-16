@@ -12,8 +12,6 @@ Prerequisites:
   - Tenant namespace discovery enabled on controller
   - KServe controller running
   - Gateway infrastructure (openshift-ingress)
-
-Run with ENABLE_TENANT_MODEL_INFERENCE_E2E=true.
 """
 
 import json
