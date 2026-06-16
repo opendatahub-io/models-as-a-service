@@ -218,7 +218,7 @@ curl ... -d '{"name": "key-max"}' ...
 curl ... -d '{"name": "key-7d", "expiresIn": 604800}' ...
 ```
 
-!!! Warning: "There are no permanent keys."  
+!!! warning: "There are no permanent keys."  
     All API keys must have an expiration. There is no option to create a permanent, never-expiring key. Use the maximum allowed duration for long-lived integrations.
 
 ---
