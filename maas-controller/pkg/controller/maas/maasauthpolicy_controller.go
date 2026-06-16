@@ -429,6 +429,24 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// Reconcile the gateway-level AuthPolicy for this tenant's gateway.
 	// In single-tenant mode: creates AuthPolicy for the default gateway.
 	// In multi-tenant mode: creates AuthPolicy for each tenant's gateway.
+	//
+	// Skip reconciling if this is a non-default tenant using the default gateway.
+	// This happens when a Tenant CR exists without a gatewayRef - it shouldn't
+	// overwrite the default gateway's AuthPolicy with tenant-specific configuration.
+	isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
+	isNonDefaultTenant := tenantID != ""
+	if isNonDefaultTenant && isDefaultGateway {
+		log.Info("skipping gateway AuthPolicy reconciliation: non-default tenant falling back to default gateway (Tenant CR missing gatewayRef)",
+			"tenantID", tenantID,
+			"tenantNamespace", req.Namespace,
+			"gatewayNamespace", gatewayNs,
+			"gatewayName", gatewayName)
+		// Still mark the policy as Active since the model-level auth rules are aggregated correctly,
+		// even though we're not updating the gateway policy
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
 	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID, gatewayNs, gatewayName); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
