@@ -114,3 +114,16 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 ## Next Steps
 
 After deployment, proceed to [Model Setup](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
+
+### Observability
+
+MaaS provides metrics collection, dashboards, and usage tracking. If you plan to use metrics, showback, or dashboards, you need to enable observability as a post-install step. See [Observability Setup](observability/setup.md) for the required configuration (User Workload Monitoring, Kuadrant observability, and optional RHOAI Dashboard integration).
+
+!!! warning "What happens if you skip observability"
+    Without observability configured:
+
+    - **No metrics collection** — ServiceMonitors will not be processed and Prometheus will not scrape MaaS components.
+    - **No usage dashboards** — Token consumption, request volume, and rate-limiting dashboards will have no data.
+    - **No per-subscription latency tracking** — The `subscription` label on gateway latency metrics requires Istio Telemetry deployed by the Tenant reconciler.
+
+    You can enable observability at any time after the initial install without redeploying MaaS.
