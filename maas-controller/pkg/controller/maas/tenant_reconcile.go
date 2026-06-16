@@ -85,6 +85,22 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Guard against unlabeled Tenant CRs in foreign namespaces when discovery is enabled.
+	// Without LabelManagedByAITenant, TenantIdentifierFor returns "" (default tenant),
+	// which would cause the rendered maas-api Deployment to use the base name "maas-api"
+	// and SSA-overwrite the actual default tenant's Deployment with wrong env vars
+	// (e.g., MAAS_SUBSCRIPTION_NAMESPACE pointing at the foreign namespace).
+	if r.TenantNamespaceDiscoveryEnabled && r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
+		labels := tenant.GetLabels()
+		if labels == nil || labels[tenantreconcile.LabelManagedByAITenant] != "true" {
+			log.V(1).Info("ignoring unlabeled Tenant in foreign namespace to prevent default-tenant resource collision",
+				"tenantNamespace", tenant.Namespace,
+				"defaultTenantNamespace", r.TenantNamespace,
+				"hint", "set maas.opendatahub.io/managed-by-aitenant=true and maas.opendatahub.io/tenant-name labels")
+			return ctrl.Result{}, nil
+		}
+	}
+
 	// Handle deletion
 	if !tenant.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, log, &tenant)
