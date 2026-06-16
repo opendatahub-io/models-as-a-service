@@ -1270,8 +1270,10 @@ metadata:
   namespace: ${INTERNAL_MODEL_NAMESPACE}
 spec:
   model:
-    uri: hf://sshleifer/tiny-gpt2
+    uri: hf://placeholder/no-model
     name: facebook/opt-125m
+  storageInitializer:
+    enabled: false
   replicas: 1
   router:
     route: {}
