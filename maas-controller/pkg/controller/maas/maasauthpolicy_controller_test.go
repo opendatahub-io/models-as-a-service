@@ -1076,7 +1076,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 }
 
 // TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream verifies that identity headers
-// (X-MaaS-Username, X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
+// (X-MaaS-Group, X-MaaS-Key-Id) are NOT injected into requests forwarded
 // to upstream model workloads (defense-in-depth). Exception: X-MaaS-Subscription IS injected
 // for Istio Telemetry (per-subscription latency tracking).
 // All identity information remains available to TRLP and telemetry via filters.identity.
@@ -1119,7 +1119,7 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 		t.Fatalf("Get AuthPolicy %q: %v", authPolicyName, err)
 	}
 
-	// Test 1: Verify identity headers (except X-MaaS-Subscription) are not forwarded upstream
+	// Test 1: Verify identity headers (except X-MaaS-Subscription and X-MaaS-Username) are not forwarded upstream
 	t.Run("identity headers not forwarded to upstream", func(t *testing.T) {
 		headers, found, err := unstructured.NestedMap(got.Object, "spec", "rules", "response", "success", "headers")
 		if err != nil {
@@ -1135,8 +1135,13 @@ func TestMaaSAuthPolicyReconciler_NoIdentityHeadersUpstream(t *testing.T) {
 			t.Errorf("X-MaaS-Subscription header should be present for Istio Telemetry")
 		}
 
-		// Verify identity headers are NOT present (defense-in-depth)
-		forbiddenHeaders := []string{"X-MaaS-Username", "X-MaaS-Group", "X-MaaS-Key-Id"}
+		// Verify X-MaaS-Username IS present (required for per-user metering)
+		if _, exists := headers["X-MaaS-Username"]; !exists {
+			t.Errorf("X-MaaS-Username header should be present for per-user metering")
+		}
+
+		// Verify sensitive identity headers are NOT present (defense-in-depth)
+		forbiddenHeaders := []string{"X-MaaS-Group", "X-MaaS-Key-Id"}
 		for _, header := range forbiddenHeaders {
 			if _, exists := headers[header]; exists {
 				t.Errorf("Identity header %q should NOT be forwarded to upstream workloads (defense-in-depth)", header)

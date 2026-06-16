@@ -783,7 +783,7 @@ allow {
 		// User identity, groups, and key IDs are not forwarded to upstream model workloads
 		// to prevent accidental disclosure in logs or dumps. All identity information remains
 		// available to TRLP and telemetry via auth.identity and filters.identity below.
-		// Exception: X-MaaS-Subscription is injected for Istio Telemetry (per-subscription latency tracking).
+		// Exceptions: X-MaaS-Subscription (Istio Telemetry) and X-MaaS-Username (per-user metering) are injected.
 		rule["response"] = map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{
@@ -803,6 +803,14 @@ allow {
 					"X-MaaS-Subscription": map[string]any{
 						"plain": map[string]any{
 							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : ""`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Username for per-user metering (API keys: from validation, K8s tokens: from identity)
+					"X-MaaS-Username": map[string]any{
+						"plain": map[string]any{
+							"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : (has(auth.identity) && has(auth.identity.user) ? auth.identity.user.username : "")`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
