@@ -181,27 +181,27 @@ The `expiresIn` field accepts duration strings in multiple formats:
 
 **Numeric format (seconds):**
 
-When passed as a JSON number (not a string), the value is interpreted as **seconds**:
+When passed as a JSON number (not a string), the value is interpreted as **seconds**. E.g. the following `expiresIn: 86400` is one day (24 * 60 * 60):
 
 ```json
 {
-  "expiresIn": 86400  // 86400 seconds = 1 day
+  "expiresIn": 86400
 }
 ```
 
 **Validation rules:**
 
 - **Minimum**: Any positive duration (e.g., `"1s"` is valid, though not practical)
-- **Maximum for regular keys**: Configured platform maximum (typically 90 days)
+- **Maximum for regular keys**: Configured platform maximum
 - **Maximum for ephemeral keys**: 1 hour
-- **Omitted**: Defaults to the platform maximum for regular keys, or 1 hour for ephemeral keys
+- **Omitted** (i.e. `expiresIn` not sent): Keys still expire; there is no indefinite default.
+  - **Ephemeral keys**: **1 hour**.
+  - **Regular keys**: Omitting `expiresIn` will default to the maximum expiration days value. The maximum expiration value is set by either:
+    - Setting the value in [`Tenant.spec.apiKeys.maxExpirationDays`](../install/maas-setup.md#tenant-cr), or 
+    - When deploying a standalone maas-api instance you can also set this maximum allowed lifetime via the `API_KEY_MAX_EXPIRATION_DAYS` environment variable.
 
-**Examples:**
-
+### Examples:
 ```bash
-# 30 days
-curl ... -d '{"name": "key-30d", "expiresIn": "30d"}' ...
-
 # 6 hours
 curl ... -d '{"name": "key-6h", "expiresIn": "6h"}' ...
 
@@ -218,7 +218,7 @@ curl ... -d '{"name": "key-max"}' ...
 curl ... -d '{"name": "key-7d", "expiresIn": 604800}' ...
 ```
 
-!!! warning "No permanent keys"
+!!! Warning: "There are no permanent keys."  
     All API keys must have an expiration. There is no option to create a permanent, never-expiring key. Use the maximum allowed duration for long-lived integrations.
 
 ---
