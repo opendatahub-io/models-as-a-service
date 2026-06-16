@@ -30,7 +30,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc")
+		got, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
@@ -61,7 +61,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "tenant-ns", "cluster-audience")
+		got, err := BuildPlatformParams(tenant, "tenant-ns", "cluster-audience", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
