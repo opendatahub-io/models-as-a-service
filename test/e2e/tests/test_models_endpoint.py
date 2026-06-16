@@ -2152,7 +2152,6 @@ class TestModelsEndpoint:
                 model_refs=[model_ref],
                 groups=["system:authenticated"]
             )
-            _wait_reconcile()
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
@@ -2164,7 +2163,6 @@ class TestModelsEndpoint:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_reconcile()
             _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced

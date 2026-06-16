@@ -302,7 +302,6 @@ class TestMaaSControllerWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile(15)
             _wait_for_maas_auth_policy_phase("e2e-watched-auth", timeout=90)
             _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns, timeout=90)
 
