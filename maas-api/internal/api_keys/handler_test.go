@@ -1105,7 +1105,7 @@ func TestCreateAPIKey_SubscriptionSelectErrors(t *testing.T) {
 			assert.Equal(t, apiKeySubscriptionResolutionErrCode, resp["code"])
 			assert.Equal(t, apiKeySubscriptionResolutionErrMsg, resp["error"])
 
-			res, err := store.Search(context.Background(), user.Username, "",
+			res, err := store.Search(context.Background(), user.Username, user.Tenant,
 				&SearchFilters{}, &SortParams{By: DefaultSortBy, Order: DefaultSortOrder},
 				&PaginationParams{Limit: 10, Offset: 0})
 			require.NoError(t, err)

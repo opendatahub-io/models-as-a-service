@@ -135,9 +135,9 @@ func TestPatchMaaSAPIDeploymentTENANT_NAME(t *testing.T) {
 		expectedTenantName string
 	}{
 		{
-			name:               "default tenant gets empty TENANT_NAME",
+			name:               "default tenant gets models-as-a-service TENANT_NAME",
 			tenantID:           "",
-			expectedTenantName: "",
+			expectedTenantName: "models-as-a-service",
 		},
 		{
 			name:               "redteam tenant gets TENANT_NAME=redteam",

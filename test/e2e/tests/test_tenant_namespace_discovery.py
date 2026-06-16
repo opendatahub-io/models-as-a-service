@@ -80,7 +80,7 @@ class TestTenantNamespaceDiscovery:
         case = new_discovery_case(use_default_gateway=True)
         try:
             apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             apply_maas_subscription(case["subscription_name"], case["tenant_ns"])
 
@@ -108,7 +108,7 @@ class TestTenantNamespaceDiscovery:
         case = new_discovery_case(use_default_gateway=True)
         try:
             apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
 
@@ -162,7 +162,7 @@ class TestTenantNamespaceDiscovery:
         case = new_discovery_case(use_default_gateway=True)
         try:
             ensure_namespace(case["tenant_ns"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_reconcile(10)
             before = get_json_or_none("maasauthpolicy", case["policy_name"], case["tenant_ns"])
@@ -194,6 +194,7 @@ class TestTenantNamespaceDiscovery:
                 case["tenant_ns"],
                 DEFAULT_GATEWAY_NAME,
                 external_oidc={"issuerUrl": issuer, "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client")},
+                tenant_label_name=case["tenant_label_name"],
             )
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
@@ -223,7 +224,7 @@ class TestTenantNamespaceDiscovery:
         try:
             for case in (case_a, case_b):
                 apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
                 apply_maas_auth_policy(shared_policy_name, case["tenant_ns"])
                 apply_maas_subscription(shared_sub_name, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy_name, case["tenant_ns"], FINALIZER_AUTHPOLICY)
@@ -364,7 +365,7 @@ class TestTenantDiscoveryDormantMode:
         policy_name = f"e2e-dormant-{case['suffix']}"
         try:
             apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
 
             patch_controller_tenant_namespace_discovery(enabled=False)
             apply_maas_auth_policy(policy_name, case["tenant_ns"])

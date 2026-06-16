@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"testing"
 
+	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -186,7 +187,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc")
+		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "", params.TenantIdentifier)
@@ -210,7 +211,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "redhat-ai-gateway-infra", "https://kubernetes.default.svc")
+		params, err := BuildPlatformParams(tenant, "redhat-ai-gateway-infra", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "redteam", params.TenantIdentifier)
