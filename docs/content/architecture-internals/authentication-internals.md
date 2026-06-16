@@ -8,8 +8,10 @@ This page describes how **identity and subscription context** are established at
 
 Today’s pipeline does **not** drive TokenRateLimitPolicy by splitting group membership in CEL the way older drafts did. The flow is:
 
-1. **AuthPolicy** (controller-generated per model) authenticates the caller and calls **maas-api** at  
-   `POST https://maas-api.<namespace>.svc.cluster.local:8443/internal/v1/subscriptions/select`  
+1. **AuthPolicy** (controller-generated per model) authenticates the caller and calls **maas-api** at:
+   - Default tenant: `POST https://maas-api.opendatahub.svc.cluster.local:8443/internal/v1/subscriptions/select`
+   - Additional tenants: `POST https://maas-api-{tenantID}.opendatahub.svc.cluster.local:8443/internal/v1/subscriptions/select`
+   
    with the caller’s groups, username, requested subscription header (when applicable), and model scope.
 
 2. **maas-api** resolves which **MaaSSubscription** applies (including validation, auto-selection when only one subscription applies, and error paths). Results are exposed to Authorino as **`subscription-info`** metadata.

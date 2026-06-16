@@ -169,9 +169,10 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		Scheme:                          scheme,
 		TenantNamespace:                 "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
-		GatewayName:                     "team-a-gateway",
-		GatewayNamespace:                gwNamespace,
-		MaaSAPINamespace:                "opendatahub",
+		// Controller's default gateway (different from tenant's gateway)
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "openshift-ingress",
+		MaaSAPINamespace: "opendatahub",
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}
@@ -182,7 +183,9 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
+	// Gateway AuthPolicy name is now dynamic: {gatewayName}-maas-auth
+	expectedAuthPolicyName := "team-a-gateway-maas-auth"
+	if err := c.Get(context.Background(), types.NamespacedName{Name: expectedAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
 		t.Errorf("Gateway AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
 	}
 }

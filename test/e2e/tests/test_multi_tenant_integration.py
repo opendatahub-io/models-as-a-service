@@ -119,7 +119,7 @@ class TestMultiTenantIntegration:
         try:
             for case in (case_a, case_b):
                 apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
                 apply_maas_auth_policy(shared_policy, case["tenant_ns"])
                 apply_maas_subscription(shared_sub, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
@@ -145,7 +145,7 @@ class TestMultiTenantIntegration:
         second_policy = f"e2e-label-return-{case['suffix']}"
         try:
             ensure_namespace(case["tenant_ns"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
             apply_maas_auth_policy(first_policy, case["tenant_ns"])
             _wait_reconcile(10)
             first = get_json_or_none("maasauthpolicy", first_policy, case["tenant_ns"])

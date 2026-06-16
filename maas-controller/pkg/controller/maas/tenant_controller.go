@@ -67,6 +67,12 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// TenantNamespaceDiscoveryEnabled allows reconciling Tenant CRs across all namespaces
+	// instead of only TenantNamespace (enables AITenant multi-tenancy).
+	TenantNamespaceDiscoveryEnabled bool
+	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
+	// Applies to apiKeyValidation and subscription-info metadata evaluators.
+	MetadataCacheTTL int64
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -113,6 +119,12 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+
+// Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/status;externalproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/finalizers;externalproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
 // Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).

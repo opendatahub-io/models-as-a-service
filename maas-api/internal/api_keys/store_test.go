@@ -46,13 +46,13 @@ func TestPostgresStoreFromURL(t *testing.T) {
 	testLogger := logger.Development()
 
 	t.Run("InvalidURL", func(t *testing.T) {
-		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "mysql://localhost:3306/db")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "mysql://localhost:3306/db", "test-tenant")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid database URL")
 	})
 
 	t.Run("EmptyURL", func(t *testing.T) {
-		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "")
+		_, err := api_keys.NewPostgresStoreFromURL(ctx, testLogger, "", "test-tenant")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "invalid database URL")
 	})
