@@ -1,13 +1,10 @@
 """
-E2E tests for per-tenant rate-limit isolation (MT S4).
+E2E tests for per-tenant rate-limit isolation.
 
-Run with:
-  ENABLE_S4_E2E=true
-  MAAS_API_BASE_URL_TENANT_A / MAAS_API_BASE_URL_TENANT_B
-  TENANT_A_NAMESPACE / TENANT_B_NAMESPACE
+These tests use shared_test_tenants fixture to create two AITenant instances
+and validate rate limit isolation between tenants.
 """
 
-import os
 import time
 import uuid
 
@@ -20,48 +17,67 @@ from multitenancy_helpers import (
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
-    env_bool,
-    require_tenant_api_base_urls,
     response_summary,
     wait_for_status_phase,
 )
 from test_helper import (
-    MODEL_NAME,
-    MODEL_NAMESPACE,
-    MODEL_PATH,
-    MODEL_REF,
     TIMEOUT,
     TLS_VERIFY,
     _get_cluster_token,
     _wait_for_token_rate_limit_policy,
+    _create_llmis,
+    _create_maas_model_ref,
+    _delete_cr,
 )
+from multitenancy_helpers import GATEWAY_NAMESPACE
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S4_E2E"),
-    reason="S4 tenant rate-limit isolation E2E is gated; set ENABLE_S4_E2E=true once the backing implementation lands",
-)
+# Tenant rate-limit isolation tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")
-def tenant_env():
-    urls = require_tenant_api_base_urls("TENANT_A", "TENANT_B")
+def tenant_env(shared_test_tenants):
+    """Adapter fixture with tenant-specific models."""
+    case_a, case_b = shared_test_tenants
+
+    # Create models in each tenant namespace
+    for case in (case_a, case_b):
+        model_name = f"rate-test-model-{case['suffix']}"
+
+        # Create LLMIS pointing to tenant gateway
+        _create_llmis(model_name, case["tenant_ns"], case["gateway_name"], GATEWAY_NAMESPACE)
+
+        # Create MaaSModelRef
+        _create_maas_model_ref(model_name, case["tenant_ns"], model_name)
+
+        # Store model info
+        case["model_name"] = model_name
+        case["model_namespace"] = case["tenant_ns"]
+
+    # Rename keys to match existing test expectations
     tenant_a = {
-        "slot": "TENANT_A",
-        "name": os.environ.get("TENANT_A_NAME", "tenant-a"),
-        "namespace": os.environ.get("TENANT_A_NAMESPACE", ""),
-        "base_url": urls["TENANT_A"],
+        "name": case_a["tenant_label_name"],
+        "namespace": case_a["tenant_ns"],
+        "base_url": case_a["base_url"],
+        "model_name": case_a["model_name"],
+        "model_namespace": case_a["model_namespace"],
     }
     tenant_b = {
-        "slot": "TENANT_B",
-        "name": os.environ.get("TENANT_B_NAME", "tenant-b"),
-        "namespace": os.environ.get("TENANT_B_NAMESPACE", ""),
-        "base_url": urls["TENANT_B"],
+        "name": case_b["tenant_label_name"],
+        "namespace": case_b["tenant_ns"],
+        "base_url": case_b["base_url"],
+        "model_name": case_b["model_name"],
+        "model_namespace": case_b["model_namespace"],
     }
-    missing = [item["slot"] for item in (tenant_a, tenant_b) if not item["namespace"]]
-    if missing:
-        pytest.fail(f"tenant namespaces not configured; set {', '.join(f'{slot}_NAMESPACE' for slot in missing)}")
-    return tenant_a, tenant_b
+
+    yield tenant_a, tenant_b
+
+    # Cleanup models
+    for case in (case_a, case_b):
+        _delete_cr("maasmodelref", case["model_name"], case["tenant_ns"])
+        _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
+
+
 
 
 @pytest.fixture
@@ -72,15 +88,25 @@ def tenant_rate_limit_setup(tenant_env):
     sub_a = f"e2e-rate-iso-a-{suffix}"
     sub_b = f"e2e-rate-iso-b-{suffix}"
     try:
+        # Create auth policies for tenant models
         for tenant in tenant_env:
-            apply_maas_auth_policy(policy_name, tenant["namespace"])
+            apply_maas_auth_policy(policy_name, tenant["namespace"],
+                                  model_ref=tenant["model_name"],
+                                  model_namespace=tenant["model_namespace"])
             wait_for_status_phase("maasauthpolicy", policy_name, tenant["namespace"], expected_phase="Active")
 
-        apply_maas_subscription(sub_a, tenant_a["namespace"], token_limit=3, window="1m")
-        apply_maas_subscription(sub_b, tenant_b["namespace"], token_limit=100, window="1m")
+        # Create subscriptions with different rate limits
+        apply_maas_subscription(sub_a, tenant_a["namespace"],
+                               model_ref=tenant_a["model_name"],
+                               model_namespace=tenant_a["model_namespace"],
+                               token_limit=3, window="1m")
+        apply_maas_subscription(sub_b, tenant_b["namespace"],
+                               model_ref=tenant_b["model_name"],
+                               model_namespace=tenant_b["model_namespace"],
+                               token_limit=100, window="1m")
         wait_for_status_phase("maassubscription", sub_a, tenant_a["namespace"], expected_phase=("Active", "Degraded"))
         wait_for_status_phase("maassubscription", sub_b, tenant_b["namespace"], expected_phase=("Active", "Degraded"))
-        _wait_for_token_rate_limit_policy(MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_token_rate_limit_policy(tenant_a["model_name"], model_namespace=tenant_a["model_namespace"], timeout=120)
 
         oc_token = _get_cluster_token()
         key_a_response = create_api_key_at(

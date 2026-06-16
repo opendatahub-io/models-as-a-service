@@ -238,3 +238,52 @@ def api_key_headers(api_key: str):
     """Headers with API key for model inference requests."""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
+
+@pytest.fixture(scope="session")
+def shared_test_tenants(gateway_host: str, is_https: bool):
+    """
+    Shared tenant infrastructure for multi-tenant tests.
+
+    Creates two AITenant instances (tenant-a, tenant-b) that persist for the
+    entire test session. Tests requiring multiple tenants should use this fixture
+    instead of creating their own tenants.
+
+    Returns:
+        tuple: (tenant_a_dict, tenant_b_dict) with keys from new_named_tenant_case plus:
+            - base_url: maas-api URL for this tenant (https://{gateway_host}/maas-api)
+
+    Requires:
+        - AITenant CRD installed
+        - Tenant namespace discovery enabled on maas-controller
+    """
+    from multitenancy_helpers import (
+        require_aitenant_crd,
+        new_named_tenant_case,
+        bootstrap_aitenant_tenant,
+        cleanup_discovery_case,
+    )
+
+    require_aitenant_crd()
+
+    # Create two persistent tenants for the session
+    case_a = new_named_tenant_case("e2e-shared-a")
+    case_b = new_named_tenant_case("e2e-shared-b")
+
+    # Add maas-api base URL (tenant maas-api routes through same gateway host)
+    scheme = "https" if is_https else "http"
+    base_url = f"{scheme}://{gateway_host}/maas-api"
+    case_a["base_url"] = base_url
+    case_b["base_url"] = base_url
+
+    try:
+        # Bootstrap both tenants
+        for case in (case_a, case_b):
+            bootstrap_aitenant_tenant(case)
+
+        yield case_a, case_b
+
+    finally:
+        # Cleanup after all tests complete
+        cleanup_discovery_case(case_a)
+        cleanup_discovery_case(case_b)
+
