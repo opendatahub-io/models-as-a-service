@@ -118,6 +118,15 @@ verify-codegen: generate manifests ##	run generate + manifests and fail if files
 	fi
 	@echo "Generated files are up to date."
 
+##@ Chaos validation
+
+KNOWLEDGE_MODEL ?= ../chaos/knowledge/maas.yaml
+
+.PHONY: chaos-validate
+chaos-validate: $(OPERATOR_CHAOS) ##	validate knowledge model and run local preflight
+	"$(OPERATOR_CHAOS)" validate --knowledge "$(KNOWLEDGE_MODEL)"
+	"$(OPERATOR_CHAOS)" preflight --knowledge "$(KNOWLEDGE_MODEL)" --local
+
 ##@ Deployment
 
 # Install CRDs, RBAC, and manager deployment (default: opendatahub namespace).
