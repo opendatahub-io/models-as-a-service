@@ -32,6 +32,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -52,6 +53,9 @@ const (
 	aitenantNameAnnotation      = "maas.opendatahub.io/aitenant-name"
 	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
+
+	defaultAITenantName   = "models-as-a-service"
+	tenantNamespacePrefix = "ai-tenant-"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
@@ -111,7 +115,8 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{}, r.updateAITenantStatus(ctx, &aitenant, statusSnapshot)
 	}
 
-	aitenant.Status.TenantNamespace = aitenant.Spec.TenantNamespace.Name
+	tenantNamespace := r.tenantNamespaceName(&aitenant)
+	aitenant.Status.TenantNamespace = tenantNamespace
 
 	gatewayRef, err := r.validateTenantGateway(ctx, &aitenant)
 	aitenant.Status.GatewayRef = gatewayRef
@@ -124,13 +129,6 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.ensureTenantNamespace(ctx, &aitenant); err != nil {
-		if errors.Is(err, errTenantNamespaceMissing) {
-			setAITenantPhase(&aitenant, "Pending", "TenantNamespaceMissing", err.Error())
-			if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
-				return ctrl.Result{}, err2
-			}
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
 		setAITenantPhase(&aitenant, "Failed", "TenantNamespaceFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
@@ -184,19 +182,15 @@ func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AI
 	if aitenant.Namespace != aitenantNamespace {
 		return fmt.Errorf("AITenant %s/%s must be created in the configured AITenant infrastructure namespace %q", aitenant.Namespace, aitenant.Name, aitenantNamespace)
 	}
-	if aitenant.Spec.TenantNamespace.Name == "" {
-		return errors.New("spec.tenantNamespace.name is required")
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	if tenantNamespace == aitenant.Namespace {
+		return fmt.Errorf("derived tenant namespace must be different from the AITenant infra namespace %q", aitenant.Namespace)
 	}
-	if aitenant.Spec.TenantNamespace.Name == aitenant.Namespace {
-		return fmt.Errorf("spec.tenantNamespace.name must be different from the AITenant infra namespace %q", aitenant.Namespace)
+	if r.AppNamespace != "" && tenantNamespace == r.AppNamespace {
+		return fmt.Errorf("derived tenant namespace must not be the protected application namespace %q", r.AppNamespace)
 	}
-	if r.AppNamespace != "" && aitenant.Spec.TenantNamespace.Name == r.AppNamespace {
-		return fmt.Errorf("spec.tenantNamespace.name must not be the protected application namespace %q", r.AppNamespace)
-	}
-	if r.TenantNamespace != "" &&
-		aitenant.Spec.TenantNamespace.Name == r.TenantNamespace &&
-		aitenant.Name != r.TenantNamespace {
-		return fmt.Errorf("spec.tenantNamespace.name %q is reserved for the default AITenant %q", r.TenantNamespace, r.TenantNamespace)
+	if errs := validation.IsDNS1123Label(tenantNamespace); len(errs) > 0 {
+		return fmt.Errorf("derived tenant namespace %q is invalid: %s", tenantNamespace, strings.Join(errs, "; "))
 	}
 	return nil
 }
@@ -208,22 +202,42 @@ func (r *AITenantReconciler) aitenantNamespace() string {
 	return r.AITenantNamespace
 }
 
-var errTenantNamespaceMissing = errors.New("tenant namespace missing")
+func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant) string {
+	if r.isDefaultAITenant(aitenant) {
+		return r.defaultTenantNamespace()
+	}
+	return derivedTenantNamespaceName(aitenant.Name)
+}
+
+func (r *AITenantReconciler) isDefaultAITenant(aitenant *maasv1alpha1.AITenant) bool {
+	if aitenant.Name == defaultAITenantName {
+		return true
+	}
+	return r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace
+}
+
+func (r *AITenantReconciler) defaultTenantNamespace() string {
+	if r.TenantNamespace != "" {
+		return r.TenantNamespace
+	}
+	return defaultAITenantName
+}
+
+func derivedTenantNamespaceName(aitenantName string) string {
+	return tenantNamespacePrefix + aitenantName
+}
 
 func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	name := aitenant.Spec.TenantNamespace.Name
+	name := r.tenantNamespaceName(aitenant)
 	var ns corev1.Namespace
 	err := r.get(ctx, client.ObjectKey{Name: name}, &ns)
 	if isNotFoundError(err) {
-		if !boolDefault(aitenant.Spec.TenantNamespace.Create, true) {
-			return fmt.Errorf("%w: namespace %q does not exist and spec.tenantNamespace.create=false", errTenantNamespaceMissing, name)
-		}
 		toCreate := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name,
 			},
 		}
-		applyAITenantMetadata(toCreate, aitenant)
+		applyAITenantMetadata(toCreate, aitenant, name)
 		setMapValue(&toCreate.Labels, "opendatahub.io/generated-namespace", "true")
 		setMapValue(&toCreate.Annotations, aitenantCreatedAnnotation, "true")
 		if createErr := r.Create(ctx, toCreate); createErr != nil {
@@ -248,7 +262,7 @@ func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant
 		return fmt.Errorf("tenant namespace %q is managed by another AITenant", name)
 	}
 	base := ns.DeepCopy()
-	applyAITenantMetadata(&ns, aitenant)
+	applyAITenantMetadata(&ns, aitenant, name)
 	if equality.Semantic.DeepEqual(base, &ns) {
 		return nil
 	}
@@ -292,6 +306,7 @@ func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maas
 }
 
 func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
 	tenant := &maasv1alpha1.Tenant{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: maasv1alpha1.GroupVersion.String(),
@@ -299,7 +314,7 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: aitenant.Spec.TenantNamespace.Name,
+			Namespace: tenantNamespace,
 		},
 	}
 	return r.upsert(ctx, tenant, aitenant, func(obj client.Object) error {
@@ -307,7 +322,7 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		if !ok {
 			return fmt.Errorf("expected Tenant, got %T", obj)
 		}
-		applyAITenantMetadata(t, aitenant)
+		applyAITenantMetadata(t, aitenant, tenantNamespace)
 		// TODO: Move these mirrored platform values out of Tenant spec in a
 		// follow-up Jira once the MaaS config/status API is settled. The current
 		// post-render path still reads Tenant.spec.gatewayRef and externalOIDC.
@@ -330,22 +345,23 @@ func (r *AITenantReconciler) ensureTenantAdminRBAC(ctx context.Context, aitenant
 	}
 
 	if len(subjects) == 0 {
-		if err := r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Spec.TenantNamespace.Name, tenantAdminRoleName(aitenant)); err != nil {
+		if err := r.deleteOwnedRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant)); err != nil {
 			return err
 		}
 		return r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant))
 	}
-	if err := r.ensureRoleBinding(ctx, aitenant, aitenant.Spec.TenantNamespace.Name, tenantAdminRoleName(aitenant), subjects); err != nil {
+	if err := r.ensureRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant), subjects); err != nil {
 		return err
 	}
 	return r.ensureRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant), subjects)
 }
 
 func (r *AITenantReconciler) ensureTenantNamespaceRole(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tenantAdminRoleName(aitenant),
-			Namespace: aitenant.Spec.TenantNamespace.Name,
+			Namespace: tenantNamespace,
 		},
 	}
 	return r.upsert(ctx, role, aitenant, func(obj client.Object) error {
@@ -353,7 +369,7 @@ func (r *AITenantReconciler) ensureTenantNamespaceRole(ctx context.Context, aite
 		if !ok {
 			return fmt.Errorf("expected Role, got %T", obj)
 		}
-		applyAITenantMetadata(role, aitenant)
+		applyAITenantMetadata(role, aitenant, tenantNamespace)
 		role.Rules = []rbacv1.PolicyRule{
 			{
 				APIGroups: []string{maasv1alpha1.GroupVersion.Group},
@@ -382,6 +398,7 @@ func (r *AITenantReconciler) ensureTenantNamespaceRole(ctx context.Context, aite
 }
 
 func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
 	role := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      aitenantAccessRoleName(aitenant),
@@ -393,7 +410,7 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 		if !ok {
 			return fmt.Errorf("expected Role, got %T", obj)
 		}
-		applyAITenantMetadata(role, aitenant)
+		applyAITenantMetadata(role, aitenant, tenantNamespace)
 		role.Rules = []rbacv1.PolicyRule{
 			{
 				APIGroups:     []string{maasv1alpha1.GroupVersion.Group},
@@ -407,6 +424,7 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 }
 
 func (r *AITenantReconciler) ensureRoleBinding(ctx context.Context, aitenant *maasv1alpha1.AITenant, namespace, name string, subjects []rbacv1.Subject) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
 	binding := &rbacv1.RoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -418,7 +436,7 @@ func (r *AITenantReconciler) ensureRoleBinding(ctx context.Context, aitenant *ma
 		if !ok {
 			return fmt.Errorf("expected RoleBinding, got %T", obj)
 		}
-		applyAITenantMetadata(binding, aitenant)
+		applyAITenantMetadata(binding, aitenant, tenantNamespace)
 		binding.Subjects = subjects
 		binding.RoleRef = rbacv1.RoleRef{
 			APIGroup: rbacv1.GroupName,
@@ -471,16 +489,17 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 }
 
 func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: aitenant.Spec.TenantNamespace.Name, Name: maasv1alpha1.TenantInstanceName}); err != nil {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.TenantInstanceName}); err != nil {
 		return err
 	}
-	if err := r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Spec.TenantNamespace.Name, tenantAdminRoleName(aitenant)); err != nil {
+	if err := r.deleteOwnedRoleBinding(ctx, aitenant, tenantNamespace, tenantAdminRoleName(aitenant)); err != nil {
 		return err
 	}
 	if err := r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant)); err != nil {
 		return err
 	}
-	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Spec.TenantNamespace.Name, Name: tenantAdminRoleName(aitenant)}); err != nil {
+	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
@@ -490,11 +509,8 @@ func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenan
 }
 
 func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	if aitenant.Spec.TenantNamespace.Name == "" {
-		return nil
-	}
 	var ns corev1.Namespace
-	key := client.ObjectKey{Name: aitenant.Spec.TenantNamespace.Name}
+	key := client.ObjectKey{Name: r.tenantNamespaceName(aitenant)}
 	if err := r.get(ctx, key, &ns); err != nil {
 		return client.IgnoreNotFound(err)
 	}
@@ -502,7 +518,7 @@ func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context,
 		return nil
 	}
 	base := ns.DeepCopy()
-	removeAITenantMetadata(&ns, aitenant)
+	removeAITenantMetadata(&ns, aitenant, key.Name)
 	removeMapValueIfEqual(&ns.Labels, "opendatahub.io/generated-namespace", "true")
 	if equality.Semantic.DeepEqual(base, &ns) {
 		return nil
@@ -613,7 +629,7 @@ func (r *AITenantReconciler) updateAITenantStatus(ctx context.Context, aitenant 
 	return r.Status().Update(ctx, aitenant)
 }
 
-func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
+func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, tenantNamespace string) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = map[string]string{}
@@ -623,7 +639,7 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
 	labels[aitenantManagedLabel] = "true"
 	labels[aiGatewayTenantLabel] = aitenant.Name
 	labels[tenantreconcile.LabelTenantName] = aitenant.Name
-	labels[tenantreconcile.LabelTenantNamespace] = aitenant.Spec.TenantNamespace.Name
+	labels[tenantreconcile.LabelTenantNamespace] = tenantNamespace
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
@@ -635,14 +651,14 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
 	obj.SetAnnotations(annotations)
 }
 
-func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant) {
+func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, tenantNamespace string) {
 	labels := obj.GetLabels()
 	removeMapValueIfEqual(&labels, "app.kubernetes.io/managed-by", "maas-controller")
 	removeMapValueIfEqual(&labels, "app.kubernetes.io/part-of", tenantreconcile.ComponentName)
 	removeMapValueIfEqual(&labels, aitenantManagedLabel, "true")
 	removeMapValueIfEqual(&labels, aiGatewayTenantLabel, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantName, aitenant.Name)
-	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantNamespace, aitenant.Spec.TenantNamespace.Name)
+	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantNamespace, tenantNamespace)
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
@@ -721,13 +737,6 @@ func removeMapValueIfEqual(m *map[string]string, key, value string) {
 	if len(*m) == 0 {
 		*m = nil
 	}
-}
-
-func boolDefault(v *bool, def bool) bool {
-	if v == nil {
-		return def
-	}
-	return *v
 }
 
 func tenantAdminRoleName(aitenant *maasv1alpha1.AITenant) string {

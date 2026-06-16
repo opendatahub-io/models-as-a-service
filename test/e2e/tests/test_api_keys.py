@@ -906,7 +906,7 @@ class TestEphemeralKeyCleanup:
         """Return the namespace where maas-api is deployed.
 
         Controlled by E2E_MAAS_API_DEPLOYMENT_NAMESPACE env var,
-        defaults to redhat-ai-gateway-infra.
+        defaults to DEPLOYMENT_NAMESPACE/opendatahub.
         """
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE

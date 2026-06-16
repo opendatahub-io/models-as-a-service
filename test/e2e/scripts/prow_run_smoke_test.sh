@@ -51,6 +51,8 @@
 #   OIDC_READINESS_STRICT - When true, exit before pytest if the OIDC readiness probe times out.
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
+#   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller with discovery flag before pytest (default: true)
+#   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
 #
@@ -109,6 +111,9 @@ export INGRESS_MODE
 GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 # OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
 OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
+# Multi-tenancy Phase 1: patch maas-controller for tenant namespace discovery E2E.
+ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
+AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
@@ -161,6 +166,45 @@ apply_default_oidc_for_keycloak() {
     export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
     export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
     echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
+}
+
+# Patch maas-controller to enable tenant namespace discovery for MT S1/S27 E2E.
+enable_tenant_namespace_discovery_for_e2e() {
+    [[ "${ENABLE_TENANT_NAMESPACE_DISCOVERY}" == "true" ]] || return 0
+
+    echo "Enabling --enable-tenant-namespace-discovery on maas-controller..."
+    if ! oc get deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" &>/dev/null; then
+        echo "❌ ERROR: maas-controller not found in ${DEPLOYMENT_NAMESPACE}; cannot enable tenant namespace discovery"
+        return 1
+    fi
+
+    local args_json
+    args_json="$(oc get deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo '[]')"
+    if echo "$args_json" | grep -q 'enable-tenant-namespace-discovery'; then
+        echo "✅ maas-controller already has tenant namespace discovery enabled"
+    elif [[ -z "$args_json" || "$args_json" == "<no value>" ]]; then
+        oc patch deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" --type=json -p='[
+          {"op": "add", "path": "/spec/template/spec/containers/0/args", "value": ["--enable-tenant-namespace-discovery=true"]}
+        ]' || {
+            echo "❌ ERROR: failed to initialize maas-controller args for tenant namespace discovery"
+            return 1
+        }
+    else
+        oc patch deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" --type=json -p='[
+          {"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--enable-tenant-namespace-discovery=true"}
+        ]' || {
+            echo "❌ ERROR: failed to patch maas-controller for tenant namespace discovery"
+            return 1
+        }
+    fi
+
+    if ! echo "$args_json" | grep -q 'enable-tenant-namespace-discovery'; then
+        oc rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout=180s || {
+            echo "❌ ERROR: maas-controller rollout failed after discovery patch"
+            return 1
+        }
+        echo "✅ maas-controller patched with --enable-tenant-namespace-discovery=true"
+    fi
 }
 
 require_external_oidc_config() {
@@ -470,7 +514,8 @@ wait_for_auth_policies_enforced() {
 validate_deployment() {
     echo "Deployment Validation"
     echo "Using controller namespace: $DEPLOYMENT_NAMESPACE"
-    echo "Using maas-api namespace: redhat-ai-gateway-infra"
+    echo "Using maas-api namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using AITenant namespace: $AITENANT_NAMESPACE"
 
     if [ "$SKIP_VALIDATION" = false ]; then
         # maas-api deploys to operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI)
@@ -609,6 +654,10 @@ run_e2e_tests() {
     export DEPLOYMENT_NAMESPACE
     export MAAS_SUBSCRIPTION_NAMESPACE
     export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+    export GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+    export AITENANT_NAMESPACE
+    export ENABLE_TENANT_NAMESPACE_DISCOVERY
+    enable_tenant_namespace_discovery_for_e2e || exit 1
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true
     # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
@@ -743,7 +792,7 @@ run_e2e_tests() {
         fi
     fi
 
-    # Run all e2e tests
+    # Run the default smoke e2e tests
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -757,6 +806,13 @@ run_e2e_tests() {
         "$test_dir/tests/test_external_models.py" \
         "$test_dir/tests/test_tenant.py" \
         "$test_dir/tests/test_aitenant_lifecycle.py" \
+        "$test_dir/tests/test_tenant_namespace_discovery.py" \
+        "$test_dir/tests/test_gateway_scoped_authpolicy.py" \
+        "$test_dir/tests/test_multi_tenant_integration.py" \
+        "$test_dir/tests/test_multi_tenant_maas_api.py" \
+        "$test_dir/tests/test_tenant_auth_isolation.py" \
+        "$test_dir/tests/test_tenant_subscription_isolation.py" \
+        "$test_dir/tests/test_tenant_rate_limit_isolation.py" \
         "$test_dir/tests/test_config_tenant.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"
