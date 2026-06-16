@@ -238,3 +238,65 @@ def api_key_headers(api_key: str):
     """Headers with API key for model inference requests."""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
+
+@pytest.fixture(scope="session")
+def shared_test_tenants(gateway_host: str, is_https: bool):
+    """
+    Shared tenant infrastructure for multi-tenant tests.
+
+    Creates two AITenant instances (tenant-a, tenant-b) that persist for the
+    entire test session. Tests requiring multiple tenants should use this fixture
+    instead of creating their own tenants.
+
+    Each tenant gets its own Gateway with a unique route hostname.
+
+    Returns:
+        tuple: (tenant_a_dict, tenant_b_dict) with keys from new_named_tenant_case plus:
+            - base_url: maas-api URL for this tenant (derived from tenant's gateway route)
+
+    Requires:
+        - AITenant CRD installed
+        - Tenant namespace discovery enabled on maas-controller
+    """
+    from multitenancy_helpers import (
+        require_aitenant_crd,
+        new_named_tenant_case,
+        bootstrap_aitenant_tenant,
+        cleanup_discovery_case,
+    )
+
+    require_aitenant_crd()
+
+    # Create two persistent tenants for the session
+    case_a = new_named_tenant_case("e2e-shared-a")
+    case_b = new_named_tenant_case("e2e-shared-b")
+
+    try:
+        # Bootstrap both tenants (creates gateway + AITenant CR)
+        for case in (case_a, case_b):
+            bootstrap_aitenant_tenant(case)
+
+        # Get each tenant's gateway route hostname
+        import json
+        from multitenancy_helpers import GATEWAY_NAMESPACE, _oc_run
+
+        scheme = "https" if is_https else "http"
+        for case in (case_a, case_b):
+            result = _oc_run(
+                ["get", "route", f"{case['gateway_name']}-route", "-n", GATEWAY_NAMESPACE, "-o", "json"]
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to get route for gateway {case['gateway_name']}: {result.stderr.strip()}"
+                )
+            route = json.loads(result.stdout)
+            host = route["spec"]["host"]
+            case["base_url"] = f"{scheme}://{host}/maas-api"
+
+        yield case_a, case_b
+
+    finally:
+        # Cleanup after all tests complete
+        cleanup_discovery_case(case_a)
+        cleanup_discovery_case(case_b)
+

@@ -1,13 +1,10 @@
 """
-E2E tests for tenant-scoped MaaSSubscription selection (MT S4/S5).
+E2E tests for tenant-scoped MaaSSubscription selection.
 
-Run with:
-  ENABLE_S4_E2E=true
-  MAAS_API_BASE_URL_TENANT_A / MAAS_API_BASE_URL_TENANT_B
-  TENANT_A_NAMESPACE / TENANT_B_NAMESPACE
+These tests use shared_test_tenants fixture to create two AITenant instances
+and validate subscription selection isolation between tenants.
 """
 
-import os
 import uuid
 
 import pytest
@@ -16,56 +13,88 @@ from multitenancy_helpers import (
     apply_maas_subscription,
     create_api_key_at,
     delete_maas_subscription,
-    env_bool,
     list_subscriptions_at,
     redact_sensitive,
-    require_tenant_api_base_urls,
     response_summary,
     select_subscription_at,
     wait_for_status_phase,
 )
-from test_helper import MODEL_NAMESPACE, MODEL_REF, _get_cluster_token
+from test_helper import _get_cluster_token, _create_llmis, _create_maas_model_ref, _delete_cr
+from multitenancy_helpers import GATEWAY_NAMESPACE
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S4_E2E"),
-    reason="S4 tenant subscription isolation E2E is gated; set ENABLE_S4_E2E=true once the backing implementation lands",
-)
+# Tenant subscription isolation tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")
-def tenant_env():
-    urls = require_tenant_api_base_urls("TENANT_A", "TENANT_B")
+def tenant_env(shared_test_tenants):
+    """Adapter fixture with tenant-specific models."""
+    case_a, case_b = shared_test_tenants
+
+    # Create models in each tenant namespace
+    for case in (case_a, case_b):
+        model_name = f"sub-test-model-{case['suffix']}"
+
+        # Create LLMIS pointing to tenant gateway
+        _create_llmis(model_name, case["tenant_ns"], case["gateway_name"], GATEWAY_NAMESPACE)
+
+        # Create MaaSModelRef
+        _create_maas_model_ref(model_name, case["tenant_ns"], model_name)
+
+        # Store model info
+        case["model_name"] = model_name
+        case["model_namespace"] = case["tenant_ns"]
+
+    # Rename keys to match existing test expectations
     tenant_a = {
-        "slot": "TENANT_A",
-        "name": os.environ.get("TENANT_A_NAME", "tenant-a"),
-        "namespace": os.environ.get("TENANT_A_NAMESPACE", ""),
-        "base_url": urls["TENANT_A"],
+        "name": case_a["tenant_label_name"],
+        "namespace": case_a["tenant_ns"],
+        "base_url": case_a["base_url"],
+        "model_name": case_a["model_name"],
+        "model_namespace": case_a["model_namespace"],
     }
     tenant_b = {
-        "slot": "TENANT_B",
-        "name": os.environ.get("TENANT_B_NAME", "tenant-b"),
-        "namespace": os.environ.get("TENANT_B_NAMESPACE", ""),
-        "base_url": urls["TENANT_B"],
+        "name": case_b["tenant_label_name"],
+        "namespace": case_b["tenant_ns"],
+        "base_url": case_b["base_url"],
+        "model_name": case_b["model_name"],
+        "model_namespace": case_b["model_namespace"],
     }
-    missing = [item["slot"] for item in (tenant_a, tenant_b) if not item["namespace"]]
-    if missing:
-        pytest.fail(f"tenant namespaces not configured; set {', '.join(f'{slot}_NAMESPACE' for slot in missing)}")
-    return tenant_a, tenant_b
+
+    yield tenant_a, tenant_b
+
+    # Cleanup models
+    for case in (case_a, case_b):
+        _delete_cr("maasmodelref", case["model_name"], case["tenant_ns"])
+        _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
 
 
 @pytest.fixture
 def tenant_subscriptions(tenant_env):
+    tenant_a, tenant_b = tenant_env
     suffix = uuid.uuid4().hex[:6]
     shared_name = f"e2e-shared-sub-{suffix}"
     tenant_a_only = f"e2e-a-only-{suffix}"
     tenant_b_only = f"e2e-b-only-{suffix}"
     tenant_a, tenant_b = tenant_env
     try:
-        apply_maas_subscription(shared_name, tenant_a["namespace"], token_limit=50, priority=10)
-        apply_maas_subscription(shared_name, tenant_b["namespace"], token_limit=500, priority=20)
-        apply_maas_subscription(tenant_a_only, tenant_a["namespace"], token_limit=75, priority=30)
-        apply_maas_subscription(tenant_b_only, tenant_b["namespace"], token_limit=750, priority=30)
+        # Create subscriptions using tenant's own models
+        apply_maas_subscription(shared_name, tenant_a["namespace"],
+                               model_ref=tenant_a["model_name"],
+                               model_namespace=tenant_a["model_namespace"],
+                               token_limit=50, priority=10)
+        apply_maas_subscription(shared_name, tenant_b["namespace"],
+                               model_ref=tenant_b["model_name"],
+                               model_namespace=tenant_b["model_namespace"],
+                               token_limit=500, priority=20)
+        apply_maas_subscription(tenant_a_only, tenant_a["namespace"],
+                               model_ref=tenant_a["model_name"],
+                               model_namespace=tenant_a["model_namespace"],
+                               token_limit=75, priority=30)
+        apply_maas_subscription(tenant_b_only, tenant_b["namespace"],
+                               model_ref=tenant_b["model_name"],
+                               model_namespace=tenant_b["model_namespace"],
+                               token_limit=750, priority=30)
         for tenant, names in ((tenant_a, [shared_name, tenant_a_only]), (tenant_b, [shared_name, tenant_b_only])):
             for name in names:
                 wait_for_status_phase("maassubscription", name, tenant["namespace"], expected_phase=("Active", "Degraded"))
@@ -125,14 +154,14 @@ class TestTenantSubscriptionIsolation:
         key_a = _create_key_for_subscription(tenant_a, shared)
         key_b = _create_key_for_subscription(tenant_b, shared)
 
-        requested_model = f"{MODEL_NAMESPACE}/{MODEL_REF}"
+        requested_model_a = f"{tenant_a['model_namespace']}/{tenant_a['model_name']}"
         response_a = select_subscription_at(
             tenant_a["base_url"],
             key_a,
             "e2e-sub-user",
             ["system:authenticated"],
             requested_subscription=shared,
-            requested_model=requested_model,
+            requested_model=requested_model_a,
         )
         assert response_a.status_code == 200
         data_a = response_a.json()
@@ -140,13 +169,14 @@ class TestTenantSubscriptionIsolation:
         assert data_a.get("name") == shared
         assert data_a.get("namespace") == tenant_a["namespace"]
 
+        requested_model_b = f"{tenant_b['model_namespace']}/{tenant_b['model_name']}"
         response_b = select_subscription_at(
             tenant_b["base_url"],
             key_b,
             "e2e-sub-user",
             ["system:authenticated"],
             requested_subscription=shared,
-            requested_model=requested_model,
+            requested_model=requested_model_b,
         )
         assert response_b.status_code == 200
         data_b = response_b.json()
