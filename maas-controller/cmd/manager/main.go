@@ -471,6 +471,11 @@ func main() {
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
 		os.Exit(1)
 	}
+	if strings.TrimSpace(controllerNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid controller namespace configuration"),
+			"--controller-namespace must be non-empty")
+		os.Exit(1)
+	}
 	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
 		setupLog.Error(stderrors.New("invalid MaaS subscription namespace configuration"),
 			"--maas-subscription-namespace must be non-empty")
@@ -647,14 +652,16 @@ func main() {
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
 	if err := (&maas.TenantReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		ManifestPath:     manifestPath,
-		AppNamespace:     maasAPINamespace,
-		TenantNamespace:  maasSubscriptionNamespace,
-		GatewayName:      gatewayName,
-		GatewayNamespace: gatewayNamespace,
-		ClusterAudience:  clusterAudience,
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		ManifestPath:                    manifestPath,
+		AppNamespace:                    maasAPINamespace,
+		TenantNamespace:                 maasSubscriptionNamespace,
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
+		ClusterAudience:                 clusterAudience,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		MetadataCacheTTL:                metadataCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)

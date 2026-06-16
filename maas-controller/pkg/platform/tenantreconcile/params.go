@@ -15,10 +15,11 @@ import (
 
 // PlatformParams holds resolved runtime values for PostRender patching.
 type PlatformParams struct {
-	AppNamespace     string
-	GatewayNamespace string
-	GatewayName      string
-	ClusterAudience  string
+	AppNamespace          string
+	GatewayNamespace      string
+	GatewayName           string
+	ClusterAudience       string
+	SubscriptionNamespace string
 
 	// TenantIdentifier is the tenant name used for per-tenant resource naming.
 	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
@@ -33,23 +34,32 @@ type PlatformParams struct {
 
 // BuildPlatformParams resolves all runtime parameters from the Tenant CR,
 // cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string) (PlatformParams, error) {
+func BuildPlatformParams(tenant *maasv1alpha1.Tenant, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
 	}
 
-	return PlatformParams{
+	params := PlatformParams{
 		AppNamespace:            appNamespace,
 		GatewayNamespace:        tenant.Spec.GatewayRef.Namespace,
 		GatewayName:             tenant.Spec.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
+		SubscriptionNamespace:   tenant.Namespace,
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
-	}, nil
+	}
+
+	log.Info("Built platform params",
+		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"tenantID", tenantID,
+		"subscriptionNamespace", params.SubscriptionNamespace,
+		"gatewayName", params.GatewayName)
+
+	return params, nil
 }
 
 func firstNonEmpty(values ...string) string {
@@ -136,20 +146,24 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	if err := setOrAddEnvVar(r, "maas-api", "GATEWAY_NAME", params.GatewayName); err != nil {
 		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
 	}
+	if err := setOrAddEnvVar(r, "maas-api", "MAAS_SUBSCRIPTION_NAMESPACE", params.SubscriptionNamespace); err != nil {
+		return fmt.Errorf("patch MAAS_SUBSCRIPTION_NAMESPACE: %w", err)
+	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
 	}
 
 	// Set TENANT_NAME environment variable for per-tenant maas-api instances.
-	// This value is used by maas-api for logging context and will be used for
-	// database tenant_id filtering.
-	// Value: Empty string ("") for default tenant, tenant name (e.g., "redteam") for AITenant-managed tenants.
-	// TODO: Ensure maas-api code uses this for database queries: WHERE tenant_id = $TENANT_NAME
+	// This value is used by maas-api for database queries (WHERE tenant = $TENANT_NAME)
+	// and for validating the X-MaaS-Tenant header from Authorino.
+	// Value: "models-as-a-service" for default tenant, tenant name (e.g., "redteam") for AITenant-managed tenants.
+	// Note: TenantIdentifier is "" for default tenant (used for resource naming),
+	// but TENANT_NAME must be "models-as-a-service" for DB consistency.
 	tenantName := params.TenantIdentifier
 	if tenantName == "" {
-		// TODO: When DB migration changes default tenant_id from "" to "models-as-a-service",
-		// update this to set TENANT_NAME="models-as-a-service" for the default tenant.
-		tenantName = ""
+		// Default tenant: resource names use empty string (e.g., "maas-api"),
+		// but TENANT_NAME must match DB default and AuthPolicy header value
+		tenantName = "models-as-a-service"
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "TENANT_NAME", tenantName); err != nil {
 		return fmt.Errorf("patch TENANT_NAME: %w", err)
