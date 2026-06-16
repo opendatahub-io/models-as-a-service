@@ -1521,13 +1521,12 @@ class TestModelsEndpoint:
 
             # Query with API key (gateway injects deleted subscription name)
             log.info("Querying /v1/models with API key bound to deleted subscription")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should return 403 because subscription doesn't exist
