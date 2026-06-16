@@ -60,7 +60,7 @@ const (
 	DefaultMaaSAPINamespace = "opendatahub"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
