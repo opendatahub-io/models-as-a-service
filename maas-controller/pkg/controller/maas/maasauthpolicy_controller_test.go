@@ -182,7 +182,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 	// Capture gateway AuthPolicy ResourceVersion after first reconciliation.
 	ap := &unstructured.Unstructured{}
 	ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, ap); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, ap); err != nil {
 		t.Fatalf("Get gateway AuthPolicy after policy-a reconcile: %v", err)
 	}
 	rvAfterA := ap.GetResourceVersion()
@@ -194,7 +194,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 		t.Fatalf("Reconcile policy-b: %v", err)
 	}
 
-	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, ap); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, ap); err != nil {
 		t.Fatalf("Get gateway AuthPolicy after policy-b reconcile: %v", err)
 	}
 	rvAfterB := ap.GetResourceVersion()
@@ -365,7 +365,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 	// Gateway policy should only carry model A after model B is removed.
 	gw := &unstructured.Unstructured{}
 	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gw); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
@@ -449,7 +449,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	}
 	gw := &unstructured.Unstructured{}
 	gw.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gw); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
@@ -476,7 +476,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	if _, err := r.Reconcile(ctx, req1); err != nil {
 		t.Fatalf("Reconcile ap1 after ap2 deletion: %v", err)
 	}
-	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gw); err != nil {
+	if err := c.Get(ctx, types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gw); err != nil {
 		t.Fatalf("Get gateway AuthPolicy after ap2 deletion: %v", err)
 	}
 	rego, found, err = unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
@@ -584,7 +584,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	// Verify gateway AuthPolicy was created
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy); err != nil {
 		t.Fatalf("gateway AuthPolicy not found before deletion: %v", err)
 	}
 
@@ -603,7 +603,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	if _, err := r.Reconcile(context.Background(), req1); err != nil {
 		t.Fatalf("Reconcile policy1 deletion: %v", err)
 	}
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy); err != nil {
 		t.Fatalf("gateway AuthPolicy should persist while policy2 exists: %v", err)
 	}
 
@@ -618,7 +618,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	// Gateway AuthPolicy should NOW BE DELETED (no remaining parents).
 	authPolicy = &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, authPolicy)
+	err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("gateway AuthPolicy should be deleted after deleting last parent policy, but got: %v", err)
 	}
@@ -720,8 +720,8 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			// Gateway policy holds metadata + auth-valid + subscription-valid
 			gwPolicy := &unstructured.Unstructured{}
 			gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-			if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
-				t.Fatalf("Get gateway AuthPolicy %q: %v", maasGatewayAuthPolicyName, err)
+			if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+				t.Fatalf("Get gateway AuthPolicy %q: %v", "maas-gateway-auth", err)
 			}
 
 			// Verify apiKeyValidation metadata has cache with correct TTL (on gateway policy)
@@ -909,7 +909,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	// Gateway policy holds apiKeyValidation, subscription-info, auth-valid, subscription-valid
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
@@ -1037,7 +1037,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	// identity extractor expression rather than static model names.
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
@@ -1123,7 +1123,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	// Response shaping lives in the gateway policy
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwPolicy); err != nil {
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
@@ -1140,6 +1140,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		requiredHeaders := []string{
 			"X-MaaS-Username", "X-MaaS-Username-Token",
 			"X-MaaS-Group", "X-MaaS-Group-Token",
+			"X-MaaS-Tenant", "X-MaaS-Tenant-Token",
 			"X-MaaS-Subscription",
 		}
 		for _, header := range requiredHeaders {
@@ -1230,7 +1231,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	}
 
 	t.Run("without OIDC", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1253,7 +1254,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 			IssuerURL: "https://keycloak.example.com/realms/test",
 			ClientID:  "maas-client",
 		}
-		spec := r.buildGatewayAuthPolicySpec("{}", oidc)
+		spec := r.buildGatewayAuthPolicySpec("{}", oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
 		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1273,7 +1274,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-info has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
@@ -1294,7 +1295,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-valid has path-scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
 		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
@@ -1315,7 +1316,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil)
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
 		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")

@@ -15,6 +15,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - Per-model `AuthPolicy` objects managed by the controller are deleted on the first reconcile after upgrade.
 - `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
 - New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `Tenant` CR.
+- `AITenant` created outside the configured `--aitenant-namespace` are now rejected at admission instead of being accepted and later marked `Failed/InvalidPlacement` by the controller.
 - **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
 - **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
 

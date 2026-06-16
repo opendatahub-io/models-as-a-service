@@ -120,6 +120,22 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
+13. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+
+      - [ ] Check which namespace the controller is configured to accept:
+
+      ```bash
+      kubectl get deployment maas-controller -n opendatahub -o jsonpath='{.spec.template.spec.containers[0].args}'
+      ```
+
+      - [ ] Create the `AITenant` in that namespace instead of the target tenant namespace:
+
+      ```bash
+      kubectl get namespace ai-tenants
+      ```
+
+      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.
+
 ## Conflicting AuthPolicy Detection
 
 MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.

@@ -1,0 +1,78 @@
+operator:
+  name: maas-controller
+  namespace: opendatahub
+  repository: https://github.com/opendatahub-io/models-as-a-service
+
+components:
+  - name: maas-controller
+    controller: TenantReconciler
+    managedResources:
+      - apiVersion: apps/v1
+        kind: Deployment
+        name: maas-controller
+        namespace: opendatahub
+        labels:
+          control-plane: maas-controller
+          app: maas-controller
+        expectedSpec:
+          replicas: 1
+      - apiVersion: v1
+        kind: ServiceAccount
+        name: maas-controller
+        namespace: opendatahub
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: maas-controller-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: maas-controller-rolebinding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRole
+        name: maas-controller-cluster-config-role
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: ClusterRoleBinding
+        name: maas-controller-cluster-config-rolebinding
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: Role
+        name: maas-controller-leader-election-role
+        namespace: opendatahub
+      - apiVersion: rbac.authorization.k8s.io/v1
+        kind: RoleBinding
+        name: maas-controller-leader-election-rolebinding
+        namespace: opendatahub
+      - apiVersion: v1
+        kind: Service
+        name: maas-controller-webhook-service
+        namespace: opendatahub
+      - apiVersion: monitoring.coreos.com/v1
+        kind: PodMonitor
+        name: maas-controller-metrics
+        namespace: opendatahub
+      - apiVersion: maas.opendatahub.io/v1alpha1
+        kind: Config
+        name: default
+    webhooks:
+      - name: vmaassubscription.kb.io
+        type: validating
+        path: /validate-maas-opendatahub-io-v1alpha1-maassubscription
+      - name: vmaasauthpolicy.kb.io
+        type: validating
+        path: /validate-maas-opendatahub-io-v1alpha1-maasauthpolicy
+    finalizers:
+      - maas.opendatahub.io/aitenant-cleanup
+      - maas.opendatahub.io/model-cleanup
+      - maas.opendatahub.io/authpolicy-cleanup
+      - maas.opendatahub.io/subscription-cleanup
+    steadyState:
+      checks:
+        - type: conditionTrue
+          apiVersion: apps/v1
+          kind: Deployment
+          name: maas-controller
+          namespace: opendatahub
+          conditionType: Available
+      timeout: "60s"
+
+recovery:
+  reconcileTimeout: "300s"
+  maxReconcileCycles: 10

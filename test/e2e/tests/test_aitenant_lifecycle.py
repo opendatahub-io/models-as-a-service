@@ -12,7 +12,7 @@ import pytest
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
 TENANT_NAME = "default-tenant"
-AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "redhat-ai-gateway-infra")
+AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
@@ -124,7 +124,7 @@ def _new_aitenant_case():
     suffix = uuid.uuid4().hex[:8]
     aitenant_name = f"e2e-ait-{suffix}"
     return {
-        "tenant_ns": f"e2e-aitenant-{suffix}",
+        "tenant_ns": f"ai-tenant-e2e-ait-{suffix}",
         "aitenant_name": aitenant_name,
         "gateway_name": aitenant_name,
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
@@ -175,9 +175,6 @@ def _apply_aitenant(case):
                 "namespace": AITENANT_NAMESPACE,
             },
             "spec": {
-                "tenantNamespace": {
-                    "name": case["tenant_ns"],
-                },
                 "rbac": {
                     "admins": [
                         {
@@ -237,6 +234,50 @@ def _delete_aitenant(case):
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
+    def test_aitenant_rejected_outside_ai_tenants_namespace(self):
+        suffix = uuid.uuid4().hex[:8]
+        wrong_ns = f"e2e-ait-wrong-{suffix}"
+        tenant_ns = f"e2e-ait-wrong-tenant-{suffix}"
+        aitenant_name = f"e2e-ait-wrong-{suffix}"
+
+        try:
+            result = _oc_run(["create", "namespace", wrong_ns])
+            assert result.returncode == 0, f"Failed to create namespace: {result.stderr.strip() or result.stdout.strip()}"
+
+            result = _oc_run(
+                ["apply", "-f", "-"],
+                input_text=json.dumps(
+                    {
+                        "apiVersion": "maas.opendatahub.io/v1alpha1",
+                        "kind": "AITenant",
+                        "metadata": {
+                            "name": aitenant_name,
+                            "namespace": wrong_ns,
+                        },
+                        "spec": {
+                            "tenantNamespace": {
+                                "name": tenant_ns,
+                            },
+                        },
+                    }
+                ),
+            )
+
+            assert result.returncode != 0, "Expected webhook to reject AITenant outside the configured infra namespace"
+            combined = f"{result.stderr or ''}\n{result.stdout or ''}"
+            assert "admission webhook" in combined.lower(), \
+                f"Expected webhook rejection, got: {combined}"
+            assert "configured AITenant infrastructure namespace" in combined, \
+                f"Expected namespace placement error, got: {combined}"
+            assert AITENANT_NAMESPACE in combined, \
+                f"Expected configured infra namespace in error, got: {combined}"
+
+            assert _get_json_or_none(AITENANT_KIND, aitenant_name, wrong_ns) is None
+
+        finally:
+            _delete_best_effort(AITENANT_KIND, aitenant_name, wrong_ns)
+            _delete_best_effort("namespace", wrong_ns, timeout="90s")
+
     def test_aitenant_create_bootstrap_resources(self):
         case = _new_aitenant_case()
 
@@ -279,3 +320,38 @@ class TestAITenantLifecycle:
             _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
+
+    def test_aitenant_derives_non_default_tenant_namespace(self):
+        """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
+        suffix = uuid.uuid4().hex[:8]
+        aitenant_name = f"e2e-derive-{suffix}"
+        reserved_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+        expected_ns = f"ai-tenant-{aitenant_name}"
+        gateway_name = aitenant_name
+
+        try:
+            _apply_gateway_fixture({"gateway_name": gateway_name, "aitenant_name": aitenant_name})
+            _apply(
+                {
+                    "apiVersion": "maas.opendatahub.io/v1alpha1",
+                    "kind": "AITenant",
+                    "metadata": {"name": aitenant_name, "namespace": AITENANT_NAMESPACE},
+                    "spec": {
+                        "rbac": {"admins": [{"kind": "User", "name": _admin_subject()}]},
+                    },
+                }
+            )
+            aitenant = _wait_for_json(
+                AITENANT_KIND,
+                aitenant_name,
+                AITENANT_NAMESPACE,
+                predicate=_aitenant_ready,
+                timeout=120,
+            )
+            assert aitenant["status"]["tenantNamespace"] == expected_ns
+            assert aitenant["status"]["tenantNamespace"] != reserved_ns
+            assert _get_json_or_none("tenant", TENANT_NAME, expected_ns) is not None
+        finally:
+            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE)
+            _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
+            _delete_best_effort("namespace", expected_ns, timeout="90s")

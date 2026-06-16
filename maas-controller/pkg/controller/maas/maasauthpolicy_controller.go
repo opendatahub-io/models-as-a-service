@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -46,6 +47,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // MaaSAuthPolicyReconciler reconciles a MaaSAuthPolicy object
@@ -110,6 +112,43 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 		return authz
 	}
 	return metadata
+}
+
+// fetchTenantIdentifier fetches the tenant name from the Tenant CR in the given namespace.
+// This returns the tenant name used for database queries and AuthPolicy headers
+// (e.g., "models-as-a-service" for default tenant, "redteam" for AITenant-managed tenants).
+// Returns the tenant name string, or "models-as-a-service" as fallback.
+func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) string {
+	tenant := &maasv1alpha1.Tenant{}
+	tenantKey := client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: policyNamespace,
+	}
+
+	if err := r.Get(ctx, tenantKey, tenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(1).Info("Tenant not found, assuming default tenant (empty identifier)",
+				"tenantName", maasv1alpha1.TenantInstanceName,
+				"tenantNamespace", policyNamespace)
+			// Fallback to default tenant identifier (empty string)
+			return ""
+		}
+		log.Error(err, "failed to get Tenant resource, using default tenant identifier as fallback",
+			"tenantName", maasv1alpha1.TenantInstanceName,
+			"tenantNamespace", policyNamespace)
+		return ""
+	}
+
+	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
+	// Returns "" for default tenant, tenantID for others.
+	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
+	if err != nil {
+		log.Error(err, "failed to determine tenant identifier, using empty string (default) as fallback")
+		return ""
+	}
+
+	log.V(1).Info("Tenant identifier resolved", "tenantIdentifier", tenantIdentifier, "namespace", policyNamespace)
+	return tenantIdentifier
 }
 
 // fetchOIDCConfig fetches OIDC configuration from the Tenant CR in the given
@@ -186,6 +225,43 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		IssuerURL: issuerURL,
 		ClientID:  clientID,
 	}
+}
+
+// fetchGatewayInfo fetches gateway namespace and name from the Tenant CR.
+// Returns (gatewayNamespace, gatewayName, error).
+// Falls back to controller defaults if Tenant CR not found or missing gateway ref.
+func (r *MaaSAuthPolicyReconciler) fetchGatewayInfo(ctx context.Context, log logr.Logger, tenantNamespace string) (string, string, error) {
+	tenant := &maasv1alpha1.Tenant{}
+	tenantKey := client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: tenantNamespace,
+	}
+
+	if err := r.Get(ctx, tenantKey, tenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No Tenant CR - use controller defaults
+			log.V(1).Info("Tenant not found, using default gateway",
+				"gatewayNamespace", r.GatewayNamespace,
+				"gatewayName", r.GatewayName)
+			return r.GatewayNamespace, r.GatewayName, nil
+		}
+		return "", "", fmt.Errorf("failed to get Tenant CR: %w", err)
+	}
+
+	// Check if Tenant has GatewayRef
+	if tenant.Spec.GatewayRef.Namespace == "" || tenant.Spec.GatewayRef.Name == "" {
+		// Tenant exists but no gateway ref - use controller defaults
+		log.V(1).Info("Tenant has no gatewayRef, using defaults",
+			"gatewayNamespace", r.GatewayNamespace,
+			"gatewayName", r.GatewayName)
+		return r.GatewayNamespace, r.GatewayName, nil
+	}
+
+	// Use tenant's gateway
+	log.V(1).Info("Using tenant's gateway",
+		"gatewayNamespace", tenant.Spec.GatewayRef.Namespace,
+		"gatewayName", tenant.Spec.GatewayRef.Name)
+	return tenant.Spec.GatewayRef.Namespace, tenant.Spec.GatewayRef.Name, nil
 }
 
 // CEL sub-expressions reused across Authorino cache-key selectors.
@@ -341,9 +417,37 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
+	tenantID := r.fetchTenantIdentifier(ctx, log, req.Namespace)
 
-	// Reconcile the singleton gateway-level AuthPolicy first, then the per-model group policies.
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc); err != nil {
+	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
+	if err != nil {
+		log.Error(err, "failed to fetch gateway info")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to fetch gateway info: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+
+	// Reconcile the gateway-level AuthPolicy for this tenant's gateway.
+	// In single-tenant mode: creates AuthPolicy for the default gateway.
+	// In multi-tenant mode: creates AuthPolicy for each tenant's gateway.
+	//
+	// Skip reconciling if this is a non-default tenant using the default gateway.
+	// This happens when a Tenant CR exists without a gatewayRef - it shouldn't
+	// overwrite the default gateway's AuthPolicy with tenant-specific configuration.
+	isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
+	isNonDefaultTenant := tenantID != ""
+	if isNonDefaultTenant && isDefaultGateway {
+		log.Info("skipping gateway AuthPolicy reconciliation: non-default tenant falling back to default gateway (Tenant CR missing gatewayRef)",
+			"tenantID", tenantID,
+			"tenantNamespace", req.Namespace,
+			"gatewayNamespace", gatewayNs,
+			"gatewayName", gatewayName)
+		// Still mark the policy as Active since the model-level auth rules are aggregated correctly,
+		// even though we're not updating the gateway policy
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
+		return ctrl.Result{}, nil
+	}
+
+	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID, gatewayNs, gatewayName); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
@@ -474,9 +578,16 @@ type modelSubjectAllowlist struct {
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig) map[string]any {
-	apiKeyValidationURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", r.MaaSAPINamespace)
-	subscriptionSelectorURL := fmt.Sprintf("https://maas-api.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", r.MaaSAPINamespace)
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+	// Construct tenant-specific maas-api service name using TenantIdentifier
+	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
+	maasAPIServiceName := "maas-api"
+	if tenantID != "" {
+		maasAPIServiceName = fmt.Sprintf("maas-api-%s", tenantID)
+	}
+
+	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.MaaSAPINamespace)
+	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.MaaSAPINamespace)
 
 	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
 	subscriptionInfoBody := fmt.Sprintf(`{
@@ -757,7 +868,10 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.groups.@tostr",
+							// NOTE: Manual JSON construction without escaping (CEL lacks JSON escape functions).
+							// Group names are validated on API key creation to reject quotes/backslashes.
+							// Kubernetes group names follow DNS rules (no special chars).
+							"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -774,6 +888,34 @@ allow {
 								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
 						},
 						"key":      "X-MaaS-Group",
+						"metrics":  false,
+						"priority": int64(1),
+					},
+					"X-MaaS-Tenant": map[string]any{
+						"when": []any{
+							map[string]any{
+								"selector": "request.headers.authorization",
+								"operator": "matches",
+								"value":    "^Bearer sk-oai-.*",
+							},
+						},
+						"plain": map[string]any{
+							"selector": "auth.metadata.apiKeyValidation.tenant",
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-Tenant-Token": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+							},
+						},
+						"plain": map[string]any{
+							// Use tenantName (DB/header value) not tenantID (resource identifier)
+							"expression": strconv.Quote(tenantName),
+						},
+						"key":      "X-MaaS-Tenant",
 						"metrics":  false,
 						"priority": int64(1),
 					},
@@ -805,7 +947,7 @@ allow {
 									"expression": celUsername,
 								},
 								"keyId": map[string]any{
-									"expression": `has(auth.metadata.apiKeyValidation) ? auth.metadata.apiKeyValidation.keyId : ""`,
+									"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
 								},
 								"selected_subscription": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
@@ -814,8 +956,8 @@ allow {
 								// modelIdentity is dynamic (header or path), so this is always current
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
-										`has(auth.metadata["subscription-info"].namespace) && `+
-											`has(auth.metadata["subscription-info"].name) `+
+										`(has(auth.metadata["subscription-info"].namespace) && `+
+											`has(auth.metadata["subscription-info"].name)) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
 										celModelIdentity,
@@ -863,8 +1005,8 @@ allow {
 		"targetRef": map[string]any{
 			"group":     "gateway.networking.k8s.io",
 			"kind":      "Gateway",
-			"name":      r.GatewayName,
-			"namespace": r.GatewayNamespace,
+			"name":      gatewayName,
+			"namespace": gatewayNamespace,
 		},
 		// "when" must live inside "defaults" (not at spec level) because Kuadrant treats
 		// top-level "when" as implicit defaults, which conflicts with explicit "defaults".
@@ -884,14 +1026,29 @@ allow {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig) error {
-	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", r.GatewayNamespace, "gatewayName", r.GatewayName)
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc)
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, tenantID, gatewayNamespace, gatewayName string) error {
+	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID)
+
+	// Calculate tenantName from tenantID
+	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
+	tenantName := "models-as-a-service"
+	if tenantID != "" {
+		tenantName = tenantID
+	}
+
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, tenantName, gatewayNamespace, gatewayName)
+
+	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
+	authPolicyName := maasGatewayAuthPolicyName
+	if gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName {
+		// This is a tenant-specific gateway, use dynamic naming
+		authPolicyName = fmt.Sprintf("%s-maas-auth", gatewayName)
+	}
 
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	gwPolicy.SetName(maasGatewayAuthPolicyName)
-	gwPolicy.SetNamespace(r.GatewayNamespace)
+	gwPolicy.SetName(authPolicyName)
+	gwPolicy.SetNamespace(gatewayNamespace)
 	gwPolicy.SetLabels(map[string]string{
 		"app.kubernetes.io/managed-by": "maas-controller",
 		"app.kubernetes.io/part-of":    "maas-gateway-auth",
@@ -908,7 +1065,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		if err := r.Create(ctx, gwPolicy); err != nil {
 			return fmt.Errorf("failed to create gateway AuthPolicy: %w", err)
 		}
-		log.Info("gateway AuthPolicy created", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+		log.Info("gateway AuthPolicy created", "name", authPolicyName, "namespace", gatewayNamespace)
 		r.deleteGatewayDefaultAuthPolicy(ctx, log)
 		return nil
 	}
@@ -917,7 +1074,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	}
 
 	if !isManaged(existing) {
-		log.Info("gateway AuthPolicy opted out of management, skipping", "name", maasGatewayAuthPolicyName)
+		log.Info("gateway AuthPolicy opted out of management, skipping", "name", authPolicyName)
 		return nil
 	}
 
@@ -926,14 +1083,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		return fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
 	}
 	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-		log.Info("gateway AuthPolicy unchanged, skipping update", "name", maasGatewayAuthPolicyName)
+		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
 		r.deleteGatewayDefaultAuthPolicy(ctx, log)
 		return nil
 	}
 	if err := r.Update(ctx, existing); err != nil {
 		return fmt.Errorf("failed to update gateway AuthPolicy: %w", err)
 	}
-	log.Info("gateway AuthPolicy updated", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+	log.Info("gateway AuthPolicy updated", "name", authPolicyName, "namespace", gatewayNamespace)
 	r.deleteGatewayDefaultAuthPolicy(ctx, log)
 	return nil
 }
@@ -1157,7 +1314,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			}
 		}
 		if liveCount == 0 {
-			if err := r.deleteGatewayAuthPolicy(ctx, log); err != nil {
+			if err := r.deleteGatewayAuthPolicy(ctx, log, policy.Namespace); err != nil {
 				log.Error(err, "failed to delete gateway AuthPolicy")
 				return ctrl.Result{}, err
 			}
@@ -1175,21 +1332,34 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 	return ctrl.Result{}, nil
 }
 
-// deleteGatewayAuthPolicy removes the singleton Gateway-level AuthPolicy when no
-// MaaSAuthPolicy CRs remain.
-func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger) error {
+// deleteGatewayAuthPolicy removes the tenant's Gateway-level AuthPolicy when no
+// MaaSAuthPolicy CRs remain in that tenant namespace.
+func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger, tenantNamespace string) error {
+	// Get tenant's gateway info
+	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, tenantNamespace)
+	if err != nil {
+		return fmt.Errorf("failed to fetch gateway info for deletion: %w", err)
+	}
+
+	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
+	authPolicyName := maasGatewayAuthPolicyName
+	if gatewayNs != r.GatewayNamespace || gatewayName != r.GatewayName {
+		// This is a tenant-specific gateway, use dynamic naming
+		authPolicyName = fmt.Sprintf("%s-maas-auth", gatewayName)
+	}
+
 	gwPolicy := &unstructured.Unstructured{}
 	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	gwPolicy.SetName(maasGatewayAuthPolicyName)
-	gwPolicy.SetNamespace(r.GatewayNamespace)
+	gwPolicy.SetName(authPolicyName)
+	gwPolicy.SetNamespace(gatewayNs)
 
 	if err := r.Delete(ctx, gwPolicy); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil
 		}
-		return fmt.Errorf("failed to delete gateway AuthPolicy %s/%s: %w", r.GatewayNamespace, maasGatewayAuthPolicyName, err)
+		return fmt.Errorf("failed to delete gateway AuthPolicy %s/%s: %w", gatewayNs, authPolicyName, err)
 	}
-	log.Info("gateway AuthPolicy deleted (no remaining MaaSAuthPolicies)", "name", maasGatewayAuthPolicyName, "namespace", r.GatewayNamespace)
+	log.Info("gateway AuthPolicy deleted (no remaining MaaSAuthPolicies)", "name", authPolicyName, "namespace", gatewayNs, "tenantNamespace", tenantNamespace)
 	return nil
 }
 

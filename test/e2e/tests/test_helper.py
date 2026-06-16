@@ -14,6 +14,7 @@ Environment variables (all optional unless noted):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (auto-derived from GATEWAY_HOST if not set)
   - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
+  - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api workloads run (default: DEPLOYMENT_NAMESPACE/opendatahub)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
@@ -61,6 +62,9 @@ MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated"
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
+# Infrastructure namespace where maas-api workloads run (uses operator namespace)
+# Defaults to DEPLOYMENT_NAMESPACE (controller namespace) since maas-api now deploys there
+MAAS_API_DEPLOYMENT_NAMESPACE = os.environ.get("E2E_MAAS_API_DEPLOYMENT_NAMESPACE", os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub"))
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")

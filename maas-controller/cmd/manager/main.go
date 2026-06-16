@@ -434,6 +434,7 @@ func main() {
 	var probeAddr string
 	var gatewayName string
 	var gatewayNamespace string
+	var controllerNamespace string
 	var maasAPINamespace string
 	var maasSubscriptionNamespace string
 	var aitenantNamespace string
@@ -448,9 +449,10 @@ func main() {
 		"Enable leader election for controller manager.")
 	flag.StringVar(&gatewayName, "gateway-name", "maas-default-gateway", "The name of the Gateway resource to use for model HTTPRoutes.")
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
-	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "opendatahub", "The namespace where maas-api service is deployed.")
+	flag.StringVar(&controllerNamespace, "controller-namespace", "opendatahub", "The namespace where the maas-controller Deployment runs.")
+	flag.StringVar(&maasAPINamespace, "maas-api-namespace", tenantreconcile.DefaultMaaSAPINamespace, "The namespace where maas-api service is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
-	flag.StringVar(&aitenantNamespace, "aitenant-namespace", maas.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
+	flag.StringVar(&aitenantNamespace, "aitenant-namespace", tenantreconcile.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
 	flag.Int64Var(&authzCacheTTL, "authz-cache-ttl", 60, "TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership).")
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
@@ -467,6 +469,11 @@ func main() {
 		setupLog.Error(stderrors.New("invalid gateway configuration"),
 			"both --gateway-name and --gateway-namespace must be non-empty",
 			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
+		os.Exit(1)
+	}
+	if strings.TrimSpace(controllerNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid controller namespace configuration"),
+			"--controller-namespace must be non-empty")
 		os.Exit(1)
 	}
 	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
@@ -500,7 +507,9 @@ func main() {
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
-			&maasv1alpha1.Tenant{}:           {Namespaces: nsCfg},
+			// Tenant CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
+			// TODO: Replace with proper namespace discovery from S1 when merged.
+			&maasv1alpha1.Tenant{}:           {},
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
 		},
@@ -643,14 +652,16 @@ func main() {
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
 	if err := (&maas.TenantReconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		ManifestPath:     manifestPath,
-		AppNamespace:     maasAPINamespace,
-		TenantNamespace:  maasSubscriptionNamespace,
-		GatewayName:      gatewayName,
-		GatewayNamespace: gatewayNamespace,
-		ClusterAudience:  clusterAudience,
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		ManifestPath:                    manifestPath,
+		AppNamespace:                    maasAPINamespace,
+		TenantNamespace:                 maasSubscriptionNamespace,
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
+		ClusterAudience:                 clusterAudience,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		MetadataCacheTTL:                metadataCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
 		os.Exit(1)
@@ -663,16 +674,24 @@ func main() {
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
 		DeploymentName:              "maas-controller",
-		DeploymentNS:                maasAPINamespace,
+		DeploymentNS:                controllerNamespace,
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
 		os.Exit(1)
 	}
 
-	// Setup validating webhooks for MaaSSubscription and MaaSAuthPolicy to ensure they are only
-	// created in tenant-enabled namespaces. This prevents users from creating resources in
-	// random namespaces where they will be silently ignored.
+	// Setup validating webhooks for placement-sensitive MaaS resources.
+	if err := (&webhook.AITenantValidator{
+		AITenantNamespace: aitenantNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create webhook", "webhook", "AITenant")
+		os.Exit(1)
+	}
+
+	// MaaSSubscription and MaaSAuthPolicy must be created in tenant-enabled namespaces.
+	// This prevents users from creating resources in random namespaces where they
+	// would be silently ignored.
 	tenantValidator := &webhook.TenantNamespaceValidator{
 		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
 	}
@@ -693,7 +712,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, maasAPINamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, controllerNamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
 		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
