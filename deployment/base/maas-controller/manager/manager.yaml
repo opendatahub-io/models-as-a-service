@@ -34,6 +34,7 @@ spec:
           - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
+          - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
         env:

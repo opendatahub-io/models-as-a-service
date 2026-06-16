@@ -67,7 +67,7 @@ func RunPlatform(
 		return nil, fmt.Errorf("gateway lookup: %w", err)
 	}
 
-	params, err := BuildPlatformParams(tenant, appNs, clusterAudience)
+	params, err := BuildPlatformParams(tenant, appNs, clusterAudience, log)
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}

@@ -18,6 +18,7 @@ from multitenancy_helpers import (
     DEPLOYMENT_NAMESPACE,
     GATEWAY_NAMESPACE,
     TENANT_CR_NAME,
+    apply_maas_auth_policy,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
     deployment_env,
@@ -48,6 +49,8 @@ def tenant_cases():
     try:
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case)
+            # Create MaaSAuthPolicy to trigger gateway AuthPolicy creation
+            apply_maas_auth_policy(f"e2e-{case['tenant_label_name']}-policy", case["tenant_ns"])
         yield case_a, case_b
     finally:
         cleanup_discovery_case(case_a)
@@ -66,7 +69,7 @@ class TestPerTenantMaaSAPI:
     """S27 section 2 — per-tenant maas-api infrastructure."""
 
     def test_aitenant_creates_dedicated_maas_api_infrastructure(self, tenant_cases):
-        """2.1: AITenant creates dedicated maas-api Deployment, Service, HTTPRoute, and AuthPolicy."""
+        """2.1: AITenant creates dedicated maas-api Deployment, Service, HTTPRoute, and gateway AuthPolicy."""
         for case in tenant_cases:
             names = _tenant_api_names(case)
             deployment = wait_for_deployment_available(names["deployment"], DEPLOYMENT_NAMESPACE, timeout=240)
@@ -78,8 +81,12 @@ class TestPerTenantMaaSAPI:
             route = wait_for_json("httproute", names["httproute"], DEPLOYMENT_NAMESPACE, timeout=180)
             assert route["metadata"]["name"] == names["httproute"]
 
-            auth = wait_for_json("authpolicy", names["authpolicy"], DEPLOYMENT_NAMESPACE, timeout=180)
-            assert auth["metadata"]["name"] == names["authpolicy"]
+            # Gateway-level AuthPolicy is in the gateway namespace, named {gateway-name}-maas-auth
+            gateway_auth_policy_name = f"{case['gateway_name']}-maas-auth"
+            auth = wait_for_json("authpolicy", gateway_auth_policy_name, GATEWAY_NAMESPACE, timeout=180)
+            assert auth["metadata"]["name"] == gateway_auth_policy_name
+            # Verify it targets the tenant Gateway
+            assert auth["spec"]["targetRef"]["name"] == case["gateway_name"]
 
             tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]

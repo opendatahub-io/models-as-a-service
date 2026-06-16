@@ -67,6 +67,12 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// TenantNamespaceDiscoveryEnabled allows reconciling Tenant CRs across all namespaces
+	// instead of only TenantNamespace (enables AITenant multi-tenancy).
+	TenantNamespaceDiscoveryEnabled bool
+	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
+	// Applies to apiKeyValidation and subscription-info metadata evaluators.
+	MetadataCacheTTL int64
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
