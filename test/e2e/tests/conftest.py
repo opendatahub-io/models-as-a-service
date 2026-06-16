@@ -248,9 +248,11 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
     entire test session. Tests requiring multiple tenants should use this fixture
     instead of creating their own tenants.
 
+    Each tenant gets its own Gateway with a unique route hostname.
+
     Returns:
         tuple: (tenant_a_dict, tenant_b_dict) with keys from new_named_tenant_case plus:
-            - base_url: maas-api URL for this tenant (https://{gateway_host}/maas-api)
+            - base_url: maas-api URL for this tenant (derived from tenant's gateway route)
 
     Requires:
         - AITenant CRD installed
@@ -269,16 +271,27 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
     case_a = new_named_tenant_case("e2e-shared-a")
     case_b = new_named_tenant_case("e2e-shared-b")
 
-    # Add maas-api base URL (tenant maas-api routes through same gateway host)
-    scheme = "https" if is_https else "http"
-    base_url = f"{scheme}://{gateway_host}/maas-api"
-    case_a["base_url"] = base_url
-    case_b["base_url"] = base_url
-
     try:
-        # Bootstrap both tenants
+        # Bootstrap both tenants (creates gateway + AITenant CR)
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case)
+
+        # Get each tenant's gateway route hostname
+        import json
+        from multitenancy_helpers import GATEWAY_NAMESPACE, _oc_run
+
+        scheme = "https" if is_https else "http"
+        for case in (case_a, case_b):
+            result = _oc_run(
+                ["get", "route", f"{case['gateway_name']}-route", "-n", GATEWAY_NAMESPACE, "-o", "json"]
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to get route for gateway {case['gateway_name']}: {result.stderr.strip()}"
+                )
+            route = json.loads(result.stdout)
+            host = route["spec"]["host"]
+            case["base_url"] = f"{scheme}://{host}/maas-api"
 
         yield case_a, case_b
 
