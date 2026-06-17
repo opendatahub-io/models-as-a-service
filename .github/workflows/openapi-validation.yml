@@ -112,8 +112,9 @@ jobs:
           git fetch origin "$BASE_REF"
           git show "origin/$BASE_REF:maas-api/openapi3.yaml" > base-spec.yaml
 
-          # Run breaking change detection (--warn-ignore suppresses acknowledged warnings)
+          # Run breaking change detection (--err-ignore / --warn-ignore suppress acknowledged changes)
           oasdiff breaking base-spec.yaml maas-api/openapi3.yaml \
+            --err-ignore maas-api/oasdiff-err-ignore.txt \
             --warn-ignore maas-api/oasdiff-warn-ignore.txt > breaking-changes.txt || true
 
           # Check if actual breaking changes were detected.

@@ -793,6 +793,7 @@ run_e2e_tests() {
     fi
 
     # Run the default smoke e2e tests
+    export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
