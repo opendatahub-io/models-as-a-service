@@ -206,7 +206,7 @@ func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
 			Namespace: testNS,
 			Labels: map[string]string{
 				tenantreconcile.LabelManagedByAITenant: "true",
-				tenantreconcile.LabelTenantName:       "redteam",
+				tenantreconcile.LabelTenantName:        "redteam",
 			},
 		},
 	}
