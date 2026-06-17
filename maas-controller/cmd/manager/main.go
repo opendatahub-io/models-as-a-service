@@ -29,7 +29,7 @@ import (
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -73,7 +73,7 @@ func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
-	utilruntime.Must(configv1.Install(scheme))
+	utilruntime.Must(confv1.Install(scheme))
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
@@ -439,7 +439,7 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, controlle
 // If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
 // default Intermediate profile immediately with available=false. For transient
 // errors on OpenShift, it retries a few times before returning an error.
-func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (configv1.TLSProfileSpec, configv1.TLSAdherencePolicy, bool, error) {
+func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
 	const maxRetries = 3
 
 	var lastErr error
@@ -447,7 +447,7 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (configv1.TL
 	for attempt := range maxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
 		profile, err := utiltls.FetchAPIServerTLSProfile(fetchCtx, c)
-		adherencePolicy := configv1.TLSAdherencePolicyNoOpinion
+		adherencePolicy := confv1.TLSAdherencePolicyNoOpinion
 		if err == nil {
 			adherencePolicy, err = utiltls.FetchAPIServerTLSAdherencePolicy(fetchCtx, c)
 		}
@@ -460,8 +460,8 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (configv1.TL
 		if apimeta.IsNoMatchError(err) || errors.IsNotFound(err) {
 			setupLog.Info("config.openshift.io API not available, using default Intermediate TLS profile " +
 				"(expected on non-OpenShift clusters)")
-			return *configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
-				configv1.TLSAdherencePolicyNoOpinion, false, nil
+			return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+				confv1.TLSAdherencePolicyNoOpinion, false, nil
 		}
 
 		lastErr = err
@@ -470,8 +470,8 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (configv1.TL
 				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
 			select {
 			case <-ctx.Done():
-				return *configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
-					configv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
+				return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+					confv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
 			case <-time.After(2 * time.Second):
 			}
 		} else {
@@ -479,8 +479,8 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (configv1.TL
 		}
 	}
 
-	return *configv1.TLSProfiles[configv1.TLSProfileIntermediateType],
-		configv1.TLSAdherencePolicyNoOpinion, false, lastErr
+	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+		confv1.TLSAdherencePolicyNoOpinion, false, lastErr
 }
 
 func main() {
@@ -810,13 +810,13 @@ func main() {
 			Client:                    mgr.GetClient(),
 			InitialTLSProfileSpec:     tlsProfile,
 			InitialTLSAdherencePolicy: tlsAdherencePolicy,
-			OnProfileChange: func(_ context.Context, oldProfile, newProfile configv1.TLSProfileSpec) {
+			OnProfileChange: func(_ context.Context, oldProfile, newProfile confv1.TLSProfileSpec) {
 				setupLog.Info("TLS security profile changed, initiating graceful shutdown to reload",
 					"oldMinTLS", oldProfile.MinTLSVersion, "newMinTLS", newProfile.MinTLSVersion,
 				)
 				cancel()
 			},
-			OnAdherencePolicyChange: func(_ context.Context, oldPolicy, newPolicy configv1.TLSAdherencePolicy) {
+			OnAdherencePolicyChange: func(_ context.Context, oldPolicy, newPolicy confv1.TLSAdherencePolicy) {
 				setupLog.Info("TLS adherence policy changed, initiating graceful shutdown to reload",
 					"oldPolicy", oldPolicy, "newPolicy", newPolicy)
 				cancel()

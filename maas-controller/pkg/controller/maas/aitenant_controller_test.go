@@ -80,10 +80,6 @@ func reconcileAITenantTwice(t *testing.T, r *AITenantReconciler, key types.Names
 
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.Requeue).To(BeTrue())
-
-	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res).To(Equal(ctrl.Result{}))
 }
 
@@ -225,10 +221,6 @@ func TestAITenantReconcile_MissingGatewaySetsFailedStatus(t *testing.T) {
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.Requeue).To(BeTrue())
-
-	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 
@@ -664,10 +656,6 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.Requeue).To(BeTrue())
-
-	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 
 	var updated maasv1alpha1.AITenant
@@ -843,10 +831,6 @@ func TestAITenantReconcile_RBACServiceAccountRequiresNamespace(t *testing.T) {
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.Requeue).To(BeTrue())
-
-	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 

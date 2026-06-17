@@ -74,7 +74,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		unstructured.RemoveNestedField(u.Object, "status")
 		// ForceOwnership is intentional: maas-controller is the sole manager for
 		// Tenant platform resources, ensuring a clean field-manager handoff.
-		if err := c.Patch(ctx, u, client.Apply, client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
+		if err := c.Apply(ctx, client.ApplyConfigurationFromUnstructured(u), client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
 			if apimeta.IsNoMatchError(err) && isOptionalAPIGroup(u.GroupVersionKind().Group) {
 				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
 				// installed by COO which may not be present yet). Skip so the rest of the

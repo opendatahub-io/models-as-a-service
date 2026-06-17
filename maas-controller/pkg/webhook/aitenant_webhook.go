@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
@@ -37,16 +36,12 @@ type AITenantValidator struct {
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *AITenantValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.AITenant{}).
-		WithCustomValidator(v).
+		WithValidator(v).
 		Complete()
 }
 
 // ValidateCreate validates AITenant on creation.
-func (v *AITenantValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	aitenant, ok := obj.(*maasv1alpha1.AITenant)
-	if !ok {
-		return nil, fmt.Errorf("expected AITenant object, got %T", obj)
-	}
+func (v *AITenantValidator) ValidateCreate(ctx context.Context, aitenant *maasv1alpha1.AITenant) (admission.Warnings, error) {
 	if v == nil {
 		return nil, errors.New("webhook validator not configured")
 	}
@@ -65,7 +60,7 @@ func (v *AITenantValidator) ValidateCreate(ctx context.Context, obj runtime.Obje
 
 // ValidateUpdate validates AITenant on update.
 // Namespace is immutable and placement is enforced on create, so no update validation is needed here.
-func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.AITenant) (admission.Warnings, error) {
 	_ = ctx
 	_ = oldObj
 	_ = newObj
@@ -74,7 +69,7 @@ func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj r
 
 // ValidateDelete validates AITenant on deletion.
 // No validation needed for deletion.
-func (v *AITenantValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *AITenantValidator) ValidateDelete(ctx context.Context, obj *maasv1alpha1.AITenant) (admission.Warnings, error) {
 	_ = ctx
 	_ = obj
 	return nil, nil
