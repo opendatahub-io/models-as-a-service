@@ -748,6 +748,12 @@ components:
                             type: string
                             description: Context window size (from opendatahub.io/context-window annotation)
                             example: "4096"
+                        modelCapabilities:
+                            type: array
+                            items:
+                                type: string
+                            description: Model capabilities (from opendatahub.io/model-capabilities annotation)
+                            example: ["text-generation", "image-text-inferencing"]
                 kind:
                     type: string
                     description: The model reference kind (e.g., "LLMInferenceService")
@@ -817,7 +823,7 @@ components:
                     example: premium
                 subscription_description:
                     type: string
-                    description: Human-readable description (from description annotation, falls back to display-name, then name)
+                    description: Human-readable description from the openshift.io/description annotation. May be empty if not set.
                     example: Premium Plan
                 display_name:
                     type: string
@@ -850,7 +856,6 @@ components:
                         env: production
             required:
                 - subscription_id_header
-                - subscription_description
                 - priority
                 - model_refs
 
