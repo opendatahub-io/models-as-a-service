@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-xks-overlay
+
+resources:
+  - ../../base/maas-controller/crd
+  - ../../base/maas-controller/rbac
+  - ../../base/maas-controller/manager
+  - ../../base/maas-controller/webhook
+
+# xKS differences from OpenShift overlay:
+# - Skip base/networking/maas (Gateway uses openshift-default GatewayClass;
+#   on xKS, the gateway is managed by the rhai-on-xks-chart post-install hook
+#   with Istio GatewayClass and cert-manager TLS)
+# - Skip base/observability (removes PodMonitor CRD dependency;
+#   observability can be added later when Prometheus operator is available)
+# - Skip base/maas-controller/monitoring (contains PodMonitor resource)
+# - Include CRDs, RBAC, manager, and webhook directly (same as
+#   base/maas-controller/default minus monitoring)
