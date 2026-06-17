@@ -465,6 +465,32 @@ paths:
                                 error:
                                     message: "Access denied: you can only bulk revoke your own API keys"
                                     type: forbidden
+    /v1/api-keys/config:
+        get:
+            tags:
+                - api-keys-v2
+            summary: Get API key configuration limits
+            description: |
+                Returns the API key limits that apply when creating keys.
+                Useful for clients (e.g. Dashboard) that need to display valid ranges
+                for expiration without requiring admin access to the Tenant CR.
+            operationId: api-keys#get-config
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ApiKeyConfig'
+                            example:
+                                max_expiration_days: 90
+                                ephemeral_max_expiration: "1h"
+                "401":
+                    description: Unauthorized. Missing or invalid Authorization header.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
     /v1/api-keys/{id}:
         get:
             tags:
@@ -722,6 +748,12 @@ components:
                             type: string
                             description: Context window size (from opendatahub.io/context-window annotation)
                             example: "4096"
+                        modelCapabilities:
+                            type: array
+                            items:
+                                type: string
+                            description: Model capabilities (from opendatahub.io/model-capabilities annotation)
+                            example: ["text-generation", "image-text-inferencing"]
                 kind:
                     type: string
                     description: The model reference kind (e.g., "LLMInferenceService")
@@ -791,7 +823,7 @@ components:
                     example: premium
                 subscription_description:
                     type: string
-                    description: Human-readable description (from description annotation, falls back to display-name, then name)
+                    description: Human-readable description from the openshift.io/description annotation. May be empty if not set.
                     example: Premium Plan
                 display_name:
                     type: string
@@ -824,7 +856,6 @@ components:
                         env: production
             required:
                 - subscription_id_header
-                - subscription_description
                 - priority
                 - model_refs
 
@@ -879,6 +910,22 @@ components:
                         - per_token
             required:
                 - name
+
+        # API Key configuration limits
+        ApiKeyConfig:
+            type: object
+            properties:
+                max_expiration_days:
+                    type: integer
+                    description: Maximum expiration in days for regular API keys
+                    example: 90
+                ephemeral_max_expiration:
+                    type: string
+                    description: Maximum expiration for ephemeral API keys
+                    example: "1h"
+            required:
+                - max_expiration_days
+                - ephemeral_max_expiration
 
         # API Key metadata
         ApiKey:

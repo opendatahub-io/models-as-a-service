@@ -5,7 +5,12 @@
 package tenantreconcile
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // OptionalAPIGroups lists API groups whose CRDs are installed by optional platform
@@ -38,20 +43,43 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
+	// LabelAIGatewayTenant is the ADR-defined tenant marker on tenant admin namespaces.
+	LabelAIGatewayTenant = "ai-gateway.opendatahub.io/tenant"
+
+	// LabelManagedByAITenant is set to "true" on namespaces created/adopted
+	// by the AITenant reconciler (S11). The subscription/auth-policy controllers
+	// use this label to discover tenant namespaces dynamically.
+	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
+
+	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
+	DefaultAITenantNamespace = "ai-tenants"
+
+	// DefaultMaaSAPINamespace is the fallback namespace for maas-api workloads when
+	// --maas-api-namespace flag is not specified (kustomize standalone deployments).
+	// Production deployments use the controller's namespace via fieldRef.
+	DefaultMaaSAPINamespace = "opendatahub"
+
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
-	GatewayDefaultAuthPolicyName                  = "gateway-default-auth"
-	GatewayTokenRateLimitDefaultDenyPolicyName    = "gateway-default-deny"
-	MaaSAPIAuthPolicyName                         = "maas-api-auth-policy"
-	MaaSAPIRouteName                              = "maas-api-route"
-	MaaSAPIKeyCleanupCronJobName                  = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
-	GatewayDestinationRuleName                    = "maas-api-backend-tls"
-	TelemetryPolicyName                           = "maas-telemetry"
-	IstioTelemetryName                            = "latency-per-subscription"
-	MaaSAPIDeploymentName                         = "maas-api"
+	// Resource name base constants for multi-tenant resources.
+	// These are used with tenant identifiers to create unique resource names per tenant.
+	// For legacy/default tenant (empty tenantID), these values are used as-is.
+	baseGatewayDefaultAuthPolicyName               = "gateway-default-auth"
+	baseGatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
+	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
+	baseMaaSAPIRouteName                           = "maas-api-route"
+	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
+	baseTelemetryPolicyName                        = "maas-telemetry"
+	baseIstioTelemetryName                         = "latency-per-subscription"
+	baseMaaSAPIDeploymentName                      = "maas-api"
+	baseMaaSAPIServiceName                         = "maas-api"
+	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
+
+	// Non-tenant-specific resource names (shared infrastructure)
 	PayloadProcessingName                         = "payload-processing"
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
@@ -92,3 +120,151 @@ var (
 	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 )
+
+// Resource naming functions for multi-tenant deployment.
+// Each function accepts a tenantID string and returns the appropriate resource name.
+//
+// Tenant identifier behavior:
+// - Empty string ("") = default/legacy tenant (preserves existing names for backward compatibility)
+//   TODO: When database tenant_id filtering is implemented in maas-api, migrate empty string
+//   to "models-as-a-service" for consistency with ADR and database tenant_id column.
+// - Non-empty string = AITenant-managed tenant (e.g., "redteam" from AITenant.metadata.name)
+//
+// Resource naming pattern:
+// - Default tenant (tenantID=""): Returns base name as-is (e.g., "maas-api")
+// - AITenant tenant (tenantID="redteam"): Returns "{base}-{tenantID}" (e.g., "maas-api-redteam")
+//
+// Name length constraints:
+// - Kubernetes resources (Service, ConfigMap, etc.) have a 63-character limit
+// - Longest base name is "maas-api-auth-policy" (21 chars)
+// - Max tenant name: 63 - 21 - 1 (separator) = 41 chars
+// - AITenant CRD enforces this 41-char limit via XValidation
+
+func resourceNameForTenant(baseName, tenantID string) string {
+	if tenantID == "" {
+		return baseName
+	}
+	return baseName + "-" + tenantID
+}
+
+func GatewayDefaultAuthPolicyName(tenantID string) string {
+	return resourceNameForTenant(baseGatewayDefaultAuthPolicyName, tenantID)
+}
+
+func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {
+	return resourceNameForTenant(baseGatewayTokenRateLimitDefaultDenyPolicyName, tenantID)
+}
+
+func MaaSAPIAuthPolicyName(tenantID string) string {
+	return resourceNameForTenant(baseMaaSAPIAuthPolicyName, tenantID)
+}
+
+func MaaSAPIRouteName(tenantID string) string {
+	return resourceNameForTenant(baseMaaSAPIRouteName, tenantID)
+}
+
+func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
+	return resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+}
+
+func GatewayDestinationRuleName(tenantID string) string {
+	return resourceNameForTenant(baseGatewayDestinationRuleName, tenantID)
+}
+
+func TelemetryPolicyName(tenantID string) string {
+	return resourceNameForTenant(baseTelemetryPolicyName, tenantID)
+}
+
+func IstioTelemetryName(tenantID string) string {
+	return resourceNameForTenant(baseIstioTelemetryName, tenantID)
+}
+
+func MaaSAPIDeploymentName(tenantID string) string {
+	name := resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
+	ctrl.Log.WithName("MaaSAPIDeploymentName").Info("Generated deployment name",
+		"tenantID", tenantID,
+		"deploymentName", name)
+	return name
+}
+
+func MaaSAPIServiceName(tenantID string) string {
+	return resourceNameForTenant(baseMaaSAPIServiceName, tenantID)
+}
+
+// TenantIdentifierFor extracts the tenant identifier from a Tenant CR.
+//
+// Returns:
+//   - Empty string ("") for default/legacy tenant (not managed by AITenant)
+//   - Tenant name (e.g., "redteam") for AITenant-managed tenants
+//   - Error if LabelManagedByAITenant is true but LabelTenantName is missing (invalid state)
+//
+// The tenant identifier is used to generate unique per-tenant resource names.
+//
+// TODO: When database migration changes default tenant_id from "" to "models-as-a-service",
+// update this function to return "models-as-a-service" for the default tenant
+// instead of empty string, ensuring consistency between resource names and DB tenant_id.
+func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
+	if tenant == nil {
+		return "", nil
+	}
+
+	// Check if this Tenant is managed by AITenant controller
+	// AITenant controller sets this label when creating Tenant CRs
+	labels := tenant.GetLabels()
+	log := ctrl.Log.WithName("TenantIdentifierFor").WithValues(
+		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"labels", labels,
+	)
+
+	if labels != nil && labels[LabelManagedByAITenant] == "true" {
+		// Use the tenant name from the label set by AITenant controller
+		tenantName := labels[LabelTenantName]
+		if tenantName == "" {
+			// Fail closed: AITenant-managed Tenant must have LabelTenantName set.
+			// This should never happen if created by AITenant controller, but if someone
+			// manually creates a Tenant with LabelManagedByAITenant=true and no LabelTenantName,
+			// we must not fall back to default tenant name. Return error instead of panic
+			// to allow graceful degradation - the Tenant reconciler can set a degraded
+			// condition instead of crashing the entire controller.
+			log.Error(nil, "AITenant-managed Tenant is missing LabelTenantName",
+				"managedByLabel", LabelManagedByAITenant,
+				"tenantNameLabel", LabelTenantName)
+			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
+				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+		}
+		log.Info("Resolved tenant identifier from AITenant label", "tenantIdentifier", tenantName)
+		return tenantName, nil
+	}
+
+	// Legacy/default tenant - return empty string for backward compatibility
+	// TODO: Change to return "models-as-a-service" when DB migration is done
+	log.Info("Using legacy/default tenant identifier (empty string)", "reason", "no AITenant label")
+	return "", nil
+}
+
+// TenantNameFor returns the tenant name used for database queries, AuthPolicy headers,
+// and maas-api TENANT_NAME environment variable. This is distinct from TenantIdentifierFor,
+// which is used for resource naming.
+//
+// Returns:
+//   - "models-as-a-service" for the default tenant (matches DB default and TENANT_NAME env var)
+//   - The tenant name for AITenant-managed tenants
+func TenantNameFor(tenant *maasv1alpha1.Tenant) (string, error) {
+	if tenant == nil {
+		return "models-as-a-service", nil
+	}
+
+	// Check if this Tenant is managed by AITenant controller
+	labels := tenant.GetLabels()
+	if labels != nil && labels[LabelManagedByAITenant] == "true" {
+		tenantName := labels[LabelTenantName]
+		if tenantName == "" {
+			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
+				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+		}
+		return tenantName, nil
+	}
+
+	// Default tenant uses "models-as-a-service" for database/headers
+	return "models-as-a-service", nil
+}

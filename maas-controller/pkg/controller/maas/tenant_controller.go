@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -47,7 +48,10 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default opendatahub).
+	// AppNamespace is the protected application namespace (--maas-api-namespace, default opendatahub).
+	// NOTE: This field is ONLY used for namespace protection checks (isProtectedNamespace).
+	// The actual maas-api deployment namespace is determined by appNamespaceForTenant(), which
+	// hardcodes redhat-ai-gateway-infra regardless of this field's value.
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
@@ -55,8 +59,20 @@ type TenantReconciler struct {
 	GatewayName string
 	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
 	GatewayNamespace string
+	// cleanupOnce ensures legacy maas-api cleanup runs at most once per controller lifetime
+	cleanupOnce sync.Once
+	// cleanupMu protects cleanupCompleted
+	cleanupMu sync.Mutex
+	// cleanupCompleted tracks whether legacy cleanup succeeded
+	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
+	// TenantNamespaceDiscoveryEnabled allows reconciling Tenant CRs across all namespaces
+	// instead of only TenantNamespace (enables AITenant multi-tenancy).
+	TenantNamespaceDiscoveryEnabled bool
+	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
+	// Applies to apiKeyValidation and subscription-info metadata evaluators.
+	MetadataCacheTTL int64
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -103,6 +119,12 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+
+// Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/status;externalproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/finalizers;externalproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
 // Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).

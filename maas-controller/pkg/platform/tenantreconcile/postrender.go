@@ -2,6 +2,7 @@ package tenantreconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/go-logr/logr"
@@ -16,6 +17,7 @@ import (
 func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
 	gatewayName := tenant.Spec.GatewayRef.Name
+	tenantID := params.TenantIdentifier
 
 	var filteredResources []unstructured.Unstructured
 	for i := range resources {
@@ -30,30 +32,39 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 
 		gvk := resource.GroupVersionKind()
 		switch {
-		case gvk == GVKAuthPolicy && resource.GetName() == GatewayDefaultAuthPolicyName:
-			if err := configureAuthPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
+		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == baseGatewayTokenRateLimitDefaultDenyPolicyName:
+			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName, tenantID); err != nil {
 				return nil, err
 			}
-		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == GatewayTokenRateLimitDefaultDenyPolicyName:
-			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName); err != nil {
-				return nil, err
-			}
-		case gvk == GVKDestinationRule && resource.GetName() == GatewayDestinationRuleName:
+		case gvk == GVKDestinationRule && resource.GetName() == baseGatewayDestinationRuleName:
 			configureDestinationRule(log, resource, gatewayNamespace)
+		case gvk.Group == "" && gvk.Kind == "Service" && resource.GetName() == "maas-api":
+			// Make TLS secret name unique per tenant
+			if err := configureMaaSAPIService(log, resource, tenantID); err != nil {
+				return nil, err
+			}
+		case gvk.Group == "apps" && gvk.Kind == "Deployment" && resource.GetName() == "maas-api":
+			// Update Deployment to mount tenant-specific TLS secret
+			if err := configureMaaSAPIDeployment(log, resource, tenantID); err != nil {
+				return nil, err
+			}
+		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
+			// Configure per-tenant HTTPRoute
+			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, tenant, params); err != nil {
+				return nil, err
+			}
 		}
 
 		filteredResources = append(filteredResources, *resource)
 	}
 
-	setManagedFalseAnnotation(filteredResources)
-
 	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
 		return nil, err
 	}
-	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources); err != nil {
+	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, tenantID); err != nil {
 		return nil, err
 	}
-	if err := configureIstioTelemetryResources(log, tenant, &filteredResources); err != nil {
+	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, tenantID); err != nil {
 		return nil, err
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
@@ -63,17 +74,16 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 	return filteredResources, nil
 }
 
-func configureAuthPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string) error {
-	log.V(4).Info("Configuring AuthPolicy", "name", resource.GetName(), "newNamespace", gatewayNamespace, "newTargetGateway", gatewayName)
-	resource.SetNamespace(gatewayNamespace)
-	if err := unstructured.SetNestedField(resource.Object, gatewayName, "spec", "targetRef", "name"); err != nil {
-		return fmt.Errorf("failed to set spec.targetRef.name on AuthPolicy: %w", err)
-	}
-	return nil
-}
+func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName, tenantID string) error {
+	// Generate unique per-tenant name to avoid conflicts when multiple tenants share the same gateway namespace
+	newName := GatewayTokenRateLimitDefaultDenyPolicyName(tenantID)
+	log.V(4).Info("Configuring TokenRateLimitPolicy",
+		"oldName", resource.GetName(),
+		"newName", newName,
+		"namespace", gatewayNamespace,
+		"targetGateway", gatewayName)
 
-func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string) error {
-	log.V(4).Info("Configuring TokenRateLimitPolicy", "name", resource.GetName(), "newNamespace", gatewayNamespace, "newTargetGateway", gatewayName)
+	resource.SetName(newName)
 	resource.SetNamespace(gatewayNamespace)
 	if err := unstructured.SetNestedField(resource.Object, gatewayName, "spec", "targetRef", "name"); err != nil {
 		return fmt.Errorf("failed to set spec.targetRef.name on TokenRateLimitPolicy: %w", err)
@@ -86,36 +96,75 @@ func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructur
 	resource.SetNamespace(gatewayNamespace)
 }
 
-// setManagedFalseAnnotation marks the maas-api AuthPolicy with opendatahub.io/managed=false
-// so the ODH operator does not reconcile it back to its defaults after the Tenant reconciler
-// has applied OIDC, audience, and other customizations.
-func setManagedFalseAnnotation(resources []unstructured.Unstructured) {
-	for i := range resources {
-		r := &resources[i]
-		if r.GroupVersionKind() == GVKAuthPolicy && r.GetName() == MaaSAPIAuthPolicyName {
-			ann := r.GetAnnotations()
-			if ann == nil {
-				ann = make(map[string]string)
+func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
+	// For default tenant (tenantID=""), use "maas-api-serving-cert"
+	// For other tenants, use "maas-api-{tenantID}-serving-cert"
+	secretName := "maas-api-serving-cert"
+	if tenantID != "" {
+		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
+	}
+
+	annotations := resource.GetAnnotations()
+	if annotations == nil {
+		annotations = make(map[string]string)
+	}
+	annotations["service.beta.openshift.io/serving-cert-secret-name"] = secretName
+	resource.SetAnnotations(annotations)
+
+	log.V(4).Info("Configured maas-api Service TLS secret", "tenantID", tenantID, "secretName", secretName)
+	return nil
+}
+
+func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
+	// Update the Deployment to mount the correct tenant-specific TLS secret
+	secretName := "maas-api-serving-cert"
+	if tenantID != "" {
+		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
+	}
+
+	// Navigate to spec.template.spec.volumes and find the tls-cert volume
+	volumes, found, err := unstructured.NestedSlice(resource.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("failed to get volumes: %w", err)
+	}
+	if !found {
+		return errors.New("no volumes found in deployment")
+	}
+
+	// Find and update the maas-api-tls volume's secret name
+	for i, vol := range volumes {
+		volMap, ok := vol.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(volMap, "name")
+		if name == "maas-api-tls" {
+			if err := unstructured.SetNestedField(volMap, secretName, "secret", "secretName"); err != nil {
+				return fmt.Errorf("failed to set maas-api-tls secret name: %w", err)
 			}
-			ann[AnnotationManaged] = "false"
-			r.SetAnnotations(ann)
-			return
+			volumes[i] = volMap
+			break
 		}
 	}
+
+	if err := unstructured.SetNestedSlice(resource.Object, volumes, "spec", "template", "spec", "volumes"); err != nil {
+		return fmt.Errorf("failed to set volumes: %w", err)
+	}
+
+	log.V(4).Info("Configured maas-api Deployment TLS secret volume", "tenantID", tenantID, "secretName", secretName)
+	return nil
 }
 
 func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {
 	if tenant.Spec.ExternalOIDC == nil {
 		return nil
 	}
-	oidc := tenant.Spec.ExternalOIDC
-	for i := range resources {
-		resource := &resources[i]
-		if resource.GroupVersionKind() == GVKAuthPolicy && resource.GetName() == MaaSAPIAuthPolicyName {
-			return patchAuthPolicyWithOIDC(log, resource, oidc)
-		}
-	}
-	return fmt.Errorf("rendered resources are missing AuthPolicy %q while spec.externalOIDC is configured — refusing to deploy without OIDC rules", MaaSAPIAuthPolicyName)
+	// OIDC is configured in the singleton maas-gateway-auth AuthPolicy managed by
+	// maas-controller (see MaaSAuthPolicyReconciler.buildGatewayAuthPolicySpec).
+	// The route-level maas-api-auth-policy has been removed, so there is nothing
+	// to patch in the kustomize-rendered resources here.
+	log.V(1).Info("external OIDC configured via gateway-level AuthPolicy; no kustomize resources to patch")
+	return nil
 }
 
 func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructured, oidc *maasv1alpha1.TenantExternalOIDCConfig) error {
@@ -196,7 +245,7 @@ func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	return *t.Enabled
 }
 
-func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured) error {
+func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
@@ -209,7 +258,7 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 			"apiVersion": "extensions.kuadrant.io/v1alpha1",
 			"kind":       "TelemetryPolicy",
 			"metadata": map[string]any{
-				"name":      TelemetryPolicyName,
+				"name":      TelemetryPolicyName(tenantID),
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
@@ -231,12 +280,13 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 			},
 		},
 	}
-	log.V(2).Info("Appending TelemetryPolicy", "name", TelemetryPolicyName, "namespace", gatewayNamespace)
+	telemetryPolicyName := TelemetryPolicyName(tenantID)
+	log.V(2).Info("Appending TelemetryPolicy", "name", telemetryPolicyName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *tp)
 	return nil
 }
 
-func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured) error {
+func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
@@ -247,7 +297,7 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 			"apiVersion": "telemetry.istio.io/v1",
 			"kind":       "Telemetry",
 			"metadata": map[string]any{
-				"name":      IstioTelemetryName,
+				"name":      IstioTelemetryName(tenantID),
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
@@ -280,7 +330,8 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 			},
 		},
 	}
-	log.V(2).Info("Appending Istio Telemetry", "name", IstioTelemetryName, "namespace", gatewayNamespace)
+	istioTelemetryName := IstioTelemetryName(tenantID)
+	log.V(2).Info("Appending Istio Telemetry", "name", istioTelemetryName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *istioTelemetry)
 	return nil
 }
@@ -323,4 +374,81 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["model"] = "responseBodyJSON(\"/model\")"
 	}
 	return labels
+}
+
+func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, tenant *maasv1alpha1.Tenant, params PlatformParams) error {
+	tenantID := params.TenantIdentifier
+
+	// Rename HTTPRoute for non-default tenants
+	if tenantID != "" {
+		newName := fmt.Sprintf("maas-api-%s-route", tenantID)
+		log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
+		resource.SetName(newName)
+	}
+
+	// Get parentRefs array first
+	parentRefs, found, err := unstructured.NestedSlice(resource.Object, "spec", "parentRefs")
+	if err != nil || !found || len(parentRefs) == 0 {
+		return fmt.Errorf("HTTPRoute has no parentRefs: %w", err)
+	}
+
+	// Update first parentRef
+	parentRefMap, ok := parentRefs[0].(map[string]any)
+	if !ok {
+		return errors.New("parentRefs[0] is not a map")
+	}
+	parentRefMap["name"] = gatewayName
+	parentRefMap["namespace"] = gatewayNamespace
+	parentRefs[0] = parentRefMap
+
+	if err := unstructured.SetNestedSlice(resource.Object, parentRefs, "spec", "parentRefs"); err != nil {
+		return fmt.Errorf("failed to set HTTPRoute parentRefs: %w", err)
+	}
+
+	// Update backendRefs to point to tenant-specific maas-api service
+	serviceName := MaaSAPIServiceName(tenantID)
+
+	// Update both rules (v1/models and /maas-api)
+	rules, found, err := unstructured.NestedSlice(resource.Object, "spec", "rules")
+	if err != nil {
+		return fmt.Errorf("failed to get HTTPRoute rules: %w", err)
+	}
+	if !found || len(rules) == 0 {
+		return errors.New("HTTPRoute has no rules")
+	}
+
+	for i := range rules {
+		ruleMap, ok := rules[i].(map[string]any)
+		if !ok {
+			continue
+		}
+		backendRefs, found, err := unstructured.NestedSlice(ruleMap, "backendRefs")
+		if err != nil || !found || len(backendRefs) == 0 {
+			continue
+		}
+		for j := range backendRefs {
+			backendMap, ok := backendRefs[j].(map[string]any)
+			if !ok {
+				continue
+			}
+			if err := unstructured.SetNestedField(backendMap, serviceName, "name"); err != nil {
+				return fmt.Errorf("failed to set backendRefs[%d].name: %w", j, err)
+			}
+			backendRefs[j] = backendMap
+		}
+		if err := unstructured.SetNestedSlice(ruleMap, backendRefs, "backendRefs"); err != nil {
+			return fmt.Errorf("failed to set rule[%d].backendRefs: %w", i, err)
+		}
+		rules[i] = ruleMap
+	}
+
+	if err := unstructured.SetNestedSlice(resource.Object, rules, "spec", "rules"); err != nil {
+		return fmt.Errorf("failed to set HTTPRoute rules: %w", err)
+	}
+
+	log.V(4).Info("Configured maas-api HTTPRoute",
+		"tenantID", tenantID,
+		"gateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName),
+		"service", serviceName)
+	return nil
 }

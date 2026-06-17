@@ -549,7 +549,7 @@ main() {
     [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
-    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5")}"
+    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
 
     log_info "  Ensuring maas-parameters ConfigMap..."
@@ -611,14 +611,16 @@ EOF
   # Wait for the Tenant reconciler to deploy maas-api.
   # The controller creates a default-tenant CR on startup, and the Tenant
   # reconciler renders and SSA-applies maas-api manifests + gateway policies.
+  # All maas-api instances deploy to redhat-ai-gateway-infra infrastructure namespace.
   log_info ""
   log_info "Waiting for Tenant reconciler to deploy maas-api..."
+  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do
-    if kubectl get deployment maas-api -n "$NAMESPACE" &>/dev/null; then
-      log_info "  maas-api deployment found, waiting for rollout..."
-      if kubectl rollout status deployment/maas-api -n "$NAMESPACE" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
+    if kubectl get deployment maas-api -n "$maas_api_namespace" &>/dev/null; then
+      log_info "  maas-api deployment found in $maas_api_namespace, waiting for rollout..."
+      if kubectl rollout status deployment/maas-api -n "$maas_api_namespace" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
         log_info "  maas-api is ready"
         break
       fi
@@ -630,18 +632,19 @@ EOF
     fi
   done
 
-  if ! kubectl get deployment maas-api -n "$NAMESPACE" &>/dev/null; then
+  if ! kubectl get deployment maas-api -n "$maas_api_namespace" &>/dev/null; then
     log_error "maas-api deployment not created by Tenant reconciler after ${maas_api_timeout}s"
+    log_error "Expected in namespace: $maas_api_namespace"
     log_error "Check maas-controller logs: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
     return 1
   fi
 
-  # External OIDC: merge-patch maas-api-auth-policy with Keycloak (or other IdP) JWT rules.
-  # The Tenant reconciler creates the base AuthPolicy; this must run after it exists.
+  # External OIDC: Patch Tenant CR with externalOIDC so the MaaSAuthPolicy controller
+  # adds oidc-identities authentication to the gateway-level AuthPolicy (maas-gateway-auth).
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    if ! configure_maas_api_authpolicy; then
-      log_error "configure_maas_api_authpolicy failed — set OIDC_ISSUER_URL / OIDC_CLIENT_ID (or overlay params) and retry"
+    if ! configure_tenant_external_oidc; then
+      log_error "configure_tenant_external_oidc failed — gateway AuthPolicy will not include OIDC auth"
       return 1
     fi
   fi
@@ -649,10 +652,10 @@ EOF
   log_info ""
   log_info "MaaS API and MaaS Controller deployment completed successfully!"
   local deployed_api_image deployed_ctrl_image
-  deployed_api_image=$(kubectl get deployment/maas-api -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  deployed_api_image=$(kubectl get deployment/maas-api -n "$maas_api_namespace" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
   deployed_ctrl_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
-  log_info "  maas-api image:        $deployed_api_image"
-  log_info "  maas-controller image: $deployed_ctrl_image"
+  log_info "  maas-api image:        $deployed_api_image (namespace: $maas_api_namespace)"
+  log_info "  maas-controller image: $deployed_ctrl_image (namespace: $NAMESPACE)"
 
   log_info "==================================================="
   log_info "  Models-as-a-Service Deployment completed successfully!"
@@ -762,11 +765,15 @@ validate_postgres_connection() {
 }
 
 deploy_postgresql() {
+  # Namespace where maas-api and postgres run (operator namespace)
+  local infra_ns="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+
   if [[ -n "$POSTGRES_CONNECTION" ]]; then
     validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1
     log_info "Using external PostgreSQL connection"
-    create_maas_db_config_secret "$NAMESPACE" "$POSTGRES_CONNECTION"
-    log_info "Created maas-db-config secret with external connection"
+    # Create secret in infrastructure namespace for maas-api access
+    create_maas_db_config_secret "$infra_ns" "$POSTGRES_CONNECTION"
+    log_info "Created maas-db-config secret in $infra_ns with external connection"
   else
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     log_warn "  DEPLOYING POC POSTGRESQL — NOT INTENDED FOR PRODUCTION USE"
@@ -774,7 +781,8 @@ deploy_postgresql() {
     log_warn "  For production, use --postgres-connection with an external database"
     log_warn "  (AWS RDS, Crunchy Operator, Azure Database, etc.)"
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-    NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
+    # setup-database.sh handles upgrade detection and namespace selection
+    "${SCRIPT_DIR}/setup-database.sh"
   fi
 }
 
@@ -1406,11 +1414,11 @@ patch_authpolicy_from_template() {
   # Merge patch cannot reliably delete "when" arrays or replace "selector"
   # with "expression" inside CRD objects, causing stale fields to persist.
   local resource_version
-  resource_version=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+  resource_version=$(kubectl get authpolicy "$authpolicy_name" -n "$maas_namespace" \
     -o jsonpath='{.metadata.resourceVersion}')
 
   local when_predicate
-  when_predicate=$(kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" \
+  when_predicate=$(kubectl get authpolicy "$authpolicy_name" -n "$maas_namespace" \
     -o jsonpath='{.spec.when[0].predicate}')
 
   local manifest
@@ -1420,7 +1428,7 @@ apiVersion: kuadrant.io/v1
 kind: AuthPolicy
 metadata:
   name: ${authpolicy_name}
-  namespace: ${NAMESPACE}
+  namespace: ${maas_namespace}
   resourceVersion: "${resource_version}"
   annotations:
     opendatahub.io/managed: "false"
@@ -1439,72 +1447,41 @@ MANIFEST_EOF
   rm -f "$manifest"
   return $rc
 }
+# configure_tenant_external_oidc
+#   Patches the default-tenant Tenant CR with spec.externalOIDC so the
+#   MaaSAuthPolicy controller adds oidc-identities authentication to the
+#   gateway-level AuthPolicy (maas-gateway-auth).
+configure_tenant_external_oidc() {
+  local tenant_name="default-tenant"
+  local tenant_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
-# configure_maas_api_authpolicy
-#   Ensures the live maas-api AuthPolicy keeps API key support and, when
-#   enabled, layers external OIDC JWT validation on top.
-configure_maas_api_authpolicy() {
-  log_info "Configuring MaaS API AuthPolicy..."
+  log_info "Configuring Tenant CR with external OIDC..."
 
-  local project_root
-  project_root="$(find_project_root)" || {
-    log_error "Could not determine project root for AuthPolicy patching"
-    return 1
-  }
-
-  local authpolicy_name="maas-api-auth-policy"
-  local wait_timeout=120
-  local elapsed=0
-
-  log_info "  Waiting for AuthPolicy '$authpolicy_name' to be created (timeout: ${wait_timeout}s)..."
-  while [[ $elapsed -lt $wait_timeout ]]; do
-    if kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-      log_info "  Found AuthPolicy '$authpolicy_name'"
-      break
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-
-  if ! kubectl get authpolicy "$authpolicy_name" -n "$NAMESPACE" &>/dev/null; then
-    log_warn "AuthPolicy '$authpolicy_name' not found after ${wait_timeout}s, skipping auth configuration"
-    return 0
-  fi
-
-  log_info "  Annotating AuthPolicy to prevent operator reconciliation..."
-  kubectl annotate authpolicy "$authpolicy_name" -n "$NAMESPACE" \
-    opendatahub.io/managed="false" --overwrite 2>/dev/null || true
-
-  if [[ "$EXTERNAL_OIDC" != "true" ]]; then
-    log_info "  External OIDC not enabled, leaving OpenShift auth as the only identity-token path"
+  if ! kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
+    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping OIDC config"
     return 0
   fi
 
   local oidc_issuer_url
   oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
-    log_error "External OIDC requested but no real oidc-issuer-url was configured"
+    log_error "External OIDC requested but no OIDC_ISSUER_URL was configured"
     return 1
   }
 
   local oidc_client_id
   oidc_client_id="$(resolve_external_oidc_client_id)" || {
-    log_error "External OIDC requested but no oidc-client-id or OIDC_CLIENT_ID was configured"
+    log_error "External OIDC requested but no OIDC_CLIENT_ID was configured"
     return 1
   }
 
-  # Resolve cluster audience for TokenReview (HyperShift/ROSA use non-standard audiences).
-  local cluster_aud
-  cluster_aud=$(get_cluster_audience 2>/dev/null || echo "https://kubernetes.default.svc")
-  log_info "  Cluster audience: $cluster_aud"
-
-  local oidc_patch="$project_root/scripts/data/maas-api-authpolicy-external-oidc-patch.yaml"
-  log_info "  Enabling OIDC JWT validation with issuer: $oidc_issuer_url, clientId: $oidc_client_id"
-  if ! patch_authpolicy_from_template "$authpolicy_name" "$oidc_patch" "$NAMESPACE" "$oidc_issuer_url" "$oidc_client_id" "$cluster_aud"; then
-    log_error "  Failed to patch AuthPolicy with external OIDC configuration"
+  log_info "  Patching Tenant '$tenant_name' with externalOIDC (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
+  if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p \
+    "{\"spec\":{\"externalOIDC\":{\"issuerUrl\":\"$oidc_issuer_url\",\"clientId\":\"$oidc_client_id\"}}}"; then
+    log_error "  Failed to patch Tenant CR with external OIDC"
     return 1
   fi
 
-  log_info "  AuthPolicy patched successfully"
+  log_info "  Tenant CR patched with externalOIDC successfully"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1561,9 +1538,9 @@ configure_tls_backend() {
   # Restart deployments to pick up TLS config
   log_info "Restarting deployments to pick up TLS configuration..."
 
-  # Determine maas-api namespace based on deployment mode
-  local maas_namespace="${NAMESPACE:-maas-api}"
-  kubectl rollout restart deployment/maas-api -n "$maas_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
+  # maas-api deploys to operator namespace
+  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+  kubectl rollout restart deployment/maas-api -n "$maas_api_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
   kubectl rollout restart deployment/authorino -n "$authorino_namespace" 2>/dev/null || log_debug "authorino deployment not found or not yet ready"
   
   # Wait for Authorino to be ready after restart

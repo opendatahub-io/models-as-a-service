@@ -106,10 +106,25 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 			return
 		}
 
+		tenant := strings.TrimSpace(c.GetHeader(constant.HeaderTenant))
+		if tenant == "" {
+			h.logger.Error("Missing or empty tenant header",
+				"header", constant.HeaderTenant,
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":         "Exception thrown while generating token",
+				"exceptionCode": "AUTH_FAILURE",
+				"refId":         "004",
+			})
+			c.Abort()
+			return
+		}
+
 		// Create UserContext from headers
 		userContext := &UserContext{
 			Username: username,
 			Groups:   groups,
+			Tenant:   tenant,
 		}
 
 		h.logger.Debug("Extracted user info from headers",

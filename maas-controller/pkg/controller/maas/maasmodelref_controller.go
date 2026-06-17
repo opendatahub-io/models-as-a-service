@@ -54,6 +54,11 @@ type MaaSModelRefReconciler struct {
 	// GatewayName and GatewayNamespace identify the Gateway used for model HTTPRoutes (configurable via flags).
 	GatewayName      string
 	GatewayNamespace string
+
+	// DefaultTenantNamespace is the legacy single-tenant namespace.
+	DefaultTenantNamespace string
+	// TenantNamespaceDiscoveryEnabled enables AITenant-labeled tenant namespaces.
+	TenantNamespaceDiscoveryEnabled bool
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
@@ -185,12 +190,36 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 // MaaSSubscription AND at least one active MaaSAuthPolicy referencing this model.
 // No admin CR names, namespaces, or UIDs are propagated to status.
 func (r *MaaSModelRefReconciler) checkGovernanceAttached(ctx context.Context, model *maasv1alpha1.MaaSModelRef) bool {
-	sub := findAnySubscriptionForModel(ctx, r.Client, model.Namespace, model.Name)
+	sub := r.findAnySubscriptionForModel(ctx, model.Namespace, model.Name)
 	if sub == nil {
 		return false
 	}
-	ap := findAnyAuthPolicyForModel(ctx, r.Client, model.Namespace, model.Name)
+	ap := r.findAnyAuthPolicyForModel(ctx, model.Namespace, model.Name)
 	return ap != nil
+}
+
+func (r *MaaSModelRefReconciler) findAnySubscriptionForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSSubscription {
+	subs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return nil
+	}
+	subs = filterSubscriptionsByTenantNamespace(ctx, r.Client, subs, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if len(subs) == 0 {
+		return nil
+	}
+	return &subs[0]
+}
+
+func (r *MaaSModelRefReconciler) findAnyAuthPolicyForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSAuthPolicy {
+	policies, err := findAllAuthPoliciesForModel(ctx, r.Client, modelNamespace, modelName)
+	if err != nil {
+		return nil
+	}
+	policies = filterAuthPoliciesByTenantNamespace(ctx, r.Client, policies, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+	if len(policies) == 0 {
+		return nil
+	}
+	return &policies[0]
 }
 
 func (r *MaaSModelRefReconciler) setGovernanceCondition(model *maasv1alpha1.MaaSModelRef, governed bool) {
@@ -438,9 +467,12 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 
 // mapMaaSSubscriptionToMaaSModelRefs returns reconcile requests for all MaaSModelRefs
 // referenced by the given MaaSSubscription.
-func (r *MaaSModelRefReconciler) mapMaaSSubscriptionToMaaSModelRefs(_ context.Context, obj client.Object) []reconcile.Request {
+func (r *MaaSModelRefReconciler) mapMaaSSubscriptionToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
 	if !ok {
+		return nil
+	}
+	if !isTenantNamespace(ctx, r.Client, sub.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled) {
 		return nil
 	}
 	seen := make(map[types.NamespacedName]struct{})
@@ -458,9 +490,12 @@ func (r *MaaSModelRefReconciler) mapMaaSSubscriptionToMaaSModelRefs(_ context.Co
 
 // mapMaaSAuthPolicyToMaaSModelRefs returns reconcile requests for all MaaSModelRefs
 // referenced by the given MaaSAuthPolicy.
-func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(_ context.Context, obj client.Object) []reconcile.Request {
+func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
 	policy, ok := obj.(*maasv1alpha1.MaaSAuthPolicy)
 	if !ok {
+		return nil
+	}
+	if !isTenantNamespace(ctx, r.Client, policy.Namespace, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled) {
 		return nil
 	}
 	seen := make(map[types.NamespacedName]struct{})

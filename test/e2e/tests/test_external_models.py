@@ -45,6 +45,10 @@ RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 
+# MaaS ExternalModel CR (not inference.opendatahub.io ExternalModel — oc resolves the
+# short name "externalmodel" to the inference API group by default).
+MAAS_EXTERNAL_MODEL_KIND = "externalmodels.maas.opendatahub.io"
+
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -197,7 +201,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
               {"metadata": {"finalizers": []}})
     _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _delete_cr("externalmodel", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+    _delete_cr(MAAS_EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
     _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
 
 
@@ -317,7 +321,7 @@ class TestExternalModelCleanup:
             assert route is not None, f"HTTPRoute {temp_name} should exist before deletion"
 
             # Delete the ExternalModel (owns the HTTPRoute via OwnerReference)
-            _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
+            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
             time.sleep(RECONCILE_WAIT)
 
             # Verify HTTPRoute was cleaned up by garbage collection
@@ -325,4 +329,4 @@ class TestExternalModelCleanup:
             assert route is None, f"HTTPRoute {temp_name} should be cleaned up after ExternalModel deletion"
         finally:
             # Always clean up to avoid resource leaks
-            _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
+            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
