@@ -739,20 +739,13 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 
 // toSubscriptionInfo converts internal subscription to a list response item.
 func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
-	desc := sub.Description
-	if desc == "" {
-		desc = sub.DisplayName
-	}
-	if desc == "" {
-		desc = sub.Name
-	}
 	modelRefs := sub.ModelRefs
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
 	info := SubscriptionInfo{
 		SubscriptionIDHeader:    sub.Name,
-		SubscriptionDescription: desc,
+		SubscriptionDescription: sub.Description,
 		DisplayName:             sub.DisplayName,
 		Priority:                sub.Priority,
 		ModelRefs:               modelRefs,
@@ -765,20 +758,13 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 
 // ResponseToSubscriptionInfo converts a SelectResponse to a SubscriptionInfo.
 func ResponseToSubscriptionInfo(sub *SelectResponse) SubscriptionInfo {
-	desc := sub.Description
-	if desc == "" {
-		desc = sub.DisplayName
-	}
-	if desc == "" {
-		desc = sub.Name
-	}
 	modelRefs := sub.ModelRefs
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
 	return SubscriptionInfo{
 		SubscriptionIDHeader:    sub.Name,
-		SubscriptionDescription: desc,
+		SubscriptionDescription: sub.Description,
 		DisplayName:             sub.DisplayName,
 		Priority:                sub.Priority,
 		ModelRefs:               modelRefs,

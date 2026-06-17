@@ -192,7 +192,7 @@ func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, re
 	return server
 }
 
-func TestListingModels(t *testing.T) {
+func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test with many scenarios
 	testLogger := logger.Development()
 	strptr := func(s string) *string { return &s }
 
@@ -208,6 +208,7 @@ func TestListingModels(t *testing.T) {
 	llamaPrivateServer := createMockModelServer(t, "llama-7b-private-url")
 	fallbackServer := createMockModelServer(t, "fallback-model-name")
 	metadataServer := createMockModelServer(t, "model-with-metadata")
+	capabilitiesServer := createMockModelServer(t, "model-with-capabilities")
 	partialMetadataServer := createMockModelServer(t, "model-with-partial-metadata")
 	emptyMetadataServer := createMockModelServer(t, "model-with-empty-metadata")
 
@@ -283,6 +284,22 @@ func TestListingModels(t *testing.T) {
 				assert.Equal(t, "Test Model Alpha", model.Details.DisplayName)
 				assert.Equal(t, "A large language model for general AI tasks", model.Details.Description)
 				assert.Equal(t, "General purpose LLM", model.Details.GenAIUseCase)
+			},
+		},
+		{
+			Name:             "model-with-capabilities",
+			Namespace:        "model-serving",
+			URL:              fixtures.PublicURL(capabilitiesServer.URL),
+			Ready:            true,
+			GatewayName:      testGatewayName,
+			GatewayNamespace: testGatewayNamespace,
+			Annotations: map[string]string{
+				constant.AnnotationModelCapabilities: `["audio-speech-recognition","image-text-inferencing"]`,
+			},
+			AssertDetails: func(t *testing.T, model models.Model) {
+				t.Helper()
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from capabilities annotation")
+				assert.Equal(t, []string{"audio-speech-recognition", "image-text-inferencing"}, model.Details.ModelCapabilities)
 			},
 		},
 		{
