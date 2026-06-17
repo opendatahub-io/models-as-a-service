@@ -1384,6 +1384,20 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 		t.Errorf("api-keys-x-api-key plain.expression should reference x-api-key header, got: %s", expr)
 	}
 
+	priority, ok := xAPIKeyMap["priority"].(int64)
+	if !ok || priority != 1 {
+		t.Errorf("api-keys-x-api-key priority should be 1 (fallback after api-keys), got: %v", xAPIKeyMap["priority"])
+	}
+
+	xAPIKeyWhen, found2, err2 := unstructured.NestedSlice(xAPIKeyMap, "when")
+	if err2 != nil || !found2 || len(xAPIKeyWhen) == 0 {
+		t.Fatalf("api-keys-x-api-key when missing: found=%v err=%v", found2, err2)
+	}
+	xWhenPred, _ := xAPIKeyWhen[0].(map[string]any)["predicate"].(string)
+	if !contains(xWhenPred, `!request.headers.authorization.matches`) {
+		t.Errorf("api-keys-x-api-key when should exclude requests with Authorization Bearer sk-oai-, got: %s", xWhenPred)
+	}
+
 	apiKeyWhen, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "when")
 	if err != nil || !found || len(apiKeyWhen) == 0 {
 		t.Fatalf("apiKeyValidation when missing: found=%v err=%v", found, err)
@@ -1908,6 +1922,13 @@ func TestAPIKeyCELPredicates(t *testing.T) {
 		}
 		if !contains(isAPIKey, "authorization") {
 			t.Errorf("isAPIKey should still reference authorization header, got: %s", isAPIKey)
+		}
+	})
+
+	t.Run("enabled extractKey prefers Authorization over x-api-key", func(t *testing.T) {
+		_, _, extractKey := apiKeyCELPredicates(true)
+		if !strings.HasPrefix(extractKey, `request.headers.authorization.matches`) {
+			t.Errorf("extractKey should check Authorization first (prefer Bearer over x-api-key), got: %s", extractKey)
 		}
 	})
 }

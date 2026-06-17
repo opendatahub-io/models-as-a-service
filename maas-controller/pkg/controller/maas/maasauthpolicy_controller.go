@@ -650,11 +650,11 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 			},
 			"when": []any{
 				map[string]any{
-					"predicate": `"x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*")`,
+					"predicate": `"x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*") && !request.headers.authorization.matches("^Bearer sk-oai-.*")`,
 				},
 			},
 			"metrics":  false,
-			"priority": int64(0),
+			"priority": int64(1),
 		}
 	}
 
@@ -1499,9 +1499,9 @@ func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRaw
 	isAPIKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") || ` +
 		`("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
 	isNotAPIKey = `!(` + isAPIKey + `)`
-	extractRawKey = `("x-api-key" in request.headers && request.headers["x-api-key"].startsWith("sk-oai-")) ` +
-		`? request.headers["x-api-key"] ` +
-		`: request.headers.authorization.replace("Bearer ", "")`
+	extractRawKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") ` +
+		`? request.headers.authorization.replace("Bearer ", "") ` +
+		`: request.headers["x-api-key"]`
 	return isAPIKey, isNotAPIKey, extractRawKey
 }
 
