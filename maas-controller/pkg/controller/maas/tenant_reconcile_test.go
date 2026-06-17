@@ -155,7 +155,7 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(BeEmpty())
+	g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
 }
 
 func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing.T) {

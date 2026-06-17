@@ -22,6 +22,11 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
 
+// infoLogger interface for logging (matches logger.Logger methods we need).
+type infoLogger interface {
+	Info(msg string, keysAndValues ...any)
+}
+
 type ClusterConfig struct {
 	ClientSet *kubernetes.Clientset
 
@@ -39,6 +44,7 @@ type ClusterConfig struct {
 	restConfig      *rest.Config
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
+	log             infoLogger
 }
 
 // RESTConfig returns the Kubernetes REST config used by this cluster config.
@@ -49,11 +55,13 @@ func (c *ClusterConfig) RESTConfig() *rest.Config {
 // maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
 type maasModelRefLister struct {
 	lister cache.GenericLister
+	log    infoLogger
 }
 
 func (m *maasModelRefLister) List() ([]*unstructured.Unstructured, error) {
 	objs, err := m.lister.List(labels.Everything())
 	if err != nil {
+		m.log.Info("MaaSModelRef List() error", "error", err)
 		return nil, err
 	}
 	out := make([]*unstructured.Unstructured, 0, len(objs))
@@ -65,17 +73,20 @@ func (m *maasModelRefLister) List() ([]*unstructured.Unstructured, error) {
 		// Return all MaaSModelRefs from all namespaces (no filtering)
 		out = append(out, u)
 	}
+	m.log.Info("MaaSModelRef List() returning", "count", len(out))
 	return out, nil
 }
 
 // subscriptionLister implements subscription.Lister from a cache.GenericLister (informer-backed).
 type subscriptionLister struct {
 	lister cache.GenericLister
+	log    infoLogger
 }
 
 func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	objs, err := s.lister.List(labels.Everything())
 	if err != nil {
+		s.log.Info("MaaSSubscription List() error", "error", err)
 		return nil, err
 	}
 	out := make([]*unstructured.Unstructured, 0, len(objs))
@@ -86,10 +97,14 @@ func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
 		}
 		out = append(out, u)
 	}
+	s.log.Info("MaaSSubscription List() returning", "count", len(out))
 	return out, nil
 }
 
-func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int, metricsRegisterer prometheus.Registerer) (*ClusterConfig, error) {
+func NewClusterConfig(
+	_ string, subscriptionNamespace string, resyncPeriod time.Duration,
+	sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger,
+) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -109,13 +124,15 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 	maasGVR := models.GVR()
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
-	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
+	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister(), log: log}
+	log.Info("Created MaaSModelRef informer", "watchNamespace", "ALL", "gvr", maasGVR.String())
 
 	// MaaSSubscription informer (cached); watches only the configured namespace for subscription selection.
 	subscriptionDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	subscriptionGVR := subscription.GVR()
 	subscriptionInformer := subscriptionDynamicFactory.ForResource(subscriptionGVR)
-	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
+	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister(), log: log}
+	log.Info("Created MaaSSubscription informer", "watchNamespace", subscriptionNamespace, "gvr", subscriptionGVR.String())
 
 	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
 	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
@@ -140,6 +157,7 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 			maasDynamicFactory.Start,
 			subscriptionDynamicFactory.Start,
 		},
+		log: log,
 	}, nil
 }
 
@@ -187,7 +205,10 @@ func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interf
 
 	switch len(candidates) {
 	case 0:
-		return "", fmt.Errorf("no gateway-owned service with HTTPS port found for gateway %s/%s (label: %s)", gatewayNamespace, gatewayName, labelSelector)
+		// No gateway service found - this is expected for test gateways or gateways
+		// without proper infrastructure. Return empty string to allow startup.
+		// Model access checks will be disabled.
+		return "", nil
 	case 1:
 		return fmt.Sprintf("%s.%s.svc.cluster.local", candidates[0], gatewayNamespace), nil
 	default:

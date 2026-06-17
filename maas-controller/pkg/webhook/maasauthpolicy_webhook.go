@@ -39,9 +39,8 @@ type MaaSAuthPolicyValidator struct {
 
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *MaaSAuthPolicyValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&maasv1alpha1.MaaSAuthPolicy{}).
-		WithValidator(v).
+	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.MaaSAuthPolicy{}).
+		WithCustomValidator(v).
 		Complete()
 }
 

@@ -4,6 +4,8 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 `AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
+Creates outside the configured infrastructure namespace are rejected by the validating admission webhook before the object is persisted.
+
 ---
 
 ## Spec

@@ -62,6 +62,7 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
+		NextProtos:   []string{"h2", "http/1.1"},
 	}
 
 	if len(profileCipherSuites) > 0 {

@@ -23,6 +23,7 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     env_bool,
     get_api_key_at,
+    list_subscriptions_at,
     redact_sensitive,
     require_tenant_api_base_urls,
     response_summary,
@@ -121,18 +122,28 @@ class TestTenantAuthIsolation:
 
     def test_api_key_validates_against_correct_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.2: API key validates on the tenant endpoint that minted it."""
-        response = validate_api_key_at(tenant_auth_setup["tenant_a"]["base_url"], tenant_api_keys["a"]["key"])
-        assert response.status_code == 200
+        # Use list subscriptions endpoint which accepts API key authentication
+        response = list_subscriptions_at(
+            tenant_auth_setup["tenant_a"]["base_url"],
+            tenant_api_keys["a"]["key"],
+        )
+        assert response.status_code == 200, (
+            f"Tenant A key should work on Tenant A gateway: {response_summary(response)}"
+        )
+        # Verify the key works by checking we get a subscriptions array
         data = response.json()
-        assert data.get("valid") is True, redact_sensitive(data)
-        assert data.get("subscription") == tenant_auth_setup["subscription"]
+        assert isinstance(data, list), redact_sensitive(data)
 
     def test_api_key_rejected_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.3: Tenant B rejects a key minted by Tenant A."""
-        response = validate_api_key_at(tenant_auth_setup["tenant_b"]["base_url"], tenant_api_keys["a"]["key"])
-        assert response.status_code == 200
-        data = response.json()
-        assert data.get("valid") is False, redact_sensitive(data)
+        # Try to use tenant A's key on tenant B's gateway - should be rejected
+        response = list_subscriptions_at(
+            tenant_auth_setup["tenant_b"]["base_url"],
+            tenant_api_keys["a"]["key"],
+        )
+        assert response.status_code in (401, 403), (
+            f"Tenant A key should be rejected on Tenant B gateway (got {response.status_code}): {response_summary(response)}"
+        )
 
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""

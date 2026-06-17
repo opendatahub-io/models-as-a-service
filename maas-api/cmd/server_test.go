@@ -32,6 +32,7 @@ func TestBuildTLSConfig_ProfileOverridesFlag(t *testing.T) {
 		"profile minVersion should override flag-based default")
 	assert.Equal(t, profileCipherSuites, tlsCfg.CipherSuites,
 		"profile cipher suites should be applied")
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
 }
 
 func TestBuildTLSConfig_FlagDefaultWhenNoProfile(t *testing.T) {
@@ -50,6 +51,7 @@ func TestBuildTLSConfig_FlagDefaultWhenNoProfile(t *testing.T) {
 		"flag default should apply when profileMinVersion is 0")
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when no profile suites provided")
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
 }
 
 func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
@@ -70,4 +72,5 @@ func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
 	assert.Equal(t, uint16(tls.VersionTLS13), tlsCfg.MinVersion)
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when profile provides empty slice (Go defaults apply)")
+	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
 }

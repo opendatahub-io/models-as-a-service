@@ -4,6 +4,7 @@ import (
 	"crypto/tls"
 	"testing"
 
+	configv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
@@ -12,13 +13,15 @@ import (
 func TestTLSConfigFromProfile_Intermediate(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileIntermediate,
-		Ciphers: []string{
-			"TLS_AES_128_GCM_SHA256",
-			"TLS_AES_256_GCM_SHA384",
-			"ECDHE-ECDSA-AES128-GCM-SHA256",
-			"ECDHE-RSA-AES128-GCM-SHA256",
+		TLSProfileSpec: configv1.TLSProfileSpec{
+			Ciphers: []string{
+				"TLS_AES_128_GCM_SHA256",
+				"TLS_AES_256_GCM_SHA384",
+				"ECDHE-ECDSA-AES128-GCM-SHA256",
+				"ECDHE-RSA-AES128-GCM-SHA256",
+			},
+			MinTLSVersion: configv1.VersionTLS12,
 		},
-		MinTLSVersion: "VersionTLS12",
 	}
 
 	minVer, ciphers, unsupported := tlsprofile.TLSConfigFromProfile(spec)
@@ -32,12 +35,14 @@ func TestTLSConfigFromProfile_Intermediate(t *testing.T) {
 func TestTLSConfigFromProfile_TLS13CiphersSkipped(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileModern,
-		Ciphers: []string{
-			"TLS_AES_128_GCM_SHA256",
-			"TLS_AES_256_GCM_SHA384",
-			"TLS_CHACHA20_POLY1305_SHA256",
+		TLSProfileSpec: configv1.TLSProfileSpec{
+			Ciphers: []string{
+				"TLS_AES_128_GCM_SHA256",
+				"TLS_AES_256_GCM_SHA384",
+				"TLS_CHACHA20_POLY1305_SHA256",
+			},
+			MinTLSVersion: configv1.VersionTLS13,
 		},
-		MinTLSVersion: "VersionTLS13",
 	}
 
 	minVer, ciphers, unsupported := tlsprofile.TLSConfigFromProfile(spec)
@@ -49,9 +54,11 @@ func TestTLSConfigFromProfile_TLS13CiphersSkipped(t *testing.T) {
 
 func TestTLSConfigFromProfile_UnsupportedCiphers(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
-		Type:          tlsprofile.ProfileCustom,
-		Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "UNKNOWN-CIPHER-XYZ"},
-		MinTLSVersion: "VersionTLS12",
+		Type: tlsprofile.ProfileCustom,
+		TLSProfileSpec: configv1.TLSProfileSpec{
+			Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "UNKNOWN-CIPHER-XYZ"},
+			MinTLSVersion: configv1.VersionTLS12,
+		},
 	}
 
 	_, ciphers, unsupported := tlsprofile.TLSConfigFromProfile(spec)
@@ -62,9 +69,11 @@ func TestTLSConfigFromProfile_UnsupportedCiphers(t *testing.T) {
 
 func TestTLSConfigFromProfile_InvalidMinVersion(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
-		Type:          tlsprofile.ProfileCustom,
-		Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
-		MinTLSVersion: "InvalidVersion",
+		Type: tlsprofile.ProfileCustom,
+		TLSProfileSpec: configv1.TLSProfileSpec{
+			Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+			MinTLSVersion: configv1.TLSProtocolVersion("InvalidVersion"),
+		},
 	}
 
 	minVer, _, _ := tlsprofile.TLSConfigFromProfile(spec)
@@ -74,21 +83,23 @@ func TestTLSConfigFromProfile_InvalidMinVersion(t *testing.T) {
 
 func TestTLSConfigFromProfile_AllVersions(t *testing.T) {
 	tests := []struct {
-		version string
+		version configv1.TLSProtocolVersion
 		want    uint16
 	}{
-		{"VersionTLS10", tls.VersionTLS10},
-		{"VersionTLS11", tls.VersionTLS11},
-		{"VersionTLS12", tls.VersionTLS12},
-		{"VersionTLS13", tls.VersionTLS13},
+		{configv1.VersionTLS10, tls.VersionTLS10},
+		{configv1.VersionTLS11, tls.VersionTLS11},
+		{configv1.VersionTLS12, tls.VersionTLS12},
+		{configv1.VersionTLS13, tls.VersionTLS13},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.version, func(t *testing.T) {
+		t.Run(string(tt.version), func(t *testing.T) {
 			spec := tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileCustom,
-				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
-				MinTLSVersion: tt.version,
+				Type: tlsprofile.ProfileCustom,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+					MinTLSVersion: tt.version,
+				},
 			}
 			minVer, _, _ := tlsprofile.TLSConfigFromProfile(spec)
 			assert.Equal(t, tt.want, minVer)
@@ -111,9 +122,11 @@ func TestTLSConfigFromProfile_CipherMapping(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.openSSL, func(t *testing.T) {
 			spec := tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileCustom,
-				Ciphers:       []string{tt.openSSL},
-				MinTLSVersion: "VersionTLS12",
+				Type: tlsprofile.ProfileCustom,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{tt.openSSL},
+					MinTLSVersion: configv1.VersionTLS12,
+				},
 			}
 			_, ciphers, unsupported := tlsprofile.TLSConfigFromProfile(spec)
 			assert.Empty(t, unsupported)

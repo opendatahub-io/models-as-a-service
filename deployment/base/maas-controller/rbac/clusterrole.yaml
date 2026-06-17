@@ -158,6 +158,33 @@ rules:
   verbs:
   - update
 - apiGroups:
+  - inference.opendatahub.io
+  resources:
+  - externalmodels
+  - externalproviders
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - inference.opendatahub.io
+  resources:
+  - externalmodels/finalizers
+  - externalproviders/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - inference.opendatahub.io
+  resources:
+  - externalmodels/status
+  - externalproviders/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - kuadrant.io
   resources:
   - authpolicies
@@ -269,6 +296,7 @@ rules:
   - serviceentries
   verbs:
   - create
+  - delete
   - get
   - list
   - update

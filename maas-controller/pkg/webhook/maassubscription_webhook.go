@@ -39,9 +39,8 @@ type MaaSSubscriptionValidator struct {
 
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *MaaSSubscriptionValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&maasv1alpha1.MaaSSubscription{}).
-		WithValidator(v).
+	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.MaaSSubscription{}).
+		WithCustomValidator(v).
 		Complete()
 }
 

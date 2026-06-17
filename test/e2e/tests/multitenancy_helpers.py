@@ -464,6 +464,7 @@ def apply_tenant_cr(
     *,
     gateway_namespace: str = GATEWAY_NAMESPACE,
     external_oidc: Optional[dict[str, str]] = None,
+    tenant_label_name: Optional[str] = None,
 ) -> None:
     spec: dict[str, Any] = {
         "gatewayRef": {
@@ -475,11 +476,18 @@ def apply_tenant_cr(
         external_oidc = external_oidc_from_env()
     if external_oidc:
         spec["externalOIDC"] = external_oidc
+    metadata: dict[str, Any] = {"name": TENANT_CR_NAME, "namespace": namespace}
+    if tenant_label_name:
+        metadata["labels"] = {
+            LABEL_MANAGED_BY_AITENANT: "true",
+            LABEL_TENANT_NAME: tenant_label_name,
+            LABEL_TENANT_NAMESPACE: namespace,
+        }
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "Tenant",
-            "metadata": {"name": TENANT_CR_NAME, "namespace": namespace},
+            "metadata": metadata,
             "spec": spec,
         }
     )

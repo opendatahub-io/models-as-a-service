@@ -59,7 +59,7 @@ func serve() error {
 
 	metricsRegistry := prometheus.NewRegistry()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry)
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -178,17 +178,19 @@ func serve() error {
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (*api_keys.PostgresStore, error) {
-	log.Info("Connecting to PostgreSQL database...")
-	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
+func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
+	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
+	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
+	log.Info("Starting informers and waiting for cache sync...")
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")
 	}
+	log.Info("Informer caches synced successfully")
 
 	v1Routes := router.Group("/v1")
 
@@ -200,7 +202,13 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	if err != nil {
 		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
 	}
-	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+	if gatewayInternalHost == "" {
+		log.Warn("No gateway service found - model access checks will be disabled",
+			"gateway", cfg.GatewayName,
+			"namespace", cfg.GatewayNamespace)
+	} else {
+		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+	}
 
 	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
 	if err != nil {

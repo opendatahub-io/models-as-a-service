@@ -3,6 +3,7 @@ package tlsprofile_test
 import (
 	"testing"
 
+	configv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
@@ -10,9 +11,11 @@ import (
 
 func TestProfileEqual(t *testing.T) {
 	base := tlsprofile.ProfileSpec{
-		Type:          tlsprofile.ProfileIntermediate,
-		Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
-		MinTLSVersion: "VersionTLS12",
+		Type: tlsprofile.ProfileIntermediate,
+		TLSProfileSpec: configv1.TLSProfileSpec{
+			Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+			MinTLSVersion: configv1.VersionTLS12,
+		},
 	}
 
 	tests := []struct {
@@ -23,45 +26,55 @@ func TestProfileEqual(t *testing.T) {
 		{
 			"identical",
 			tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileIntermediate,
-				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
-				MinTLSVersion: "VersionTLS12",
+				Type: tlsprofile.ProfileIntermediate,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+					MinTLSVersion: configv1.VersionTLS12,
+				},
 			},
 			true,
 		},
 		{
 			"different type",
 			tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileModern,
-				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
-				MinTLSVersion: "VersionTLS12",
+				Type: tlsprofile.ProfileModern,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+					MinTLSVersion: configv1.VersionTLS12,
+				},
 			},
 			false,
 		},
 		{
 			"different minVersion",
 			tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileIntermediate,
-				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
-				MinTLSVersion: "VersionTLS13",
+				Type: tlsprofile.ProfileIntermediate,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
+					MinTLSVersion: configv1.VersionTLS13,
+				},
 			},
 			false,
 		},
 		{
 			"different ciphers",
 			tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileIntermediate,
-				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
-				MinTLSVersion: "VersionTLS12",
+				Type: tlsprofile.ProfileIntermediate,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
+					MinTLSVersion: configv1.VersionTLS12,
+				},
 			},
 			false,
 		},
 		{
 			"different cipher order",
 			tlsprofile.ProfileSpec{
-				Type:          tlsprofile.ProfileIntermediate,
-				Ciphers:       []string{"ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"},
-				MinTLSVersion: "VersionTLS12",
+				Type: tlsprofile.ProfileIntermediate,
+				TLSProfileSpec: configv1.TLSProfileSpec{
+					Ciphers:       []string{"ECDHE-RSA-AES256-GCM-SHA384", "ECDHE-RSA-AES128-GCM-SHA256"},
+					MinTLSVersion: configv1.VersionTLS12,
+				},
 			},
 			false,
 		},

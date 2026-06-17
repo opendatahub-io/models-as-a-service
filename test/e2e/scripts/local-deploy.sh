@@ -37,7 +37,7 @@ SUBSCRIPTION_NAMESPACE="models-as-a-service"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
 
-BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5}"
+BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6}"
 PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${BBR_IMAGE##*:}}"
 
 # Path to BBR repo (for arm64 image builds)
@@ -1270,8 +1270,10 @@ metadata:
   namespace: ${INTERNAL_MODEL_NAMESPACE}
 spec:
   model:
-    uri: hf://sshleifer/tiny-gpt2
+    uri: hf://placeholder/no-model
     name: facebook/opt-125m
+  storageInitializer:
+    enabled: false
   replicas: 1
   router:
     route: {}

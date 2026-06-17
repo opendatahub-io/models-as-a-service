@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"reflect"
 
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/dynamic/dynamicinformer"
+	configv1 "github.com/openshift/api/config/v1"
+	configclientset "github.com/openshift/client-go/config/clientset/versioned"
+	configinformers "github.com/openshift/client-go/config/informers/externalversions"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/cache"
 )
@@ -16,7 +16,7 @@ import (
 // profile changes and invokes the callback when a change is detected.
 type Watcher struct {
 	initial ProfileSpec
-	factory dynamicinformer.DynamicSharedInformerFactory
+	factory configinformers.SharedInformerFactory
 }
 
 // NewWatcher creates a Watcher that will invoke onChange when the cluster TLS
@@ -26,21 +26,24 @@ func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange fu
 		return nil, errors.New("restConfig must not be nil")
 	}
 
-	dynClient, err := dynamic.NewForConfig(restConfig)
+	configClient, err := configclientset.NewForConfig(restConfig)
 	if err != nil {
 		return nil, err
 	}
 
-	factory := dynamicinformer.NewDynamicSharedInformerFactory(dynClient, 0)
-	informer := factory.ForResource(apiServerGVR).Informer()
+	factory := configinformers.NewSharedInformerFactory(configClient, 0)
+	informer := factory.Config().V1().APIServers().Informer()
 
 	if _, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(_, newObj any) {
-			u, ok := newObj.(*unstructured.Unstructured)
+			apiServer, ok := newObj.(*configv1.APIServer)
 			if !ok {
 				return
 			}
-			current, err := parseProfileFromAPIServer(u)
+			if apiServer.Name != "cluster" {
+				return
+			}
+			current, err := profileFromAPIServer(apiServer)
 			if err != nil {
 				return
 			}

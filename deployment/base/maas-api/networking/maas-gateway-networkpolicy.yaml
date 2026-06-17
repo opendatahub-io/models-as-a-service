@@ -26,10 +26,14 @@ spec:
     - Ingress
   ingress:
     # Allow traffic from Gateway pods in openshift-ingress
+    # Restricts to router component pods only for security
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/component: router
       ports:
         - protocol: TCP
           port: 8443

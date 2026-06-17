@@ -1,6 +1,5 @@
 package tlsprofile
 
 // Exported for testing only.
-var ParseProfileFromAPIServer = parseProfileFromAPIServer
+var ProfileFromAPIServer = profileFromAPIServer
 var ProfileEqual = profileEqual
-var Profiles = profiles
