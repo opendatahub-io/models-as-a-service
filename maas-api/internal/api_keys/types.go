@@ -42,6 +42,7 @@ type ValidationResult struct {
 	KeyID        string   `json:"keyId,omitempty"`
 	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
 	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
+	Tenant       string   `json:"tenant"`                 // Tenant bound at key creation (always present, empty string for legacy keys)
 	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
 }
 

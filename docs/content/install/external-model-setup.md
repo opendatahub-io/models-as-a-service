@@ -60,8 +60,9 @@ kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/desti
 kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/envoy-filter.yaml
 
 # Deployment (substitute the image placeholder)
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/overlays/odh/params.env" | cut -d= -f2-)}"
 cat ${PROJECT_DIR}/deployment/base/payload-processing/manager/deployment.yaml | \
-  sed 's|image: payload-processing|image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable|' | \
+  sed "s|image: payload-processing|image: ${PAYLOAD_PROCESSING_IMAGE}|" | \
   kubectl apply -f -
 
 # Verify

@@ -51,6 +51,8 @@
 #   OIDC_READINESS_STRICT - When true, exit before pytest if the OIDC readiness probe times out.
 #   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
+#   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller with discovery flag before pytest (default: true)
+#   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
 #
@@ -99,8 +101,19 @@ AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+# Use clusterip gateway mode by default in e2e to avoid cloud LB provisioning delays/failures.
+# Can be overridden by setting INGRESS_MODE=route explicitly.
+INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+export INGRESS_MODE
+# Gateway programming can lag during fresh cluster bring-up; allow a generous timeout.
+GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
 # OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
 OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
+# Multi-tenancy Phase 1: patch maas-controller for tenant namespace discovery E2E.
+ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
+AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
@@ -115,6 +128,25 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+wait_for_gateway_programmed() {
+    local gateway_name="${1:-$GATEWAY_NAME}"
+    local gateway_ns="${2:-$GATEWAY_NAMESPACE}"
+    local timeout="${3:-$GATEWAY_PROGRAMMED_TIMEOUT}"
+
+    echo "Waiting for Gateway ${gateway_ns}/${gateway_name} to be Programmed=True (timeout: ${timeout}s)..."
+
+    if oc wait "gateway/${gateway_name}" -n "${gateway_ns}" --for=condition=Programmed --timeout="${timeout}s"; then
+        echo "✅ Gateway ${gateway_ns}/${gateway_name} is Programmed"
+        return 0
+    fi
+
+    echo "❌ ERROR: Gateway ${gateway_ns}/${gateway_name} did not reach Programmed=True within ${timeout}s"
+    echo "Gateway diagnostics:"
+    oc get "gateway/${gateway_name}" -n "${gateway_ns}" -o wide || true
+    oc describe "gateway/${gateway_name}" -n "${gateway_ns}" || true
+    return 1
 }
 
 # When EXTERNAL_OIDC=true and OIDC_* are not set, use Keycloak test realm (tenant-a) on this cluster.
@@ -134,6 +166,45 @@ apply_default_oidc_for_keycloak() {
     export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
     export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
     echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
+}
+
+# Patch maas-controller to enable tenant namespace discovery for MT S1/S27 E2E.
+enable_tenant_namespace_discovery_for_e2e() {
+    [[ "${ENABLE_TENANT_NAMESPACE_DISCOVERY}" == "true" ]] || return 0
+
+    echo "Enabling --enable-tenant-namespace-discovery on maas-controller..."
+    if ! oc get deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" &>/dev/null; then
+        echo "❌ ERROR: maas-controller not found in ${DEPLOYMENT_NAMESPACE}; cannot enable tenant namespace discovery"
+        return 1
+    fi
+
+    local args_json
+    args_json="$(oc get deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].args}' 2>/dev/null || echo '[]')"
+    if echo "$args_json" | grep -q 'enable-tenant-namespace-discovery'; then
+        echo "✅ maas-controller already has tenant namespace discovery enabled"
+    elif [[ -z "$args_json" || "$args_json" == "<no value>" ]]; then
+        oc patch deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" --type=json -p='[
+          {"op": "add", "path": "/spec/template/spec/containers/0/args", "value": ["--enable-tenant-namespace-discovery=true"]}
+        ]' || {
+            echo "❌ ERROR: failed to initialize maas-controller args for tenant namespace discovery"
+            return 1
+        }
+    else
+        oc patch deployment maas-controller -n "$DEPLOYMENT_NAMESPACE" --type=json -p='[
+          {"op": "add", "path": "/spec/template/spec/containers/0/args/-", "value": "--enable-tenant-namespace-discovery=true"}
+        ]' || {
+            echo "❌ ERROR: failed to patch maas-controller for tenant namespace discovery"
+            return 1
+        }
+    fi
+
+    if ! echo "$args_json" | grep -q 'enable-tenant-namespace-discovery'; then
+        oc rollout status deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --timeout=180s || {
+            echo "❌ ERROR: maas-controller rollout failed after discovery patch"
+            return 1
+        }
+        echo "✅ maas-controller patched with --enable-tenant-namespace-discovery=true"
+    fi
 }
 
 require_external_oidc_config() {
@@ -181,6 +252,7 @@ check_prerequisites() {
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
+    echo "Gateway ingress mode for deploy.sh: ${INGRESS_MODE}"
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     fi
@@ -218,6 +290,8 @@ deploy_maas_platform() {
 
     # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
+    # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
+    export DB_SSLMODE="${DB_SSLMODE:-disable}"
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode kustomize
@@ -308,6 +382,12 @@ deploy_maas_platform() {
 
 deploy_models() {
     echo "Deploying MaaS system (free + premium: LLMIS + MaaSModelRef + MaaSAuthPolicy + MaaSSubscription)"
+    # LLMInferenceService readiness depends on Gateway Programmed=True. On fresh clusters this can
+    # lag behind deploy.sh completion, causing deterministic model readiness failures.
+    if ! wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" "$GATEWAY_PROGRAMMED_TIMEOUT"; then
+        exit 1
+    fi
+
     # Create llm namespace if it does not exist
     if ! kubectl get namespace llm >/dev/null 2>&1; then
         echo "Creating 'llm' namespace..."
@@ -350,6 +430,11 @@ deploy_models() {
     if ! oc wait llminferenceservice/premium-simulated-simulated-premium -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
         echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for premium simulator to be ready"
         dump_llmis_diagnostics "premium-simulated-simulated-premium" "llm"
+        exit 1
+    fi
+    if ! oc wait llminferenceservice/e2e-unconfigured-facebook-opt-125m-simulated -n llm --for=condition=Ready --timeout="${LLMIS_TIMEOUT}s"; then
+        echo "❌ ERROR: Timed out after ${LLMIS_TIMEOUT}s waiting for e2e-unconfigured simulator to be ready"
+        dump_llmis_diagnostics "e2e-unconfigured-facebook-opt-125m-simulated" "llm"
         exit 1
     fi
     echo "✅ Simulator models ready"
@@ -396,12 +481,12 @@ wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
     echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
 
+    # Always include the gateway namespace where maas-gateway-auth lives.
+    # Also include any namespaces that contain LLMInferenceServices.
+    local llm_namespaces
+    llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
     local namespaces
-    namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
-    if [[ -z "$namespaces" ]]; then
-        echo "  No LLMInferenceService namespaces found, skipping AuthPolicy wait"
-        return 0
-    fi
+    namespaces=$(printf '%s\n%s\n' "${GATEWAY_NAMESPACE:-openshift-ingress}" "$llm_namespaces" | sort -u | xargs)
 
     local deadline=$((SECONDS + timeout))
     while [[ $SECONDS -lt $deadline ]]; do
@@ -428,13 +513,17 @@ wait_for_auth_policies_enforced() {
 
 validate_deployment() {
     echo "Deployment Validation"
-    echo "Using namespace: $DEPLOYMENT_NAMESPACE"
-    
+    echo "Using controller namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using maas-api namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using AITenant namespace: $AITENANT_NAMESPACE"
+
     if [ "$SKIP_VALIDATION" = false ]; then
-        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+        # maas-api deploys to operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI)
+        # validate-deployment.sh uses MAAS_API_NAMESPACE env var or defaults to opendatahub
+        if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
-            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh" --namespace "$DEPLOYMENT_NAMESPACE"; then
+            if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
             fi
@@ -565,6 +654,10 @@ run_e2e_tests() {
     export DEPLOYMENT_NAMESPACE
     export MAAS_SUBSCRIPTION_NAMESPACE
     export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+    export GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+    export AITENANT_NAMESPACE
+    export ENABLE_TENANT_NAMESPACE_DISCOVERY
+    enable_tenant_namespace_discovery_for_e2e || exit 1
     # Skip TLS verification in CI (self-signed certs)
     export E2E_SKIP_TLS_VERIFY=true
     # Set MODEL_NAME explicitly - maas-api /v1/models currently only lists MaaSModelRefs
@@ -652,9 +745,9 @@ run_e2e_tests() {
     if [[ "${EXTERNAL_OIDC}" == "true" ]] && [[ -n "${OIDC_TOKEN_URL:-}" ]]; then
         # Fail fast if cluster AuthPolicy was not patched with the same issuer as this job (no 180s of 401).
         if [[ -n "${OIDC_ISSUER_URL:-}" ]]; then
-            echo "Checking maas-api AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
-            if ! verify_maas_api_oidc_authpolicy "$DEPLOYMENT_NAMESPACE"; then
-                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see validate-deployment.sh / deployment-helpers.sh verify_maas_api_oidc_authpolicy"
+            echo "Checking gateway AuthPolicy OIDC issuer matches OIDC_ISSUER_URL..."
+            if ! verify_gateway_oidc_authpolicy "${GATEWAY_NAMESPACE:-openshift-ingress}"; then
+                echo "❌ ERROR: Fix deploy (same OIDC_ISSUER_URL as tests) or see deployment-helpers.sh verify_gateway_oidc_authpolicy"
                 exit 1
             fi
         fi
@@ -685,7 +778,7 @@ run_e2e_tests() {
             if [[ $SECONDS -ge $oidc_deadline ]]; then
                 echo "⚠️  WARNING: OIDC gateway readiness failed after ${oidc_timeout}s (still HTTP 401)."
                 echo "   Issuer check already passed; suspect JWKS/network from kuadrant-system to Keycloak or token signature."
-                echo "   kubectl get authpolicy maas-api-auth-policy -n ${DEPLOYMENT_NAMESPACE} -o yaml | grep -A30 oidc"
+                echo "   kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml | grep -A30 oidc"
                 echo "   kubectl logs -n ${AUTHORINO_NAMESPACE} -l app=authorino --tail=80"
                 if [[ "${OIDC_READINESS_STRICT}" == "true" ]]; then
                     echo "❌ ERROR: OIDC_READINESS_STRICT=true — exiting before pytest."
@@ -699,7 +792,8 @@ run_e2e_tests() {
         fi
     fi
 
-    # Run all e2e tests
+    # Run the default smoke e2e tests
+    export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
     if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
         -v --maxfail=5 --disable-warnings \
         --junitxml="$xml" \
@@ -713,6 +807,13 @@ run_e2e_tests() {
         "$test_dir/tests/test_external_models.py" \
         "$test_dir/tests/test_tenant.py" \
         "$test_dir/tests/test_aitenant_lifecycle.py" \
+        "$test_dir/tests/test_tenant_namespace_discovery.py" \
+        "$test_dir/tests/test_gateway_scoped_authpolicy.py" \
+        "$test_dir/tests/test_multi_tenant_integration.py" \
+        "$test_dir/tests/test_multi_tenant_maas_api.py" \
+        "$test_dir/tests/test_tenant_auth_isolation.py" \
+        "$test_dir/tests/test_tenant_subscription_isolation.py" \
+        "$test_dir/tests/test_tenant_rate_limit_isolation.py" \
         "$test_dir/tests/test_config_tenant.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"

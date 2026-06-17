@@ -57,30 +57,30 @@ func TestResolveGatewayInternalHost(t *testing.T) {
 			wantHost: "gw-svc.istio-system.svc.cluster.local",
 		},
 		{
-			name:      "no matching services",
-			services:  []runtime.Object{},
-			wantError: "no gateway-owned service with HTTPS port found",
+			name:     "no matching services",
+			services: []runtime.Object{},
+			wantHost: "", // Empty string, no error - allows maas-api to start for test gateways
 		},
 		{
 			name: "service without ownerReference is skipped",
 			services: []runtime.Object{
 				newService("rogue-svc", 443, ""),
 			},
-			wantError: "no gateway-owned service with HTTPS port found",
+			wantHost: "", // Empty string, no error - allows maas-api to start for test gateways
 		},
 		{
 			name: "service owned by Istio Gateway CRD is skipped",
 			services: []runtime.Object{
 				newService("istio-svc", 443, "networking.istio.io/v1alpha3"),
 			},
-			wantError: "no gateway-owned service with HTTPS port found",
+			wantHost: "", // Empty string, no error - allows maas-api to start for test gateways
 		},
 		{
 			name: "service without port 443 is skipped",
 			services: []runtime.Object{
 				newService("http-svc", 80, "gateway.networking.k8s.io/v1"),
 			},
-			wantError: "no gateway-owned service with HTTPS port found",
+			wantHost: "", // Empty string, no error - allows maas-api to start for test gateways
 		},
 		{
 			name: "multiple valid candidates returns error",
