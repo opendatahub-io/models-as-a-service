@@ -1,0 +1,10 @@
+# Acknowledged breaking changes (errors) — document reason and PR link for each entry.
+#
+# Format: each line must contain the HTTP method, path, and change description.
+# See https://github.com/oasdiff/oasdiff/blob/main/docs/BREAKING-CHANGES.md
+
+# PR #966: subscription_description is now optional (can be empty string).
+# The field was previously required and used a fallback chain (description → display-name → name).
+# Now it returns only the openshift.io/description annotation value, which may be unset.
+GET /v1/subscriptions the response property `items/subscription_description` became optional for the status `200`
+GET /v1/model/{model-id}/subscriptions the response property `items/subscription_description` became optional for the status `200`
