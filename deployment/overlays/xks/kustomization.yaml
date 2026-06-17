@@ -9,13 +9,42 @@ resources:
   - ../../base/maas-controller/rbac
   - ../../base/maas-controller/manager
   - ../../base/maas-controller/webhook
+  - cert-manager/
 
-# xKS differences from OpenShift overlay:
-# - Skip base/networking/maas (Gateway uses openshift-default GatewayClass;
-#   on xKS, the gateway is managed by the rhai-on-xks-chart post-install hook
-#   with Istio GatewayClass and cert-manager TLS)
-# - Skip base/observability (removes PodMonitor CRD dependency;
-#   observability can be added later when Prometheus operator is available)
-# - Skip base/maas-controller/monitoring (contains PodMonitor resource)
-# - Include CRDs, RBAC, manager, and webhook directly (same as
-#   base/maas-controller/default minus monitoring)
+patches:
+  # Remove OCP service-serving cert annotation (cert-manager handles TLS on xKS)
+  - target:
+      kind: Service
+      name: maas-controller-webhook-service
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
+
+  # Replace OCP CA bundle injection with cert-manager CA injection
+  - target:
+      kind: ValidatingWebhookConfiguration
+      name: maas-validating-webhook-configuration
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
+      - op: add
+        path: /metadata/annotations/cert-manager.io~1inject-ca-from
+        value: "$(NAMESPACE)/maas-controller-webhook-cert"
+
+  # Mount the cert-manager TLS secret into the controller deployment
+  - target:
+      kind: Deployment
+      name: maas-controller
+    patch: |
+      - op: add
+        path: /spec/template/spec/volumes
+        value:
+          - name: webhook-certs
+            secret:
+              secretName: maas-controller-webhook-cert
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts
+        value:
+          - name: webhook-certs
+            mountPath: /tmp/k8s-webhook-server/serving-certs
+            readOnly: true

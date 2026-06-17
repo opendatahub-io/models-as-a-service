@@ -1,0 +1,16 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: maas-controller-webhook-cert
+  namespace: system
+spec:
+  secretName: maas-controller-webhook-cert
+  dnsNames:
+    - maas-controller-webhook-service.$(CERTIFICATE_NAMESPACE).svc
+    - maas-controller-webhook-service.$(CERTIFICATE_NAMESPACE).svc.cluster.local
+  duration: 8760h
+  renewBefore: 720h
+  issuerRef:
+    name: rhai-ca-issuer
+    kind: ClusterIssuer
+    group: cert-manager.io
