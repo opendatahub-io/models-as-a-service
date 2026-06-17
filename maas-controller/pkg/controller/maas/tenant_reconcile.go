@@ -407,9 +407,7 @@ func (r *TenantReconciler) operatorNamespace() string {
 }
 
 func (r *TenantReconciler) appNamespaceForTenant() string {
-	// All maas-api instances deploy to the operator namespace (opendatahub for ODH,
-	// redhat-ods-applications for RHOAI). The shared database secret also lives in this namespace.
-	return tenantreconcile.DefaultMaaSAPINamespace
+	return r.AppNamespace
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {
