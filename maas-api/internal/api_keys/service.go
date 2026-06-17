@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -14,6 +15,12 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
+
+// validGroupNamePattern matches Kubernetes/OpenShift group names.
+// Allows alphanumerics, colons (for system: prefixes), dots, underscores, and hyphens.
+// Rejects control characters, quotes, backslashes, and other unsafe characters
+// that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
+var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._-]+$`)
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
@@ -26,6 +33,13 @@ type Service struct {
 	logger      *logger.Logger
 	config      *config.Config
 	subSelector SubscriptionSelector
+}
+
+func (s *Service) GetMaxExpirationDays() int {
+	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
+		return s.config.APIKeyMaxExpirationDays
+	}
+	return constant.DefaultAPIKeyMaxExpirationDays
 }
 
 func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelector) *Service {
@@ -70,18 +84,23 @@ func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
 	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string,
 ) (*CreateAPIKeyResponse, error) {
-	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
-	maxDays := constant.DefaultAPIKeyMaxExpirationDays
-	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-		maxDays = s.config.APIKeyMaxExpirationDays
+	// Validate group names against allowlist pattern (CWE-116/CWE-74 mitigation).
+	// AuthPolicy uses CEL to build JSON arrays from groups, and CEL lacks JSON escaping
+	// functions, so we reject any characters outside the safe allowlist on write.
+	for _, group := range userGroups {
+		if !validGroupNamePattern.MatchString(group) {
+			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, and hyphens are allowed)", group)
+		}
 	}
+
+	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
+	maxDays := s.GetMaxExpirationDays()
 	maxRegularDuration := time.Duration(maxDays) * 24 * time.Hour
 
 	// Default expiration if not provided
 	if expiresIn == nil {
 		if ephemeral {
-			// Ephemeral keys default to 1 hour
-			d := 1 * time.Hour
+			d := constant.DefaultEphemeralKeyMaxExpiration
 			expiresIn = &d
 		} else {
 			// Regular keys default to max expiration days
@@ -95,10 +114,8 @@ func (s *Service) CreateAPIKey(
 
 	// Validate against maximum expiration limit (always enforced)
 	if ephemeral {
-		// Ephemeral keys have a strict 1-hour maximum to prevent abuse
-		maxEphemeralDuration := 1 * time.Hour
-		if *expiresIn > maxEphemeralDuration {
-			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour: %w", *expiresIn, ErrExpirationExceedsMax)
+		if *expiresIn > constant.DefaultEphemeralKeyMaxExpiration {
+			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed %v: %w", *expiresIn, constant.DefaultEphemeralKeyMaxExpiration, ErrExpirationExceedsMax)
 		}
 	} else if *expiresIn > maxRegularDuration {
 		// Regular keys always enforce max expiration (config or default)

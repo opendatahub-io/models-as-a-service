@@ -10,6 +10,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -33,6 +34,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+}
+
+func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"max_expiration_days":      h.service.GetMaxExpirationDays(),
+		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
+	})
 }
 
 func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {

@@ -280,6 +280,59 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
     API version `opendatahub.io/v1alpha`. The operator re-creates this resource with factory
     defaults if it is deleted, but does not overwrite user changes to existing fields.
 
+## Creating Additional Tenants (Optional)
+
+The default installation creates a single tenant in the `models-as-a-service` namespace. To create additional isolated tenants:
+
+### 1. Create a Gateway
+
+Each tenant requires its own Gateway. Follow the [Gateway Patterns](../configuration-and-management/gateway-patterns.md) guide to create a gateway using the same pattern as `maas-default-gateway`.
+
+!!! warning "Avoid hostname filters"
+    Do not add `hostname` fields to Gateway listeners. Hostname-based routing can cause TLS/SNI issues. Use the default pattern with no hostname filter.
+
+### 2. Create AITenant CR
+
+Create an `AITenant` resource in the `ai-tenants` namespace:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: team-red
+  namespace: ai-tenants
+spec:
+  gateway:
+    name: team-red-gateway  # Must already exist in openshift-ingress
+```
+
+Apply the manifest:
+
+```bash
+kubectl apply -f aitenant.yaml
+```
+
+The controller will automatically create:
+- Tenant namespace: `ai-tenant-team-red`
+- Tenant CR: `default-tenant` in the tenant namespace
+- maas-api deployment: `maas-api-team-red`
+- HTTPRoute and AuthPolicy for the tenant
+
+### 3. Verify
+
+```bash
+# Check AITenant status
+kubectl get aitenant team-red -n ai-tenants -o yaml
+
+# Check tenant namespace was created
+kubectl get namespace ai-tenant-team-red
+
+# Check Tenant CR
+kubectl get tenant default-tenant -n ai-tenant-team-red
+```
+
+For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
+
 ## Next steps
 
 * **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.

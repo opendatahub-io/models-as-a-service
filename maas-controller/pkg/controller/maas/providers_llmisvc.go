@@ -59,8 +59,21 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	}
 	route := &routeList.Items[0]
 	routeName := route.Name
+
+	// Get expected gateway from tenant's configuration
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
+
+	// For multi-tenant deployments, fetch the tenant's gateway
+	tenant, err := fetchTenantForNamespace(ctx, h.r.Client, model.Namespace)
+	if err == nil && tenant.Spec.GatewayRef.Name != "" {
+		expectedGatewayName = tenant.Spec.GatewayRef.Name
+		expectedGatewayNamespace = tenant.Spec.GatewayRef.Namespace
+		log.V(4).Info("Using tenant-specific gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenant", tenant.Name)
+	} else if err != nil {
+		log.V(4).Info("No tenant found for namespace, using default gateway", "namespace", model.Namespace, "error", err)
+	}
+
 	gatewayFound := false
 	var gatewayName string
 	var gatewayNamespace string
@@ -141,8 +154,16 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 		hostname := model.Status.HTTPRouteHostnames[0]
 		return fmt.Sprintf("https://%s/%s", hostname, model.Name), nil
 	}
-	gatewayName := h.r.gatewayName()
-	gatewayNS := h.r.gatewayNamespace()
+
+	// Use the gateway from the model's status (populated by validateLLMISvcHTTPRoute)
+	// which is tenant-aware. Fall back to default gateway if not set.
+	gatewayName := model.Status.HTTPRouteGatewayName
+	gatewayNS := model.Status.HTTPRouteGatewayNamespace
+	if gatewayName == "" {
+		gatewayName = h.r.gatewayName()
+		gatewayNS = h.r.gatewayNamespace()
+	}
+
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
 	if err := h.r.Get(ctx, key, gateway); err != nil {

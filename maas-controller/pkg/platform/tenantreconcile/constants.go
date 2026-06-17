@@ -8,6 +8,7 @@ import (
 	"fmt"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	ctrl "sigs.k8s.io/controller-runtime"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -59,7 +60,7 @@ const (
 	DefaultMaaSAPINamespace = "opendatahub"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:36614760abfa1b3fb2b521a89097bdaf6e0693b5"
+	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
@@ -179,7 +180,11 @@ func IstioTelemetryName(tenantID string) string {
 }
 
 func MaaSAPIDeploymentName(tenantID string) string {
-	return resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
+	name := resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
+	ctrl.Log.WithName("MaaSAPIDeploymentName").Info("Generated deployment name",
+		"tenantID", tenantID,
+		"deploymentName", name)
+	return name
 }
 
 func MaaSAPIServiceName(tenantID string) string {
@@ -206,6 +211,11 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 	// Check if this Tenant is managed by AITenant controller
 	// AITenant controller sets this label when creating Tenant CRs
 	labels := tenant.GetLabels()
+	log := ctrl.Log.WithName("TenantIdentifierFor").WithValues(
+		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"labels", labels,
+	)
+
 	if labels != nil && labels[LabelManagedByAITenant] == "true" {
 		// Use the tenant name from the label set by AITenant controller
 		tenantName := labels[LabelTenantName]
@@ -216,13 +226,45 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 			// we must not fall back to default tenant name. Return error instead of panic
 			// to allow graceful degradation - the Tenant reconciler can set a degraded
 			// condition instead of crashing the entire controller.
+			log.Error(nil, "AITenant-managed Tenant is missing LabelTenantName",
+				"managedByLabel", LabelManagedByAITenant,
+				"tenantNameLabel", LabelTenantName)
+			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
+				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+		}
+		log.Info("Resolved tenant identifier from AITenant label", "tenantIdentifier", tenantName)
+		return tenantName, nil
+	}
+
+	// Legacy/default tenant - return empty string for backward compatibility
+	// TODO: Change to return "models-as-a-service" when DB migration is done
+	log.Info("Using legacy/default tenant identifier (empty string)", "reason", "no AITenant label")
+	return "", nil
+}
+
+// TenantNameFor returns the tenant name used for database queries, AuthPolicy headers,
+// and maas-api TENANT_NAME environment variable. This is distinct from TenantIdentifierFor,
+// which is used for resource naming.
+//
+// Returns:
+//   - "models-as-a-service" for the default tenant (matches DB default and TENANT_NAME env var)
+//   - The tenant name for AITenant-managed tenants
+func TenantNameFor(tenant *maasv1alpha1.Tenant) (string, error) {
+	if tenant == nil {
+		return "models-as-a-service", nil
+	}
+
+	// Check if this Tenant is managed by AITenant controller
+	labels := tenant.GetLabels()
+	if labels != nil && labels[LabelManagedByAITenant] == "true" {
+		tenantName := labels[LabelTenantName]
+		if tenantName == "" {
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
 				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
 		}
 		return tenantName, nil
 	}
 
-	// Legacy/default tenant - return empty string for backward compatibility
-	// TODO: Change to return "models-as-a-service" when DB migration is done
-	return "", nil
+	// Default tenant uses "models-as-a-service" for database/headers
+	return "models-as-a-service", nil
 }

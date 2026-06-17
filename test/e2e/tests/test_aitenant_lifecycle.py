@@ -234,6 +234,50 @@ def _delete_aitenant(case):
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
+    def test_aitenant_rejected_outside_ai_tenants_namespace(self):
+        suffix = uuid.uuid4().hex[:8]
+        wrong_ns = f"e2e-ait-wrong-{suffix}"
+        tenant_ns = f"e2e-ait-wrong-tenant-{suffix}"
+        aitenant_name = f"e2e-ait-wrong-{suffix}"
+
+        try:
+            result = _oc_run(["create", "namespace", wrong_ns])
+            assert result.returncode == 0, f"Failed to create namespace: {result.stderr.strip() or result.stdout.strip()}"
+
+            result = _oc_run(
+                ["apply", "-f", "-"],
+                input_text=json.dumps(
+                    {
+                        "apiVersion": "maas.opendatahub.io/v1alpha1",
+                        "kind": "AITenant",
+                        "metadata": {
+                            "name": aitenant_name,
+                            "namespace": wrong_ns,
+                        },
+                        "spec": {
+                            "tenantNamespace": {
+                                "name": tenant_ns,
+                            },
+                        },
+                    }
+                ),
+            )
+
+            assert result.returncode != 0, "Expected webhook to reject AITenant outside the configured infra namespace"
+            combined = f"{result.stderr or ''}\n{result.stdout or ''}"
+            assert "admission webhook" in combined.lower(), \
+                f"Expected webhook rejection, got: {combined}"
+            assert "configured AITenant infrastructure namespace" in combined, \
+                f"Expected namespace placement error, got: {combined}"
+            assert AITENANT_NAMESPACE in combined, \
+                f"Expected configured infra namespace in error, got: {combined}"
+
+            assert _get_json_or_none(AITENANT_KIND, aitenant_name, wrong_ns) is None
+
+        finally:
+            _delete_best_effort(AITENANT_KIND, aitenant_name, wrong_ns)
+            _delete_best_effort("namespace", wrong_ns, timeout="90s")
+
     def test_aitenant_create_bootstrap_resources(self):
         case = _new_aitenant_case()
 

@@ -1521,13 +1521,12 @@ class TestModelsEndpoint:
 
             # Query with API key (gateway injects deleted subscription name)
             log.info("Querying /v1/models with API key bound to deleted subscription")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should return 403 because subscription doesn't exist
@@ -2153,7 +2152,6 @@ class TestModelsEndpoint:
                 model_refs=[model_ref],
                 groups=["system:authenticated"]
             )
-            _wait_reconcile()
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
@@ -2165,7 +2163,6 @@ class TestModelsEndpoint:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_reconcile()
             _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced
