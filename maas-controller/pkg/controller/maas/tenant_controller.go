@@ -48,10 +48,9 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the protected application namespace (--maas-api-namespace, default opendatahub).
-	// NOTE: This field is ONLY used for namespace protection checks (isProtectedNamespace).
-	// The actual maas-api deployment namespace is determined by appNamespaceForTenant(), which
-	// hardcodes redhat-ai-gateway-infra regardless of this field's value.
+	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace,
+	// default opendatahub for ODH, redhat-ods-applications for RHOAI).
+	// Used by appNamespaceForTenant() and isProtectedNamespace().
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
