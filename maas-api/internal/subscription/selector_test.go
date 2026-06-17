@@ -978,15 +978,10 @@ func (f *fakeAccessChecker) AuthorizedModels(_ []string, _ string) map[authpolic
 }
 
 // createSubscriptionWithModelRefs creates a subscription with custom model refs (each with name and namespace).
-func createSubscriptionWithModelRefs(subName string, groups []string, users []string, modelRefs []map[string]any) *unstructured.Unstructured {
+func createSubscriptionWithModelRefs(subName string, groups []string, modelRefs []map[string]any) *unstructured.Unstructured {
 	groupsSlice := make([]any, len(groups))
 	for i, g := range groups {
 		groupsSlice[i] = map[string]any{"name": g}
-	}
-
-	usersSlice := make([]any, len(users))
-	for i, u := range users {
-		usersSlice[i] = u
 	}
 
 	modelRefsSlice := make([]any, len(modelRefs))
@@ -997,7 +992,6 @@ func createSubscriptionWithModelRefs(subName string, groups []string, users []st
 	spec := map[string]any{
 		"owner": map[string]any{
 			"groups": groupsSlice,
-			"users":  usersSlice,
 		},
 		"priority":  int64(10),
 		"modelRefs": modelRefsSlice,
@@ -1032,6 +1026,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		name          string
 		subscriptions []*unstructured.Unstructured
 		authorized    map[authpolicy.ModelKey]bool
+		withChecker   bool
 		groups        []string
 		username      string
 		modelID       string
@@ -1041,7 +1036,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "single namespace match authorized",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
@@ -1056,7 +1051,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "single namespace match not authorized",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
 			},
@@ -1070,7 +1065,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "multi namespace - first not authorized but second is",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
@@ -1086,7 +1081,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "multi namespace - none authorized",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
@@ -1101,7 +1096,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "multi namespace - both authorized",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
@@ -1118,7 +1113,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "no access checker - all namespaces pass",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
@@ -1130,9 +1125,35 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 			wantSubNames: []string{"sub1"},
 		},
 		{
+			name: "access checker returns nil authorized set - deny",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-x", "namespace": "tenant-a"},
+				}),
+			},
+			authorized:  nil,
+			withChecker: true,
+			groups:      []string{"g1"},
+			modelID:     "model-x",
+			wantCount:   0,
+		},
+		{
+			name: "access checker returns empty authorized set - deny",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
+					{"name": "model-x", "namespace": "tenant-a"},
+				}),
+			},
+			authorized:  map[authpolicy.ModelKey]bool{},
+			withChecker: true,
+			groups:      []string{"g1"},
+			modelID:     "model-x",
+			wantCount:   0,
+		},
+		{
 			name: "model not in subscription",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "other-model", "namespace": "tenant-a"},
 				}),
 			},
@@ -1146,10 +1167,10 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		{
 			name: "multiple subscriptions - mixed authorization",
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithModelRefs("sub1", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub1", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 				}),
-				createSubscriptionWithModelRefs("sub2", []string{"g1"}, nil, []map[string]any{
+				createSubscriptionWithModelRefs("sub2", []string{"g1"}, []map[string]any{
 					{"name": "model-x", "namespace": "tenant-a"},
 					{"name": "model-x", "namespace": "tenant-b"},
 				}),
@@ -1169,7 +1190,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 			lister := &fakeLister{subscriptions: tt.subscriptions}
 
 			var accessChecker subscription.ModelAccessChecker
-			if tt.authorized != nil {
+			if tt.withChecker || tt.authorized != nil {
 				accessChecker = &fakeAccessChecker{authorized: tt.authorized}
 			}
 

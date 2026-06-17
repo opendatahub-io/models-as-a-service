@@ -723,7 +723,7 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 			continue
 		}
 
-		if authorizedSet != nil {
+		if s.accessChecker != nil {
 			authorized := false
 			for _, ns := range modelNamespaces {
 				if authorizedSet[authpolicy.ModelKey{Namespace: ns, Name: modelID}] {
