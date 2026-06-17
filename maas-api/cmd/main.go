@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
@@ -178,7 +179,7 @@ func serve() error {
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
-func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
+func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) {
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
@@ -194,7 +195,8 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	v1Routes := router.Group("/v1")
 
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister)
+	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
+	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
 	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
@@ -230,6 +232,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
+	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
 	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys

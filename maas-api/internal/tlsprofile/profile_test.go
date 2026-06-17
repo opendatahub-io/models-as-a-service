@@ -3,7 +3,7 @@ package tlsprofile_test
 import (
 	"testing"
 
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
@@ -13,7 +13,7 @@ func TestDefaultProfile(t *testing.T) {
 	p := tlsprofile.DefaultProfile()
 
 	assert.Equal(t, tlsprofile.ProfileIntermediate, p.Type)
-	assert.Equal(t, configv1.VersionTLS12, p.MinTLSVersion)
+	assert.Equal(t, confv1.VersionTLS12, p.MinTLSVersion)
 	assert.NotEmpty(t, p.Ciphers)
 }
 

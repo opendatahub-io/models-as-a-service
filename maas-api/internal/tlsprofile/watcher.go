@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"reflect"
 
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	configclientset "github.com/openshift/client-go/config/clientset/versioned"
 	configinformers "github.com/openshift/client-go/config/informers/externalversions"
 	"k8s.io/client-go/rest"
@@ -36,7 +36,7 @@ func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange fu
 
 	if _, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		UpdateFunc: func(_, newObj any) {
-			apiServer, ok := newObj.(*configv1.APIServer)
+			apiServer, ok := newObj.(*confv1.APIServer)
 			if !ok {
 				return
 			}

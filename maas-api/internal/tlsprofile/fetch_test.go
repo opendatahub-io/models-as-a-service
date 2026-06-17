@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -15,10 +15,10 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
 
-func newAPIServerObj(profile *configv1.TLSSecurityProfile) *configv1.APIServer {
-	return &configv1.APIServer{
+func newAPIServerObj(profile *confv1.TLSSecurityProfile) *confv1.APIServer {
+	return &confv1.APIServer{
 		ObjectMeta: metav1.ObjectMeta{Name: "cluster"},
-		Spec: configv1.APIServerSpec{
+		Spec: confv1.APIServerSpec{
 			TLSSecurityProfile: profile,
 		},
 	}
@@ -32,7 +32,7 @@ func TestParseProfileFromAPIServer_NoProfile(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_EmptyType(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{})
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{})
 	spec, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.NoError(t, err)
 	assert.Equal(t, tlsprofile.ProfileIntermediate, spec.Type)
@@ -41,18 +41,18 @@ func TestParseProfileFromAPIServer_EmptyType(t *testing.T) {
 func TestParseProfileFromAPIServer_NamedProfiles(t *testing.T) {
 	tests := []struct {
 		name     string
-		profType configv1.TLSProfileType
+		profType confv1.TLSProfileType
 		wantType tlsprofile.ProfileType
-		wantMin  configv1.TLSProtocolVersion
+		wantMin  confv1.TLSProtocolVersion
 	}{
-		{"Old", configv1.TLSProfileOldType, tlsprofile.ProfileOld, configv1.VersionTLS10},
-		{"Intermediate", configv1.TLSProfileIntermediateType, tlsprofile.ProfileIntermediate, configv1.VersionTLS12},
-		{"Modern", configv1.TLSProfileModernType, tlsprofile.ProfileModern, configv1.VersionTLS13},
+		{"Old", confv1.TLSProfileOldType, tlsprofile.ProfileOld, confv1.VersionTLS10},
+		{"Intermediate", confv1.TLSProfileIntermediateType, tlsprofile.ProfileIntermediate, confv1.VersionTLS12},
+		{"Modern", confv1.TLSProfileModernType, tlsprofile.ProfileModern, confv1.VersionTLS13},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			obj := newAPIServerObj(&configv1.TLSSecurityProfile{Type: tt.profType})
+			obj := newAPIServerObj(&confv1.TLSSecurityProfile{Type: tt.profType})
 			spec, err := tlsprofile.ProfileFromAPIServer(obj)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantType, spec.Type)
@@ -62,7 +62,7 @@ func TestParseProfileFromAPIServer_NamedProfiles(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_NamedProfileReturnsClone(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{Type: configv1.TLSProfileIntermediateType})
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{Type: confv1.TLSProfileIntermediateType})
 	p1, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.NoError(t, err)
 
@@ -74,7 +74,7 @@ func TestParseProfileFromAPIServer_NamedProfileReturnsClone(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_UnrecognizedType(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{Type: configv1.TLSProfileType("SuperSecure")})
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{Type: confv1.TLSProfileType("SuperSecure")})
 	spec, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unrecognized TLS profile type")
@@ -82,28 +82,28 @@ func TestParseProfileFromAPIServer_UnrecognizedType(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_CustomProfile(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{
-		Type: configv1.TLSProfileCustomType,
-		Custom: &configv1.CustomTLSProfile{
-			TLSProfileSpec: configv1.TLSProfileSpec{
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
+		Type: confv1.TLSProfileCustomType,
+		Custom: &confv1.CustomTLSProfile{
+			TLSProfileSpec: confv1.TLSProfileSpec{
 				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"},
-				MinTLSVersion: configv1.VersionTLS13,
+				MinTLSVersion: confv1.VersionTLS13,
 			},
 		},
 	})
 	spec, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.NoError(t, err)
 	assert.Equal(t, tlsprofile.ProfileCustom, spec.Type)
-	assert.Equal(t, configv1.VersionTLS13, spec.MinTLSVersion)
+	assert.Equal(t, confv1.VersionTLS13, spec.MinTLSVersion)
 	assert.Equal(t, []string{"ECDHE-RSA-AES128-GCM-SHA256", "ECDHE-RSA-AES256-GCM-SHA384"}, spec.Ciphers)
 }
 
 func TestParseProfileFromAPIServer_CustomMissingCiphers(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{
-		Type: configv1.TLSProfileCustomType,
-		Custom: &configv1.CustomTLSProfile{
-			TLSProfileSpec: configv1.TLSProfileSpec{
-				MinTLSVersion: configv1.VersionTLS12,
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
+		Type: confv1.TLSProfileCustomType,
+		Custom: &confv1.CustomTLSProfile{
+			TLSProfileSpec: confv1.TLSProfileSpec{
+				MinTLSVersion: confv1.VersionTLS12,
 			},
 		},
 	})
@@ -113,19 +113,19 @@ func TestParseProfileFromAPIServer_CustomMissingCiphers(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_CustomMissingSection(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{Type: configv1.TLSProfileCustomType})
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{Type: confv1.TLSProfileCustomType})
 	_, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "custom is missing")
 }
 
 func TestParseProfileFromAPIServer_CustomInvalidMinVersion(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{
-		Type: configv1.TLSProfileCustomType,
-		Custom: &configv1.CustomTLSProfile{
-			TLSProfileSpec: configv1.TLSProfileSpec{
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
+		Type: confv1.TLSProfileCustomType,
+		Custom: &confv1.CustomTLSProfile{
+			TLSProfileSpec: confv1.TLSProfileSpec{
 				Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
-				MinTLSVersion: configv1.TLSProtocolVersion("VersionTLS99"),
+				MinTLSVersion: confv1.TLSProtocolVersion("VersionTLS99"),
 			},
 		},
 	})
@@ -135,17 +135,17 @@ func TestParseProfileFromAPIServer_CustomInvalidMinVersion(t *testing.T) {
 }
 
 func TestParseProfileFromAPIServer_CustomDefaultMinVersion(t *testing.T) {
-	obj := newAPIServerObj(&configv1.TLSSecurityProfile{
-		Type: configv1.TLSProfileCustomType,
-		Custom: &configv1.CustomTLSProfile{
-			TLSProfileSpec: configv1.TLSProfileSpec{
+	obj := newAPIServerObj(&confv1.TLSSecurityProfile{
+		Type: confv1.TLSProfileCustomType,
+		Custom: &confv1.CustomTLSProfile{
+			TLSProfileSpec: confv1.TLSProfileSpec{
 				Ciphers: []string{"ECDHE-RSA-AES128-GCM-SHA256"},
 			},
 		},
 	})
 	spec, err := tlsprofile.ProfileFromAPIServer(obj)
 	require.NoError(t, err)
-	assert.Equal(t, configv1.VersionTLS12, spec.MinTLSVersion)
+	assert.Equal(t, confv1.VersionTLS12, spec.MinTLSVersion)
 }
 
 func TestIsAPIUnavailable(t *testing.T) {

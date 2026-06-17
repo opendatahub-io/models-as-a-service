@@ -4,7 +4,7 @@ import (
 	"crypto/tls"
 	"testing"
 
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	"github.com/stretchr/testify/assert"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
@@ -13,14 +13,14 @@ import (
 func TestTLSConfigFromProfile_Intermediate(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileIntermediate,
-		TLSProfileSpec: configv1.TLSProfileSpec{
+		TLSProfileSpec: confv1.TLSProfileSpec{
 			Ciphers: []string{
 				"TLS_AES_128_GCM_SHA256",
 				"TLS_AES_256_GCM_SHA384",
 				"ECDHE-ECDSA-AES128-GCM-SHA256",
 				"ECDHE-RSA-AES128-GCM-SHA256",
 			},
-			MinTLSVersion: configv1.VersionTLS12,
+			MinTLSVersion: confv1.VersionTLS12,
 		},
 	}
 
@@ -35,13 +35,13 @@ func TestTLSConfigFromProfile_Intermediate(t *testing.T) {
 func TestTLSConfigFromProfile_TLS13CiphersSkipped(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileModern,
-		TLSProfileSpec: configv1.TLSProfileSpec{
+		TLSProfileSpec: confv1.TLSProfileSpec{
 			Ciphers: []string{
 				"TLS_AES_128_GCM_SHA256",
 				"TLS_AES_256_GCM_SHA384",
 				"TLS_CHACHA20_POLY1305_SHA256",
 			},
-			MinTLSVersion: configv1.VersionTLS13,
+			MinTLSVersion: confv1.VersionTLS13,
 		},
 	}
 
@@ -55,9 +55,9 @@ func TestTLSConfigFromProfile_TLS13CiphersSkipped(t *testing.T) {
 func TestTLSConfigFromProfile_UnsupportedCiphers(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileCustom,
-		TLSProfileSpec: configv1.TLSProfileSpec{
+		TLSProfileSpec: confv1.TLSProfileSpec{
 			Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256", "UNKNOWN-CIPHER-XYZ"},
-			MinTLSVersion: configv1.VersionTLS12,
+			MinTLSVersion: confv1.VersionTLS12,
 		},
 	}
 
@@ -70,9 +70,9 @@ func TestTLSConfigFromProfile_UnsupportedCiphers(t *testing.T) {
 func TestTLSConfigFromProfile_InvalidMinVersion(t *testing.T) {
 	spec := tlsprofile.ProfileSpec{
 		Type: tlsprofile.ProfileCustom,
-		TLSProfileSpec: configv1.TLSProfileSpec{
+		TLSProfileSpec: confv1.TLSProfileSpec{
 			Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
-			MinTLSVersion: configv1.TLSProtocolVersion("InvalidVersion"),
+			MinTLSVersion: confv1.TLSProtocolVersion("InvalidVersion"),
 		},
 	}
 
@@ -83,20 +83,20 @@ func TestTLSConfigFromProfile_InvalidMinVersion(t *testing.T) {
 
 func TestTLSConfigFromProfile_AllVersions(t *testing.T) {
 	tests := []struct {
-		version configv1.TLSProtocolVersion
+		version confv1.TLSProtocolVersion
 		want    uint16
 	}{
-		{configv1.VersionTLS10, tls.VersionTLS10},
-		{configv1.VersionTLS11, tls.VersionTLS11},
-		{configv1.VersionTLS12, tls.VersionTLS12},
-		{configv1.VersionTLS13, tls.VersionTLS13},
+		{confv1.VersionTLS10, tls.VersionTLS10},
+		{confv1.VersionTLS11, tls.VersionTLS11},
+		{confv1.VersionTLS12, tls.VersionTLS12},
+		{confv1.VersionTLS13, tls.VersionTLS13},
 	}
 
 	for _, tt := range tests {
 		t.Run(string(tt.version), func(t *testing.T) {
 			spec := tlsprofile.ProfileSpec{
 				Type: tlsprofile.ProfileCustom,
-				TLSProfileSpec: configv1.TLSProfileSpec{
+				TLSProfileSpec: confv1.TLSProfileSpec{
 					Ciphers:       []string{"ECDHE-RSA-AES128-GCM-SHA256"},
 					MinTLSVersion: tt.version,
 				},
@@ -123,9 +123,9 @@ func TestTLSConfigFromProfile_CipherMapping(t *testing.T) {
 		t.Run(tt.openSSL, func(t *testing.T) {
 			spec := tlsprofile.ProfileSpec{
 				Type: tlsprofile.ProfileCustom,
-				TLSProfileSpec: configv1.TLSProfileSpec{
+				TLSProfileSpec: confv1.TLSProfileSpec{
 					Ciphers:       []string{tt.openSSL},
-					MinTLSVersion: configv1.VersionTLS12,
+					MinTLSVersion: confv1.VersionTLS12,
 				},
 			}
 			_, ciphers, unsupported := tlsprofile.TLSConfigFromProfile(spec)

@@ -34,7 +34,7 @@ rules:
 
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
-  resources: ["maasmodelrefs", "maassubscriptions"]
+  resources: ["maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
 
 # HTTPRoutes (for future use, e.g. listing or resolving model routes)

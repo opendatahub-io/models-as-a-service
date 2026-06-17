@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	configv1 "github.com/openshift/api/config/v1"
+	confv1 "github.com/openshift/api/config/v1"
 	configclientset "github.com/openshift/client-go/config/clientset/versioned"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -33,14 +33,14 @@ func FetchTLSProfile(ctx context.Context, restConfig *rest.Config) (ProfileSpec,
 	return profileFromAPIServer(apiServer)
 }
 
-func profileFromAPIServer(apiServer *configv1.APIServer) (ProfileSpec, error) {
+func profileFromAPIServer(apiServer *confv1.APIServer) (ProfileSpec, error) {
 	if apiServer == nil {
 		return DefaultProfile(), errors.New("APIServer must not be nil")
 	}
 	return profileFromTLSSecurityProfile(apiServer.Spec.TLSSecurityProfile)
 }
 
-func profileFromTLSSecurityProfile(profile *configv1.TLSSecurityProfile) (ProfileSpec, error) {
+func profileFromTLSSecurityProfile(profile *confv1.TLSSecurityProfile) (ProfileSpec, error) {
 	if profile == nil || profile.Type == "" {
 		return DefaultProfile(), nil
 	}
@@ -61,7 +61,7 @@ func profileFromTLSSecurityProfile(profile *configv1.TLSSecurityProfile) (Profil
 		return DefaultProfile(), errors.New("custom profile has empty cipher list")
 	}
 	if spec.MinTLSVersion == "" {
-		spec.MinTLSVersion = configv1.VersionTLS12
+		spec.MinTLSVersion = confv1.VersionTLS12
 	}
 	if _, ok := protocolVersion[spec.MinTLSVersion]; !ok {
 		return DefaultProfile(), fmt.Errorf("custom profile has unrecognized minTLSVersion %q", spec.MinTLSVersion)

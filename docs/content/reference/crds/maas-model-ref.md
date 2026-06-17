@@ -129,6 +129,7 @@ MaaSModelRef supports standard Kubernetes and OpenShift annotations. The MaaS AP
 | `openshift.io/description` | Model description | `modelDetails.description` | `"A large language model optimized for chat"` |
 | `opendatahub.io/genai-use-case` | GenAI use case category | `modelDetails.genaiUseCase` | `"chat"` |
 | `opendatahub.io/context-window` | Context window size | `modelDetails.contextWindow` | `"4096"` |
+| `opendatahub.io/model-capabilities` | Model capabilities (JSON string array) | `modelDetails.modelCapabilities` | `'["text-generation","image-text-inferencing"]'` |
 
 ### Example with annotations
 
@@ -143,6 +144,7 @@ metadata:
     openshift.io/description: "A large language model optimized for chat use cases"
     opendatahub.io/genai-use-case: "chat"
     opendatahub.io/context-window: "4096"
+    opendatahub.io/model-capabilities: '["text-generation","chat"]'
 spec:
   modelRef:
     kind: LLMInferenceService
@@ -165,7 +167,8 @@ When annotations are set, the `GET /v1/models` response includes a `modelDetails
     "displayName": "Llama 2 7B Chat",
     "description": "A large language model optimized for chat use cases",
     "genaiUseCase": "chat",
-    "contextWindow": "4096"
+    "contextWindow": "4096",
+    "modelCapabilities": ["text-generation", "chat"]
   }
 }
 ```

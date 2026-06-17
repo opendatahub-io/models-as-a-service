@@ -479,20 +479,16 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
 }
 
-func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManagedTenant(t *testing.T) {
+func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespace(t *testing.T) {
 	g := NewWithT(t)
 	r := &TenantReconciler{AppNamespace: "opendatahub"}
-
-	// All tenants deploy maas-api to operator namespace
-	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+	g.Expect(r.appNamespaceForTenant()).To(Equal("opendatahub"))
 }
 
-func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
+func TestTenantReconcile_AppNamespaceReturnsRHOAINamespace(t *testing.T) {
 	g := NewWithT(t)
-	r := &TenantReconciler{AppNamespace: "opendatahub"}
-
-	// All tenants deploy maas-api to operator namespace
-	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+	r := &TenantReconciler{AppNamespace: "redhat-ods-applications"}
+	g.Expect(r.appNamespaceForTenant()).To(Equal("redhat-ods-applications"))
 }
 
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {

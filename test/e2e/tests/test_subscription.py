@@ -564,7 +564,6 @@ class TestSubscriptionEnforcement:
                 model_refs=[model_ref],
                 groups=["system:authenticated"]
             )
-            _wait_reconcile()
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
 
             # 2. Create subscription with low token limit
@@ -575,7 +574,6 @@ class TestSubscriptionEnforcement:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_reconcile()
             _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created AND enforced by Kuadrant/Limitador
@@ -986,7 +984,6 @@ class TestOrderingEdgeCases:
                 groups=["system:authenticated"],
                 namespace=ns,
             )
-            _wait_reconcile()
             _wait_for_maas_subscription_phase("e2e-ordering-sub", namespace=ns, timeout=180)
 
             # Use SA token instead of user token to avoid environment-specific 401s on /v1/api-keys.
