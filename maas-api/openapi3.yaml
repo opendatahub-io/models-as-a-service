@@ -748,6 +748,12 @@ components:
                             type: string
                             description: Context window size (from opendatahub.io/context-window annotation)
                             example: "4096"
+                        modelCapabilities:
+                            type: array
+                            items:
+                                type: string
+                            description: Model capabilities (from opendatahub.io/model-capabilities annotation)
+                            example: ["text-generation", "image-text-inferencing"]
                 kind:
                     type: string
                     description: The model reference kind (e.g., "LLMInferenceService")
