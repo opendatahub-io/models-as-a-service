@@ -53,7 +53,7 @@ const (
 )
 
 // tenantUsesCleanupFinalizer reports whether this Tenant should carry tenant-cleanup.
-// The default platform tenant (no AITenant labels) relies on Config/default GC for teardown;
+// The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
 // only AITenant-managed tenants need explicit per-tenant resource cleanup on delete.
 func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.Tenant) (bool, error) {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
@@ -546,14 +546,27 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 	appNs := r.appNamespaceForTenant()
 	log.Info("Cleaning up per-tenant maas-api resources", "tenant", tenantID, "namespace", appNs)
 
+	// List of resources to delete (name functions from tenantreconcile package)
 	resourcesToDelete := []struct {
 		gvk  schema.GroupVersionKind
 		name string
 	}{
-		{gvk: tenantreconcile.GVKDeployment, name: tenantreconcile.MaaSAPIDeploymentName(tenantID)},
-		{gvk: tenantreconcile.GVKService, name: tenantreconcile.MaaSAPIServiceName(tenantID)},
-		{gvk: tenantreconcile.GVKHTTPRoute, name: fmt.Sprintf("maas-api-%s-route", tenantID)},
-		{gvk: tenantreconcile.GVKCronJob, name: tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID)},
+		{
+			gvk:  tenantreconcile.GVKDeployment,
+			name: tenantreconcile.MaaSAPIDeploymentName(tenantID),
+		},
+		{
+			gvk:  tenantreconcile.GVKService,
+			name: tenantreconcile.MaaSAPIServiceName(tenantID),
+		},
+		{
+			gvk:  tenantreconcile.GVKHTTPRoute,
+			name: fmt.Sprintf("maas-api-%s-route", tenantID),
+		},
+		{
+			gvk:  tenantreconcile.GVKCronJob,
+			name: tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
+		},
 	}
 
 	for _, res := range resourcesToDelete {
@@ -564,7 +577,9 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "failed to delete tenant resource",
-				"gvk", res.gvk.String(), "name", res.name, "namespace", appNs)
+				"gvk", res.gvk.String(),
+				"name", res.name,
+				"namespace", appNs)
 			return err
 		}
 		log.Info("Deleted tenant resource", "gvk", res.gvk.Kind, "name", res.name)
@@ -574,23 +589,28 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 }
 
 // cleanupMaaSAuthPolicies deletes all MaaSAuthPolicy CRs in the tenant namespace.
+// MaaSAuthPolicyReconciler's handleDeletion will clean up the gateway AuthPolicy
+// when the last MaaSAuthPolicy is deleted.
 func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
 		return err
 	}
 
+	// Skip cleanup for default tenant - Config lifecycle handles it
 	if tenantID == "" {
 		return nil
 	}
 
 	log.Info("Cleaning up MaaSAuthPolicy CRs", "namespace", tenant.Namespace)
 
+	// List all MaaSAuthPolicy CRs in this namespace
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(tenant.Namespace)); err != nil {
 		return fmt.Errorf("failed to list MaaSAuthPolicies: %w", err)
 	}
 
+	// Delete each MaaSAuthPolicy
 	for i := range policyList.Items {
 		policy := &policyList.Items[i]
 		log.Info("Deleting MaaSAuthPolicy", "name", policy.Name, "namespace", policy.Namespace)
