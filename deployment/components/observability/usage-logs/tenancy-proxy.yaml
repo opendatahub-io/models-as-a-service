@@ -1,0 +1,96 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: usage-logs-tenancy-proxy
+  namespace: opendatahub
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/component: loki-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki-query-proxy
+  template:
+    metadata:
+      labels:
+        app: loki-query-proxy
+    spec:
+      serviceAccountName: loki-query-proxy
+      containers:
+      - name: proxy
+        # Image is set by controller (DefaultUsageLogsTenancyProxyImage or RELATED_IMAGE override)
+        command:
+        - python3
+        - /opt/app-root/src/proxy/main.py
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        # Override via kustomize patch for your LokiStack service name/namespace.
+        - name: LOKI_UPSTREAM_URL
+          value: "https://maas-loki-gateway-http.opendatahub.svc.cluster.local:8080/api/logs/v1/application"
+        - name: PYTHONPATH
+          value: "/opt/app-root/src/proxy"
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: LOG_LEVEL
+          value: "INFO"
+        volumeMounts:
+        - name: proxy-source
+          mountPath: /opt/app-root/src/proxy
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 50m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+      volumes:
+      - name: proxy-source
+        configMap:
+          name: loki-query-proxy-source
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: usage-logs-tenancy-proxy
+  namespace: opendatahub
+  labels:
+    app: loki-query-proxy
+    app.kubernetes.io/managed-by: maas-controller
+    app.kubernetes.io/component: loki-proxy
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8080
+    targetPort: 8080
+    protocol: TCP
+    name: http
+  selector:
+    app: loki-query-proxy

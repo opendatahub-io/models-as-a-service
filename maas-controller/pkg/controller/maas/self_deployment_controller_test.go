@@ -954,3 +954,118 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(subj["namespace"]).To(Equal(monitoringNS))
 	})
 }
+
+func TestPatchTenancyProxyImage(t *testing.T) {
+	t.Run("patches proxy container image when RELATED_IMAGE set", func(t *testing.T) {
+		g := NewWithT(t)
+		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "usage-logs-tenancy-proxy",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "proxy",
+									"image": "registry.redhat.io/ubi9/python-312",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(containers).To(HaveLen(1))
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal("quay.io/example/tenancy-proxy:test"))
+	})
+
+	t.Run("uses default image when RELATED_IMAGE not set", func(t *testing.T) {
+		g := NewWithT(t)
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "usage-logs-tenancy-proxy",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name": "proxy",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal(DefaultUsageLogsTenancyProxyImage))
+	})
+
+	t.Run("ignores non-matching deployment", func(t *testing.T) {
+		g := NewWithT(t)
+		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "some-other-deployment",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "proxy",
+									"image": "registry.redhat.io/ubi9/python-312",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal("registry.redhat.io/ubi9/python-312"))
+	})
+}

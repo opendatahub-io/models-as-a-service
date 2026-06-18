@@ -4,3 +4,6 @@ kind: Kustomization
 resources:
   - otel-collector.yaml
   - otel-collector-rbac.yaml
+  - tenancy-proxy-code.yaml
+  - tenancy-proxy-rbac.yaml
+  - tenancy-proxy.yaml

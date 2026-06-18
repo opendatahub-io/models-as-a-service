@@ -582,6 +582,9 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 			if err := patchUsageLogsOpenTelemetryCollector(&res, r.MonitoringNamespace); err != nil {
 				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
+			if err := patchTenancyProxyImage(&res); err != nil {
+				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
 			if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
 				return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
@@ -665,6 +668,37 @@ func patchUsageLogsOpenTelemetryCollector(res *unstructured.Unstructured, monito
 		return fmt.Errorf("set loki exporter endpoint: %w", err)
 	}
 	return nil
+}
+
+// patchTenancyProxyImage sets the tenancy-proxy container image to RELATED_IMAGE_ODH_PYTHON_312_IMAGE
+// if configured, otherwise uses DefaultUsageLogsTenancyProxyImage. This enables disconnected deployments
+// to mirror the image while maintaining a code-defined default.
+func patchTenancyProxyImage(res *unstructured.Unstructured) error {
+	if res.GetKind() != "Deployment" || res.GetName() != "usage-logs-tenancy-proxy" {
+		return nil
+	}
+
+	image := os.Getenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE")
+	if image == "" {
+		image = DefaultUsageLogsTenancyProxyImage
+	}
+
+	containers, found, err := unstructured.NestedSlice(res.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return fmt.Errorf("containers not found in deployment: %w", err)
+	}
+
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != "proxy" {
+			continue
+		}
+		cm["image"] = image
+		containers[i] = cm
+		return unstructured.SetNestedSlice(res.Object, containers, "spec", "template", "spec", "containers")
+	}
+
+	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
 // ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
