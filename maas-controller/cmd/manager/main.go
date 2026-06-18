@@ -683,7 +683,9 @@ func main() {
 
 	// Setup validating webhooks for placement-sensitive MaaS resources.
 	if err := (&webhook.AITenantValidator{
+		Client:            mgr.GetAPIReader(),
 		AITenantNamespace: aitenantNamespace,
+		GatewayNamespace:  gatewayNamespace,
 	}).SetupWebhookWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create webhook", "webhook", "AITenant")
 		os.Exit(1)
