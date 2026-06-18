@@ -38,9 +38,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-// TenantReconciler reconciles the Tenant CR (platform singleton).
+// TenantReconciler reconciles the Tenant CRs that drive MaaS runtime manifests.
 // Platform manifest logic follows the ODH operator's component deploy pattern (kustomize + post-render + SSA apply).
-// The Tenant CR is the runtime object; DSC.modelsAsService controls only enablement.
+// The Tenant CR remains the runtime object while ModelsAsService carries the platform-facing aggregate status.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -123,7 +123,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
 // Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
-// owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).
+// owns the full deploy pipeline via the Tenant CR.
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	return r.reconcile(ctx, req)
 }

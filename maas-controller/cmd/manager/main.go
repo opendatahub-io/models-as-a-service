@@ -714,6 +714,8 @@ func main() {
 	//   3. ensureClusterBootstrapRunnable creates the default AITenant once Config/default exists (no owner refs).
 	//   4. AITenant reconciler creates/adopts Tenant/default-tenant.
 	//   5. LifecycleReconciler patches Config→AITenant/Tenant owner refs.
+	//   5. ModelsAsServiceReconciler aggregates all Tenant/default-tenant status onto the
+	//      platform-facing ModelsAsService singleton when the platform creates that CR.
 	//   6. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
@@ -738,6 +740,12 @@ func main() {
 		MetadataCacheTTL:                metadataCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
+		os.Exit(1)
+	}
+	if err := (&maas.ModelsAsServiceReconciler{
+		Client: mgr.GetClient(),
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "ModelsAsService")
 		os.Exit(1)
 	}
 

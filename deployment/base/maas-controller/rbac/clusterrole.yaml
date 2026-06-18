@@ -105,6 +105,24 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - components.platform.opendatahub.io
+  resources:
+  - modelsasservices
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - components.platform.opendatahub.io
+  resources:
+  - modelsasservices/status
+  verbs:
+  - get
+  - patch
+  - update
+- apiGroups:
   - config.openshift.io
   resources:
   - authentications
