@@ -402,6 +402,21 @@ def new_named_tenant_case(prefix: str) -> dict[str, str]:
     }
 
 
+def gateway_access_label_key(gateway_name: str) -> str:
+    return f"maas.opendatahub.io/gateway-access-{gateway_name}"
+
+
+def apply_gateway_access_label(namespace: str, gateway_name: str) -> None:
+    ensure_namespace(namespace, labels={gateway_access_label_key(gateway_name): "true"})
+
+
+def remove_gateway_access_label(namespace: str, gateway_name: str) -> None:
+    patch = {"metadata": {"labels": {gateway_access_label_key(gateway_name): None}}}
+    result = _oc_run(["patch", "namespace", namespace, "--type=merge", "-p", json.dumps(patch)])
+    if result.returncode != 0 and not _oc_output_not_found(result):
+        raise RuntimeError(f"failed to remove gateway access label from {namespace}: {result.stderr.strip()}")
+
+
 def admin_subject() -> str:
     whoami = _oc_run(["whoami"])
     if whoami.returncode == 0 and whoami.stdout.strip():
@@ -496,6 +511,8 @@ def apply_tenant_cr(
 def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
     gw_options_name = f"{gateway_name}-gw-options"
     service_ca_secret = f"{gateway_name}-gw-service-tls"
+    gateway_access_label = gateway_access_label_key(gateway_name)
+    apply_gateway_access_label(DEPLOYMENT_NAMESPACE, gateway_name)
     _apply(
         {
             "apiVersion": "v1",
@@ -554,7 +571,7 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
                                 "from": "Selector",
                                 "selector": {
                                     "matchLabels": {
-                                        LABEL_AI_GATEWAY_TENANT: fixture_label,
+                                        gateway_access_label: "true",
                                     }
                                 },
                             }
@@ -617,6 +634,30 @@ def wait_for_route_admitted(route_name: str, *, timeout: int = 60, interval: int
         return False
 
     return wait_for_json("route", route_name, GATEWAY_NAMESPACE, predicate=_predicate, timeout=timeout, interval=interval)
+
+
+def wait_for_httproute_accepted(
+    route_name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+    interval: int = 5,
+) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for parent in (obj.get("status") or {}).get("parents") or []:
+            parent_ref = parent.get("parentRef") or {}
+            parent_namespace = parent_ref.get("namespace") or gateway_namespace
+            if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
+                continue
+            return any(
+                condition.get("type") == "Accepted" and condition.get("status") == "True"
+                for condition in parent.get("conditions") or []
+            )
+        return False
+
+    return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
 def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> None:
@@ -695,6 +736,13 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"])
+    if not use_default_gateway:
+        apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
+        wait_for_httproute_accepted(
+            per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
+            DEPLOYMENT_NAMESPACE,
+            case["gateway_name"],
+        )
 
 
 def apply_maas_auth_policy(name: str, namespace: str, model_ref: str = MODEL_REF, model_namespace: str = MODEL_NAMESPACE) -> None:
@@ -866,6 +914,10 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
         delete_best_effort("route", f"{case['gateway_name']}-route", GATEWAY_NAMESPACE)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
         delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
+        try:
+            remove_gateway_access_label(DEPLOYMENT_NAMESPACE, case["gateway_name"])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cleanup] failed to remove gateway access label for {case['gateway_name']}: {exc}")
 
 
 def legacy_default_namespace() -> str:
