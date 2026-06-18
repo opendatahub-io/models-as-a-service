@@ -9,7 +9,6 @@ resources:
   - ../../base/maas-controller/rbac
   - ../../base/maas-controller/manager
   - ../../base/maas-controller/webhook
-  - cert-manager/
 
 patches:
   # Remove OCP service-serving cert annotation (cert-manager handles TLS on xKS)
@@ -20,18 +19,16 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
 
-  # Replace OCP CA bundle injection with cert-manager CA injection
+  # Remove OCP CA bundle injection (cert-manager CA injection is handled by the chart)
   - target:
       kind: ValidatingWebhookConfiguration
       name: maas-validating-webhook-configuration
     patch: |
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
-      - op: add
-        path: /metadata/annotations/cert-manager.io~1inject-ca-from
-        value: "$(NAMESPACE)/maas-controller-webhook-cert"
 
-  # Mount the cert-manager TLS secret into the controller deployment
+  # Mount the webhook TLS secret into the controller deployment
+  # (Certificate is created by the rhai-on-xks-chart post-install hook)
   - target:
       kind: Deployment
       name: maas-controller
