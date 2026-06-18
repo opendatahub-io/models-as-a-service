@@ -7,7 +7,7 @@ Our goal is to create a comprehensive platform for **Models as a Service** with 
 - **OpenShift**: Kubernetes platform
 - **Gateway API**: Traffic routing and management (OpenShift native implementation)
 - **Kuadrant/Authorino/Limitador**: API gateway and policy engine
-- **KServe**: Model serving platform
+- **KServe**: Model serving platform 
 - **React**: Frontend framework
 - **Go**: Backend frameworks
 
