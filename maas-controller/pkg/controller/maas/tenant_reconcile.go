@@ -52,6 +52,17 @@ const (
 	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
 )
 
+// tenantUsesCleanupFinalizer reports whether this Tenant should carry tenant-cleanup.
+// The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
+// only AITenant-managed tenants need explicit per-tenant resource cleanup on delete.
+func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.Tenant) (bool, error) {
+	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
+	if err != nil {
+		return false, err
+	}
+	return tenantID != "", nil
+}
+
 func managementState(ann map[string]string) string {
 	if ann == nil {
 		return ""
@@ -101,14 +112,26 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Handle deletion
 	if !tenant.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, log, &tenant)
 	}
 
-	// Add finalizer if not present
-	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+	if usesCleanupFinalizer {
+		if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+			controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+			if err := r.Update(ctx, &tenant); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+		// Converge upgraded clusters: default-tenant teardown is owned by Config GC.
+		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
 		if err := r.Update(ctx, &tenant); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -407,9 +430,7 @@ func (r *TenantReconciler) operatorNamespace() string {
 }
 
 func (r *TenantReconciler) appNamespaceForTenant() string {
-	// All maas-api instances deploy to the operator namespace (opendatahub for ODH,
-	// redhat-ods-applications for RHOAI). The shared database secret also lives in this namespace.
-	return tenantreconcile.DefaultMaaSAPINamespace
+	return r.AppNamespace
 }
 
 func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {

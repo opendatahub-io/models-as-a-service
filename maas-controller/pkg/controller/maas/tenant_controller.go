@@ -48,10 +48,9 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the protected application namespace (--maas-api-namespace, default opendatahub).
-	// NOTE: This field is ONLY used for namespace protection checks (isProtectedNamespace).
-	// The actual maas-api deployment namespace is determined by appNamespaceForTenant(), which
-	// hardcodes redhat-ai-gateway-infra regardless of this field's value.
+	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace,
+	// default opendatahub for ODH, redhat-ods-applications for RHOAI).
+	// Used by appNamespaceForTenant() and isProtectedNamespace().
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
@@ -119,6 +118,12 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+
+// Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/status;externalproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/finalizers;externalproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
 // Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).
