@@ -494,6 +494,28 @@ def apply_tenant_cr(
 
 
 def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
+    gw_options_name = f"{gateway_name}-gw-options"
+    service_ca_secret = f"{gateway_name}-gw-service-tls"
+    _apply(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": gw_options_name,
+                "namespace": GATEWAY_NAMESPACE,
+                "labels": {"e2e.maas.opendatahub.io/fixture": fixture_label},
+            },
+            "data": {
+                "service": (
+                    "metadata:\n"
+                    "  annotations:\n"
+                    f"    service.beta.openshift.io/serving-cert-secret-name: \"{service_ca_secret}\"\n"
+                    "spec:\n"
+                    "  type: ClusterIP\n"
+                )
+            },
+        }
+    )
     _apply(
         {
             "apiVersion": "gateway.networking.k8s.io/v1",
@@ -501,14 +523,128 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
             "metadata": {
                 "name": gateway_name,
                 "namespace": GATEWAY_NAMESPACE,
-                "labels": {"e2e.maas.opendatahub.io/fixture": fixture_label},
+                "labels": {
+                    "app.kubernetes.io/component": "gateway",
+                    "app.kubernetes.io/instance": gateway_name,
+                    "app.kubernetes.io/name": "maas",
+                    "e2e.maas.opendatahub.io/fixture": fixture_label,
+                    "opendatahub.io/managed": "false",
+                },
+                "annotations": {
+                    "opendatahub.io/managed": "false",
+                    "security.opendatahub.io/authorino-tls-bootstrap": "true",
+                },
             },
             "spec": {
                 "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
-                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}],
+                "infrastructure": {
+                    "parametersRef": {
+                        "group": "",
+                        "kind": "ConfigMap",
+                        "name": gw_options_name,
+                    }
+                },
+                "listeners": [
+                    {
+                        "name": "https",
+                        "port": 443,
+                        "protocol": "HTTPS",
+                        "allowedRoutes": {"namespaces": {"from": "All"}},
+                        "tls": {
+                            "mode": "Terminate",
+                            "certificateRefs": [
+                                {"group": "", "kind": "Secret", "name": service_ca_secret}
+                            ],
+                        },
+                    }
+                ],
             },
         }
     )
+
+
+def cluster_domain_from_default_route() -> str:
+    for route_name in ("maas-gateway-route",):
+        route = get_json_or_none("route", route_name, GATEWAY_NAMESPACE)
+        host = ((route or {}).get("spec") or {}).get("host", "")
+        if host and "." in host:
+            return host.split(".", 1)[1]
+    gateway_host = os.environ.get("GATEWAY_HOST", "")
+    if gateway_host and "." in gateway_host:
+        return gateway_host.split(".", 1)[1]
+    routes = list_json("route", GATEWAY_NAMESPACE)
+    for route in routes:
+        host = ((route or {}).get("spec") or {}).get("host", "")
+        if host and "." in host:
+            return host.split(".", 1)[1]
+    raise RuntimeError(f"could not determine cluster apps domain from routes in {GATEWAY_NAMESPACE}")
+
+
+def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 180) -> None:
+    result = _oc_run(
+        [
+            "wait",
+            "--for=condition=Programmed",
+            f"gateway/{gateway_name}",
+            "-n",
+            GATEWAY_NAMESPACE,
+            f"--timeout={timeout}s",
+        ],
+        timeout=timeout + 30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gateway {GATEWAY_NAMESPACE}/{gateway_name} did not become Programmed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
+def wait_for_route_admitted(route_name: str, *, timeout: int = 60, interval: int = 3) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for ingress in (obj.get("status") or {}).get("ingress") or []:
+            for condition in ingress.get("conditions") or []:
+                if condition.get("type") == "Admitted" and condition.get("status") == "True":
+                    return True
+        return False
+
+    return wait_for_json("route", route_name, GATEWAY_NAMESPACE, predicate=_predicate, timeout=timeout, interval=interval)
+
+
+def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> None:
+    service_name = f"{gateway_name}-{AITENANT_GATEWAY_CLASS_NAME}"
+    route_name = f"{gateway_name}-route"
+    hostname = f"{gateway_name}.{cluster_domain_from_default_route()}"
+    wait_for_json("service", service_name, GATEWAY_NAMESPACE, timeout=120)
+
+    route: dict[str, Any] = {
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {
+            "name": route_name,
+            "namespace": GATEWAY_NAMESPACE,
+            "labels": {
+                "app.kubernetes.io/component": "gateway",
+                "app.kubernetes.io/instance": gateway_name,
+                "app.kubernetes.io/name": "maas",
+                "e2e.maas.opendatahub.io/fixture": fixture_label,
+                "gateway.networking.k8s.io/gateway-name": gateway_name,
+            },
+        },
+        "spec": {
+            "host": hostname,
+            "to": {"kind": "Service", "name": service_name, "weight": 100},
+            "port": {"targetPort": 443},
+            "tls": {"termination": "reencrypt", "insecureEdgeTerminationPolicy": "Redirect"},
+        },
+    }
+
+    signing_ca = get_json_or_none("configmap", "signing-cabundle", "openshift-service-ca")
+    ca_bundle = ((signing_ca or {}).get("data") or {}).get("ca-bundle.crt", "")
+    if ca_bundle:
+        route["spec"]["tls"]["destinationCACertificate"] = ca_bundle
+
+    _apply(route)
+    wait_for_route_admitted(route_name)
 
 
 def apply_aitenant(case: dict[str, str]) -> None:
@@ -545,6 +681,8 @@ def aitenant_ready(obj: dict) -> bool:
 def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool = False) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
+        wait_for_gateway_programmed(case["gateway_name"])
+        apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"])
@@ -716,7 +854,9 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
     delete_namespace_best_effort(case["tenant_ns"])
     if delete_gateway and case["gateway_name"] != DEFAULT_GATEWAY_NAME:
+        delete_best_effort("route", f"{case['gateway_name']}-route", GATEWAY_NAMESPACE)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+        delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
 
 
 def legacy_default_namespace() -> str:

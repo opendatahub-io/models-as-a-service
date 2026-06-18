@@ -238,3 +238,70 @@ def api_key_headers(api_key: str):
     """Headers with API key for model inference requests."""
     return {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
 
+
+@pytest.fixture(scope="session")
+def shared_test_tenants(gateway_host: str, is_https: bool):
+    """
+    Shared tenant infrastructure for multi-tenant tests.
+
+    Creates two AITenant instances (tenant-a, tenant-b) that persist for the
+    entire test session. Tests requiring multiple tenants should use this fixture
+    instead of creating their own tenants.
+
+    Each tenant gets its own Gateway with a unique route hostname.
+
+    Returns:
+        tuple: (tenant_a_dict, tenant_b_dict) with keys:
+            - name: tenant label name (e.g., "e2e-shared-a-abc123")
+            - namespace: tenant namespace (e.g., "ai-tenant-e2e-shared-a-abc123")
+            - base_url: maas-api URL for this tenant (derived from tenant's gateway route)
+            - gateway_name: name of the Gateway CR for this tenant
+            - suffix: 6-character hex suffix for unique resource names
+            - policy_name: default auth policy name for this tenant
+            - subscription_name: default subscription name for this tenant
+
+    Requires:
+        - AITenant CRD installed
+        - Tenant namespace discovery enabled on maas-controller
+    """
+    from multitenancy_helpers import (
+        require_aitenant_crd,
+        new_named_tenant_case,
+        bootstrap_aitenant_tenant,
+        cleanup_discovery_case,
+        wait_for_route_admitted,
+    )
+
+    require_aitenant_crd()
+
+    # Create two persistent tenants for the session
+    case_a = new_named_tenant_case("e2e-shared-a")
+    case_b = new_named_tenant_case("e2e-shared-b")
+
+    try:
+        # Bootstrap both tenants (creates gateway + AITenant CR)
+        for case in (case_a, case_b):
+            bootstrap_aitenant_tenant(case)
+
+        scheme = "https" if is_https else "http"
+        for case in (case_a, case_b):
+            route = wait_for_route_admitted(f"{case['gateway_name']}-route")
+            try:
+                host = route["spec"]["host"]
+            except KeyError as e:
+                raise RuntimeError(
+                    f"Route {case['gateway_name']}-route missing expected field: {e}. "
+                    f"Route structure: {route}"
+                ) from e
+            case["base_url"] = f"{scheme}://{host}/maas-api"
+
+        # Add aliases to match test expectations while keeping cleanup helper keys intact.
+        for case in (case_a, case_b):
+            case["name"] = case["tenant_label_name"]
+            case["namespace"] = case["tenant_ns"]
+
+        yield case_a, case_b
+
+    finally:
+        cleanup_discovery_case(case_a)
+        cleanup_discovery_case(case_b)

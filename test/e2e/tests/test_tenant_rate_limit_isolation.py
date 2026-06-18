@@ -1,13 +1,10 @@
 """
-E2E tests for per-tenant rate-limit isolation (MT S4).
+E2E tests for per-tenant rate-limit isolation.
 
-Run with:
-  ENABLE_S4_E2E=true
-  MAAS_API_BASE_URL_TENANT_A / MAAS_API_BASE_URL_TENANT_B
-  TENANT_A_NAMESPACE / TENANT_B_NAMESPACE
+These tests use shared_test_tenants fixture to create two AITenant instances
+and validate rate limit isolation between tenants.
 """
 
-import os
 import time
 import uuid
 
@@ -20,48 +17,53 @@ from multitenancy_helpers import (
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
-    env_bool,
-    require_tenant_api_base_urls,
     response_summary,
     wait_for_status_phase,
 )
 from test_helper import (
-    MODEL_NAME,
-    MODEL_NAMESPACE,
-    MODEL_PATH,
-    MODEL_REF,
     TIMEOUT,
     TLS_VERIFY,
     _get_cluster_token,
     _wait_for_token_rate_limit_policy,
+    _create_llmis,
+    _create_maas_model_ref,
+    _delete_cr,
 )
+from multitenancy_helpers import GATEWAY_NAMESPACE
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S4_E2E"),
-    reason="S4 tenant rate-limit isolation E2E is gated; set ENABLE_S4_E2E=true once the backing implementation lands",
-)
+# Tenant rate-limit isolation tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")
-def tenant_env():
-    urls = require_tenant_api_base_urls("TENANT_A", "TENANT_B")
-    tenant_a = {
-        "slot": "TENANT_A",
-        "name": os.environ.get("TENANT_A_NAME", "tenant-a"),
-        "namespace": os.environ.get("TENANT_A_NAMESPACE", ""),
-        "base_url": urls["TENANT_A"],
-    }
-    tenant_b = {
-        "slot": "TENANT_B",
-        "name": os.environ.get("TENANT_B_NAME", "tenant-b"),
-        "namespace": os.environ.get("TENANT_B_NAMESPACE", ""),
-        "base_url": urls["TENANT_B"],
-    }
-    missing = [item["slot"] for item in (tenant_a, tenant_b) if not item["namespace"]]
-    if missing:
-        pytest.fail(f"tenant namespaces not configured; set {', '.join(f'{slot}_NAMESPACE' for slot in missing)}")
-    return tenant_a, tenant_b
+def tenant_env(shared_test_tenants):
+    """Adapter fixture with tenant-specific models."""
+    # Shallow copy to avoid mutating session-scoped shared_test_tenants
+    tenant_a, tenant_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
+
+    # Create models in each tenant namespace
+    for tenant in (tenant_a, tenant_b):
+        model_name = f"rate-test-model-{tenant['suffix']}"
+
+        # Create LLMIS pointing to tenant gateway
+        _create_llmis(model_name, tenant["namespace"], tenant["gateway_name"], GATEWAY_NAMESPACE)
+
+        # Create MaaSModelRef
+        _create_maas_model_ref(model_name, tenant["namespace"], model_name)
+
+        # Store model info
+        tenant["model_name"] = model_name
+        tenant["model_namespace"] = tenant["namespace"]
+        tenant["model_path"] = f"/{tenant['namespace']}/{model_name}"
+
+    yield tenant_a, tenant_b
+
+    # Cleanup models
+    for tenant in (tenant_a, tenant_b):
+        _delete_cr("maasmodelref", tenant["model_name"], tenant["namespace"])
+        _delete_cr("llminferenceservice", tenant["model_name"], tenant["namespace"])
+
+
 
 
 @pytest.fixture
@@ -72,15 +74,26 @@ def tenant_rate_limit_setup(tenant_env):
     sub_a = f"e2e-rate-iso-a-{suffix}"
     sub_b = f"e2e-rate-iso-b-{suffix}"
     try:
+        # Create auth policies for tenant models
         for tenant in tenant_env:
-            apply_maas_auth_policy(policy_name, tenant["namespace"])
+            apply_maas_auth_policy(policy_name, tenant["namespace"],
+                                  model_ref=tenant["model_name"],
+                                  model_namespace=tenant["model_namespace"])
             wait_for_status_phase("maasauthpolicy", policy_name, tenant["namespace"], expected_phase="Active")
 
-        apply_maas_subscription(sub_a, tenant_a["namespace"], token_limit=3, window="1m")
-        apply_maas_subscription(sub_b, tenant_b["namespace"], token_limit=100, window="1m")
+        # Create subscriptions with different rate limits
+        apply_maas_subscription(sub_a, tenant_a["namespace"],
+                               model_ref=tenant_a["model_name"],
+                               model_namespace=tenant_a["model_namespace"],
+                               token_limit=3, window="1m")
+        apply_maas_subscription(sub_b, tenant_b["namespace"],
+                               model_ref=tenant_b["model_name"],
+                               model_namespace=tenant_b["model_namespace"],
+                               token_limit=100, window="1m")
         wait_for_status_phase("maassubscription", sub_a, tenant_a["namespace"], expected_phase=("Active", "Degraded"))
         wait_for_status_phase("maassubscription", sub_b, tenant_b["namespace"], expected_phase=("Active", "Degraded"))
-        _wait_for_token_rate_limit_policy(MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=120)
+        _wait_for_token_rate_limit_policy(tenant_a["model_name"], model_namespace=tenant_a["model_namespace"], timeout=120)
+        _wait_for_token_rate_limit_policy(tenant_b["model_name"], model_namespace=tenant_b["model_namespace"], timeout=120)
 
         oc_token = _get_cluster_token()
         key_a_response = create_api_key_at(
@@ -121,22 +134,22 @@ def _gateway_base_from_api_url(api_base_url: str) -> str:
     return stripped
 
 
-def _inference_at(api_base_url: str, api_key: str) -> requests.Response:
-    url = f"{_gateway_base_from_api_url(api_base_url)}{MODEL_PATH}/v1/completions"
+def _inference_at(api_base_url: str, api_key: str, model_path: str, model_name: str) -> requests.Response:
+    url = f"{_gateway_base_from_api_url(api_base_url)}{model_path}/v1/completions"
     return requests.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 1},
+        json={"model": model_name, "prompt": "Hello", "max_tokens": 1},
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
 
 
-def _exhaust_until_429(api_base_url: str, api_key: str, *, attempts: int = 8) -> tuple[int, requests.Response]:
+def _exhaust_until_429(api_base_url: str, api_key: str, model_path: str, model_name: str, *, attempts: int = 8) -> tuple[int, requests.Response]:
     successes = 0
     last = None
     for _ in range(attempts):
-        last = _inference_at(api_base_url, api_key)
+        last = _inference_at(api_base_url, api_key, model_path, model_name)
         if last.status_code == 200:
             successes += 1
         elif last.status_code == 429:
@@ -154,7 +167,12 @@ class TestTenantRateLimitIsolation:
     def test_rate_limit_enforced_per_tenant(self, tenant_rate_limit_setup):
         """5.1: Tenant A's low quota is enforced on Tenant A traffic."""
         tenant_a = tenant_rate_limit_setup["tenant_a"]
-        successes, response = _exhaust_until_429(tenant_a["base_url"], tenant_rate_limit_setup["key_a"])
+        successes, response = _exhaust_until_429(
+            tenant_a["base_url"],
+            tenant_rate_limit_setup["key_a"],
+            tenant_a["model_path"],
+            tenant_a["model_name"]
+        )
         assert successes > 0, f"Tenant A hit 429 before any successful inference: {response_summary(response)}"
         assert response.status_code == 429, (
             f"expected Tenant A to hit rate limit after {successes} successes: {response_summary(response)}"
@@ -164,10 +182,20 @@ class TestTenantRateLimitIsolation:
         """5.2: Exhausting Tenant A does not consume Tenant B's quota."""
         tenant_a = tenant_rate_limit_setup["tenant_a"]
         tenant_b = tenant_rate_limit_setup["tenant_b"]
-        successes, response = _exhaust_until_429(tenant_a["base_url"], tenant_rate_limit_setup["key_a"])
+        successes, response = _exhaust_until_429(
+            tenant_a["base_url"],
+            tenant_rate_limit_setup["key_a"],
+            tenant_a["model_path"],
+            tenant_a["model_name"]
+        )
         assert response.status_code == 429, f"Tenant A did not hit rate limit after {successes} successes"
 
-        tenant_b_response = _inference_at(tenant_b["base_url"], tenant_rate_limit_setup["key_b"])
+        tenant_b_response = _inference_at(
+            tenant_b["base_url"],
+            tenant_rate_limit_setup["key_b"],
+            tenant_b["model_path"],
+            tenant_b["model_name"]
+        )
         assert tenant_b_response.status_code == 200, (
             f"Tenant B should still have independent quota: {response_summary(tenant_b_response)}"
         )
