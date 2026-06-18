@@ -549,7 +549,16 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
                         "name": "https",
                         "port": 443,
                         "protocol": "HTTPS",
-                        "allowedRoutes": {"namespaces": {"from": "All"}},
+                        "allowedRoutes": {
+                            "namespaces": {
+                                "from": "Selector",
+                                "selector": {
+                                    "matchLabels": {
+                                        LABEL_AI_GATEWAY_TENANT: fixture_label,
+                                    }
+                                },
+                            }
+                        },
                         "tls": {
                             "mode": "Terminate",
                             "certificateRefs": [
@@ -572,7 +581,7 @@ def cluster_domain_from_default_route() -> str:
     gateway_host = os.environ.get("GATEWAY_HOST", "")
     if gateway_host and "." in gateway_host:
         return gateway_host.split(".", 1)[1]
-    routes = list_json("route", GATEWAY_NAMESPACE)
+    routes = list_json("route", GATEWAY_NAMESPACE, labels="app.kubernetes.io/name=maas")
     for route in routes:
         host = ((route or {}).get("spec") or {}).get("host", "")
         if host and "." in host:

@@ -1062,7 +1062,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
                 "containers": [
                     {
                         "name": "main",
-                        "image": "ghcr.io/llm-d/llm-d-inference-sim:v0.8.2",
+                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",

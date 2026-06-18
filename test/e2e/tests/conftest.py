@@ -212,6 +212,8 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     Note: The key inherits the authenticated user's groups, which should include
     system:authenticated to satisfy AuthPolicy requirements for model access.
     """
+    from multitenancy_helpers import response_summary
+
     sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
     print("[api_key] Creating API key for inference tests (subscription bound at mint)...")
     r = requests.post(
@@ -223,14 +225,14 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     )
     # Accept both 200 and 201 as success
     if r.status_code not in (200, 201):
-        raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
+        raise RuntimeError(f"Failed to create API key: {response_summary(r)}")
 
     data = r.json()
     key = data.get("key")
     if not key:
         raise RuntimeError("API key creation response missing 'key' field")
 
-    print(f"[api_key] Created API key id={data.get('id')}, key prefix={key[:15]}...")
+    print("[api_key] Created API key for inference tests")
     return key
 
 @pytest.fixture(scope="session")
@@ -283,7 +285,7 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case)
 
-        scheme = "https" if is_https else "http"
+        scheme = "https"
         for case in (case_a, case_b):
             route = wait_for_route_admitted(f"{case['gateway_name']}-route")
             try:

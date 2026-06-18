@@ -28,7 +28,6 @@ from multitenancy_helpers import (
     cleanup_discovery_case,
     delete_maas_auth_policy,
     delete_maas_subscription,
-    env_bool,
     get_json_or_none,
     new_named_tenant_case,
     redact_sensitive,
@@ -62,9 +61,7 @@ def _get_tenant_gateway_url(gateway_name: str) -> str:
         )
     route = json.loads(result.stdout)
     host = route["spec"]["host"]
-    # Respect INSECURE_HTTP flag for test mode consistency
-    scheme = "http" if env_bool("INSECURE_HTTP") else "https"
-    return f"{scheme}://{host}"
+    return f"https://{host}"
 
 
 @pytest.fixture(scope="module")
@@ -246,7 +243,12 @@ class TestTenantModelInference:
 
         # If API key creation succeeds, use it to try accessing B's model
         if api_key_response.status_code in (200, 201):
-            api_key = api_key_response.json().get("key")
+            api_key_body = api_key_response.json()
+            api_key = api_key_body.get("key")
+            assert api_key, (
+                "API key creation returned success without key material: "
+                f"{redact_sensitive(api_key_body)}"
+            )
 
             # Try to access tenant B's model through tenant B's gateway using tenant A's API key
             model_b_url = f"{gateway_b_url}{case_b['model_path']}"
