@@ -1,0 +1,79 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loki-query-proxy-user
+  labels:
+    app: loki-query-proxy
+    mode: user
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: loki-proxy
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: loki-query-proxy
+      mode: user
+  template:
+    metadata:
+      labels:
+        app: loki-query-proxy
+        mode: user
+    spec:
+      serviceAccountName: loki-query-proxy
+      containers:
+      - name: proxy
+        image: registry.access.redhat.com/ubi9/go-toolset:1.25
+        command: ["go", "run", "/opt/app-root/src/proxy/main.go", "/opt/app-root/src/proxy/auth.go", "/opt/app-root/src/proxy/rewriter.go", "/opt/app-root/src/proxy/config.go"]
+        securityContext:
+          runAsNonRoot: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        ports:
+        - containerPort: 8080
+          name: http
+          protocol: TCP
+        env:
+        - name: PORT
+          value: "8080"
+        - name: ISOLATION_MODE
+          value: "user"
+        # Override via kustomize patch for your LokiStack service name/namespace.
+        - name: LOKI_UPSTREAM_URL
+          value: "https://__LOKI_GATEWAY_SVC__.openshift-logging.svc:8080/api/logs/v1/application"
+        - name: HOME
+          value: "/tmp"
+        - name: GOPATH
+          value: "/tmp/go"
+        - name: GOCACHE
+          value: "/tmp/go-cache"
+        volumeMounts:
+        - name: proxy-source
+          mountPath: /opt/app-root/src/proxy
+          readOnly: true
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8080
+          initialDelaySeconds: 120
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /ready
+            port: 8080
+          initialDelaySeconds: 90
+          periodSeconds: 10
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      volumes:
+      - name: proxy-source
+        configMap:
+          name: loki-query-proxy-source
