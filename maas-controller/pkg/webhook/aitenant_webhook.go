@@ -95,6 +95,9 @@ func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj r
 	if v.Client == nil {
 		return nil, errors.New("webhook client not configured")
 	}
+	if v.AITenantNamespace == "" {
+		return nil, errors.New("AITenant infrastructure namespace is not configured")
+	}
 	if v.GatewayNamespace == "" {
 		return nil, errors.New("gateway namespace is not configured")
 	}
