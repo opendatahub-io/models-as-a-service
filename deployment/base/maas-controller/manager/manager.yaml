@@ -110,6 +110,6 @@ spec:
       - name: webhook-cert
         secret:
           defaultMode: 420
-          secretName: maas-controller-webhook-cert
+          secretName: maas-controller-webhook-server-cert
       serviceAccountName: maas-controller
       terminationGracePeriodSeconds: 30

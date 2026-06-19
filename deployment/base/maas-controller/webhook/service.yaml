@@ -4,7 +4,7 @@ metadata:
   name: maas-controller-webhook-service
   namespace: system
   annotations:
-    service.beta.openshift.io/serving-cert-secret-name: maas-controller-webhook-cert
+    service.beta.openshift.io/serving-cert-secret-name: maas-controller-webhook-server-cert
 spec:
   ports:
     - port: 443
