@@ -88,6 +88,53 @@ func TestModelsAsServiceReconciler_AllHealthyTenantsReportReady(t *testing.T) {
 	g.Expect(degraded.Message).To(Equal("MaaS is operating normally in all 2 tenant namespaces."))
 }
 
+func TestModelsAsServiceReconciler_NoTenantStatusReportedYet(t *testing.T) {
+	g := NewWithT(t)
+	s := modelsAsServiceTestScheme(t)
+
+	module := &componentsv1alpha1.ModelsAsService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       componentsv1alpha1.ModelsAsServiceInstanceName,
+			Generation: 5,
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&componentsv1alpha1.ModelsAsService{}).
+		WithObjects(module).
+		Build()
+
+	r := &ModelsAsServiceReconciler{Client: cl}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated componentsv1alpha1.ModelsAsService
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName}, &updated)).To(Succeed())
+	g.Expect(updated.Status.ObservedGeneration).To(Equal(int64(5)))
+	g.Expect(updated.Status.Phase).To(Equal(componentsv1alpha1.ModelsAsServicePhaseNotReady))
+
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(ready.Reason).To(Equal("NoTenantsFound"))
+	g.Expect(ready.Message).To(Equal("MaaS is waiting for tenant status to be reported."))
+
+	provisioning := apimeta.FindStatusCondition(updated.Status.Conditions, "ProvisioningSucceeded")
+	g.Expect(provisioning).NotTo(BeNil())
+	g.Expect(provisioning.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(provisioning.Reason).To(Equal("NoTenantsFound"))
+	g.Expect(provisioning.Message).To(Equal("MaaS is waiting for tenant setup status to be reported."))
+
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(degraded.Reason).To(Equal("NoDegradedTenants"))
+	g.Expect(degraded.Message).To(Equal("MaaS is waiting for tenant status to be reported."))
+}
+
 func TestModelsAsServiceReconciler_DegradedTenantKeepsModuleReady(t *testing.T) {
 	g := NewWithT(t)
 	s := modelsAsServiceTestScheme(t)
@@ -189,6 +236,118 @@ func TestModelsAsServiceReconciler_NotReadyTenantMakesModuleNotReady(t *testing.
 	g.Expect(provisioning).NotTo(BeNil())
 	g.Expect(provisioning.Status).To(Equal(metav1.ConditionFalse))
 	g.Expect(provisioning.Message).To(Equal("MaaS setup is still in progress in 1 of 2 tenant namespaces: team-c-maas"))
+
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Status).To(Equal(metav1.ConditionFalse))
+}
+
+func TestModelsAsServiceReconciler_DeletingTenantBlocksReadyAndProvisioning(t *testing.T) {
+	g := NewWithT(t)
+	s := modelsAsServiceTestScheme(t)
+
+	module := &componentsv1alpha1.ModelsAsService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       componentsv1alpha1.ModelsAsServiceInstanceName,
+			Generation: 13,
+		},
+	}
+	deletingNow := metav1.Now()
+	healthyTenant := tenantWithModuleStatus("models-as-a-service", "Active",
+		newCondition(tenantreconcile.ReadyConditionType, metav1.ConditionTrue, "Reconciled", "healthy"),
+		newCondition(tenantreconcile.ConditionDeploymentsAvailable, metav1.ConditionTrue, "DeploymentsReady", "healthy"),
+		newCondition(tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse, "PrerequisitesMet", "healthy"),
+	)
+	deletingTenant := tenantWithModuleStatus("team-d-maas", "Pending")
+	deletingTenant.DeletionTimestamp = &deletingNow
+	deletingTenant.Finalizers = []string{"maas.opendatahub.io/test-cleanup"}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&componentsv1alpha1.ModelsAsService{}, &maasv1alpha1.Tenant{}).
+		WithObjects(module, healthyTenant, deletingTenant).
+		Build()
+
+	r := &ModelsAsServiceReconciler{Client: cl}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated componentsv1alpha1.ModelsAsService
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName}, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal(componentsv1alpha1.ModelsAsServicePhaseNotReady))
+
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(ready.Message).To(Equal("MaaS is not ready in 1 of 2 tenant namespaces: team-d-maas (being removed)"))
+
+	provisioning := apimeta.FindStatusCondition(updated.Status.Conditions, "ProvisioningSucceeded")
+	g.Expect(provisioning).NotTo(BeNil())
+	g.Expect(provisioning.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(provisioning.Message).To(Equal("MaaS setup is still in progress in 1 of 2 tenant namespaces: team-d-maas (being removed)"))
+
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(degraded.Message).To(Equal("MaaS is operating normally in all 2 tenant namespaces."))
+}
+
+func TestModelsAsServiceReconciler_IgnoresNonSingletonTenantNames(t *testing.T) {
+	g := NewWithT(t)
+	s := modelsAsServiceTestScheme(t)
+
+	module := &componentsv1alpha1.ModelsAsService{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       componentsv1alpha1.ModelsAsServiceInstanceName,
+			Generation: 17,
+		},
+	}
+	defaultTenant := tenantWithModuleStatus("models-as-a-service", "Active",
+		newCondition(tenantreconcile.ReadyConditionType, metav1.ConditionTrue, "Reconciled", "healthy"),
+		newCondition(tenantreconcile.ConditionDeploymentsAvailable, metav1.ConditionTrue, "DeploymentsReady", "healthy"),
+		newCondition(tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse, "PrerequisitesMet", "healthy"),
+	)
+	foreignTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "not-default-tenant",
+			Namespace: "team-e-maas",
+		},
+		Status: maasv1alpha1.TenantStatus{
+			Phase: "Failed",
+			Conditions: []metav1.Condition{
+				newCondition(tenantreconcile.ReadyConditionType, metav1.ConditionFalse, "UnexpectedManagementState", "should be ignored"),
+				newCondition(tenantreconcile.ConditionDeploymentsAvailable, metav1.ConditionFalse, "DeploymentsNotReady", "should be ignored"),
+				newCondition(tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue, "Broken", "should be ignored"),
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&componentsv1alpha1.ModelsAsService{}, &maasv1alpha1.Tenant{}).
+		WithObjects(module, defaultTenant, foreignTenant).
+		Build()
+
+	r := &ModelsAsServiceReconciler{Client: cl}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated componentsv1alpha1.ModelsAsService
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: componentsv1alpha1.ModelsAsServiceInstanceName}, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal(componentsv1alpha1.ModelsAsServicePhaseReady))
+
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(ready.Message).To(Equal("MaaS is ready in all 1 tenant namespaces."))
+
+	provisioning := apimeta.FindStatusCondition(updated.Status.Conditions, "ProvisioningSucceeded")
+	g.Expect(provisioning).NotTo(BeNil())
+	g.Expect(provisioning.Status).To(Equal(metav1.ConditionTrue))
 
 	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 	g.Expect(degraded).NotTo(BeNil())
