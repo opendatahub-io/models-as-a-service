@@ -4,7 +4,7 @@ metadata:
   name: payload-processing-plugins
   namespace: openshift-ingress
 data:
-  # Each key defines a plugin passed as --plugin <value> to the BBR ext_proc server.
+  # Each key defines a plugin passed as --plugin <value> to the IPP ext_proc server.
   # Format: "<plugin-type>:<plugin-name>[:<json-config>]"
   # Overlays can add/remove plugins by patching this ConfigMap.
   model-to-header-plugin: "body-field-to-header:model-extractor:{\"fieldName\":\"model\",\"headerName\":\"X-Gateway-Model-Name\"}"
