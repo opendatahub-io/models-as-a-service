@@ -644,7 +644,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 			"jwt": map[string]any{
 				"issuerUrl": oidc.IssuerURL,
 				"audiences": []any{oidc.ClientID},
-				"ttl":       oidc.TTL,
+				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
 				map[string]any{
