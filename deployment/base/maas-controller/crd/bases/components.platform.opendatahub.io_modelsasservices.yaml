@@ -55,7 +55,6 @@ spec:
               It intentionally stays minimal and does not mirror Tenant configuration.
             properties:
               managementState:
-                default: Managed
                 description: |-
                   ManagementState controls whether the module operator should reconcile or remove
                   the MaaS platform resources represented by this contract.
@@ -63,6 +62,8 @@ spec:
                 - Managed
                 - Removed
                 type: string
+            required:
+            - managementState
             type: object
           status:
             description: ModelsAsServiceStatus defines the observed state of the MaaS
@@ -139,6 +140,9 @@ spec:
                 description: |-
                   Phase is a high-level lifecycle summary expected by the module handler.
                   Expected values are "Ready" and "Not Ready".
+                enum:
+                - Ready
+                - Not Ready
                 type: string
               releases:
                 description: Releases lists the installed operator / component versions
@@ -166,6 +170,8 @@ spec:
                 - name
                 x-kubernetes-list-type: map
             type: object
+        required:
+        - spec
         type: object
         x-kubernetes-validations:
         - message: ModelsAsService name must be default-modelsasservice

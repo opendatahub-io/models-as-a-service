@@ -38,7 +38,10 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-const modelsAsServiceRepoURL = "https://github.com/opendatahub-io/models-as-a-service"
+const (
+	modelsAsServiceRepoURL  = "https://github.com/opendatahub-io/models-as-a-service"
+	maxConditionTenantNames = 5
+)
 
 // ModelsAsServiceReconciler maintains the platform-facing aggregate MaaS module
 // status while Tenant remains the runtime configuration and reconcile object.
@@ -219,13 +222,13 @@ func enqueueModelsAsServiceSingleton(_ context.Context, _ client.Object) []recon
 	}}
 }
 
-func moduleSingletonPredicate() predicate.Predicate {
+func moduleSingletonPredicate() predicate.Funcs {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == componentsv1alpha1.ModelsAsServiceInstanceName
 	})
 }
 
-func defaultTenantSingletonPredicate() predicate.Predicate {
+func defaultTenantSingletonPredicate() predicate.Funcs {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == maasv1alpha1.TenantInstanceName
 	})
@@ -256,7 +259,7 @@ func readyConditionMessage(summary moduleTenantSummary) string {
 		return fmt.Sprintf("MaaS is ready in all %d tenant namespaces.", summary.total)
 	}
 	return fmt.Sprintf("MaaS is not ready in %d of %d tenant namespaces: %s",
-		len(summary.notReady), summary.total, strings.Join(summary.notReady, "; "))
+		len(summary.notReady), summary.total, summarizeTenantNames(summary.notReady))
 }
 
 func provisioningConditionStatus(summary moduleTenantSummary) metav1.ConditionStatus {
@@ -284,7 +287,7 @@ func provisioningConditionMessage(summary moduleTenantSummary) string {
 		return fmt.Sprintf("MaaS setup has completed in all %d tenant namespaces.", summary.total)
 	}
 	return fmt.Sprintf("MaaS setup is still in progress in %d of %d tenant namespaces: %s",
-		len(summary.unprovisioned), summary.total, strings.Join(summary.unprovisioned, "; "))
+		len(summary.unprovisioned), summary.total, summarizeTenantNames(summary.unprovisioned))
 }
 
 func degradedConditionStatus(summary moduleTenantSummary) metav1.ConditionStatus {
@@ -309,5 +312,16 @@ func degradedConditionMessage(summary moduleTenantSummary) string {
 		return fmt.Sprintf("MaaS is operating normally in all %d tenant namespaces.", summary.total)
 	}
 	return fmt.Sprintf("MaaS is degraded in %d of %d tenant namespaces: %s",
-		len(summary.degraded), summary.total, strings.Join(summary.degraded, "; "))
+		len(summary.degraded), summary.total, summarizeTenantNames(summary.degraded))
+}
+
+func summarizeTenantNames(names []string) string {
+	if len(names) <= maxConditionTenantNames {
+		return strings.Join(names, "; ")
+	}
+
+	return fmt.Sprintf("%s; and %d more",
+		strings.Join(names[:maxConditionTenantNames], "; "),
+		len(names)-maxConditionTenantNames,
+	)
 }

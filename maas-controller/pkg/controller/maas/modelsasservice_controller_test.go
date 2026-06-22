@@ -354,6 +354,36 @@ func TestModelsAsServiceReconciler_IgnoresNonSingletonTenantNames(t *testing.T) 
 	g.Expect(degraded.Status).To(Equal(metav1.ConditionFalse))
 }
 
+func TestModelsAsServiceConditionMessages_CapTenantNameLists(t *testing.T) {
+	g := NewWithT(t)
+
+	names := []string{
+		"tenant-a",
+		"tenant-b",
+		"tenant-c",
+		"tenant-d",
+		"tenant-e",
+		"tenant-f",
+		"tenant-g",
+	}
+	summary := moduleTenantSummary{
+		total:         8,
+		notReady:      names,
+		unprovisioned: names,
+		degraded:      names,
+	}
+
+	g.Expect(readyConditionMessage(summary)).To(Equal(
+		"MaaS is not ready in 7 of 8 tenant namespaces: tenant-a; tenant-b; tenant-c; tenant-d; tenant-e; and 2 more",
+	))
+	g.Expect(provisioningConditionMessage(summary)).To(Equal(
+		"MaaS setup is still in progress in 7 of 8 tenant namespaces: tenant-a; tenant-b; tenant-c; tenant-d; tenant-e; and 2 more",
+	))
+	g.Expect(degradedConditionMessage(summary)).To(Equal(
+		"MaaS is degraded in 7 of 8 tenant namespaces: tenant-a; tenant-b; tenant-c; tenant-d; tenant-e; and 2 more",
+	))
+}
+
 func tenantWithModuleStatus(namespace, phase string, conditions ...metav1.Condition) *maasv1alpha1.Tenant {
 	return &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{
