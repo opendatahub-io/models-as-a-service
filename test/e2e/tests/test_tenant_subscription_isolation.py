@@ -10,17 +10,19 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
+    apply_maas_auth_policy,
     apply_maas_subscription,
     create_api_key_at,
+    delete_maas_auth_policy,
     delete_maas_subscription,
     list_subscriptions_at,
+    provision_tenant_model,
     redact_sensitive,
     response_summary,
     select_subscription_at,
     wait_for_status_phase,
 )
-from test_helper import _get_cluster_token, _create_llmis, _create_maas_model_ref, _delete_cr
-from multitenancy_helpers import GATEWAY_NAMESPACE
+from test_helper import _get_cluster_token, _delete_cr, _wait_for_subscription_trlp_status
 
 
 # Tenant subscription isolation tests are enabled by default (Phase 1 implementation)
@@ -29,26 +31,16 @@ from multitenancy_helpers import GATEWAY_NAMESPACE
 @pytest.fixture(scope="module")
 def tenant_env(shared_test_tenants):
     """Adapter fixture with tenant-specific models."""
-    # Shallow copy to avoid mutating session-scoped shared_test_tenants
     tenant_a, tenant_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
 
-    # Create models in each tenant namespace
     for tenant in (tenant_a, tenant_b):
         model_name = f"sub-test-model-{tenant['suffix']}"
-
-        # Create LLMIS pointing to tenant gateway
-        _create_llmis(model_name, tenant["namespace"], tenant["gateway_name"], GATEWAY_NAMESPACE)
-
-        # Create MaaSModelRef
-        _create_maas_model_ref(model_name, tenant["namespace"], model_name)
-
-        # Store model info
+        provision_tenant_model(model_name, tenant["namespace"], tenant["gateway_name"])
         tenant["model_name"] = model_name
         tenant["model_namespace"] = tenant["namespace"]
 
     yield tenant_a, tenant_b
 
-    # Cleanup models
     for tenant in (tenant_a, tenant_b):
         _delete_cr("maasmodelref", tenant["model_name"], tenant["namespace"])
         _delete_cr("llminferenceservice", tenant["model_name"], tenant["namespace"])
@@ -61,38 +53,81 @@ def tenant_subscriptions(tenant_env):
     shared_name = f"e2e-shared-sub-{suffix}"
     tenant_a_only = f"e2e-a-only-{suffix}"
     tenant_b_only = f"e2e-b-only-{suffix}"
+    auth_policy_name = f"e2e-sub-iso-auth-{suffix}"
     try:
-        # Create subscriptions using tenant's own models
-        apply_maas_subscription(shared_name, tenant_a["namespace"],
-                               model_ref=tenant_a["model_name"],
-                               model_namespace=tenant_a["model_namespace"],
-                               token_limit=50, priority=10)
-        apply_maas_subscription(shared_name, tenant_b["namespace"],
-                               model_ref=tenant_b["model_name"],
-                               model_namespace=tenant_b["model_namespace"],
-                               token_limit=500, priority=20)
-        apply_maas_subscription(tenant_a_only, tenant_a["namespace"],
-                               model_ref=tenant_a["model_name"],
-                               model_namespace=tenant_a["model_namespace"],
-                               token_limit=75, priority=30)
-        apply_maas_subscription(tenant_b_only, tenant_b["namespace"],
-                               model_ref=tenant_b["model_name"],
-                               model_namespace=tenant_b["model_namespace"],
-                               token_limit=750, priority=30)
+        for tenant in (tenant_a, tenant_b):
+            apply_maas_auth_policy(
+                auth_policy_name,
+                tenant["namespace"],
+                model_ref=tenant["model_name"],
+                model_namespace=tenant["model_namespace"],
+            )
+            wait_for_status_phase(
+                "maasauthpolicy",
+                auth_policy_name,
+                tenant["namespace"],
+                expected_phase="Active",
+            )
+
+        apply_maas_subscription(
+            shared_name,
+            tenant_a["namespace"],
+            model_ref=tenant_a["model_name"],
+            model_namespace=tenant_a["model_namespace"],
+            token_limit=50,
+            priority=10,
+        )
+        apply_maas_subscription(
+            shared_name,
+            tenant_b["namespace"],
+            model_ref=tenant_b["model_name"],
+            model_namespace=tenant_b["model_namespace"],
+            token_limit=500,
+            priority=20,
+        )
+        apply_maas_subscription(
+            tenant_a_only,
+            tenant_a["namespace"],
+            model_ref=tenant_a["model_name"],
+            model_namespace=tenant_a["model_namespace"],
+            token_limit=75,
+            priority=30,
+        )
+        apply_maas_subscription(
+            tenant_b_only,
+            tenant_b["namespace"],
+            model_ref=tenant_b["model_name"],
+            model_namespace=tenant_b["model_namespace"],
+            token_limit=750,
+            priority=30,
+        )
         for tenant, names in ((tenant_a, [shared_name, tenant_a_only]), (tenant_b, [shared_name, tenant_b_only])):
             for name in names:
-                wait_for_status_phase("maassubscription", name, tenant["namespace"], expected_phase=("Active", "Degraded"))
+                wait_for_status_phase(
+                    "maassubscription",
+                    name,
+                    tenant["namespace"],
+                    expected_phase=("Active", "Degraded"),
+                )
+                _wait_for_subscription_trlp_status(
+                    name,
+                    expected_ready=True,
+                    namespace=tenant["namespace"],
+                    timeout=120,
+                )
         yield {
             "shared": shared_name,
             "tenant_a_only": tenant_a_only,
             "tenant_b_only": tenant_b_only,
             "tenant_a": tenant_a,
             "tenant_b": tenant_b,
+            "auth_policy": auth_policy_name,
         }
     finally:
-        for namespace in (tenant_a["namespace"], tenant_b["namespace"]):
+        for tenant in (tenant_a, tenant_b):
+            delete_maas_auth_policy(auth_policy_name, tenant["namespace"])
             for name in (shared_name, tenant_a_only, tenant_b_only):
-                delete_maas_subscription(name, namespace)
+                delete_maas_subscription(name, tenant["namespace"])
 
 
 def _create_key_for_subscription(tenant: dict[str, str], subscription: str) -> str:

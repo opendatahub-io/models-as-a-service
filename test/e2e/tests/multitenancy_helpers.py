@@ -797,6 +797,92 @@ def apply_maas_subscription(
     )
 
 
+def provision_tenant_model(
+    model_name: str,
+    tenant_namespace: str,
+    gateway_name: str,
+    *,
+    ready_timeout: int = 180,
+) -> None:
+    """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
+
+    Creates LLMInferenceService + MaaSModelRef and waits for Ready. The model is
+    not accessible for inference or /v1/models until MaasAuthPolicy and
+    MaasSubscription are created in the tenant admin namespace.
+    """
+    from test_helper import _create_llmis, _create_maas_model_ref
+
+    _create_llmis(model_name, tenant_namespace, gateway_name, GATEWAY_NAMESPACE)
+    wait_for_json(
+        "httproute",
+        f"{model_name}-kserve-route",
+        tenant_namespace,
+        timeout=120,
+    )
+    _create_maas_model_ref(model_name, tenant_namespace, model_name)
+    wait_for_status_phase(
+        "maasmodelref",
+        model_name,
+        tenant_namespace,
+        expected_phase="Ready",
+        timeout=ready_timeout,
+    )
+
+
+def make_tenant_model_accessible(
+    model_name: str,
+    tenant_namespace: str,
+    auth_policy_name: str,
+    subscription_name: str,
+    *,
+    token_limit: int = 100,
+    window: str = "1m",
+    priority: Optional[int] = None,
+    trlp_timeout: int = 120,
+) -> None:
+    """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
+
+    Creates MaasAuthPolicy + MaasSubscription in the tenant namespace and waits
+    for controller reconciliation, including TokenRateLimitPolicy readiness on the
+    subscription status (required by maas-api subscription selection).
+    """
+    from test_helper import _wait_for_subscription_trlp_status
+
+    apply_maas_auth_policy(
+        auth_policy_name,
+        tenant_namespace,
+        model_ref=model_name,
+        model_namespace=tenant_namespace,
+    )
+    wait_for_status_phase(
+        "maasauthpolicy",
+        auth_policy_name,
+        tenant_namespace,
+        expected_phase="Active",
+    )
+    apply_maas_subscription(
+        subscription_name,
+        tenant_namespace,
+        model_ref=model_name,
+        model_namespace=tenant_namespace,
+        token_limit=token_limit,
+        window=window,
+        priority=priority,
+    )
+    wait_for_status_phase(
+        "maassubscription",
+        subscription_name,
+        tenant_namespace,
+        expected_phase=("Active", "Degraded"),
+    )
+    _wait_for_subscription_trlp_status(
+        subscription_name,
+        expected_ready=True,
+        namespace=tenant_namespace,
+        timeout=trlp_timeout,
+    )
+
+
 def delete_maas_auth_policy(name: str, namespace: str) -> None:
     _delete_cr("MaaSAuthPolicy", name, namespace)
 

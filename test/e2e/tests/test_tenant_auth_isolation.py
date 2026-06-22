@@ -11,22 +11,20 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
-    apply_maas_auth_policy,
-    apply_maas_subscription,
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
     get_api_key_at,
     list_subscriptions_at,
+    make_tenant_model_accessible,
+    provision_tenant_model,
     redact_sensitive,
     response_summary,
     search_api_keys_at,
     select_subscription_at,
     validate_api_key_at,
-    wait_for_status_phase,
 )
-from test_helper import _get_cluster_token, _create_llmis, _create_maas_model_ref, _delete_cr
-from multitenancy_helpers import GATEWAY_NAMESPACE
+from test_helper import _get_cluster_token, _delete_cr
 
 
 # Tenant auth isolation tests are enabled by default (Phase 1 implementation)
@@ -35,24 +33,14 @@ from multitenancy_helpers import GATEWAY_NAMESPACE
 @pytest.fixture(scope="module")
 def tenant_env(shared_test_tenants):
     """Adapter fixture with tenant-specific models."""
-    # Shallow copy to avoid mutating session-scoped shared_test_tenants
     case_a, case_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
 
-    # Create models in each tenant namespace
     for case in (case_a, case_b):
         model_name = f"auth-test-model-{case['suffix']}"
-
-        # Create LLMIS pointing to tenant gateway
-        _create_llmis(model_name, case["tenant_ns"], case["gateway_name"], GATEWAY_NAMESPACE)
-
-        # Create MaaSModelRef
-        _create_maas_model_ref(model_name, case["tenant_ns"], model_name)
-
-        # Store model info
+        provision_tenant_model(model_name, case["tenant_ns"], case["gateway_name"])
         case["model_name"] = model_name
         case["model_namespace"] = case["tenant_ns"]
 
-    # Rename keys to match existing test expectations
     tenant_a = {
         "name": case_a["tenant_label_name"],
         "namespace": case_a["tenant_ns"],
@@ -70,7 +58,6 @@ def tenant_env(shared_test_tenants):
 
     yield tenant_a, tenant_b
 
-    # Cleanup models
     for case in (case_a, case_b):
         _delete_cr("maasmodelref", case["model_name"], case["tenant_ns"])
         _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
@@ -84,21 +71,12 @@ def tenant_auth_setup(tenant_env):
     subscription_name = f"e2e-auth-iso-{suffix}"
     try:
         for tenant in tenant_env:
-            # Create auth policy and subscription for tenant's own model
-            apply_maas_auth_policy(
+            make_tenant_model_accessible(
+                tenant["model_name"],
+                tenant["namespace"],
                 policy_name,
-                tenant["namespace"],
-                model_ref=tenant["model_name"],
-                model_namespace=tenant["model_namespace"]
-            )
-            apply_maas_subscription(
                 subscription_name,
-                tenant["namespace"],
-                model_ref=tenant["model_name"],
-                model_namespace=tenant["model_namespace"]
             )
-            wait_for_status_phase("maasauthpolicy", policy_name, tenant["namespace"], expected_phase="Active")
-            wait_for_status_phase("maassubscription", subscription_name, tenant["namespace"], expected_phase=("Active", "Degraded"))
         yield {
             "tenant_a": tenant_a,
             "tenant_b": tenant_b,
@@ -147,7 +125,6 @@ class TestTenantAuthIsolation:
 
     def test_api_key_validates_against_correct_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.2: API key validates on the tenant endpoint that minted it."""
-        # Use list subscriptions endpoint which accepts API key authentication
         response = list_subscriptions_at(
             tenant_auth_setup["tenant_a"]["base_url"],
             tenant_api_keys["a"]["key"],
@@ -155,13 +132,11 @@ class TestTenantAuthIsolation:
         assert response.status_code == 200, (
             f"Tenant A key should work on Tenant A gateway: {response_summary(response)}"
         )
-        # Verify the key works by checking we get a subscriptions array
         data = response.json()
         assert isinstance(data, list), redact_sensitive(data)
 
     def test_api_key_rejected_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
         """3.3: Tenant B rejects a key minted by Tenant A."""
-        # Try to use tenant A's key on tenant B's gateway - should be rejected
         response = list_subscriptions_at(
             tenant_auth_setup["tenant_b"]["base_url"],
             tenant_api_keys["a"]["key"],

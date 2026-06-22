@@ -17,6 +17,7 @@ from multitenancy_helpers import (
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
+    provision_tenant_model,
     response_summary,
     wait_for_status_phase,
 )
@@ -24,12 +25,9 @@ from test_helper import (
     TIMEOUT,
     TLS_VERIFY,
     _get_cluster_token,
-    _wait_for_token_rate_limit_policy,
-    _create_llmis,
-    _create_maas_model_ref,
     _delete_cr,
+    _wait_for_subscription_trlp_status,
 )
-from multitenancy_helpers import GATEWAY_NAMESPACE
 
 
 # Tenant rate-limit isolation tests are enabled by default (Phase 1 implementation)
@@ -38,32 +36,20 @@ from multitenancy_helpers import GATEWAY_NAMESPACE
 @pytest.fixture(scope="module")
 def tenant_env(shared_test_tenants):
     """Adapter fixture with tenant-specific models."""
-    # Shallow copy to avoid mutating session-scoped shared_test_tenants
     tenant_a, tenant_b = dict(shared_test_tenants[0]), dict(shared_test_tenants[1])
 
-    # Create models in each tenant namespace
     for tenant in (tenant_a, tenant_b):
         model_name = f"rate-test-model-{tenant['suffix']}"
-
-        # Create LLMIS pointing to tenant gateway
-        _create_llmis(model_name, tenant["namespace"], tenant["gateway_name"], GATEWAY_NAMESPACE)
-
-        # Create MaaSModelRef
-        _create_maas_model_ref(model_name, tenant["namespace"], model_name)
-
-        # Store model info
+        provision_tenant_model(model_name, tenant["namespace"], tenant["gateway_name"])
         tenant["model_name"] = model_name
         tenant["model_namespace"] = tenant["namespace"]
         tenant["model_path"] = f"/{tenant['namespace']}/{model_name}"
 
     yield tenant_a, tenant_b
 
-    # Cleanup models
     for tenant in (tenant_a, tenant_b):
         _delete_cr("maasmodelref", tenant["model_name"], tenant["namespace"])
         _delete_cr("llminferenceservice", tenant["model_name"], tenant["namespace"])
-
-
 
 
 @pytest.fixture
@@ -74,26 +60,49 @@ def tenant_rate_limit_setup(tenant_env):
     sub_a = f"e2e-rate-iso-a-{suffix}"
     sub_b = f"e2e-rate-iso-b-{suffix}"
     try:
-        # Create auth policies for tenant models
         for tenant in tenant_env:
-            apply_maas_auth_policy(policy_name, tenant["namespace"],
-                                  model_ref=tenant["model_name"],
-                                  model_namespace=tenant["model_namespace"])
-            wait_for_status_phase("maasauthpolicy", policy_name, tenant["namespace"], expected_phase="Active")
+            apply_maas_auth_policy(
+                policy_name,
+                tenant["namespace"],
+                model_ref=tenant["model_name"],
+                model_namespace=tenant["model_namespace"],
+            )
+            wait_for_status_phase(
+                "maasauthpolicy",
+                policy_name,
+                tenant["namespace"],
+                expected_phase="Active",
+            )
 
-        # Create subscriptions with different rate limits
-        apply_maas_subscription(sub_a, tenant_a["namespace"],
-                               model_ref=tenant_a["model_name"],
-                               model_namespace=tenant_a["model_namespace"],
-                               token_limit=3, window="1m")
-        apply_maas_subscription(sub_b, tenant_b["namespace"],
-                               model_ref=tenant_b["model_name"],
-                               model_namespace=tenant_b["model_namespace"],
-                               token_limit=100, window="1m")
-        wait_for_status_phase("maassubscription", sub_a, tenant_a["namespace"], expected_phase=("Active", "Degraded"))
-        wait_for_status_phase("maassubscription", sub_b, tenant_b["namespace"], expected_phase=("Active", "Degraded"))
-        _wait_for_token_rate_limit_policy(tenant_a["model_name"], model_namespace=tenant_a["model_namespace"], timeout=120)
-        _wait_for_token_rate_limit_policy(tenant_b["model_name"], model_namespace=tenant_b["model_namespace"], timeout=120)
+        apply_maas_subscription(
+            sub_a,
+            tenant_a["namespace"],
+            model_ref=tenant_a["model_name"],
+            model_namespace=tenant_a["model_namespace"],
+            token_limit=3,
+            window="1m",
+        )
+        apply_maas_subscription(
+            sub_b,
+            tenant_b["namespace"],
+            model_ref=tenant_b["model_name"],
+            model_namespace=tenant_b["model_namespace"],
+            token_limit=100,
+            window="1m",
+        )
+        for name, namespace in ((sub_a, tenant_a["namespace"]), (sub_b, tenant_b["namespace"])):
+            wait_for_status_phase(
+                "maassubscription",
+                name,
+                namespace,
+                expected_phase=("Active", "Degraded"),
+            )
+            _wait_for_subscription_trlp_status(
+                name,
+                expected_ready=True,
+                namespace=namespace,
+                timeout=120,
+            )
 
         oc_token = _get_cluster_token()
         key_a_response = create_api_key_at(
@@ -171,7 +180,7 @@ class TestTenantRateLimitIsolation:
             tenant_a["base_url"],
             tenant_rate_limit_setup["key_a"],
             tenant_a["model_path"],
-            tenant_a["model_name"]
+            tenant_a["model_name"],
         )
         assert successes > 0, f"Tenant A hit 429 before any successful inference: {response_summary(response)}"
         assert response.status_code == 429, (
@@ -186,7 +195,7 @@ class TestTenantRateLimitIsolation:
             tenant_a["base_url"],
             tenant_rate_limit_setup["key_a"],
             tenant_a["model_path"],
-            tenant_a["model_name"]
+            tenant_a["model_name"],
         )
         assert response.status_code == 429, f"Tenant A did not hit rate limit after {successes} successes"
 
@@ -194,7 +203,7 @@ class TestTenantRateLimitIsolation:
             tenant_b["base_url"],
             tenant_rate_limit_setup["key_b"],
             tenant_b["model_path"],
-            tenant_b["model_name"]
+            tenant_b["model_name"],
         )
         assert tenant_b_response.status_code == 200, (
             f"Tenant B should still have independent quota: {response_summary(tenant_b_response)}"
