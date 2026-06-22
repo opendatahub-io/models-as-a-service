@@ -813,11 +813,11 @@ def provision_tenant_model(
     from test_helper import _create_llmis, _create_maas_model_ref
 
     _create_llmis(model_name, tenant_namespace, gateway_name, GATEWAY_NAMESPACE)
-    wait_for_json(
-        "httproute",
+    wait_for_httproute_accepted(
         f"{model_name}-kserve-route",
         tenant_namespace,
-        timeout=120,
+        gateway_name,
+        timeout=ready_timeout,
     )
     _create_maas_model_ref(model_name, tenant_namespace, model_name)
     wait_for_status_phase(

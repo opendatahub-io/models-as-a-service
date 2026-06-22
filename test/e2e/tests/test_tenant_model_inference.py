@@ -32,7 +32,7 @@ from multitenancy_helpers import (
     new_named_tenant_case,
     redact_sensitive,
     require_aitenant_crd,
-    wait_for_json,
+    wait_for_httproute_accepted,
     wait_for_status_phase,
 )
 
@@ -90,12 +90,12 @@ def tenant_inference_cases():
                 GATEWAY_NAMESPACE,
             )
 
-            # Wait for HTTPRoute to be created by KServe
-            wait_for_json(
-                "httproute",
+            # Wait for HTTPRoute to be accepted on the tenant gateway
+            wait_for_httproute_accepted(
                 f"{model_name}-kserve-route",
                 case["tenant_ns"],
-                timeout=120,
+                case["gateway_name"],
+                timeout=180,
             )
 
             # Create MaaSModelRef
