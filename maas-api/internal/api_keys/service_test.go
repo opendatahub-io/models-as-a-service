@@ -207,6 +207,121 @@ func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 	assert.NotEmpty(t, metaAfter.LastUsedAt, "LastUsedAt should be updated after validation")
 }
 
+// TestValidateAPIKey_ReturnsTenant verifies that a valid key's tenant is included
+// in the ValidationResult returned to Authorino.
+func TestValidateAPIKey_ReturnsTenant(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	keyID := "550e8400-e29b-41d4-a716-446655440010"
+	plainKey, hash := createTestAPIKey(t)
+
+	err := store.AddKey(ctx, "alice", keyID, hash, "Tenant Key", "", []string{"users"}, "default-sub", "acme-corp", nil, false)
+	require.NoError(t, err)
+
+	result, err := svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	require.True(t, result.Valid)
+	assert.Equal(t, "acme-corp", result.Tenant, "ValidationResult should include tenant from stored key")
+}
+
+// TestValidateAPIKey_EmptyTenantReturnsEmpty verifies that legacy keys created
+// with an empty tenant still validate successfully and return an empty tenant string.
+func TestValidateAPIKey_EmptyTenantReturnsEmpty(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	keyID := "550e8400-e29b-41d4-a716-446655440011"
+	plainKey, hash := createTestAPIKey(t)
+
+	// Legacy key with empty tenant
+	err := store.AddKey(ctx, "alice", keyID, hash, "Legacy Key", "", []string{"users"}, "default-sub", "", nil, false)
+	require.NoError(t, err)
+
+	result, err := svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+
+	assert.True(t, result.Valid, "legacy key with empty tenant should still be valid")
+	assert.Empty(t, result.Tenant, "tenant should be empty string for legacy keys")
+}
+
+// TestValidateAPIKey_TenantNotExposedOnInvalid verifies that tenant information
+// is not leaked in validation responses for revoked or non-existent keys.
+func TestValidateAPIKey_TenantNotExposedOnInvalid(t *testing.T) {
+	t.Run("RevokedKey", func(t *testing.T) {
+		ctx := context.Background()
+		svc, store := createTestService(t)
+
+		keyID := "550e8400-e29b-41d4-a716-446655440012"
+		plainKey, hash := createTestAPIKey(t)
+
+		err := store.AddKey(ctx, "alice", keyID, hash, "Tenant Revoked", "", []string{"users"}, "default-sub", "acme-corp", nil, false)
+		require.NoError(t, err)
+
+		err = store.Revoke(ctx, keyID)
+		require.NoError(t, err)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, result.Valid)
+		assert.Empty(t, result.Tenant, "tenant must not leak in validation response for revoked key")
+	})
+
+	t.Run("NonExistentKey", func(t *testing.T) {
+		ctx := context.Background()
+		svc, _ := createTestService(t)
+
+		plainKey, _ := createTestAPIKey(t)
+
+		result, err := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, err)
+		require.NotNil(t, result)
+
+		assert.False(t, result.Valid)
+		assert.Empty(t, result.Tenant, "tenant must not leak in validation response for missing key")
+	})
+}
+
+// TestBulkRevokeAPIKeys_TenantScopedCount verifies that bulk revoke count is
+// scoped to the specified tenant, not all keys for the user across tenants.
+func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
+	ctx := context.Background()
+	svc, store := createTestService(t)
+
+	// Create 3 keys for alice in tenant-a
+	for i := range 3 {
+		_, hash := createTestAPIKey(t)
+		id := "tenant-a-key-" + string(rune('a'+i))
+		err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false)
+		require.NoError(t, err)
+	}
+
+	// Create 2 keys for alice in tenant-b
+	tenantBIDs := make([]string, 2)
+	for i := range 2 {
+		_, hash := createTestAPIKey(t)
+		id := "tenant-b-key-" + string(rune('a'+i))
+		tenantBIDs[i] = id
+		err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-b", nil, false)
+		require.NoError(t, err)
+	}
+
+	// Bulk revoke only tenant-a keys
+	count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, 3, count, "should revoke exactly the 3 keys in tenant-a")
+
+	// Verify tenant-b keys are still active
+	for _, id := range tenantBIDs {
+		meta, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusActive, meta.Status, "key %s in tenant-b should remain active", id)
+	}
+}
+
 // ============================================================
 // SERVICE LAYER PASS-THROUGH TESTS
 // ============================================================
@@ -345,7 +460,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 			require.NoError(t, store.AddKey(ctx, "alice", id, hash, "Key "+id, "", nil, "default-sub", "", nil, false))
 		}
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "alice")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "")
 		require.NoError(t, err)
 		assert.Equal(t, 3, count)
 
@@ -363,7 +478,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		ctx := context.Background()
 		svc, _ := createTestService(t)
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "nobody")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "nobody", "")
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
 	})
@@ -377,12 +492,12 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		_, hash := createTestAPIKey(t)
 		require.NoError(t, store.AddKey(ctx, "bob", "idem-key", hash, "Idempotent Key", "", nil, "default-sub", "", nil, false))
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "bob")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "bob", "")
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 
 		// Second call: no active keys left
-		count, err = svc.BulkRevokeAPIKeys(ctx, "bob")
+		count, err = svc.BulkRevokeAPIKeys(ctx, "bob", "")
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
 	})
@@ -392,7 +507,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		ctx := context.Background()
 		svc, _ := createTestService(t)
 
-		_, err := svc.BulkRevokeAPIKeys(ctx, "")
+		_, err := svc.BulkRevokeAPIKeys(ctx, "", "")
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "username is required")
 	})
@@ -414,7 +529,7 @@ func TestBulkRevokeAPIKeys_ThenValidateAll(t *testing.T) {
 	}
 
 	// Bulk revoke all of carol's keys
-	count, err := svc.BulkRevokeAPIKeys(ctx, "carol")
+	count, err := svc.BulkRevokeAPIKeys(ctx, "carol", "")
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
@@ -443,7 +558,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 7 days - should succeed
 		expiresIn := 7 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -459,7 +574,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 60 days - should fail
 		expiresIn := 60 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
 
 		require.Error(t, err)
 		assert.Nil(t, result)
@@ -476,7 +591,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request exactly 30 days - should succeed
 		expiresIn := 30 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -490,7 +605,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
 
 		// No expiration requested - should default to APIKeyMaxExpirationDays (30 days)
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", nil, false, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -505,7 +620,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 365 days - should fail because default max is 90 days
 		expiresIn := 365 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
 
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
@@ -523,7 +638,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 
 		// Request 365 days - should fail because default max is 90 days
 		expiresIn := 365 * 24 * time.Hour
-		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "")
+		result, err := svc.CreateAPIKey(ctx, "alice", []string{"users"}, "Test Key", "", &expiresIn, false, "", "")
 
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
@@ -554,7 +669,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 		now := time.Now().UTC()
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "ephemeral-test", "", nil, true, "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "ephemeral-test", "", nil, true, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -568,7 +683,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		expiresIn := 30 * time.Minute
 		now := time.Now().UTC()
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "short-lived", "", &expiresIn, true, "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "short-lived", "", &expiresIn, true, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -580,7 +695,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 		svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 		expiresIn := 1 * time.Hour
 
-		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "exactly-one-hour", "", &expiresIn, true, "")
+		result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "exactly-one-hour", "", &expiresIn, true, "", "")
 
 		require.NoError(t, err)
 		require.NotNil(t, result)
@@ -598,7 +713,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 			name:        "ExceedsOneHourLimit",
 			expiresIn:   2 * time.Hour,
 			expectedErr: api_keys.ErrExpirationExceedsMax,
-			errContains: "cannot exceed 1 hour",
+			errContains: "cannot exceed 1h0m0s",
 		},
 		{
 			name:        "ZeroExpiration",
@@ -619,7 +734,7 @@ func TestEphemeralKeyExpiration(t *testing.T) {
 			svc := api_keys.NewServiceWithLogger(api_keys.NewMockStore(), &config.Config{}, serviceTestSubSelector{}, logger.Development())
 			expiresIn := tt.expiresIn
 
-			result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "test-key", "", &expiresIn, true, "")
+			result, err := svc.CreateAPIKey(ctx, "user", []string{"users"}, "test-key", "", &expiresIn, true, "", "")
 
 			require.Error(t, err)
 			assert.Nil(t, result)
@@ -665,7 +780,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		store := api_keys.NewMockStore()
 		svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
 
-		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "team-a")
+		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "team-a", "")
 		require.NoError(t, err)
 		require.Equal(t, "team-a", result.Subscription)
 
@@ -678,7 +793,7 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 		store := api_keys.NewMockStore()
 		svc := api_keys.NewServiceWithLogger(store, cfg, subSelectorStub{}, logger.Development())
 
-		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "")
+		result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, "", "")
 		require.NoError(t, err)
 		require.Equal(t, "from-priority", result.Subscription)
 	})
@@ -733,12 +848,12 @@ func TestCreateAPIKey_Subscription(t *testing.T) {
 				store := api_keys.NewMockStore()
 				svc := api_keys.NewServiceWithLogger(store, cfg, tt.stub, logger.Development())
 
-				result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, tt.requested)
+				result, err := svc.CreateAPIKey(ctx, user, groups, "key", "", nil, false, tt.requested, "")
 				require.Error(t, err)
 				require.Nil(t, result)
 				tt.assertErr(t, err)
 
-				res, sErr := store.Search(ctx, user, &api_keys.SearchFilters{}, &api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder},
+				res, sErr := store.Search(ctx, user, "", &api_keys.SearchFilters{}, &api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder},
 					&api_keys.PaginationParams{Limit: 10, Offset: 0})
 				require.NoError(t, sErr)
 				assert.Empty(t, res.Keys)
@@ -858,7 +973,7 @@ func TestCreateAPIKey_ValidatesSubscriptionPhase(t *testing.T) {
 			store := api_keys.NewMockStore()
 			svc := api_keys.NewServiceWithLogger(store, cfg, selector, logger.Development())
 
-			_, err := svc.CreateAPIKey(ctx, user, groups, "test-key", "", nil, false, "test-sub")
+			_, err := svc.CreateAPIKey(ctx, user, groups, "test-key", "", nil, false, "test-sub", "")
 
 			if tt.expectError {
 				require.Error(t, err, "Expected error for %s", tt.name)
@@ -911,4 +1026,55 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
 	//nolint:unqueryvet // False positive - not a SQL query
 	return m.Select(nil, "", "", "")
+}
+
+func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	validGroups := [][]string{
+		{"system:authenticated"},
+		{"my-group"},
+		{"group.with.dots"},
+		{"group_with_underscores"},
+		{"GROUP123"},
+		{"a:b:c"},
+		{"mix-of_all.types:123"},
+	}
+
+	for _, groups := range validGroups {
+		t.Run("valid_"+groups[0], func(t *testing.T) {
+			_, err := svc.CreateAPIKey(ctx, "user", groups, "test-key", "", nil, false, "", "tenant")
+			require.NoError(t, err, "group %q should be valid", groups[0])
+		})
+	}
+
+	invalidGroups := []struct {
+		group  string
+		reason string
+	}{
+		{`group"with"quotes`, "double quotes"},
+		{`group\with\backslash`, "backslashes"},
+		{`group with spaces`, "spaces"},
+		{"group\nwith\nnewline", "newlines"},
+		{"group\twith\ttab", "tabs"},
+		{"group;with;semicolon", "semicolons"},
+		{"group,with,comma", "commas"},
+		{"group[with]brackets", "brackets"},
+		{"group{with}braces", "braces"},
+		{"group(with)parens", "parentheses"},
+		{"group=with=equals", "equals"},
+		{"group$with$dollar", "dollar signs"},
+		{"group@with@at", "at signs"},
+	}
+
+	for _, tc := range invalidGroups {
+		t.Run("invalid_"+tc.reason, func(t *testing.T) {
+			_, err := svc.CreateAPIKey(ctx, "user", []string{tc.group}, "test-key", "", nil, false, "", "tenant")
+			require.Error(t, err, "group with %s should be rejected", tc.reason)
+			assert.Contains(t, err.Error(), "invalid characters", "error should mention invalid characters")
+		})
+	}
 }

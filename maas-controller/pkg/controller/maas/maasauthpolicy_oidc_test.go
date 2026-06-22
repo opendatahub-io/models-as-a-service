@@ -37,7 +37,7 @@ func TestFetchOIDCConfig_NoTenant(t *testing.T) {
 		TenantNamespace: "models-as-a-service",
 	}
 
-	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard())
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.Nil(t, config, "should return nil when Tenant doesn't exist")
 }
 
@@ -70,7 +70,7 @@ func TestFetchOIDCConfig_NoExternalOIDC(t *testing.T) {
 		TenantNamespace: "models-as-a-service",
 	}
 
-	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard())
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.Nil(t, config, "should return nil when externalOIDC is not configured")
 }
 
@@ -106,7 +106,7 @@ func TestFetchOIDCConfig_WithExternalOIDC(t *testing.T) {
 		TenantNamespace: "models-as-a-service",
 	}
 
-	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard())
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.NotNil(t, config, "should return config when externalOIDC is configured")
 	assert.Equal(t, "https://keycloak.example.com/realms/test", config.IssuerURL)
 	assert.Equal(t, "test-client", config.ClientID)
@@ -144,7 +144,7 @@ func TestFetchOIDCConfig_EmptyIssuerURL(t *testing.T) {
 		TenantNamespace: "models-as-a-service",
 	}
 
-	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard())
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.Nil(t, config, "should return nil when issuerUrl is empty")
 }
 
@@ -180,7 +180,7 @@ func TestFetchOIDCConfig_EmptyClientID(t *testing.T) {
 		TenantNamespace: "models-as-a-service",
 	}
 
-	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard())
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.Nil(t, config, "should return nil when clientId is empty (audience validation required)")
 }
 
