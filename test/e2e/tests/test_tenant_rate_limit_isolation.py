@@ -22,6 +22,7 @@ from multitenancy_helpers import (
     wait_for_status_phase,
 )
 from test_helper import (
+    MODEL_NAME,
     TIMEOUT,
     TLS_VERIFY,
     _get_cluster_token,
@@ -44,6 +45,7 @@ def tenant_env(shared_test_tenants):
         tenant["model_name"] = model_name
         tenant["model_namespace"] = tenant["namespace"]
         tenant["model_path"] = f"/{tenant['namespace']}/{model_name}"
+        tenant["backend_model_name"] = MODEL_NAME
 
     yield tenant_a, tenant_b
 
@@ -151,22 +153,29 @@ def _gateway_base_from_api_url(api_base_url: str) -> str:
     return stripped
 
 
-def _inference_at(api_base_url: str, api_key: str, model_path: str, model_name: str) -> requests.Response:
+def _inference_at(api_base_url: str, api_key: str, model_path: str, backend_model_name: str) -> requests.Response:
     url = f"{_gateway_base_from_api_url(api_base_url)}{model_path}/v1/completions"
     return requests.post(
         url,
         headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        json={"model": model_name, "prompt": "Hello", "max_tokens": 1},
+        json={"model": backend_model_name, "prompt": "Hello", "max_tokens": 1},
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )
 
 
-def _exhaust_until_429(api_base_url: str, api_key: str, model_path: str, model_name: str, *, attempts: int = 8) -> tuple[int, requests.Response]:
+def _exhaust_until_429(
+    api_base_url: str,
+    api_key: str,
+    model_path: str,
+    backend_model_name: str,
+    *,
+    attempts: int = 8,
+) -> tuple[int, requests.Response]:
     successes = 0
     last = None
     for _ in range(attempts):
-        last = _inference_at(api_base_url, api_key, model_path, model_name)
+        last = _inference_at(api_base_url, api_key, model_path, backend_model_name)
         if last.status_code == 200:
             successes += 1
         elif last.status_code == 429:
@@ -188,7 +197,7 @@ class TestTenantRateLimitIsolation:
             tenant_a["base_url"],
             tenant_rate_limit_setup["key_a"],
             tenant_a["model_path"],
-            tenant_a["model_name"],
+            tenant_a["backend_model_name"],
         )
         assert successes > 0, f"Tenant A hit 429 before any successful inference: {response_summary(response)}"
         assert response.status_code == 429, (
@@ -203,7 +212,7 @@ class TestTenantRateLimitIsolation:
             tenant_a["base_url"],
             tenant_rate_limit_setup["key_a"],
             tenant_a["model_path"],
-            tenant_a["model_name"],
+            tenant_a["backend_model_name"],
         )
         assert response.status_code == 429, f"Tenant A did not hit rate limit after {successes} successes"
 
@@ -211,7 +220,7 @@ class TestTenantRateLimitIsolation:
             tenant_b["base_url"],
             tenant_rate_limit_setup["key_b"],
             tenant_b["model_path"],
-            tenant_b["model_name"],
+            tenant_b["backend_model_name"],
         )
         assert tenant_b_response.status_code == 200, (
             f"Tenant B should still have independent quota: {response_summary(tenant_b_response)}"
