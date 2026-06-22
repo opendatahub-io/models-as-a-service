@@ -1,9 +1,12 @@
 package v1alpha1
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"slices"
+	"sort"
 	"testing"
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -64,8 +67,14 @@ func TestGeneratedModelsAsServiceCRDContract(t *testing.T) {
 	if !ok {
 		t.Fatal("CRD schema is missing spec")
 	}
+	if !hasRequiredField(schema, "spec") {
+		t.Fatal("CRD root schema must require spec")
+	}
 	if _, ok := specSchema.Properties["managementState"]; !ok {
 		t.Fatal("CRD spec is missing managementState")
+	}
+	if !hasRequiredField(&specSchema, "managementState") {
+		t.Fatal("CRD spec must require managementState")
 	}
 
 	statusSchema, ok := schema.Properties["status"]
@@ -76,6 +85,10 @@ func TestGeneratedModelsAsServiceCRDContract(t *testing.T) {
 		if _, ok := statusSchema.Properties[field]; !ok {
 			t.Fatalf("CRD status is missing %q", field)
 		}
+	}
+	phaseSchema := statusSchema.Properties["phase"]
+	if !hasEnumValues(&phaseSchema, string(ModelsAsServicePhaseReady), string(ModelsAsServicePhaseNotReady)) {
+		t.Fatal("CRD status.phase must be constrained to Ready and Not Ready")
 	}
 }
 
@@ -128,4 +141,36 @@ func hasValidationRule(schema *apiextensionsv1.JSONSchemaProps, rule string) boo
 	}
 
 	return false
+}
+
+func hasRequiredField(schema *apiextensionsv1.JSONSchemaProps, field string) bool {
+	return slices.Contains(schema.Required, field)
+}
+
+func hasEnumValues(schema *apiextensionsv1.JSONSchemaProps, want ...string) bool {
+	if schema == nil || len(schema.Enum) != len(want) {
+		return false
+	}
+
+	got := make([]string, 0, len(schema.Enum))
+	for _, raw := range schema.Enum {
+		var value string
+		if err := json.Unmarshal(raw.Raw, &value); err != nil {
+			return false
+		}
+		got = append(got, value)
+	}
+
+	got = append([]string(nil), got...)
+	want = append([]string(nil), want...)
+	sort.Strings(got)
+	sort.Strings(want)
+
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+
+	return true
 }

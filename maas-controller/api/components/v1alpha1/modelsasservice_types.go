@@ -37,6 +37,7 @@ const (
 
 // ModelsAsServicePhase is the top-level lifecycle summary exposed to the
 // platform module handler contract.
+// +kubebuilder:validation:Enum=Ready;Not Ready
 type ModelsAsServicePhase string
 
 const (
@@ -65,9 +66,9 @@ type ComponentRelease struct {
 type ModelsAsServiceSpec struct {
 	// ManagementState controls whether the module operator should reconcile or remove
 	// the MaaS platform resources represented by this contract.
-	// +kubebuilder:default=Managed
+	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=Managed;Removed
-	ManagementState ManagementState `json:"managementState,omitempty"`
+	ManagementState ManagementState `json:"managementState"`
 }
 
 // ModelsAsServiceStatus defines the observed state of the MaaS module contract.
@@ -88,7 +89,7 @@ type ModelsAsServiceStatus struct {
 	// +patchStrategy=merge
 	// +listType=map
 	// +listMapKey=type
-	Conditions []metav1.Condition `json:"conditions,omitempty" patchStrategy:"merge" patchMergeKey:"type"`
+	Conditions []metav1.Condition `json:"conditions,omitempty" patchMergeKey:"type" patchStrategy:"merge"`
 
 	// Releases lists the installed operator / component versions reported by MaaS.
 	// +optional
@@ -110,7 +111,7 @@ type ModelsAsService struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   ModelsAsServiceSpec   `json:"spec,omitempty"`
+	Spec   ModelsAsServiceSpec   `json:"spec"`
 	Status ModelsAsServiceStatus `json:"status,omitempty"`
 }
 
