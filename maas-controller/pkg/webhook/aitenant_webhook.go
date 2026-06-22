@@ -102,16 +102,10 @@ func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj r
 		return nil, errors.New("gateway namespace is not configured")
 	}
 
-	// Check if gateway reference changed
-	oldGatewayRef := v.gatewayRefFor(oldAITenant)
-	newGatewayRef := v.gatewayRefFor(newAITenant)
-
-	if oldGatewayRef.Namespace == newGatewayRef.Namespace && oldGatewayRef.Name == newGatewayRef.Name {
-		// Gateway reference unchanged, no validation needed
-		return nil, nil
-	}
-
-	// Gateway reference changed, validate the new reference is not in use
+	// Always validate gateway uniqueness on UPDATE to catch legacy duplicates
+	// (e.g., two AITenants sharing a gateway from pre-webhook data).
+	// Even if the gateway reference hasn't changed, we want to reject updates
+	// to AITenants that have duplicate gateway assignments.
 	if err := v.validateGatewayUniqueness(ctx, newAITenant, oldAITenant); err != nil {
 		return nil, err
 	}
