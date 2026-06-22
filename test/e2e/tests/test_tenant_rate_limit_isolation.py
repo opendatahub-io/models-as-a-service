@@ -103,6 +103,14 @@ def tenant_rate_limit_setup(tenant_env):
                 namespace=namespace,
                 timeout=120,
             )
+        for tenant in (tenant_a, tenant_b):
+            wait_for_status_phase(
+                "maasmodelref",
+                tenant["model_name"],
+                tenant["namespace"],
+                expected_phase="Ready",
+                timeout=180,
+            )
 
         oc_token = _get_cluster_token()
         key_a_response = create_api_key_at(

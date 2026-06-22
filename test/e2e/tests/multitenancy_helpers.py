@@ -268,6 +268,25 @@ def wait_for_status_phase(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_status_condition(
+    kind: str,
+    name: str,
+    namespace: str,
+    *,
+    condition_type: str,
+    expected_status: str = "True",
+    timeout: int = 120,
+    interval: int = 5,
+) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for condition in (obj.get("status") or {}).get("conditions") or []:
+            if condition.get("type") == condition_type and condition.get("status") == expected_status:
+                return True
+        return False
+
+    return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
+
+
 def wait_for_deployment_available(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
@@ -806,9 +825,9 @@ def provision_tenant_model(
 ) -> None:
     """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
 
-    Creates LLMInferenceService + MaaSModelRef and waits for Ready. The model is
-    not accessible for inference or /v1/models until MaasAuthPolicy and
-    MaasSubscription are created in the tenant admin namespace.
+    Creates LLMInferenceService + MaaSModelRef and waits for backend readiness.
+    The model is not Ready or accessible for inference or /v1/models until
+    MaasAuthPolicy and MaaSSubscription are created in the tenant admin namespace.
     """
     from test_helper import _create_llmis, _create_maas_model_ref
 
@@ -820,11 +839,11 @@ def provision_tenant_model(
         timeout=ready_timeout,
     )
     _create_maas_model_ref(model_name, tenant_namespace, model_name)
-    wait_for_status_phase(
+    wait_for_status_condition(
         "maasmodelref",
         model_name,
         tenant_namespace,
-        expected_phase="Ready",
+        condition_type="RuntimeReady",
         timeout=ready_timeout,
     )
 
@@ -880,6 +899,13 @@ def make_tenant_model_accessible(
         expected_ready=True,
         namespace=tenant_namespace,
         timeout=trlp_timeout,
+    )
+    wait_for_status_phase(
+        "maasmodelref",
+        model_name,
+        tenant_namespace,
+        expected_phase="Ready",
+        timeout=180,
     )
 
 

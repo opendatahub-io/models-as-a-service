@@ -115,6 +115,14 @@ def tenant_subscriptions(tenant_env):
                     namespace=tenant["namespace"],
                     timeout=120,
                 )
+        for tenant in (tenant_a, tenant_b):
+            wait_for_status_phase(
+                "maasmodelref",
+                tenant["model_name"],
+                tenant["namespace"],
+                expected_phase="Ready",
+                timeout=180,
+            )
         yield {
             "shared": shared_name,
             "tenant_a_only": tenant_a_only,
