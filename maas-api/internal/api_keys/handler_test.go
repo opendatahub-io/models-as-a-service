@@ -2103,3 +2103,93 @@ func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
 	assert.Empty(t, response.Data, "tenant-c user should see no keys")
 	assert.False(t, response.HasMore)
 }
+
+func TestCreateAPIKey_NameValidation(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker())
+
+	user := &token.UserContext{
+		Username: "user",
+		Groups:   []string{"test-group"},
+		Tenant:   "tenant",
+	}
+
+	validNames := []struct {
+		name        string
+		description string
+	}{
+		{"simple-key", "ASCII alphanumeric with dash"},
+		{"test_key_123", "ASCII with underscores and numbers"},
+		{"My API Key", "ASCII with spaces"},
+		{"café", "Latin-1 accented characters"},
+		{"🔑 api-key", "Emoji with ASCII"},
+		{"ключ", "Cyrillic characters"},
+		{"مفتاح", "Arabic characters"},
+		{"κλειδί", "Greek characters"},
+		{"a", "Single character"},
+		{strings.Repeat("a", 128), "Exactly 128 characters"},
+		{"key.with.dots", "Dots"},
+		{"key:with:colons", "Colons"},
+		{"key-with_mixed.chars:123", "Mixed valid punctuation"},
+	}
+
+	for _, tc := range validNames {
+		t.Run("valid_"+tc.description, func(t *testing.T) {
+			requestBody := fmt.Sprintf(`{"name": %q}`, tc.name)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+			c.Set("user", user)
+
+			handler.CreateAPIKey(c)
+
+			assert.Equal(t, http.StatusCreated, w.Code, "key name %q should be valid: %s", tc.name, tc.description)
+			var response CreateAPIKeyResponse
+			err := json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err)
+			// Verify the name is stored (trimmed if had whitespace)
+			assert.Equal(t, strings.TrimSpace(tc.name), response.Name)
+		})
+	}
+
+	invalidNames := []struct {
+		name      string
+		reason    string
+		errMsg    string
+	}{
+		{"   ", "whitespace only", "whitespace only"},
+		{"\t\t", "tabs only", "whitespace only"},
+		{"\n\n", "newlines only", "whitespace only"},
+		{"key\nwith\nnewline", "newline character", "control characters"},
+		{"key\twith\ttab", "tab character", "control characters"},
+		{"key\rwith\rcarriage", "carriage return", "control characters"},
+		{strings.Repeat("a", 129), "129 characters (over limit)", "exceed 128"},
+		{strings.Repeat("x", 200), "200 characters (way over limit)", "exceed 128"},
+		{"line1\nline2\nline3", "multiple newlines", "control characters"},
+	}
+
+	for _, tc := range invalidNames {
+		t.Run("invalid_"+tc.reason, func(t *testing.T) {
+			requestBody := fmt.Sprintf(`{"name": %q}`, tc.name)
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Request.Body = io.NopCloser(strings.NewReader(requestBody))
+			c.Set("user", user)
+
+			handler.CreateAPIKey(c)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code, "key name should be rejected: %s", tc.reason)
+			var response map[string]any
+			err := json.Unmarshal(w.Body.Bytes(), &response)
+			require.NoError(t, err)
+			assert.Contains(t, response["error"], tc.errMsg, "error message should mention %s for %s", tc.errMsg, tc.reason)
+		})
+	}
+}
