@@ -1155,9 +1155,9 @@ func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context
 	return requests
 }
 
-// mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any
-// MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model (aggregated),
-// so we use the model label to find a subscription to trigger reconciliation.
+// mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to every
+// MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model
+// and aggregated, so all contributing subscriptions need a status refresh.
 func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Context, obj client.Object) []reconcile.Request {
 	labels := obj.GetLabels()
 	if labels["app.kubernetes.io/managed-by"] != "maas-controller" {
@@ -1171,13 +1171,27 @@ func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Contex
 	if modelNamespace == "" {
 		modelNamespace = obj.GetNamespace()
 	}
-	sub := r.findAnySubscriptionForModel(ctx, modelNamespace, modelName)
-	if sub == nil {
+	modelKey := modelNamespace + "/" + modelName
+	var subscriptions maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
 		return nil
 	}
-	return []reconcile.Request{{
-		NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace},
-	}}
+	subscriptions.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, subscriptions.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+
+	seen := make(map[types.NamespacedName]struct{}, len(subscriptions.Items))
+	requests := make([]reconcile.Request, 0, len(subscriptions.Items))
+	for _, sub := range subscriptions.Items {
+		if !sub.GetDeletionTimestamp().IsZero() {
+			continue
+		}
+		key := types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
+	}
+	return requests
 }
 
 // mapMaaSModelRefToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions
@@ -1243,16 +1257,4 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 		}
 	}
 	return requests
-}
-
-func (r *MaaSSubscriptionReconciler) findAnySubscriptionForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSSubscription {
-	subs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
-	if err != nil {
-		return nil
-	}
-	subs = filterSubscriptionsByTenantNamespace(ctx, r.Client, subs, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-	if len(subs) == 0 {
-		return nil
-	}
-	return &subs[0]
 }

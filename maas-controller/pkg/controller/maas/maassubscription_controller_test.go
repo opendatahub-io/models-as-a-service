@@ -220,6 +220,60 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionReconciler_MapGeneratedTRLPToParent_AllModelSubscriptions(t *testing.T) {
+	const (
+		modelName  = "llm"
+		otherModel = "other-model"
+		namespace  = "default"
+		trlpName   = "maas-trlp-" + modelName
+	)
+
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+	otherSub := newMaaSSubscription("sub-other", namespace, "team-c", otherModel, 300)
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	trlp.SetName(trlpName)
+	trlp.SetNamespace(namespace)
+	trlp.SetLabels(map[string]string{
+		"maas.opendatahub.io/model":           modelName,
+		"maas.opendatahub.io/model-namespace": namespace,
+		"app.kubernetes.io/managed-by":        "maas-controller",
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(subA, subB, otherSub, trlp).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	requests := r.mapGeneratedTRLPToParent(context.Background(), trlp)
+
+	got := make(map[types.NamespacedName]bool, len(requests))
+	for _, req := range requests {
+		got[req.NamespacedName] = true
+	}
+
+	want := []types.NamespacedName{
+		{Name: "sub-a", Namespace: namespace},
+		{Name: "sub-b", Namespace: namespace},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d reconcile requests, got %d: %#v", len(want), len(got), requests)
+	}
+	for _, key := range want {
+		if !got[key] {
+			t.Errorf("expected reconcile request for %s/%s", key.Namespace, key.Name)
+		}
+	}
+	if got[types.NamespacedName{Name: "sub-other", Namespace: namespace}] {
+		t.Errorf("unexpected reconcile request for unrelated subscription")
+	}
+}
+
 // TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition checks scanForDuplicatePriority in one pass:
 // sub-a and sub-b share spec.priority; sub-c has a unique priority.
 func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T) {
