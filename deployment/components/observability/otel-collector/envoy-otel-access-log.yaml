@@ -1,0 +1,244 @@
+# MaaS Usage Logs EnvoyFilter
+#
+# Emits structured usage logs for inference requests via OTel Access Log Service.
+#
+# Identity:  FILTER_STATE(wasm.kuadrant.auth.identity.*) — set by Kuadrant Wasm
+#            plugin before rate limiting, so available on both 2xx and 429.
+# Model:     Lua parses "model" from request body (covers 429), then overwrites
+#            from response body on 200 (authoritative, not user-spoofable).
+# Tokens:    Lua parses usage.{total,prompt,completion}_tokens from response body.
+#            Skipped for streaming responses (text/event-stream) to avoid buffering.
+# Scope:     CEL filter restricts to /v1/chat/completions and /v1/completions.
+# Targeting: Gateway API targetRefs.
+#
+# Safety:    Lua body parsing uses pcall — malformed payloads yield "0" tokens,
+#            never crash the filter or drop traffic. The OTel ALS gRPC channel is
+#            async; if the collector is unreachable, Envoy silently discards the
+#            log entry without affecting the request.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: maas-model-access-logs
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+    maas.opendatahub.io/config-usage: "true"
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  configPatches:
+
+  # ── Cluster: gRPC endpoint to OTel Collector ──────────────────────────
+  - applyTo: CLUSTER
+    patch:
+      operation: ADD
+      value:
+        name: otel_als_cluster
+        type: STRICT_DNS
+        connect_timeout: 5s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: otel_als_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: otel-collector.openshift-ingress.svc.cluster.local
+                    port_value: 4317
+
+  # ── Lua filter 1: Extract model from request body ─────────────────────
+  # INSERT_FIRST so model metadata is available to downstream filters.
+  # Only activates on inference paths; all other requests pass through untouched.
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: INSERT_FIRST
+      value:
+        name: envoy.filters.http.lua.capture_model
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          default_source_code:
+            inline_string: |
+              function envoy_on_request(request_handle)
+                local path = request_handle:headers():get(":path")
+                if not path then return end
+                if not (string.find(path, "/v1/chat/completions", 1, true)
+                     or string.find(path, "/v1/completions", 1, true)) then
+                  return
+                end
+
+                local ok, model = pcall(function()
+                  local body = request_handle:body()
+                  if not body then return "unknown" end
+                  local raw = body:getBytes(0, body:length())
+                  return string.match(raw, '"model"%s*:%s*"([^"]+)"') or "unknown"
+                end)
+
+                request_handle:streamInfo():dynamicMetadata():set(
+                  "envoy.filters.http.json_to_metadata", "model", ok and model or "unknown")
+              end
+
+  # ── Lua filter 2: Extract token counts from response body ─────────────
+  # INSERT_BEFORE router. Request phase sets a flag; response phase parses tokens.
+  # Streaming responses (text/event-stream) are NOT buffered — tokens report "0".
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.router
+    patch:
+      operation: INSERT_BEFORE
+      value:
+        name: envoy.filters.http.lua.extract_tokens
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+          default_source_code:
+            inline_string: |
+              local MD_NS = "envoy.filters.http.json_to_metadata"
+
+              function envoy_on_request(request_handle)
+                local path = request_handle:headers():get(":path")
+                if path and (string.find(path, "/v1/chat/completions", 1, true)
+                          or string.find(path, "/v1/completions", 1, true)) then
+                  request_handle:streamInfo():dynamicMetadata():set(MD_NS, "is_completions", "true")
+                end
+              end
+
+              function envoy_on_response(response_handle)
+                local meta = response_handle:streamInfo():dynamicMetadata():get(MD_NS)
+                if not (meta and meta["is_completions"] == "true") then return end
+
+                local ct = response_handle:headers():get("content-type") or ""
+                if string.find(ct, "text/event-stream", 1, true) then
+                  return
+                end
+
+                local ok, total, prompt, completion, resp_model = pcall(function()
+                  local body = response_handle:body()
+                  if not body then return "0", "0", "0", nil end
+                  local raw = body:getBytes(0, body:length())
+                  return string.match(raw, '"total_tokens"%s*:%s*(%d+)') or "0",
+                         string.match(raw, '"prompt_tokens"%s*:%s*(%d+)') or "0",
+                         string.match(raw, '"completion_tokens"%s*:%s*(%d+)') or "0",
+                         string.match(raw, '"model"%s*:%s*"([^"]+)"')
+                end)
+
+                local md = response_handle:streamInfo():dynamicMetadata()
+                md:set(MD_NS, "tokens_total",      ok and total or "0")
+                md:set(MD_NS, "tokens_prompt",      ok and prompt or "0")
+                md:set(MD_NS, "tokens_completion",  ok and completion or "0")
+                if ok and resp_model then
+                  md:set(MD_NS, "model", resp_model)
+                end
+              end
+
+  # ── OTel Access Log Service ───────────────────────────────────────────
+  # CEL filter restricts to inference paths. Attributes streamed via gRPC.
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          access_log:
+          - name: envoy.access_loggers.open_telemetry
+            filter:
+              extension_filter:
+                name: envoy.access_loggers.extension_filters.cel
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
+                  expression: >-
+                    request.path.endsWith('/v1/chat/completions')
+                    || request.path.endsWith('/v1/completions')
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
+              common_config:
+                log_name: maas-usage-log
+                transport_api_version: V3
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: otel_als_cluster
+              body:
+                string_value: "%REQ(:METHOD)% %REQ(:PATH)% %RESPONSE_CODE%"
+              attributes:
+                values:
+                # ── Request ──
+                - key: request_id
+                  value:
+                    string_value: "%REQ(X-REQUEST-ID)%"
+                - key: method
+                  value:
+                    string_value: "%REQ(:METHOD)%"
+                - key: path
+                  value:
+                    string_value: "%REQ(:PATH)%"
+                # ── Response ──
+                - key: response_code
+                  value:
+                    string_value: "%RESPONSE_CODE%"
+                - key: response_type
+                  value:
+                    string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
+                - key: duration_ms
+                  value:
+                    string_value: "%DURATION%"
+                - key: downstream_remote_address
+                  value:
+                    string_value: "%DOWNSTREAM_REMOTE_ADDRESS%"
+                # ── Identity (Kuadrant WASM filter_state — survives 429) ──
+                - key: user_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
+                - key: subscription
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                - key: groups
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups_str:PLAIN)%"
+                - key: key_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
+                - key: organization_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%"
+                # ── Tokens (Lua → dynamic metadata) ──
+                - key: tokens_total
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%"
+                - key: tokens_prompt
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_prompt)%"
+                - key: tokens_completion
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%"
+                # ── Model (Lua → dynamic metadata) ──
+                - key: model
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
+              resource_attributes:
+                values:
+                - key: service.name
+                  value:
+                    string_value: maas-gateway
+                - key: service.namespace
+                  value:
+                    string_value: openshift-ingress
