@@ -18,6 +18,31 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
+func TestResolveApplicationsNamespace(t *testing.T) {
+	cases := []struct {
+		name           string
+		flag           string
+		applicationsNS string
+		maasAPINS      string
+		want           string
+	}{
+		{name: "flag overrides env", flag: "custom-ns", applicationsNS: "from-env", maasAPINS: "from-downward", want: "custom-ns"},
+		{name: "applications env", flag: "", applicationsNS: "from-env", maasAPINS: "", want: "from-env"},
+		{name: "downward api env", flag: "", applicationsNS: "", maasAPINS: "from-downward-api", want: "from-downward-api"},
+		{name: "empty", flag: "", applicationsNS: "", maasAPINS: "", want: ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(applicationsNamespaceEnv, tc.applicationsNS)
+			t.Setenv("MAAS_API_NAMESPACE", tc.maasAPINS)
+			if got := resolveApplicationsNamespace(tc.flag); got != tc.want {
+				t.Fatalf("resolveApplicationsNamespace(%q) = %q, want %q", tc.flag, got, tc.want)
+			}
+		})
+	}
+}
+
 func TestEnsureAITenantNamespaceWithClientCreatesNamespace(t *testing.T) {
 	clientset := clientsetfake.NewSimpleClientset()
 
