@@ -13,7 +13,7 @@ spec:
   display:
     name: "Usage User Dashboard"
     description: >-
-      Personal view of MaaS API usage. Shows your token consumption, request
+      Personal view of model usage. Shows your token consumption, request
       counts, and rate limiting. Queries are automatically filtered to your
       user identity via the Loki query proxy.
   duration: 1h
@@ -125,7 +125,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range]))
                     or vector(0)
 
@@ -154,7 +154,7 @@ spec:
                     name: scoped-loki
                   query: >-
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="rate_limit"}
+                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
                     [$__range]))
                     or vector(0)
 
@@ -182,11 +182,11 @@ spec:
                     name: scoped-loki
                   query: >-
                     (sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription", response_type="hit"}
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
                     [$__range]))
                     /
                     sum(count_over_time({service_name="maas-gateway",
-                    subscription=~"$subscription"}
+                    subscription=~"$subscription", model=~"$model"}
                     [$__range])))
                     or vector(1)
 
