@@ -1578,3 +1578,155 @@ func TestIsClaimOwnedByAITenant_OwnerRefTakesPrecedenceOverAnnotations(t *testin
 	}
 	g.Expect(isClaimOwnedByAITenant(claimWrongUID, aitenant)).To(BeFalse())
 }
+
+func TestAITenantReconcile_DeleteGatewayClaimSkipsSpoofedOwnerRef(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-delete-spoof",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			UID:        "uid-delete-spoof",
+			Finalizers: []string{aitenantFinalizer},
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "del-gw"},
+		},
+	}
+
+	isController := true
+	gwRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "del-gw"}
+
+	// Create a claim with matching annotations but OwnerReference pointing to
+	// a different AITenant (spoofed annotations). deleteGatewayClaim must skip it.
+	spoofedClaim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gatewayClaimName(gwRef),
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/gateway-claim": "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-delete-spoof",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind:       "AITenant",
+				Name:       "team-real-owner",
+				UID:        "uid-real-owner",
+				Controller: &isController,
+			}},
+		},
+	}
+
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ai-tenant-team-delete-spoof",
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-delete-spoof",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns, spoofedClaim, existingAITenantGateway("del-gw")).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	// Delete the AITenant and reconcile.
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	_, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// The spoofed claim must NOT have been deleted because its OwnerReference
+	// points to a different AITenant.
+	var remaining corev1.ConfigMap
+	err = cl.Get(ctx, client.ObjectKey{
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+		Name:      gatewayClaimName(gwRef),
+	}, &remaining)
+	g.Expect(err).NotTo(HaveOccurred(), "spoofed claim should survive deleteGatewayClaim")
+}
+
+func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-cleanup-spoof",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       "uid-cleanup-spoof",
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "new-gw"},
+		},
+	}
+
+	isController := true
+	staleRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "old-gw"}
+
+	// Create a stale claim with matching annotations but OwnerReference pointing
+	// to a different AITenant. cleanupStaleClaims must skip it.
+	spoofedStaleClaim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gatewayClaimName(staleRef),
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/gateway-claim": "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-cleanup-spoof",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+			OwnerReferences: []metav1.OwnerReference{{
+				Kind:       "AITenant",
+				Name:       "team-real-owner",
+				UID:        "uid-real-owner",
+				Controller: &isController,
+			}},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, spoofedStaleClaim, existingAITenantGateway("new-gw")).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	currentRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "new-gw"}
+	err := r.cleanupStaleClaims(ctx, aitenant, currentRef)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// The spoofed stale claim must NOT have been deleted because its
+	// OwnerReference points to a different AITenant.
+	var remaining corev1.ConfigMap
+	err = cl.Get(ctx, client.ObjectKey{
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+		Name:      gatewayClaimName(staleRef),
+	}, &remaining)
+	g.Expect(err).NotTo(HaveOccurred(), "spoofed stale claim should survive cleanupStaleClaims")
+}

@@ -732,7 +732,7 @@ func (r *AITenantReconciler) deleteGatewayClaim(ctx context.Context, aitenant *m
 	}
 	for i := range claimList.Items {
 		cm := &claimList.Items[i]
-		if !ownedByAITenant(cm, aitenant) {
+		if !isClaimOwnedByAITenant(cm, aitenant) {
 			continue
 		}
 		if err := r.Delete(ctx, cm); client.IgnoreNotFound(err) != nil {
@@ -760,7 +760,7 @@ func (r *AITenantReconciler) cleanupStaleClaims(ctx context.Context, aitenant *m
 		if cm.Name == currentClaimName {
 			continue // Skip the current (valid) claim.
 		}
-		if !ownedByAITenant(cm, aitenant) {
+		if !isClaimOwnedByAITenant(cm, aitenant) {
 			continue // Belongs to a different AITenant.
 		}
 		if err := r.Delete(ctx, cm); client.IgnoreNotFound(err) != nil {
