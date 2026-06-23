@@ -518,7 +518,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			req.Header.Set("X-Maas-Subscription", tt.subscription)
 			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 			req.Header.Set(constant.HeaderGroup, tt.userGroups)
-					router.ServeHTTP(w, req)
+			router.ServeHTTP(w, req)
 
 			require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
 
@@ -539,7 +539,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer valid-token")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
 
@@ -561,7 +561,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer valid-token")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["free-users", "premium-users"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		// User token (no X-MaaS-Subscription header) returns all accessible models
 		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
@@ -609,7 +609,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			req.Header.Set("X-Maas-Subscription", tt.subscription)
 			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 			req.Header.Set(constant.HeaderGroup, tt.userGroups)
-					router.ServeHTTP(w, req)
+			router.ServeHTTP(w, req)
 
 			require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
 
@@ -717,7 +717,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a", "group-b"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -769,7 +769,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-			router2.ServeHTTP(w, req)
+		router2.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -790,7 +790,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -906,7 +906,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -1024,7 +1024,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -1131,7 +1131,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
@@ -1237,7 +1237,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-			router.ServeHTTP(w, req)
+		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 
