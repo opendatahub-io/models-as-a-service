@@ -673,6 +673,15 @@ func (r *AITenantReconciler) ensureGatewayClaim(ctx context.Context, aitenant *m
 			return fmt.Errorf("get existing gateway claim %s/%s: %w", claimNamespace, claimName, err)
 		}
 		if ownedByAITenant(&existing, aitenant) {
+			// Retroactively add the controller OwnerReference if it is missing
+			// (e.g. the claim was created before the OwnerReference feature was
+			// deployed). SetControllerReference is idempotent.
+			if err := controllerutil.SetControllerReference(aitenant, &existing, r.Scheme); err != nil {
+				return fmt.Errorf("set owner reference on existing gateway claim %s/%s: %w", claimNamespace, claimName, err)
+			}
+			if err := r.Update(ctx, &existing); err != nil {
+				return fmt.Errorf("update owner reference on gateway claim %s/%s: %w", claimNamespace, claimName, err)
+			}
 			// Already claimed by this AITenant -- still clean up stale claims
 			// from any prior gateway reference.
 			return r.cleanupStaleClaims(ctx, aitenant, gatewayRef)

@@ -1280,6 +1280,86 @@ func TestAITenantReconcile_GatewayClaimHasOwnerReference(t *testing.T) {
 	g.Expect(claim.OwnerReferences[0].Controller).To(Equal(&isController))
 }
 
+func TestAITenantReconcile_GatewayClaimRetroactiveOwnerReference(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-retroactive",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       "retro-uid-1234",
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "retro-gw"},
+		},
+	}
+	gatewayRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "retro-gw"}
+	claimName := gatewayClaimName(gatewayRef)
+
+	// Pre-create a claim ConfigMap WITHOUT an OwnerReference, simulating a
+	// claim created before the OwnerReference feature was deployed.
+	preExistingClaim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      claimName,
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":      "maas-controller",
+				"maas.opendatahub.io/gateway-claim": "true",
+				aitenantManagedLabel:                 "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-retroactive",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+			// No OwnerReferences set.
+		},
+		Data: map[string]string{
+			"gatewayNamespace": "openshift-ingress",
+			"gatewayName":      "retro-gw",
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, existingAITenantGateway("retro-gw"), preExistingClaim).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+
+	// Verify the pre-existing claim has no OwnerReferences.
+	var before corev1.ConfigMap
+	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: claimName}, &before)).To(Succeed())
+	g.Expect(before.OwnerReferences).To(BeEmpty())
+
+	// Reconcile the AITenant -- the controller should retroactively add the
+	// OwnerReference to the existing claim.
+	reconcileAITenantTwice(t, r, key)
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+
+	// Verify the OwnerReference was retroactively added.
+	var after corev1.ConfigMap
+	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: claimName}, &after)).To(Succeed())
+	g.Expect(after.OwnerReferences).To(HaveLen(1))
+	g.Expect(after.OwnerReferences[0].Name).To(Equal("team-retroactive"))
+	g.Expect(after.OwnerReferences[0].Kind).To(Equal("AITenant"))
+	isController := true
+	g.Expect(after.OwnerReferences[0].Controller).To(Equal(&isController))
+}
+
 func TestAITenantReconcile_StaleClaimCleanedOnGatewayRetarget(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
