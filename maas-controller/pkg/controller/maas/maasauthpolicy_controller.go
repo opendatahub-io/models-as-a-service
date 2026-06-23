@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -341,6 +342,60 @@ func subscriptionGatewayCacheKeySelector() string {
 	)
 }
 
+// applyPublicPathsCELToRules appends a CEL "when" predicate to every evaluator in the
+// given rule map so that public-path requests skip those evaluators entirely.
+func applyPublicPathsCELToRules(rules map[string]any, celPredicate string) {
+	for name, evaluator := range rules {
+		eval, ok := evaluator.(map[string]any)
+		if !ok {
+			continue
+		}
+		when, _ := eval["when"].([]any)
+		eval["when"] = append(when, map[string]any{
+			"predicate": celPredicate,
+		})
+		rules[name] = eval
+	}
+}
+
+// buildPublicPathsRegex constructs a regex that matches exact public-path URLs across all
+// models in the allowlist. Each model's route prefix is /{namespace}/{name} per the
+// HTTPRoute convention, so /docs on model default/llm becomes ^/default/llm/docs$.
+func buildPublicPathsRegex(allowlists map[string]modelSubjectAllowlist) string {
+	var parts []string
+	for modelKey, entry := range allowlists {
+		if len(entry.PublicPaths) == 0 {
+			continue
+		}
+		for _, p := range entry.PublicPaths {
+			full := "/" + modelKey + p
+			parts = append(parts, fmt.Sprintf("^%s$", regexp.QuoteMeta(full)))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
+
+// buildPublicPathsCELPredicate constructs a CEL predicate that evaluates to true for
+// requests that are NOT targeting public paths. Attach as a "when" predicate on metadata
+// and authorization evaluators so they are skipped for unauthenticated doc endpoints.
+func buildPublicPathsCELPredicate(allowlists map[string]modelSubjectAllowlist) string {
+	var parts []string
+	for modelKey, entry := range allowlists {
+		if len(entry.PublicPaths) == 0 {
+			continue
+		}
+		for _, p := range entry.PublicPaths {
+			full := "/" + modelKey + p
+			escaped := strings.ReplaceAll(full, `\`, `\\`)
+			escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+			parts = append(parts, fmt.Sprintf(`request.path != "%s"`, escaped))
+		}
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, " && ")
+}
+
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies/finalizers,verbs=update
@@ -447,7 +502,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID, gatewayNs, gatewayName); err != nil {
+	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID, gatewayNs, gatewayName, modelAllowlists); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
@@ -571,14 +626,20 @@ type authPolicyRef struct {
 }
 
 type modelSubjectAllowlist struct {
-	Users  []string `json:"users"`
-	Groups []string `json:"groups"`
+	Users       []string `json:"users"`
+	Groups      []string `json:"groups"`
+	PublicPaths []string `json:"publicPaths,omitempty"`
 }
 
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+// The allowlists map is used to derive public-path rules (anonymous auth + evaluator skip).
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(
+	modelAccessJSON string, oidc *oidcConfig,
+	tenantID, tenantName, gatewayNamespace, gatewayName string,
+	allowlists map[string]modelSubjectAllowlist,
+) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -639,6 +700,25 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 			},
 			"metrics":  false,
 			"priority": int64(1),
+		}
+	}
+
+	// If any model has publicPaths configured, add an anonymous authentication rule scoped
+	// to those exact paths so documentation endpoints can be accessed without credentials.
+	publicPathsRegex := buildPublicPathsRegex(allowlists)
+	publicPathsCEL := buildPublicPathsCELPredicate(allowlists)
+	if publicPathsRegex != "" {
+		authenticationRules["anonymous-public-paths"] = map[string]any{
+			"anonymous": map[string]any{},
+			"when": []any{
+				map[string]any{
+					"selector": "request.url_path",
+					"operator": "matches",
+					"value":    publicPathsRegex,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
 		}
 	}
 
@@ -1004,6 +1084,18 @@ allow {
 		},
 	}
 
+	// If any model has publicPaths, append CEL skip predicates to metadata and authorization
+	// evaluators so that API-key validation, subscription checks, and group-membership
+	// checks are not triggered for unauthenticated documentation requests.
+	if publicPathsCEL != "" {
+		if md, ok := defaultsRules["metadata"].(map[string]any); ok {
+			applyPublicPathsCELToRules(md, publicPathsCEL)
+		}
+		if az, ok := defaultsRules["authorization"].(map[string]any); ok {
+			applyPublicPathsCELToRules(az, publicPathsCEL)
+		}
+	}
+
 	return map[string]any{
 		"targetRef": map[string]any{
 			"group":     "gateway.networking.k8s.io",
@@ -1029,7 +1121,10 @@ allow {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, tenantID, gatewayNamespace, gatewayName string) error {
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
+	ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig,
+	tenantID, gatewayNamespace, gatewayName string, allowlists map[string]modelSubjectAllowlist,
+) error {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID)
 
 	// Calculate tenantName from tenantID
@@ -1039,7 +1134,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, tenantName, gatewayNamespace, gatewayName, allowlists)
 
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
@@ -1177,8 +1272,12 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 				}
 				entry.Users = append(entry.Users, user)
 			}
+			for _, pp := range p.Spec.PublicPaths {
+				entry.PublicPaths = append(entry.PublicPaths, string(pp))
+			}
 			entry.Groups = deduplicateAndSort(entry.Groups)
 			entry.Users = deduplicateAndSort(entry.Users)
+			entry.PublicPaths = deduplicateAndSort(entry.PublicPaths)
 			aggregate[key] = entry
 		}
 	}
