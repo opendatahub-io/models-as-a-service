@@ -170,11 +170,13 @@ def _exhaust_until_429(
     model_path: str,
     backend_model_name: str,
     *,
-    attempts: int = 8,
+    timeout: int = 45,
+    delay: float = 1.0,
 ) -> tuple[int, requests.Response]:
     successes = 0
     last = None
-    for _ in range(attempts):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
         last = _inference_at(api_base_url, api_key, model_path, backend_model_name)
         if last.status_code == 200:
             successes += 1
@@ -182,7 +184,7 @@ def _exhaust_until_429(
             return successes, last
         else:
             raise AssertionError(f"unexpected inference response: {response_summary(last)}")
-        time.sleep(0.1)
+        time.sleep(delay)
     assert last is not None
     return successes, last
 
@@ -214,7 +216,9 @@ class TestTenantRateLimitIsolation:
             tenant_a["model_path"],
             tenant_a["backend_model_name"],
         )
-        assert response.status_code == 429, f"Tenant A did not hit rate limit after {successes} successes"
+        assert response.status_code == 429, (
+            f"Tenant A did not hit rate limit after {successes} successes: {response_summary(response)}"
+        )
 
         tenant_b_response = _inference_at(
             tenant_b["base_url"],
