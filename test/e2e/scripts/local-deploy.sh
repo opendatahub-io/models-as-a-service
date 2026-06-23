@@ -1228,7 +1228,7 @@ metadata:
   name: llm-katan-creds
   namespace: ${MODEL_NAMESPACE}
   labels:
-    inference.networking.k8s.io/bbr-managed: "true"
+    inference.llm-d.ai/ipp-managed: "true"
 stringData:
   api-key: "llm-katan-openai-key"
 ---
