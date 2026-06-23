@@ -11,7 +11,7 @@ import (
 )
 
 func TestEnsureAITenantNamespaceWithClientCreatesNamespace(t *testing.T) {
-	clientset := fake.NewSimpleClientset()
+	clientset := fake.NewClientset()
 
 	if err := ensureAITenantNamespaceWithClient(context.Background(), tenantreconcile.DefaultAITenantNamespace, clientset); err != nil {
 		t.Fatalf("ensure AITenant namespace: %v", err)

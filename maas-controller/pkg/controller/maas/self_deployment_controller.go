@@ -329,7 +329,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 		return fmt.Errorf("set owner reference on ServiceMonitor: %w", err)
 	}
 
-	if err := r.Patch(ctx, sm, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(sm), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		// If ServiceMonitor CRD is not installed, skip creation (monitoring stack is optional)
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil

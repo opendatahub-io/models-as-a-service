@@ -1,13 +1,13 @@
 # TLS Configuration
 
-This guide covers TLS configuration for the MaaS API component to enable encrypted communication for all API traffic.
+This guide covers TLS configuration for MaaS components to enable encrypted communication for API and webhook traffic.
 
 !!! tip "Quick Verification"
     For TLS verification commands, see [Validation Guide - TLS Verification](../install/validation.md#tls-verification).
 
 ## Overview
 
-The MaaS API supports end-to-end TLS encryption across all traffic paths:
+The MaaS deployment supports end-to-end TLS encryption across all API traffic paths:
 
 ```mermaid
 sequenceDiagram
@@ -29,8 +29,8 @@ sequenceDiagram
 When TLS is enabled:
 
 - External API traffic is encrypted from client to backend
-- Internal authentication traffic (Authorino → `maas-api`) is encrypted
-- All certificate validation uses a trusted CA bundle
+- Internal authentication traffic (Authorino → `maas-api`) is encrypted and certificate-verified via the service-CA bundle
+- Gateway → `maas-api` traffic is encrypted but uses `insecureSkipVerify` (see the DestinationRule section below)
 
 ## Prerequisites
 
@@ -98,14 +98,66 @@ kubectl -n kuadrant-system set env deployment/authorino \
 
 The `tls` overlay includes a DestinationRule to configure TLS origination from the gateway to `maas-api`.
 
-**Why DestinationRule?** Gateway API's HTTPRoute doesn't tell Istio to use TLS when communicating with backends. Without [BackendTLSPolicy](https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/) (GA in Gateway API v1.4), an Istio-native DestinationRule is required to configure TLS origination.
+**Why DestinationRule?** Gateway API's HTTPRoute doesn't tell the gateway implementation to use TLS when communicating with backends. [BackendTLSPolicy](https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/) is the standard Gateway API resource for this, but MaaS currently uses an `openshift-default` GatewayClass (`openshift.io/gateway-controller/v1`) and keeps the Istio-native DestinationRule workaround for backend TLS origination.
 
 ```
 Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TLS origination)
 ```
 
 !!! info "Future consideration"
-    Once Gateway API v1.4+ with BackendTLSPolicy is supported by the Istio Gateway provider, the DestinationRule can be replaced with a standard Gateway API resource.
+    Once the managed Gateway provider supports BackendTLSPolicy for this deployment, the DestinationRule can be replaced with a standard Gateway API resource.
+
+## Cluster TLS Security Profile
+
+On OpenShift clusters, both `maas-controller` and `maas-api` automatically read the
+cluster-wide TLS security profile from the `APIServer` resource
+(`config.openshift.io/v1`, name `cluster`). This ensures the components honor
+the admin's choice of TLS version and cipher suites.
+
+### How it works
+
+At startup, each component fetches `spec.tlsSecurityProfile` from the `APIServer` CR:
+
+- **maas-api**: Applies the profile's `minTLSVersion` and `ciphers` to the API server
+  on port 8443. The profile overrides the `--tls-min-version` flag and sets explicit
+  cipher suites instead of relying on Go defaults.
+- **maas-controller**: Applies the profile to the controller-runtime webhook server
+  on port 9443. Metrics remains HTTP on port 8080 and does not use this profile.
+
+Both components watch the `APIServer` resource for changes. When the TLS profile is
+updated, the component performs a graceful shutdown so the Pod restarts with the new
+TLS settings.
+
+### Supported profiles
+
+| Profile | Min TLS Version | Description |
+|---------|----------------|-------------|
+| **Intermediate** (default) | TLS 1.2 | Recommended for most deployments |
+| **Modern** | TLS 1.3 | TLS 1.3 only — maximum security |
+| **Old** | TLS 1.0 | Legacy compatibility — use as last resort |
+| **Custom** | Configurable | Admin-defined cipher suites and min version |
+
+When the `APIServer` resource has no `tlsSecurityProfile` set (or on non-OpenShift
+clusters), the **Intermediate** profile is used as the default.
+
+### Fallback behavior
+
+On non-OpenShift clusters (e.g., Kind for development), the `APIServer` resource does
+not exist. In this case:
+
+- **maas-controller** falls back to the Intermediate profile defaults
+- **maas-api** falls back to its flag-based `--tls-min-version` setting (default: TLS 1.2)
+
+### Known limitations
+
+The `DestinationRule` for gateway → maas-api TLS origination uses `insecureSkipVerify: true`
+(see the Gateway → maas-api TLS DestinationRule section above). This is a
+deliberate trade-off in the current gateway integration: Istio can verify upstream
+certificates with `caCertificates` or `credentialName`, but the managed gateway proxy
+does not currently mount or receive the OpenShift service-CA bundle that signs the
+`maas-api` serving certificate. Traffic is still encrypted. Removing this requires
+platform wiring that makes the service CA available to the gateway proxy, or a managed
+Gateway implementation that supports BackendTLSPolicy with the required CA reference.
 
 ## Custom maas-api TLS Configuration
 
@@ -154,4 +206,3 @@ kustomize build deployment/base/maas-api/overlays/tls
 ## Verifying TLS Configuration
 
 For TLS verification commands, see [Validation Guide - TLS Verification](../install/validation.md#tls-verification).
-
