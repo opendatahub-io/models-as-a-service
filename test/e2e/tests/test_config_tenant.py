@@ -1,4 +1,4 @@
-"""Read-only E2E for cluster Config/default (anchor + owner refs on Tenant and maas-controller).
+"""Read-only E2E for cluster Config/default owner refs.
 
 Does not delete Config; destructive GC checks belong in operator or dedicated jobs.
 """
@@ -61,6 +61,8 @@ CONFIG_API_PREFIX = "maas.opendatahub.io/"
 
 TENANT_NAME = "default-tenant"
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+DEFAULT_AITENANT_NAME = "models-as-a-service"
+AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 CONTROLLER_DEPLOY_NS = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 CONTROLLER_DEPLOYMENT = "maas-controller"
 
@@ -71,6 +73,10 @@ def _config_doc():
 
 def _tenant_doc():
     return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+
+
+def _aitenant_doc():
+    return _oc_json(["get", "aitenant", DEFAULT_AITENANT_NAME, "-n", AITENANT_NAMESPACE, "-o", "json"])
 
 
 def _config_uid_or_none():
@@ -135,6 +141,22 @@ class TestConfigAnchorPresence:
 
 
 class TestConfigTenantOwnership:
+    def test_default_aitenant_lists_config_owner_reference(self):
+        try:
+            doc = _aitenant_doc()
+        except subprocess.CalledProcessError as exc:
+            if _oc_not_found(exc):
+                pytest.skip(
+                    f"AITenant {DEFAULT_AITENANT_NAME}/{AITENANT_NAMESPACE} not found; "
+                    "run after default AITenant bootstrap."
+                )
+            raise
+        ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
+        assert ref is not None, (
+            f"AITenant {DEFAULT_AITENANT_NAME}/{AITENANT_NAMESPACE} should reference "
+            f"Config/{CONFIG_NAME} (LifecycleReconciler links the anchor for GC)."
+        )
+
     def test_tenant_lists_config_owner_reference(self):
         try:
             doc = _tenant_doc()

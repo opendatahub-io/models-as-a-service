@@ -47,6 +47,21 @@ func TestTenantIdentifierFor(t *testing.T) {
 			expected: "redteam",
 		},
 		{
+			name: "default AITenant-managed tenant keeps legacy empty identifier",
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "models-as-a-service",
+					Labels: map[string]string{
+						LabelManagedByAITenant: "true",
+						LabelTenantName:        DefaultAITenantName,
+						LabelTenantNamespace:   "models-as-a-service",
+					},
+				},
+			},
+			expected: "",
+		},
+		{
 			name: "AITenant-managed tenant with different name",
 			tenant: &maasv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -178,6 +193,30 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "default-tenant",
 				Namespace: "models-as-a-service",
+			},
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+			},
+		}
+
+		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		assert.NoError(t, err)
+
+		assert.Equal(t, "", params.TenantIdentifier)
+	})
+
+	t.Run("default AITenant-managed tenant keeps empty tenant identifier", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default-tenant",
+				Namespace: "models-as-a-service",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+				},
 			},
 			Spec: maasv1alpha1.TenantSpec{
 				GatewayRef: maasv1alpha1.TenantGatewayRef{
