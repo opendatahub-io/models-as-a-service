@@ -8,7 +8,6 @@ data:
     apiVersion: llm-d.ai/v1alpha1
     kind: PayloadProcessorConfig
     plugins:
-    - type: maas-headers-guard
     - type: body-field-to-header
       name: model-extractor
       parameters:

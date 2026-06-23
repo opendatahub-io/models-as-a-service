@@ -28,7 +28,7 @@ spec:
             readOnlyRootFilesystem: true
           args:
             - --config-file
-            - "config/custom-ipp-config.yaml"
+            - "/config/custom-ipp-config.yaml"
             - --v=3
             - --tracing=false
           ports:
