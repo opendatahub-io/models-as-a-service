@@ -220,6 +220,60 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionReconciler_MapGeneratedTRLPToParent_AllModelSubscriptions(t *testing.T) {
+	const (
+		modelName  = "llm"
+		otherModel = "other-model"
+		namespace  = "default"
+		trlpName   = "maas-trlp-" + modelName
+	)
+
+	subA := newMaaSSubscription("sub-a", namespace, "team-a", modelName, 100)
+	subB := newMaaSSubscription("sub-b", namespace, "team-b", modelName, 200)
+	otherSub := newMaaSSubscription("sub-other", namespace, "team-c", otherModel, 300)
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	trlp.SetName(trlpName)
+	trlp.SetNamespace(namespace)
+	trlp.SetLabels(map[string]string{
+		"maas.opendatahub.io/model":           modelName,
+		"maas.opendatahub.io/model-namespace": namespace,
+		"app.kubernetes.io/managed-by":        "maas-controller",
+	})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(subA, subB, otherSub, trlp).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	requests := r.mapGeneratedTRLPToParent(context.Background(), trlp)
+
+	got := make(map[types.NamespacedName]bool, len(requests))
+	for _, req := range requests {
+		got[req.NamespacedName] = true
+	}
+
+	want := []types.NamespacedName{
+		{Name: "sub-a", Namespace: namespace},
+		{Name: "sub-b", Namespace: namespace},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("expected %d reconcile requests, got %d: %#v", len(want), len(got), requests)
+	}
+	for _, key := range want {
+		if !got[key] {
+			t.Errorf("expected reconcile request for %s/%s", key.Namespace, key.Name)
+		}
+	}
+	if got[types.NamespacedName{Name: "sub-other", Namespace: namespace}] {
+		t.Errorf("unexpected reconcile request for unrelated subscription")
+	}
+}
+
 // TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition checks scanForDuplicatePriority in one pass:
 // sub-a and sub-b share spec.priority; sub-c has a unique priority.
 func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T) {
@@ -285,6 +339,53 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T)
 	t.Run("sub-c has unique priority", func(t *testing.T) {
 		assertSpecPriorityDuplicate(t, "sub-c", false, "")
 	})
+}
+
+func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateConditionAllowsSamePriorityAcrossNamespaces(t *testing.T) {
+	const (
+		modelName  = "llm"
+		namespaceA = "tenant-a"
+		namespaceB = "tenant-b"
+	)
+
+	subA := newMaaSSubscription("sub-a", namespaceA, "team-a", modelName, 100)
+	subA.Spec.Priority = 5
+	subB := newMaaSSubscription("sub-b", namespaceB, "team-b", modelName, 200)
+	subB.Spec.Priority = 5
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(subA, subB).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	r.scanForDuplicatePriority(ctx)
+
+	for _, tt := range []struct {
+		name      string
+		namespace string
+	}{
+		{name: "sub-a", namespace: namespaceA},
+		{name: "sub-b", namespace: namespaceB},
+	} {
+		t.Run(tt.namespace+"/"+tt.name, func(t *testing.T) {
+			var got maasv1alpha1.MaaSSubscription
+			if err := c.Get(ctx, types.NamespacedName{Name: tt.name, Namespace: tt.namespace}, &got); err != nil {
+				t.Fatalf("Get %s/%s: %v", tt.namespace, tt.name, err)
+			}
+			cond := apimeta.FindStatusCondition(got.Status.Conditions, ConditionSpecPriorityDuplicate)
+			if cond == nil {
+				t.Fatalf("expected SpecPriorityDuplicate condition on %s/%s", tt.namespace, tt.name)
+			}
+			if cond.Status != metav1.ConditionFalse {
+				t.Fatalf("%s/%s: SpecPriorityDuplicate.Status = %s, want False; message=%q", tt.namespace, tt.name, cond.Status, cond.Message)
+			}
+		})
+	}
 }
 
 // TestMaaSSubscriptionReconciler_DeleteAnnotation verifies that the Reconcile deletion

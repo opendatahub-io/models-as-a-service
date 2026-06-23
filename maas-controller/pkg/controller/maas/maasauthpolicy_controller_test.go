@@ -1273,7 +1273,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		}
 	})
 
-	t.Run("subscription-info has path-scoped when condition", func(t *testing.T) {
+	t.Run("subscription-info has model-route scoped when condition", func(t *testing.T) {
 		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
@@ -1289,12 +1289,15 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		if !ok {
 			t.Fatal("subscription-info when[0] has no predicate string")
 		}
-		if !contains(pred, "/llm/") {
-			t.Errorf("subscription-info when should scope to /llm/ paths, got: %s", pred)
+		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
+			t.Errorf("subscription-info when should scope to model routes and exclude management paths, got: %s", pred)
+		}
+		if contains(pred, `startsWith("/llm/")`) {
+			t.Errorf("subscription-info when should not be hard-coded to /llm/ routes, got: %s", pred)
 		}
 	})
 
-	t.Run("subscription-valid has path-scoped when condition", func(t *testing.T) {
+	t.Run("subscription-valid has model-route scoped when condition", func(t *testing.T) {
 		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 		obj := gwSpecToUnstructured(t, spec)
 
@@ -1310,8 +1313,27 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		if !ok {
 			t.Fatal("subscription-valid when[0] has no predicate string")
 		}
-		if !contains(pred, "/llm/") {
-			t.Errorf("subscription-valid when should scope to /llm/ paths, got: %s", pred)
+		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
+			t.Errorf("subscription-valid when should scope to model routes and exclude management paths, got: %s", pred)
+		}
+		if contains(pred, `startsWith("/llm/")`) {
+			t.Errorf("subscription-valid when should not be hard-coded to /llm/ routes, got: %s", pred)
+		}
+	})
+
+	t.Run("require-group-membership recognizes tenant model paths", func(t *testing.T) {
+		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+		obj := gwSpecToUnstructured(t, spec)
+
+		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+		if !contains(rego, `path_parts[0] != "maas-api"`) || !contains(rego, `path_parts[0] != "v1"`) {
+			t.Errorf("require-group-membership rego should treat tenant model paths as model routes and exclude management paths, got: %s", rego)
+		}
+		if contains(rego, `startswith(request_path, "/llm/")`) {
+			t.Errorf("require-group-membership rego should not be hard-coded to /llm/ routes, got: %s", rego)
 		}
 	})
 
