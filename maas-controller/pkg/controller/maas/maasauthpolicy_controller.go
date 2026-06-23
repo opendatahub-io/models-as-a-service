@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -897,34 +896,6 @@ allow {
 								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
 						},
 						"key":      "X-MaaS-Group",
-						"metrics":  false,
-						"priority": int64(1),
-					},
-					"X-MaaS-Tenant": map[string]any{
-						"when": []any{
-							map[string]any{
-								"selector": "request.headers.authorization",
-								"operator": "matches",
-								"value":    "^Bearer sk-oai-.*",
-							},
-						},
-						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.tenant",
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					"X-MaaS-Tenant-Token": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-							},
-						},
-						"plain": map[string]any{
-							// Use tenantName (DB/header value) not tenantID (resource identifier)
-							"expression": strconv.Quote(tenantName),
-						},
-						"key":      "X-MaaS-Tenant",
 						"metrics":  false,
 						"priority": int64(1),
 					},
