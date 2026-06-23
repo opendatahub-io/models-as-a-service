@@ -524,7 +524,8 @@ func main() {
 	flag.StringVar(&gatewayNamespace, "gateway-namespace", "openshift-ingress", "The namespace of the Gateway resource.")
 	flag.StringVar(&controllerNamespace, "controller-namespace", "opendatahub", "The namespace where the maas-controller Deployment runs.")
 	flag.StringVar(&maasAPINamespace, "maas-api-namespace", "",
-		"The namespace where maas-api and platform workloads deploy. "+
+		"The namespace where the controller runs and where maas-api workloads deploy. "+
+			"All tenants share this namespace in the current architecture. "+
 			"Defaults to APPLICATIONS_NAMESPACE or MAAS_API_NAMESPACE when unset.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", tenantreconcile.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
