@@ -86,7 +86,7 @@ Store the external provider's API key in a Kubernetes Secret. The Secret must:
 
 - Be in the same namespace as the ExternalModel
 - Use the data key `api-key`
-- Have the label `inference.networking.k8s.io/bbr-managed=true` so IPP can read it
+- Have the label `inference.llm-d.ai/ipp-managed=true` so IPP can read it
 
 ```bash
 TMP_KEY_FILE="$(mktemp)"
@@ -98,7 +98,7 @@ kubectl create secret generic openai-api-key -n llm \
 
 rm -f "${TMP_KEY_FILE}"
 
-kubectl label secret openai-api-key -n llm inference.networking.k8s.io/bbr-managed=true
+kubectl label secret openai-api-key -n llm inference.llm-d.ai/ipp-managed=true
 ```
 
 ## Step 4: Create the ExternalModel and MaaSModelRef

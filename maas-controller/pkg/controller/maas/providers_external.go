@@ -178,7 +178,7 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 
 // GetModelEndpoint returns the endpoint URL for the ExternalModel.
 // Uses ExternalModel name (spec.modelRef.name) in the path to match the HTTPRoute
-// created by the reconciler and BBR's model-provider-resolver store key.
+// created by the reconciler and IPP's model-provider-resolver store key.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	extModelName := model.Spec.ModelRef.Name
 	if len(model.Status.HTTPRouteHostnames) > 0 {

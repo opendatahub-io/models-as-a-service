@@ -27,39 +27,10 @@ spec:
                 - ALL
             readOnlyRootFilesystem: true
           args:
-            - "--streaming"
-            - --v
-            - "3"
-            - --plugin
-            - "$(MODEL_TO_HEADER)"
-            - --plugin
-            - "$(MODEL_PROVIDER_RESOLVER)"
-            - --plugin
-            - "$(API_TRANSLATION)"
-            - --plugin
-            - "$(APIKEY_INJECTION)"
+            - --config-file
+            - "/config/custom-ipp-config.yaml"
+            - --v=3
             - --tracing=false
-          env:
-            - name: MODEL_TO_HEADER
-              valueFrom:
-                configMapKeyRef:
-                  name: payload-processing-plugins
-                  key: model-to-header-plugin
-            - name: MODEL_PROVIDER_RESOLVER
-              valueFrom:
-                configMapKeyRef:
-                  name: payload-processing-plugins
-                  key: model-provider-resolver-plugin
-            - name: API_TRANSLATION
-              valueFrom:
-                configMapKeyRef:
-                  name: payload-processing-plugins
-                  key: api-translation-plugin
-            - name: APIKEY_INJECTION
-              valueFrom:
-                configMapKeyRef:
-                  name: payload-processing-plugins
-                  key: apikey-injection-plugin
           ports:
             - containerPort: 9004
               name: grpc
@@ -84,3 +55,10 @@ spec:
               port: grpc
             initialDelaySeconds: 5
             periodSeconds: 10
+          volumeMounts:
+            - name: plugins-config-volume
+              mountPath: "/config"
+      volumes:
+        - name: plugins-config-volume
+          configMap:
+            name: payload-processing-plugins
