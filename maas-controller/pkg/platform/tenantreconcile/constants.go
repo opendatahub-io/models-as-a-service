@@ -60,7 +60,6 @@ const (
 	DefaultMaaSAPINamespace = "opendatahub"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
@@ -79,11 +78,6 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 
-	// Non-tenant-specific resource names (shared infrastructure)
-	PayloadProcessingName                         = "payload-processing"
-	PayloadPreProcessingName                      = "payload-pre-processing"
-	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
-	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
 	// MaaSControllerDeploymentName matches deployment/base/maas-controller/manager/manager.yaml.
 	MaaSControllerDeploymentName = "maas-controller"
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
