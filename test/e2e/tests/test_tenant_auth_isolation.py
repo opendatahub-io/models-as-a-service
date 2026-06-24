@@ -204,6 +204,12 @@ class TestTenantAuthIsolation:
             f"(expected 404, got {response.status_code}): {response_summary(response)}"
         )
 
+        # Verify response body is exactly {"error": "API key not found"} with no leaked metadata
+        body = response.json()
+        assert body == {"error": "API key not found"}, (
+            f"404 response should contain only error message, got: {redact_sensitive(body)}"
+        )
+
         # Verify tenant A can still GET its own key (sanity check)
         response_a = get_api_key_at(
             tenant_auth_setup["tenant_a"]["base_url"],
