@@ -654,6 +654,9 @@ func isClaimOwnedByAITenant(claim *corev1.ConfigMap, aitenant *maasv1alpha1.AITe
 // two concurrent admission requests could both pass the webhook list-then-compare
 // check before either AITenant is persisted.
 func (r *AITenantReconciler) ensureGatewayClaim(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+	if gatewayRef.Namespace == "" || gatewayRef.Name == "" {
+		return fmt.Errorf("gateway reference must have both namespace and name set (got namespace=%q, name=%q)", gatewayRef.Namespace, gatewayRef.Name)
+	}
 	claimName := gatewayClaimName(gatewayRef)
 	claimNamespace := r.aitenantNamespace()
 

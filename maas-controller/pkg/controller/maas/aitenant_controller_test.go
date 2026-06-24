@@ -1662,6 +1662,86 @@ func TestAITenantReconcile_DeleteGatewayClaimSkipsSpoofedOwnerRef(t *testing.T) 
 	g.Expect(err).NotTo(HaveOccurred(), "spoofed claim should survive deleteGatewayClaim")
 }
 
+func TestEnsureGatewayClaim_RejectsEmptyNamespace(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-empty-ns",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       "uid-empty-ns",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	err := r.ensureGatewayClaim(context.Background(), aitenant, maasv1alpha1.TenantGatewayRef{
+		Namespace: "",
+		Name:      "some-gateway",
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("gateway reference must have both namespace and name set"))
+	g.Expect(err.Error()).To(ContainSubstring(`namespace=""`))
+}
+
+func TestEnsureGatewayClaim_RejectsEmptyName(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-empty-name",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       "uid-empty-name",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	err := r.ensureGatewayClaim(context.Background(), aitenant, maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "",
+	})
+	g.Expect(err).To(HaveOccurred())
+	g.Expect(err.Error()).To(ContainSubstring("gateway reference must have both namespace and name set"))
+	g.Expect(err.Error()).To(ContainSubstring(`name=""`))
+}
+
+func TestGatewayClaimName_DistinguishesNamespaceFromName(t *testing.T) {
+	g := NewWithT(t)
+
+	// Verify that "ns-a/gw" and "ns/a-gw" produce different claim names.
+	// This ensures the "/" separator prevents cross-field collisions.
+	refA := maasv1alpha1.TenantGatewayRef{Namespace: "ns-a", Name: "gw"}
+	refB := maasv1alpha1.TenantGatewayRef{Namespace: "ns", Name: "a-gw"}
+	g.Expect(gatewayClaimName(refA)).NotTo(Equal(gatewayClaimName(refB)))
+
+	// Also verify that empty namespace would collide without the guard:
+	// "/gw-a" and "/gw-a" are trivially equal, but "x/gw-a" and "/xgw-a"
+	// would differ because the separator is part of the hash input.
+	refC := maasv1alpha1.TenantGatewayRef{Namespace: "x", Name: "gw-a"}
+	refD := maasv1alpha1.TenantGatewayRef{Namespace: "", Name: "xgw-a"}
+	g.Expect(gatewayClaimName(refC)).NotTo(Equal(gatewayClaimName(refD)),
+		"hash includes separator so different field splits produce different names")
+}
+
 func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
