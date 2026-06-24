@@ -3,11 +3,13 @@ package maas
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
-	. "github.com/onsi/gomega"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"sigs.k8s.io/yaml"
+
+	. "github.com/onsi/gomega"
 )
 
 func TestSupplementalConfigRBACManifestSupportsControllerCaches(t *testing.T) {
@@ -77,12 +79,7 @@ func containsAll(got []string, want []string) bool {
 }
 
 func rbacManifestContains(items []string, want string) bool {
-	for _, item := range items {
-		if item == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(items, want)
 }
 
 func hasWildcardResource(rules []rbacv1.PolicyRule) bool {
