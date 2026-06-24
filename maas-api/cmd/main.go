@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -114,11 +115,38 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize token store: %w", err)
 	}
+	var cleanupWg sync.WaitGroup
 	defer func() {
+		cancel()
+		cleanupWg.Wait()
 		if err := store.Close(); err != nil {
 			log.Error("Failed to close token store", "error", err)
 		}
 	}()
+
+	if cfg.CleanupIntervalMinutes > 0 {
+		interval := time.Duration(cfg.CleanupIntervalMinutes) * time.Minute
+		log.Info("Ephemeral key cleanup enabled", "interval", cfg.CleanupIntervalMinutes)
+		cleanupWg.Go(func() {
+			ticker := time.NewTicker(interval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					count, err := store.DeleteExpiredEphemeral(ctx)
+					if err != nil {
+						log.Error("Failed to cleanup expired ephemeral keys", "error", err)
+					} else if count > 0 {
+						log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		})
+	} else {
+		log.Info("Ephemeral key cleanup disabled")
+	}
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
@@ -169,6 +197,7 @@ func serve() error {
 
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
+
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
@@ -229,10 +258,10 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
 
-	// Internal routes (no auth required - called by Authorino / CronJob)
+	// Internal routes (no auth required - called by Authorino / in-process cleanup)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys) // TODO: consider remove endpoint if not public access
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil

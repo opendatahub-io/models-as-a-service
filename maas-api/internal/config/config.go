@@ -61,6 +61,10 @@ type Config struct {
 	// Bounds memory usage under high-cardinality user traffic. Default: 8192.
 	SARCacheMaxSize int
 
+	// CleanupIntervalMinutes controls how often the cleanup goroutine deletes expired API keys
+	// -1 disables cleanup logic, any positive value sets the interval in minutes. Default: 15 mins
+	CleanupIntervalMinutes int
+
 	MetricsPort int
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
@@ -76,6 +80,7 @@ func Load() *Config {
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
+	cleanupIntervalMinutes, _ := env.GetInt("CLEANUP_INTERVAL_MINUTES", constant.DefaultCleanupIntervalMinutes)
 
 	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
 	if tenantName == "" {
@@ -97,6 +102,7 @@ func Load() *Config {
 		APIKeyMaxExpirationDays:   maxExpirationDays,
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
 		SARCacheMaxSize:           sarCacheMaxSize,
+		CleanupIntervalMinutes:    cleanupIntervalMinutes,
 		MetricsPort:               metricsPort,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
@@ -122,6 +128,8 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
+	fs.IntVar(&c.CleanupIntervalMinutes, "cleanup-interval",
+		c.CleanupIntervalMinutes, "Cleanup API key interval (-1 to disable, default 15) in minutes")
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
 	// Note: DBConnectionURL is loaded from K8s secret 'maas-db-config', not from CLI flag
 }
@@ -177,6 +185,10 @@ func (c *Config) Validate() error {
 
 	if c.AccessCheckTimeoutSeconds < 1 {
 		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
+	}
+
+	if c.CleanupIntervalMinutes == 0 {
+		c.CleanupIntervalMinutes = constant.DefaultCleanupIntervalMinutes
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
