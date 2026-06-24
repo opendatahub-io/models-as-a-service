@@ -121,7 +121,7 @@ func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
-	route := newHTTPRoute(modelName, namespace)
+	route := newExternalModelHTTPRoute(modelName, namespace)
 	policy := newMaaSAuthPolicy(policyName, namespace, "team-a",
 		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 
@@ -222,7 +222,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
-	route := newHTTPRoute(modelName, namespace)
+	route := newExternalModelHTTPRoute(modelName, namespace)
 	sub := &maasv1alpha1.MaaSSubscription{
 		ObjectMeta: metav1.ObjectMeta{Name: subName, Namespace: namespace},
 		Spec: maasv1alpha1.MaaSSubscriptionSpec{

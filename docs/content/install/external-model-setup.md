@@ -141,7 +141,7 @@ Expected output:
 
 ```text
 NAME     PHASE   ENDPOINT                                    HTTPROUTE   GATEWAY
-gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   gpt-4o      maas-default-gateway
+gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   maas-gpt-4o maas-default-gateway
 ```
 
 ## Step 5: Configure Access and Rate Limits
