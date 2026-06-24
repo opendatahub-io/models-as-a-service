@@ -238,6 +238,14 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
 		}
 		if tenantName == DefaultAITenantName {
+			if tenant.Name != maasv1alpha1.TenantInstanceName {
+				return "", fmt.Errorf("tenant %s/%s has %s=%q but is not the default Tenant resource %q",
+					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, maasv1alpha1.TenantInstanceName)
+			}
+			if labels[LabelTenantNamespace] == "" || labels[LabelTenantNamespace] != tenant.Namespace {
+				return "", fmt.Errorf("tenant %s/%s has %s=%q but %s must match the Tenant namespace",
+					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
+			}
 			log.Info("Using default AITenant legacy resource identifier (empty string)",
 				"tenantName", tenantName)
 			return "", nil

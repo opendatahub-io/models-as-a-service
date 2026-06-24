@@ -89,6 +89,29 @@ func TestIsTenantNamespace_EmptyDefault(t *testing.T) {
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_FetchTenantIdentifierRejectsInvalidDefaultLabels(t *testing.T) {
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-spoofed",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+
+	tenantID, err := r.fetchTenantIdentifier(context.Background(), ctrl.Log, tenant.Namespace)
+	if err == nil {
+		t.Fatalf("fetchTenantIdentifier error = nil, want invalid default tenant label error")
+	}
+	if tenantID != "" {
+		t.Fatalf("tenantID = %q, want empty on error", tenantID)
+	}
+}
+
 func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	const (
 		namespace  = "random-ns"

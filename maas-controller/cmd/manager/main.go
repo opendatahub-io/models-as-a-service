@@ -396,6 +396,14 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      tenantreconcile.DefaultAITenantName,
 			Namespace: aitenantNamespace,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       ct.Name,
+					UID:        ct.UID,
+				},
+			},
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: gatewayName},

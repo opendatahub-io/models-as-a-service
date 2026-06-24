@@ -60,10 +60,10 @@ class TestMultiTenantIntegration:
 
     def test_full_tenant_lifecycle_create_to_delete(self):
         """7.1: Full tenant lifecycle from create through policy/subscription reconcile to delete."""
-        case = new_discovery_case(use_default_gateway=True)
+        case = new_discovery_case()
         role_name = f"aitenant-{case['tenant_label_name']}-tenant-admin"
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            bootstrap_aitenant_tenant(case)
 
             tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]

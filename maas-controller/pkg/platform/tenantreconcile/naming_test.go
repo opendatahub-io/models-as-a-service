@@ -101,6 +101,39 @@ func TestTenantIdentifierFor(t *testing.T) {
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "tenant ai-tenant-broken/default-tenant has maas.opendatahub.io/managed-by-aitenant=true but maas.opendatahub.io/tenant-name is missing")
 	})
+
+	t.Run("default AITenant label without matching tenant namespace returns error", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.TenantInstanceName,
+				Namespace: "ai-tenant-spoofed",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+				},
+			},
+		}
+		_, err := TenantIdentifierFor(tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "maas.opendatahub.io/tenant-namespace must match the Tenant namespace")
+	})
+
+	t.Run("default AITenant label on non-default Tenant resource returns error", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "spoofed",
+				Namespace: "models-as-a-service",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+					LabelTenantNamespace:   "models-as-a-service",
+				},
+			},
+		}
+		_, err := TenantIdentifierFor(tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "is not the default Tenant resource")
+	})
 }
 
 func TestResourceNamingFunctions(t *testing.T) {
@@ -216,6 +249,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 				Labels: map[string]string{
 					LabelManagedByAITenant: "true",
 					LabelTenantName:        DefaultAITenantName,
+					LabelTenantNamespace:   "models-as-a-service",
 				},
 			},
 			Spec: maasv1alpha1.TenantSpec{

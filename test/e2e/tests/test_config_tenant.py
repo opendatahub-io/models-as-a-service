@@ -90,6 +90,21 @@ def _config_uid_or_none():
         raise
 
 
+def _wait_for_aitenant_doc(timeout=180, interval=5):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        try:
+            return _aitenant_doc()
+        except subprocess.CalledProcessError as exc:
+            if not _oc_not_found(exc):
+                raise
+            time.sleep(interval)
+    pytest.fail(
+        f"AITenant {DEFAULT_AITENANT_NAME}/{AITENANT_NAMESPACE} not found "
+        "after waiting for default AITenant bootstrap."
+    )
+
+
 def _ref_to_config(refs):
     for ref in refs or []:
         if ref.get("kind") != CONFIG_KIND or ref.get("name") != CONFIG_NAME:
@@ -142,15 +157,7 @@ class TestConfigAnchorPresence:
 
 class TestConfigTenantOwnership:
     def test_default_aitenant_lists_config_owner_reference(self):
-        try:
-            doc = _aitenant_doc()
-        except subprocess.CalledProcessError as exc:
-            if _oc_not_found(exc):
-                pytest.skip(
-                    f"AITenant {DEFAULT_AITENANT_NAME}/{AITENANT_NAMESPACE} not found; "
-                    "run after default AITenant bootstrap."
-                )
-            raise
+        doc = _wait_for_aitenant_doc()
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
         assert ref is not None, (
             f"AITenant {DEFAULT_AITENANT_NAME}/{AITENANT_NAMESPACE} should reference "

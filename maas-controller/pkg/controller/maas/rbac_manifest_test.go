@@ -16,6 +16,8 @@ func TestSupplementalConfigRBACManifestSupportsControllerCaches(t *testing.T) {
 	configRole := readClusterRoleManifest(t, "clusterrole_maas_configs.yaml")
 	g.Expect(hasUnrestrictedRule(configRole.Rules, "configs", "list", "watch")).To(BeTrue())
 	g.Expect(hasNamedRule(configRole.Rules, "configs", "default", "get", "patch", "update", "delete")).To(BeTrue())
+	g.Expect(hasWildcardResource(configRole.Rules)).To(BeFalse())
+	g.Expect(hasDangerousVerb(configRole.Rules)).To(BeFalse())
 }
 
 func readClusterRoleManifest(t *testing.T, name string) rbacv1.ClusterRole {
@@ -78,6 +80,26 @@ func rbacManifestContains(items []string, want string) bool {
 	for _, item := range items {
 		if item == want {
 			return true
+		}
+	}
+	return false
+}
+
+func hasWildcardResource(rules []rbacv1.PolicyRule) bool {
+	for _, rule := range rules {
+		if rbacManifestContains(rule.Resources, "*") {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDangerousVerb(rules []rbacv1.PolicyRule) bool {
+	for _, rule := range rules {
+		for _, verb := range []string{"bind", "escalate", "impersonate"} {
+			if rbacManifestContains(rule.Verbs, verb) || rbacManifestContains(rule.Verbs, "*") {
+				return true
+			}
 		}
 	}
 	return false

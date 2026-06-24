@@ -296,11 +296,35 @@ class TestAITenantLifecycle:
         assert _get_json_or_none("httproute", "maas-api-route-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
 
         if os.environ.get("EXTERNAL_OIDC") == "true" and os.environ.get("OIDC_ISSUER_URL"):
-            assert (aitenant["spec"].get("oidc") or {}).get("issuerUrl") == os.environ["OIDC_ISSUER_URL"]
-            assert (tenant["spec"].get("externalOIDC") or {}).get("issuerUrl") == os.environ["OIDC_ISSUER_URL"]
-            if os.environ.get("OIDC_CLIENT_ID"):
-                assert (aitenant["spec"].get("oidc") or {}).get("clientId") == os.environ["OIDC_CLIENT_ID"]
-                assert (tenant["spec"].get("externalOIDC") or {}).get("clientId") == os.environ["OIDC_CLIENT_ID"]
+            expected_issuer = os.environ["OIDC_ISSUER_URL"]
+            expected_client_id = os.environ.get("OIDC_CLIENT_ID")
+
+            def aitenant_oidc_converged(obj):
+                oidc = obj.get("spec", {}).get("oidc") or {}
+                return oidc.get("issuerUrl") == expected_issuer and (
+                    not expected_client_id or oidc.get("clientId") == expected_client_id
+                )
+
+            def tenant_oidc_converged(obj):
+                oidc = obj.get("spec", {}).get("externalOIDC") or {}
+                return oidc.get("issuerUrl") == expected_issuer and (
+                    not expected_client_id or oidc.get("clientId") == expected_client_id
+                )
+
+            _wait_for_json(
+                AITENANT_KIND,
+                DEFAULT_AITENANT_NAME,
+                AITENANT_NAMESPACE,
+                predicate=aitenant_oidc_converged,
+                timeout=180,
+            )
+            _wait_for_json(
+                "tenant",
+                TENANT_NAME,
+                MAAS_SUBSCRIPTION_NAMESPACE,
+                predicate=tenant_oidc_converged,
+                timeout=180,
+            )
 
     def test_aitenant_rejected_outside_ai_tenants_namespace(self):
         suffix = uuid.uuid4().hex[:8]

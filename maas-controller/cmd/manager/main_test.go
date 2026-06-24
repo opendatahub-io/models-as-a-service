@@ -110,6 +110,13 @@ func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *test
 	if aitenant.Spec.Gateway == nil || aitenant.Spec.Gateway.Name != "custom-default-gateway" {
 		t.Fatalf("gateway name = %#v, want custom-default-gateway", aitenant.Spec.Gateway)
 	}
+	ref := configOwnerReference(aitenant.OwnerReferences, types.UID("cfg-default"))
+	if ref == nil {
+		t.Fatalf("default AITenant ownerReferences = %#v, want Config/default", aitenant.OwnerReferences)
+	}
+	if ref.Controller != nil {
+		t.Fatalf("default AITenant Config owner reference is controller ref, want non-controller")
+	}
 	if aitenant.Spec.OIDC == nil {
 		t.Fatalf("OIDC was not copied from existing Tenant")
 	}
@@ -129,6 +136,19 @@ func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *test
 	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got != "true" {
 		t.Fatalf("Config bootstrap annotation = %q, want true", got)
 	}
+}
+
+func configOwnerReference(refs []metav1.OwnerReference, uid types.UID) *metav1.OwnerReference {
+	for i := range refs {
+		ref := &refs[i]
+		if ref.APIVersion == maasv1alpha1.GroupVersion.String() &&
+			ref.Kind == maasv1alpha1.ConfigKind &&
+			ref.Name == maasv1alpha1.ConfigInstanceName &&
+			ref.UID == uid {
+			return ref
+		}
+	}
+	return nil
 }
 
 func TestEnsureDefaultAITenantBootstrapPreservesCustomGatewayNameFromExistingTenant(t *testing.T) {

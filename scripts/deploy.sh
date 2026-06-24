@@ -1471,11 +1471,20 @@ configure_tenant_external_oidc() {
     return 1
   }
 
+  local aitenant_patch tenant_patch
+  aitenant_patch=$(jq -nc \
+    --arg issuerUrl "$oidc_issuer_url" \
+    --arg clientId "$oidc_client_id" \
+    '{spec:{oidc:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
+  tenant_patch=$(jq -nc \
+    --arg issuerUrl "$oidc_issuer_url" \
+    --arg clientId "$oidc_client_id" \
+    '{spec:{externalOIDC:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
+
   local patched_any="false"
   if kubectl get aitenant "$aitenant_name" -n "$aitenant_ns" &>/dev/null; then
-    log_info "  Patching AITenant '$aitenant_name' with oidc (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
-    if ! kubectl patch aitenant "$aitenant_name" -n "$aitenant_ns" --type=merge -p \
-      "{\"spec\":{\"oidc\":{\"issuerUrl\":\"$oidc_issuer_url\",\"clientId\":\"$oidc_client_id\"}}}"; then
+    log_info "  Patching AITenant '$aitenant_name' with external OIDC"
+    if ! kubectl patch aitenant "$aitenant_name" -n "$aitenant_ns" --type=merge -p "$aitenant_patch"; then
       log_error "  Failed to patch AITenant with external OIDC"
       return 1
     fi
@@ -1485,9 +1494,8 @@ configure_tenant_external_oidc() {
   fi
 
   if kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
-    log_info "  Patching Tenant '$tenant_name' with externalOIDC (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
-    if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p \
-      "{\"spec\":{\"externalOIDC\":{\"issuerUrl\":\"$oidc_issuer_url\",\"clientId\":\"$oidc_client_id\"}}}"; then
+    log_info "  Patching Tenant '$tenant_name' with external OIDC"
+    if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p "$tenant_patch"; then
       log_error "  Failed to patch Tenant CR with external OIDC"
       return 1
     fi
@@ -1497,8 +1505,8 @@ configure_tenant_external_oidc() {
   fi
 
   if [[ "$patched_any" != "true" ]]; then
-    log_warn "No default tenant resources were found to patch with external OIDC"
-    return 0
+    log_error "No default tenant resources were found to patch with external OIDC"
+    return 1
   fi
 
   log_info "  Default tenant OIDC configuration patched successfully"

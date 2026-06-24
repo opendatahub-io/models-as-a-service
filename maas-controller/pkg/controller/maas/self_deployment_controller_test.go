@@ -234,8 +234,18 @@ func TestLifecycleReconciler_LinksDefaultAITenantToConfig(t *testing.T) {
 		Namespace: tenantreconcile.DefaultAITenantNamespace,
 	}, &updated)).To(Succeed())
 	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
-	ref := updated.OwnerReferences[0]
-	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-aitenant")))
-	g.Expect(ref.Kind).To(Equal(maasv1alpha1.ConfigKind))
+	ref, found := ownerReferenceToConfig(updated.OwnerReferences, types.UID("cfg-uid-aitenant"))
+	g.Expect(found).To(BeTrue())
 	g.Expect(ref.Controller).To(BeNil())
+}
+
+func ownerReferenceToConfig(refs []metav1.OwnerReference, uid types.UID) (metav1.OwnerReference, bool) {
+	for _, ref := range refs {
+		if ref.APIVersion == maasv1alpha1.GroupVersion.String() &&
+			ref.Kind == maasv1alpha1.ConfigKind &&
+			ref.UID == uid {
+			return ref, true
+		}
+	}
+	return metav1.OwnerReference{}, false
 }
