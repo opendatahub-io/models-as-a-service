@@ -20,6 +20,7 @@
 #
 # Environment variables:
 #   CHART_PATH              Path to rhai-on-openshift-chart (default: auto-detect or clone)
+#   ODH_GITOPS_REPO         Git URL for odh-gitops (default: https://github.com/opendatahub-io/odh-gitops.git)
 #   ODH_GITOPS_BRANCH       Branch to clone from odh-gitops (default: main)
 #   OPERATOR_TYPE           odh or rhoai (default: odh)
 #   HELM_NAMESPACE          Helm release namespace (default: opendatahub-gitops)
@@ -59,7 +60,8 @@ OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
 OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
-ODH_GITOPS_BRANCH="${ODH_GITOPS_BRANCH:-main}"
+ODH_GITOPS_REPO="${ODH_GITOPS_REPO:-https://github.com/ishitasequeira/odh-gitops.git}"
+ODH_GITOPS_BRANCH="${ODH_GITOPS_BRANCH:-feat/maas-shared-deps}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 
@@ -81,6 +83,7 @@ while [[ $# -gt 0 ]]; do
     --chart-path)       CHART_PATH="$2"; shift 2 ;;
     --helm-namespace)   HELM_NAMESPACE="$2"; shift 2 ;;
     --crd-timeout)      CRD_TIMEOUT="$2"; shift 2 ;;
+    --odh-gitops-repo)   ODH_GITOPS_REPO="$2"; shift 2 ;;
     --odh-gitops-branch) ODH_GITOPS_BRANCH="$2"; shift 2 ;;
     --operator-catalog) OPERATOR_CATALOG="$2"; shift 2 ;;
     --operator-channel) OPERATOR_CHANNEL="$2"; shift 2 ;;
@@ -113,7 +116,7 @@ if [[ -z "${CHART_PATH:-}" ]]; then
   ODH_GITOPS_DIR="${SCRIPT_DIR}/../../odh-gitops"
   log_info "odh-gitops not found locally, cloning branch '${ODH_GITOPS_BRANCH}'..."
   git clone --depth 1 --branch "${ODH_GITOPS_BRANCH}" \
-    https://github.com/opendatahub-io/odh-gitops.git "${ODH_GITOPS_DIR}"
+    "${ODH_GITOPS_REPO}" "${ODH_GITOPS_DIR}"
   CHART_PATH="$(cd "${ODH_GITOPS_DIR}/charts/rhai-on-openshift-chart" && pwd)"
 fi
 

@@ -243,6 +243,12 @@ deploy_maas_platform() {
     if [[ -n "${MAAS_API_IMAGE:-}" ]]; then
         setup_cmd+=(--maas-api-image "${MAAS_API_IMAGE}")
     fi
+    if [[ -n "${ODH_GITOPS_REPO:-}" ]]; then
+        setup_cmd+=(--odh-gitops-repo "${ODH_GITOPS_REPO}")
+    fi
+    if [[ -n "${ODH_GITOPS_BRANCH:-}" ]]; then
+        setup_cmd+=(--odh-gitops-branch "${ODH_GITOPS_BRANCH}")
+    fi
     if ! "${setup_cmd[@]}"; then
         echo "❌ ERROR: Shared dependencies installation failed"
         exit 1
