@@ -81,6 +81,16 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		}
 		if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
 			routeName = name
+		} else {
+			log.Info("inference ExternalModel found but status.httpRouteName not set yet, waiting for reconciler",
+				"name", externalModelName, "namespace", model.Namespace)
+			model.Status.Endpoint = ""
+			model.Status.HTTPRouteName = ""
+			model.Status.HTTPRouteNamespace = ""
+			model.Status.HTTPRouteGatewayName = ""
+			model.Status.HTTPRouteGatewayNamespace = ""
+			model.Status.HTTPRouteHostnames = nil
+			return nil
 		}
 	} else if apierrors.IsNotFound(err) {
 		externalModel := &maasv1alpha1.ExternalModel{}
@@ -93,13 +103,10 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		}
 		externalModelName = externalModel.Name
 		providerInfo = externalModel.Spec.Provider
+		routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 		log.Info("resolved ExternalModel from legacy maas.opendatahub.io", "name", externalModelName, "namespace", model.Namespace)
 	} else {
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
-	}
-
-	if routeName == "" {
-		routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	}
 	routeNS := model.Namespace
 
