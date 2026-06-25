@@ -36,6 +36,7 @@ from multitenancy_helpers import (
     get_json_or_none,
     legacy_default_namespace,
     new_discovery_case,
+    provision_tenant_model,
     remove_discovery_labels,
     require_aitenant_crd,
     require_tenant_namespace_discovery,
@@ -60,23 +61,36 @@ class TestMultiTenantIntegration:
 
     def test_full_tenant_lifecycle_create_to_delete(self):
         """7.1: Full tenant lifecycle from create through policy/subscription reconcile to delete."""
-        case = new_discovery_case(use_default_gateway=True)
+        case = new_discovery_case()
         role_name = f"aitenant-{case['tenant_label_name']}-tenant-admin"
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            bootstrap_aitenant_tenant(case)
 
             tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]
             assert get_json_or_none("role", role_name, case["tenant_ns"]) is not None
 
-            apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
-            apply_maas_subscription(case["subscription_name"], case["tenant_ns"])
+            model_name = f"e2e-lifecycle-model-{case['suffix']}"
+            provision_tenant_model(model_name, case["tenant_ns"], case["gateway_name"])
+
+            apply_maas_auth_policy(
+                case["policy_name"],
+                case["tenant_ns"],
+                model_ref=model_name,
+                model_namespace=case["tenant_ns"],
+            )
+            apply_maas_subscription(
+                case["subscription_name"],
+                case["tenant_ns"],
+                model_ref=model_name,
+                model_namespace=case["tenant_ns"],
+            )
             wait_for_status_phase("maasauthpolicy", case["policy_name"], case["tenant_ns"], expected_phase="Active")
             wait_for_status_phase(
                 "maassubscription",
                 case["subscription_name"],
                 case["tenant_ns"],
-                expected_phase=("Active", "Degraded"),
+                expected_phase="Active",
             )
 
             delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)

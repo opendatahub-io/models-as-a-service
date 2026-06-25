@@ -282,8 +282,8 @@ The following happen without admin intervention during the upgrade:
 
 1. **Old CR cleanup**: The operator's garbage collection removes the old `ModelsAsService` CR (the operator no longer creates it).
 2. **maas-controller deployment**: The operator deploys `maas-controller` (CRDs, RBAC, Deployment) when `modelsAsService: Managed`.
-3. **Tenant creation**: `maas-controller` automatically creates the `default-tenant` Tenant CR with default values on startup.
-4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the Tenant CR.
+3. **Default tenant creation**: `maas-controller` automatically creates `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant` with default values.
+4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the default Tenant CR.
 
 ### Manual Steps: Re-applying Custom Configuration
 

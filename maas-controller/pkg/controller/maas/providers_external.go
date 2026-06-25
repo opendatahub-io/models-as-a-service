@@ -28,6 +28,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 // routeConditionProgrammed is the "Programmed" condition type for route parent status.
@@ -41,7 +42,7 @@ type externalModelHandler struct {
 }
 
 // ReconcileRoute validates the HTTPRoute for an external model and populates status.
-// The ExternalModel reconciler creates the "maas-model-<model.Name>" HTTPRoute in the
+// The ExternalModel reconciler creates a MaaS-prefixed HTTPRoute in the
 // model's namespace. This method validates that it exists and is accepted by the gateway.
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	// Fetch the referenced ExternalModel CR to get provider configuration
@@ -57,7 +58,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
 
-	routeName := model.Spec.ModelRef.Name
+	routeName := modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	routeNS := model.Namespace
 
 	route := &gatewayapiv1.HTTPRoute{}
@@ -177,8 +178,9 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 }
 
 // GetModelEndpoint returns the endpoint URL for the ExternalModel.
-// Uses ExternalModel name (spec.modelRef.name) in the path to match the HTTPRoute
-// created by the reconciler and IPP's model-provider-resolver store key.
+// Uses ExternalModel name (spec.modelRef.name) in the path to match IPP's
+// model-provider-resolver store key. The HTTPRoute object name itself is
+// MaaS-prefixed to avoid colliding with the upstream inference ExternalModel controller.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	extModelName := model.Spec.ModelRef.Name
 	if len(model.Status.HTTPRouteHostnames) > 0 {
@@ -225,7 +227,7 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
-	routeName = model.Spec.ModelRef.Name
+	routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	routeNamespace = model.Namespace
 	return routeName, routeNamespace, nil
 }
