@@ -2,6 +2,7 @@ package api_keys_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -625,7 +627,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
 		require.ErrorIs(t, err, api_keys.ErrExpirationExceedsMax)
-		assert.Contains(t, err.Error(), "90 days")
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d days", constant.DefaultAPIKeyMaxExpirationDays))
 	})
 
 	t.Run("ZeroConfigEnforcesDefaultMax", func(t *testing.T) {
@@ -998,7 +1000,7 @@ func TestGetMaxExpirationDays_NilConfig(t *testing.T) {
 
 	result := svc.GetMaxExpirationDays()
 
-	assert.Equal(t, 90, result, "Should return default when config is nil")
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config is nil")
 }
 
 func TestGetMaxExpirationDays_ZeroValue(t *testing.T) {
@@ -1009,7 +1011,7 @@ func TestGetMaxExpirationDays_ZeroValue(t *testing.T) {
 
 	result := svc.GetMaxExpirationDays()
 
-	assert.Equal(t, 90, result, "Should return default when config value is 0")
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config value is 0")
 }
 
 func TestGetMaxExpirationDays_CustomValue(t *testing.T) {
@@ -1031,7 +1033,7 @@ func TestGetMaxExpirationDays_NegativeValue(t *testing.T) {
 
 	result := svc.GetMaxExpirationDays()
 
-	assert.Equal(t, 90, result, "Should return default when config value is negative")
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config value is negative")
 }
 
 func TestGetMaxExpirationDays_UsedByCreateAPIKey(t *testing.T) {
@@ -1045,14 +1047,14 @@ func TestGetMaxExpirationDays_UsedByCreateAPIKey(t *testing.T) {
 
 	// Try to create a key that exceeds the custom limit (should fail)
 	expiresIn := 20 * 24 * time.Hour // 20 days
-	_, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "")
+	_, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "", "")
 
 	require.Error(t, err, "Should reject expiration exceeding custom max")
 	assert.Contains(t, err.Error(), "exceeds maximum allowed (15 days)", "Error should reference custom max from GetMaxExpirationDays")
 
 	// Create a key within the custom limit (should succeed)
 	expiresIn = 10 * 24 * time.Hour // 10 days
-	resp, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "")
+	resp, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "", "")
 
 	require.NoError(t, err, "Should accept expiration within custom max")
 	assert.NotNil(t, resp)
