@@ -120,7 +120,7 @@ func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile error: %v", err)
 	}
-	if res.Requeue {
+	if res.RequeueAfter != 0 {
 		t.Error("expected no requeue for non-tenant namespace")
 	}
 
@@ -225,7 +225,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile error: %v", err)
 	}
-	if res.Requeue {
+	if res.RequeueAfter != 0 {
 		t.Error("expected no requeue for non-tenant namespace")
 	}
 }

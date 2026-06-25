@@ -188,7 +188,7 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 }
 
 const (
-	addressNameGatewayExternal            = "gateway-external"
+	addressNameGatewayExternal             = "gateway-external"
 	addressNameGatewayExternalModelRouting = "gateway-external-model-routing"
 )
 
