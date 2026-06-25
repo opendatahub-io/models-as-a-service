@@ -4213,8 +4213,8 @@
 <ol>
 <li><strong>Old CR cleanup</strong>: The operator's garbage collection removes the old <code>ModelsAsService</code> CR (the operator no longer creates it).</li>
 <li><strong>maas-controller deployment</strong>: The operator deploys <code>maas-controller</code> (CRDs, RBAC, Deployment) when <code>modelsAsService: Managed</code>.</li>
-<li><strong>Tenant creation</strong>: <code>maas-controller</code> automatically creates the <code>default-tenant</code> Tenant CR with default values on startup.</li>
-<li><strong>Platform reconciliation</strong>: <code>maas-controller</code> deploys maas-api, gateway policies, telemetry, and all other platform resources via the Tenant CR.</li>
+<li><strong>Default tenant creation</strong>: <code>maas-controller</code> automatically creates <code>AITenant/models-as-a-service</code>; that AITenant creates or adopts <code>Tenant/default-tenant</code> with default values.</li>
+<li><strong>Platform reconciliation</strong>: <code>maas-controller</code> deploys maas-api, gateway policies, telemetry, and all other platform resources via the default Tenant CR.</li>
 </ol>
 <h3 id="manual-steps-re-applying-custom-configuration">Manual Steps: Re-applying Custom Configuration</h3>
 <p>If you had customized the <code>ModelsAsService</code> CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), those values are <strong>not</strong> migrated automatically to the new Tenant CR. The Tenant is created with defaults.</p>
@@ -4656,7 +4656,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 7, 2026 14:45:59 UTC">May 7, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 25, 2026 12:25:42 UTC">June 25, 2026</span>
   </span>
 
     
