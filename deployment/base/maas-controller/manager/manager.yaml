@@ -1,7 +1,6 @@
 # Default namespace: opendatahub (ODH overlay). Override via kustomize.
-# INFRA_NAMESPACE: infrastructure namespace where maas-api and maas-db-config run.
-# Note: PostgreSQL can be external - only the maas-api deployment and connection secret are here.
-# Defaults to AUTO (namespace separation enabled). Set to "" (empty) to disable for ROSA.
+# MAAS_API_NAMESPACE points to the infrastructure namespace where maas-api runs.
+# This is separate from the controller's namespace to support the namespace split architecture.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,10 +31,9 @@ spec:
           - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
-          - --infra-namespace=$(INFRA_NAMESPACE)
+          - --maas-api-namespace=$(MAAS_API_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
-          - --monitoring-namespace=$(MONITORING_NAMESPACE)
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
@@ -48,10 +46,8 @@ spec:
             value: "maas-default-gateway"
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
-          # AUTO = derive infra namespace from controller namespace (opendatahub → odh-ai-gateway-infra)
-          # To disable namespace separation (required for ROSA), override to empty string via kustomize
-          - name: INFRA_NAMESPACE
-            value: "AUTO"
+          - name: MAAS_API_NAMESPACE
+            value: "models-as-a-service"
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
@@ -59,25 +55,19 @@ spec:
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: maas-api-image
+                key: MAAS_API_IMAGE
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: payload-processing-image
+                key: PAYLOAD_PROCESSING_IMAGE
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: maas-api-key-cleanup-image
-                name: maas-parameters
-                optional: true
-          - name: MONITORING_NAMESPACE
-            valueFrom:
-              configMapKeyRef:
-                key: monitoring-namespace
+                key: MAAS_API_KEY_CLEANUP_IMAGE
                 name: maas-parameters
                 optional: true
         image: maas-controller
