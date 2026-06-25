@@ -47,6 +47,21 @@ func TestTenantIdentifierFor(t *testing.T) {
 			expected: "redteam",
 		},
 		{
+			name: "default AITenant-managed tenant keeps legacy empty identifier",
+			tenant: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: "models-as-a-service",
+					Labels: map[string]string{
+						LabelManagedByAITenant: "true",
+						LabelTenantName:        DefaultAITenantName,
+						LabelTenantNamespace:   "models-as-a-service",
+					},
+				},
+			},
+			expected: "",
+		},
+		{
 			name: "AITenant-managed tenant with different name",
 			tenant: &maasv1alpha1.Tenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -85,6 +100,39 @@ func TestTenantIdentifierFor(t *testing.T) {
 		_, err := TenantIdentifierFor(tenant)
 		assert.Error(t, err)
 		assert.Contains(t, err.Error(), "tenant ai-tenant-broken/default-tenant has maas.opendatahub.io/managed-by-aitenant=true but maas.opendatahub.io/tenant-name is missing")
+	})
+
+	t.Run("default AITenant label without matching tenant namespace returns error", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.TenantInstanceName,
+				Namespace: "ai-tenant-spoofed",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+				},
+			},
+		}
+		_, err := TenantIdentifierFor(tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "maas.opendatahub.io/tenant-namespace must match the Tenant namespace")
+	})
+
+	t.Run("default AITenant label on non-default Tenant resource returns error", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "spoofed",
+				Namespace: "models-as-a-service",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+					LabelTenantNamespace:   "models-as-a-service",
+				},
+			},
+		}
+		_, err := TenantIdentifierFor(tenant)
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "is not the default Tenant resource")
 	})
 }
 
@@ -178,6 +226,31 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "default-tenant",
 				Namespace: "models-as-a-service",
+			},
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+			},
+		}
+
+		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		assert.NoError(t, err)
+
+		assert.Equal(t, "", params.TenantIdentifier)
+	})
+
+	t.Run("default AITenant-managed tenant keeps empty tenant identifier", func(t *testing.T) {
+		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "default-tenant",
+				Namespace: "models-as-a-service",
+				Labels: map[string]string{
+					LabelManagedByAITenant: "true",
+					LabelTenantName:        DefaultAITenantName,
+					LabelTenantNamespace:   "models-as-a-service",
+				},
 			},
 			Spec: maasv1alpha1.TenantSpec{
 				GatewayRef: maasv1alpha1.TenantGatewayRef{
