@@ -22,6 +22,9 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -295,6 +298,96 @@ func TestExternalModel_CredentialRef(t *testing.T) {
 
 	if externalModel.Spec.CredentialRef.Name != "openai-api-key" {
 		t.Errorf("CredentialRef.Name = %q, want %q", externalModel.Spec.CredentialRef.Name, "openai-api-key")
+	}
+}
+
+func newInferenceExternalModelCR(name, ns, providerRef string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(inferenceExternalModelGVK)
+	obj.SetName(name)
+	obj.SetNamespace(ns)
+	obj.Object["spec"] = map[string]any{
+		"externalProviderRefs": []any{
+			map[string]any{
+				"ref":         map[string]any{"name": providerRef},
+				"targetModel": "gpt-4o",
+				"apiFormat":   "openai-chat",
+			},
+		},
+	}
+	return obj
+}
+
+func newTestReconcilerWithMapper(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(objects...).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	return &MaaSModelRefReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "openshift-ingress",
+	}, c
+}
+
+func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
+
+	r, _ := newTestReconcilerWithMapper(model, inferenceEM, route)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	err := handler.ReconcileRoute(context.Background(), log, model)
+	if err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+	}
+
+	if model.Status.HTTPRouteName != "gpt-4o" {
+		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "gpt-4o")
+	}
+	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
+		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
+	}
+}
+
+func TestExternalModel_ReconcileRoute_BothMissing(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+
+	r, _ := newTestReconcilerWithMapper(model)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	err := handler.ReconcileRoute(context.Background(), log, model)
+	if err == nil {
+		t.Fatal("ReconcileRoute: expected error when both ExternalModel types are missing")
+	}
+	if !strings.Contains(err.Error(), "maas.opendatahub.io") || !strings.Contains(err.Error(), "inference.opendatahub.io") {
+		t.Errorf("error should mention both API groups, got: %v", err)
+	}
+}
+
+func TestExternalModel_ReconcileRoute_MaasPreferred(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	maasEM := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "different-provider")
+	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
+
+	r, _ := newTestReconcilerWithMapper(model, maasEM, inferenceEM, route)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	err := handler.ReconcileRoute(context.Background(), log, model)
+	if err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+	}
+
+	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
+		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
 	}
 }
 
