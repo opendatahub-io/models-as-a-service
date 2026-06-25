@@ -4,7 +4,7 @@ go 1.25.8
 
 require (
 	github.com/go-logr/logr v1.4.3
-	github.com/kserve/kserve v0.0.0-00010101000000-000000000000
+	github.com/kserve/kserve v0.19.0
 	github.com/onsi/gomega v1.41.0
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
@@ -13,7 +13,7 @@ require (
 	k8s.io/apimachinery v0.35.3
 	k8s.io/client-go v0.35.3
 	knative.dev/pkg v0.0.0-20260120122510-4a022ed9999a
-	sigs.k8s.io/controller-runtime v0.23.3
+	sigs.k8s.io/controller-runtime v0.22.5
 	sigs.k8s.io/gateway-api v1.4.2-0.20260116062110-0d0ca872766e
 	sigs.k8s.io/kustomize/api v0.21.1
 	sigs.k8s.io/kustomize/kyaml v0.21.1
@@ -139,9 +139,4 @@ require (
 	sigs.k8s.io/json v0.0.0-20250730193827-2d320260d730 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
-)
-
-replace (
-	github.com/kserve/kserve => github.com/opendatahub-io/kserve v0.0.0-20260615193157-c53af872808d
-	sigs.k8s.io/controller-runtime => sigs.k8s.io/controller-runtime v0.22.5
 )
