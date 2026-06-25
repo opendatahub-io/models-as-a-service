@@ -22,7 +22,7 @@ spec:
       patch:
         operation: INSERT_BEFORE
         value:
-          name: envoy.filters.http.ext_proc.bbr-pre
+          name: envoy.filters.http.ext_proc.ipp-pre
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             failure_mode_allow: true
@@ -49,7 +49,7 @@ spec:
       patch:
         operation: INSERT_AFTER
         value:
-          name: envoy.filters.http.ext_proc.bbr
+          name: envoy.filters.http.ext_proc.ipp
           typed_config:
             "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
             failure_mode_allow: false
@@ -77,7 +77,7 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.bbr-pre:
+            envoy.filters.http.ext_proc.ipp-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
     # Disable ext_proc on non-inference routes (maas-api /maas-api/*).
@@ -92,6 +92,6 @@ spec:
         operation: MERGE
         value:
           typed_per_filter_config:
-            envoy.filters.http.ext_proc.bbr-pre:
+            envoy.filters.http.ext_proc.ipp-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
