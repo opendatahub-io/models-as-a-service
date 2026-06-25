@@ -400,8 +400,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 4 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 4 entries, got %d", len(configPatches))
+	if !found || len(configPatches) < 5 {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least 5 entries, got %d", len(configPatches))
 	}
 
 	clusterByIndex := []string{beforeCluster, afterCluster}

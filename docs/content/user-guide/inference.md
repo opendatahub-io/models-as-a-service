@@ -105,6 +105,9 @@ data: [DONE]
 
 Each `data:` line contains a JSON object with a `delta` field containing the incremental content. The stream ends with `data: [DONE]`.
 
+!!! note "Token usage in streaming responses"
+    The MaaS gateway automatically injects `stream_options.include_usage: true` into all streaming requests. This ensures the final streaming chunk includes a `usage` field with token counts, enabling accurate token-based rate limiting and observability regardless of client configuration.
+
 ---
 
 ## Request Parameters

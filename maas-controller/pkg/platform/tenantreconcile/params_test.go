@@ -166,11 +166,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
 
 	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER,
-	// plus per-route disable patches: configPatches[2] and [3]=MERGE on maas-api-route rules.
+	// per-route disable patches: configPatches[2] and [3]=MERGE on maas-api-route rules,
+	// and stream-usage Lua filter: configPatches[4]=INSERT_BEFORE ext-proc-pre.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 4, "expected four configPatches (INSERT_BEFORE + INSERT_AFTER + 2x MERGE)")
+	require.Len(t, configPatches, 5, "expected five configPatches (INSERT_BEFORE + INSERT_AFTER + 2x MERGE + Lua stream-usage)")
 
 	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
@@ -209,6 +210,18 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
 		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
 	}
+
+	// Verify stream-usage Lua filter (configPatches[4]) is present and correctly positioned.
+	luaPatch, ok := configPatches[4].(map[string]any)
+	require.True(t, ok, "configPatches[4] should be a map")
+	luaOp, _, _ := unstructured.NestedString(luaPatch, "patch", "operation")
+	assert.Equal(t, "INSERT_BEFORE", luaOp, "configPatches[4] operation")
+	luaSubFilter, _, _ := unstructured.NestedString(luaPatch, "match", "listener", "filterChain", "filter", "subFilter", "name")
+	assert.Equal(t, "envoy.filters.http.ext_proc.ipp-pre", luaSubFilter, "configPatches[4] subFilter.name")
+	luaFilterName, _, _ := unstructured.NestedString(luaPatch, "patch", "value", "name")
+	assert.Equal(t, "envoy.filters.http.lua.stream-usage", luaFilterName, "configPatches[4] filter name")
+	luaType, _, _ := unstructured.NestedString(luaPatch, "patch", "value", "typed_config", "@type")
+	assert.Equal(t, "type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua", luaType, "configPatches[4] typed_config type")
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)

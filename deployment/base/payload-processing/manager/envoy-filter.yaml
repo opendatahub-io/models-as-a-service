@@ -95,3 +95,66 @@ spec:
             envoy.filters.http.ext_proc.ipp-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
+    # Enforce stream_options.include_usage=true on streaming chat completion requests.
+    # Runs before ext_proc so the modified body flows through the payload-processing pipeline.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.ext_proc.ipp-pre
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua.stream-usage
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            default_source_code:
+              inline_string: |
+                function envoy_on_request(request_handle)
+                  if request_handle:headers():get(":method") ~= "POST" then
+                    return
+                  end
+                  local ct = request_handle:headers():get("content-type")
+                  if ct == nil or not string.find(ct, "application/json", 1, true) then
+                    return
+                  end
+                  local body = request_handle:body()
+                  if body == nil or body:length() == 0 then
+                    return
+                  end
+                  local raw = body:getBytes(0, body:length())
+                  if not string.find(raw, '"stream"%s*:%s*true') then
+                    return
+                  end
+                  if string.find(raw, '"stream_options"') then
+                    if string.find(raw, '"include_usage"%s*:%s*true') then
+                      return
+                    elseif string.find(raw, '"include_usage"') then
+                      raw = string.gsub(raw, '"include_usage"%s*:%s*false', '"include_usage":true')
+                    else
+                      local new_raw = string.gsub(raw, '"stream_options"%s*:%s*{%s*}',
+                        '"stream_options":{"include_usage":true}')
+                      if new_raw ~= raw then
+                        raw = new_raw
+                      else
+                        raw = string.gsub(raw, '"stream_options"%s*:%s*{',
+                          '"stream_options":{"include_usage":true,')
+                      end
+                    end
+                  else
+                    local i = #raw
+                    while i > 0 and string.byte(raw, i) ~= 125 do
+                      i = i - 1
+                    end
+                    if i < 2 then return end
+                    raw = string.sub(raw, 1, i - 1)
+                      .. ',"stream_options":{"include_usage":true}'
+                      .. string.sub(raw, i)
+                  end
+                  request_handle:headers():replace("content-length", tostring(#raw))
+                  body:setBytes(raw)
+                end
