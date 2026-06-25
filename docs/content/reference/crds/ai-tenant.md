@@ -6,6 +6,8 @@ Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or
 
 Creates outside the configured infrastructure namespace are rejected by the validating admission webhook before the object is persisted.
 
+The controller automatically creates `AITenant/models-as-a-service` for the default tenant once per `Config/default` lifecycle. That AITenant targets the existing default Gateway and creates or adopts `Tenant/default-tenant` in the MaaS subscription namespace. For migration compatibility, the default tenant keeps legacy resource names such as `maas-api`, `maas-api-route`, and `maas-api-auth-policy`; non-default tenants use suffixed names. If an administrator deletes the default AITenant after bootstrap, the controller does not recreate it until the `Config/default` anchor is recreated.
+
 ---
 
 ## Spec
@@ -22,7 +24,7 @@ Creates outside the configured infrastructure namespace are rejected by the vali
 
 ## Tenant Namespace
 
-For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. `AITenant` names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default tenant keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
+For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. `AITenant` names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default `AITenant/models-as-a-service` keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
 
 The controller does not delete the tenant namespace when an `AITenant` is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by `AITenant` reconciliation.
 

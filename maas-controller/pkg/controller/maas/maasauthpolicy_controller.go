@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -114,11 +113,11 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 	return metadata
 }
 
-// fetchTenantIdentifier fetches the tenant name from the Tenant CR in the given namespace.
-// This returns the tenant name used for database queries and AuthPolicy headers
-// (e.g., "models-as-a-service" for default tenant, "redteam" for AITenant-managed tenants).
-// Returns the tenant name string, or "models-as-a-service" as fallback.
-func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) string {
+// fetchTenantIdentifier fetches the tenant identifier from the Tenant CR in the given namespace.
+// The missing-Tenant fallback preserves legacy default-tenant behavior; malformed
+// AITenant-managed Tenant metadata returns an error so callers do not collide with
+// the legacy/default resource names.
+func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) (string, error) {
 	tenant := &maasv1alpha1.Tenant{}
 	tenantKey := client.ObjectKey{
 		Name:      maasv1alpha1.TenantInstanceName,
@@ -131,24 +130,24 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, lo
 				"tenantName", maasv1alpha1.TenantInstanceName,
 				"tenantNamespace", policyNamespace)
 			// Fallback to default tenant identifier (empty string)
-			return ""
+			return "", nil
 		}
-		log.Error(err, "failed to get Tenant resource, using default tenant identifier as fallback",
+		log.Error(err, "failed to get Tenant resource",
 			"tenantName", maasv1alpha1.TenantInstanceName,
 			"tenantNamespace", policyNamespace)
-		return ""
+		return "", err
 	}
 
 	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
 	// Returns "" for default tenant, tenantID for others.
 	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
-		log.Error(err, "failed to determine tenant identifier, using empty string (default) as fallback")
-		return ""
+		log.Error(err, "failed to determine tenant identifier")
+		return "", err
 	}
 
 	log.V(1).Info("Tenant identifier resolved", "tenantIdentifier", tenantIdentifier, "namespace", policyNamespace)
-	return tenantIdentifier
+	return tenantIdentifier, nil
 }
 
 // fetchOIDCConfig fetches OIDC configuration from the Tenant CR in the given
@@ -424,7 +423,11 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
-	tenantID := r.fetchTenantIdentifier(ctx, log, req.Namespace)
+	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
+	if err != nil {
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
 
 	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
 	if err != nil {
@@ -897,34 +900,6 @@ allow {
 								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
 						},
 						"key":      "X-MaaS-Group",
-						"metrics":  false,
-						"priority": int64(1),
-					},
-					"X-MaaS-Tenant": map[string]any{
-						"when": []any{
-							map[string]any{
-								"selector": "request.headers.authorization",
-								"operator": "matches",
-								"value":    "^Bearer sk-oai-.*",
-							},
-						},
-						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.tenant",
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					"X-MaaS-Tenant-Token": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-							},
-						},
-						"plain": map[string]any{
-							// Use tenantName (DB/header value) not tenantID (resource identifier)
-							"expression": strconv.Quote(tenantName),
-						},
-						"key":      "X-MaaS-Tenant",
 						"metrics":  false,
 						"priority": int64(1),
 					},

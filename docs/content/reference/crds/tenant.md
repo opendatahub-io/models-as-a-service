@@ -8,11 +8,12 @@ In multi-tenant deployments, each tenant has its own Tenant CR in a dedicated na
 
 | Tenant Type | Tenant CR Namespace | Tenant CR Name | maas-api Service (in operator namespace) | Created By |
 |-------------|---------------------|----------------|------------------------------------------|------------|
-| **Default** | `models-as-a-service` | `default-tenant` | `maas-api` | maas-controller on startup |
+| **Default** | `models-as-a-service` | `default-tenant` | `maas-api` | Default AITenant bootstrap |
 | **Additional** | `ai-tenant-{tenantID}` | `default-tenant` | `maas-api-{tenantID}` | AITenant reconciler |
 
 **Key points:**
 - All Tenant CRs are named `default-tenant` within their respective namespace
+- The default `Tenant/default-tenant` is created or adopted by `AITenant/models-as-a-service`
 - Additional tenants are created by the AITenant reconciler, which provisions the tenant namespace and Tenant CR
 - All maas-api Services deploy to the operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI), not to tenant namespaces
 - Each tenant has an isolated maas-api instance for API key and subscription management
