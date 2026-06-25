@@ -336,7 +336,7 @@ func newTestReconcilerWithMapper(objects ...client.Object) (*MaaSModelRefReconci
 func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "", "")
 	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
-	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
 
 	r, _ := newTestReconcilerWithMapper(model, inferenceEM, route)
 	handler := &externalModelHandler{r: r}
@@ -347,8 +347,8 @@ func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
 	}
 
-	if model.Status.HTTPRouteName != "gpt-4o" {
-		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "gpt-4o")
+	if model.Status.HTTPRouteName != "maas-gpt-4o" {
+		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "maas-gpt-4o")
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
@@ -371,11 +371,11 @@ func TestExternalModel_ReconcileRoute_BothMissing(t *testing.T) {
 	}
 }
 
-func TestExternalModel_ReconcileRoute_MaasPreferred(t *testing.T) {
+func TestExternalModel_ReconcileRoute_InferencePreferredOverLegacy(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "", "")
 	maasEM := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "different-provider")
-	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
 
 	r, _ := newTestReconcilerWithMapper(model, maasEM, inferenceEM, route)
 	handler := &externalModelHandler{r: r}
