@@ -59,15 +59,6 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 	}
 }
 
-// GetMaxExpirationDays returns the maximum expiration days for API keys.
-// Returns the configured value if set, otherwise returns the default.
-// Safely handles nil config to prevent service crashes.
-func (s *Service) GetMaxExpirationDays() int {
-	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-		return s.config.APIKeyMaxExpirationDays
-	}
-	return constant.DefaultAPIKeyMaxExpirationDays
-}
 
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
