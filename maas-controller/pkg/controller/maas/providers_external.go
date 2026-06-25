@@ -62,6 +62,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	var externalModelName string
 	var providerInfo string
+	var routeName string
 
 	// Try inference.opendatahub.io/ExternalModel first (canonical), fall back to maas.opendatahub.io (legacy)
 	inferenceEM := &unstructured.Unstructured{}
@@ -77,6 +78,9 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 					}
 				}
 			}
+		}
+		if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+			routeName = name
 		}
 	} else if apierrors.IsNotFound(err) {
 		externalModel := &maasv1alpha1.ExternalModel{}
@@ -94,7 +98,9 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
 
-	routeName := modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
+	if routeName == "" {
+		routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
+	}
 	routeNS := model.Namespace
 
 	route := &gatewayapiv1.HTTPRoute{}
@@ -263,7 +269,20 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
-	routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	routeNamespace = model.Namespace
+
+	// Read route name from inference ExternalModel status if available
+	if c != nil {
+		key := types.NamespacedName{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+		inferenceEM := &unstructured.Unstructured{}
+		inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
+		if err := c.Get(ctx, key, inferenceEM); err == nil {
+			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+				return name, routeNamespace, nil
+			}
+		}
+	}
+
+	routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	return routeName, routeNamespace, nil
 }

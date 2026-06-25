@@ -315,6 +315,9 @@ func newInferenceExternalModelCR(name, ns, providerRef string) *unstructured.Uns
 			},
 		},
 	}
+	obj.Object["status"] = map[string]any{
+		"httpRouteName": name,
+	}
 	return obj
 }
 
@@ -336,7 +339,8 @@ func newTestReconcilerWithMapper(objects ...client.Object) (*MaaSModelRefReconci
 func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "", "")
 	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
-	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
+	// HTTPRoute name comes from inference ExternalModel status.httpRouteName ("gpt-4o")
+	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
 
 	r, _ := newTestReconcilerWithMapper(model, inferenceEM, route)
 	handler := &externalModelHandler{r: r}
@@ -347,8 +351,8 @@ func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
 	}
 
-	if model.Status.HTTPRouteName != "maas-gpt-4o" {
-		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "maas-gpt-4o")
+	if model.Status.HTTPRouteName != "gpt-4o" {
+		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "gpt-4o")
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
@@ -375,7 +379,8 @@ func TestExternalModel_ReconcileRoute_InferencePreferredOverLegacy(t *testing.T)
 	model := newExternalModel("gpt-4o", "default", "", "")
 	maasEM := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
 	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "different-provider")
-	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
+	// Route name from inference ExternalModel status.httpRouteName
+	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
 
 	r, _ := newTestReconcilerWithMapper(model, maasEM, inferenceEM, route)
 	handler := &externalModelHandler{r: r}
@@ -401,6 +406,25 @@ func TestExternalModelRouteResolver(t *testing.T) {
 	}
 	if routeName != "maas-gpt-4o" {
 		t.Errorf("routeName = %q, want %q", routeName, "maas-gpt-4o")
+	}
+	if routeNS != "default" {
+		t.Errorf("routeNS = %q, want %q", routeNS, "default")
+	}
+}
+
+func TestExternalModelRouteResolver_FromInferenceStatus(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+
+	_, c := newTestReconcilerWithMapper(model, inferenceEM)
+	resolver := externalModelRouteResolver{}
+
+	routeName, routeNS, err := resolver.HTTPRouteForModel(context.Background(), c, model)
+	if err != nil {
+		t.Fatalf("HTTPRouteForModel: unexpected error: %v", err)
+	}
+	if routeName != "gpt-4o" {
+		t.Errorf("routeName = %q, want %q (from inference status)", routeName, "gpt-4o")
 	}
 	if routeNS != "default" {
 		t.Errorf("routeNS = %q, want %q", routeNS, "default")
