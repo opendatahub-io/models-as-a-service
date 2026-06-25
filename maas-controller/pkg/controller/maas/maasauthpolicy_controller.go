@@ -53,9 +53,9 @@ import (
 type MaaSAuthPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// MaaSAPINamespace is the namespace where maas-api service is deployed.
+	// InfraNamespace is the infrastructure namespace where maas-api service is deployed.
 	// Used to construct the subscription selector endpoint URL.
-	MaaSAPINamespace string
+	InfraNamespace string
 
 	// TenantNamespace is the namespace where the Tenant CR lives (configurable via flags).
 	// Defaults to "models-as-a-service".
@@ -596,8 +596,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 		maasAPIServiceName = fmt.Sprintf("maas-api-%s", tenantID)
 	}
 
-	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.MaaSAPINamespace)
-	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.MaaSAPINamespace)
+	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.InfraNamespace)
+	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.InfraNamespace)
 
 	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
 	subscriptionInfoBody := fmt.Sprintf(`{

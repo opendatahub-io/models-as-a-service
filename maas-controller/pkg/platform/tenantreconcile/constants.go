@@ -58,10 +58,13 @@ const (
 	// models-as-a-service installation during single-tenant to multi-tenant migration.
 	DefaultAITenantName = "models-as-a-service"
 
-	// DefaultMaaSAPINamespace is the fallback namespace for maas-api workloads when
-	// --maas-api-namespace flag is not specified (kustomize standalone deployments).
-	// Production deployments use the controller's namespace via fieldRef.
-	DefaultMaaSAPINamespace = "opendatahub"
+	// DefaultInfraNamespace is the fallback infrastructure namespace for maas-api
+	// and maas-db-config when --infra-namespace flag is not specified.
+	// Note: PostgreSQL can be external - only maas-api and the connection secret deploy here.
+	// Production deployments set INFRA_NAMESPACE via env var (AUTO for separation, or explicit value).
+	// This fallback is intentionally NOT "AUTO" - it provides a concrete namespace for tests
+	// and standalone scenarios where controller namespace context may be unavailable.
+	DefaultInfraNamespace = "opendatahub"
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
