@@ -38,6 +38,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // CleanupFinalizer was historically added to the maas-controller Deployment for coordinated
@@ -48,20 +49,22 @@ const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
-// It links the Deployment and default Tenant to Config via non-controller ownerReferences (same
-// relationship shape for both). Legacy CleanupFinalizer entries are removed when present.
+// It links the Deployment, default AITenant, and default Tenant to Config via non-controller
+// ownerReferences (same relationship shape for all). Legacy CleanupFinalizer entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
 	DeploymentName              string
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
+	AITenantNamespace           string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -78,6 +81,11 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if res, err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
+			return ctrl.Result{}, err
+		} else if res != nil {
+			return *res, nil
+		}
+		if res, err := r.ensureDefaultAITenantReferencesConfig(ctx); err != nil {
 			return ctrl.Result{}, err
 		} else if res != nil {
 			return *res, nil
@@ -101,6 +109,59 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+// ensureDefaultAITenantReferencesConfig links the automatically bootstrapped
+// default AITenant to Config/default. The bootstrap runnable may create the
+// AITenant shell before owner refs converge.
+func (r *LifecycleReconciler) ensureDefaultAITenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
+	if r.AITenantNamespace == "" {
+		return nil, nil
+	}
+	if r.Scheme == nil {
+		return nil, nil
+	}
+	log := ctrl.LoggerFrom(ctx)
+	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Config anchor not found when linking default AITenant; requeueing")
+			res := ctrl.Result{RequeueAfter: 2 * time.Second}
+			return &res, nil
+		}
+		return nil, err
+	}
+	if !cfg.DeletionTimestamp.IsZero() {
+		log.Info("Config anchor is terminating when linking default AITenant; requeueing")
+		res := ctrl.Result{RequeueAfter: 10 * time.Second}
+		return &res, nil
+	}
+	if cfg.UID == "" {
+		res := ctrl.Result{RequeueAfter: 2 * time.Second}
+		return &res, nil
+	}
+
+	aitenantKey := client.ObjectKey{Name: tenantreconcile.DefaultAITenantName, Namespace: r.AITenantNamespace}
+	var aitenant maasv1alpha1.AITenant
+	if err := r.Get(ctx, aitenantKey, &aitenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	if aitenantReferencesConfig(&aitenant, &cfg) {
+		return nil, nil
+	}
+	base := aitenant.DeepCopy()
+	if err := controllerutil.SetOwnerReference(&cfg, &aitenant, r.Scheme); err != nil {
+		return nil, fmt.Errorf("set Config owner reference on default AITenant: %w", err)
+	}
+	if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
+		return nil, fmt.Errorf("patch default AITenant ownerReferences: %w", err)
+	}
+	log.Info("set Config owner reference on default AITenant", "namespace", r.AITenantNamespace)
+	return nil, nil
 }
 
 func (r *LifecycleReconciler) stripLegacyCleanupFinalizer(ctx context.Context, log logr.Logger, key types.NamespacedName) error {
@@ -279,6 +340,17 @@ func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config
 	return false
 }
 
+func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.Config) bool {
+	for _, ref := range aitenant.OwnerReferences {
+		if ref.UID == ct.UID &&
+			ref.Kind == maasv1alpha1.ConfigKind &&
+			ref.APIVersion == maasv1alpha1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
+}
+
 // ensureLimitadorServiceMonitor creates or updates the Limitador ServiceMonitor in the operator namespace.
 // This ServiceMonitor ensures metrics are scraped from the Limitador pod and get to the DSC's monitoring stack.
 // TODO: move the ServiceMonitor to the monitoring namespace (opendatahub/redahat-ods-monitoring).
@@ -354,6 +426,12 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.TenantInstanceName
 	})
+	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
+		if r.AITenantNamespace == "" {
+			return false
+		}
+		return o.GetNamespace() == r.AITenantNamespace && o.GetName() == tenantreconcile.DefaultAITenantName
+	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
 		Watches(
@@ -375,6 +453,16 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}}
 			}),
 			builder.WithPredicates(defaultTenant),
+		).
+		Watches(
+			&maasv1alpha1.AITenant{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(defaultAITenant),
 		).
 		Complete(r)
 }
