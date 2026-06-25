@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -92,7 +93,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 			model.Status.HTTPRouteHostnames = nil
 			return nil
 		}
-	} else if apierrors.IsNotFound(err) {
+	} else if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 		externalModel := &maasv1alpha1.ExternalModel{}
 		if err := h.r.Get(ctx, externalModelKey, externalModel); err != nil {
 			if apierrors.IsNotFound(err) {
@@ -287,6 +288,9 @@ func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c clien
 			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
 				return name, routeNamespace, nil
 			}
+		} else if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			return "", routeNamespace, fmt.Errorf("failed to get inference ExternalModel %s/%s: %w",
+				model.Namespace, model.Spec.ModelRef.Name, err)
 		}
 	}
 
