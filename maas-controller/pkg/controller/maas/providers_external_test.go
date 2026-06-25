@@ -26,6 +26,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 func newExternalModel(name, ns, provider, endpoint string) *maasv1alpha1.MaaSModelRef {
@@ -98,7 +99,7 @@ func newGatewayWithHostname(name, ns, hostname string) *gatewayapiv1.Gateway {
 func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
 	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
-	route := newHTTPRouteWithGateway("gpt-4o", "default", "maas-default-gateway", "openshift-ingress")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
 
 	r, _ := newTestReconciler(model, externalModelCR, route)
 	r.GatewayName = "maas-default-gateway"
@@ -111,8 +112,8 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
 	}
 
-	if model.Status.HTTPRouteName != "gpt-4o" {
-		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "gpt-4o")
+	if model.Status.HTTPRouteName != "maas-gpt-4o" {
+		t.Errorf("HTTPRouteName = %q, want %q", model.Status.HTTPRouteName, "maas-gpt-4o")
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
@@ -164,7 +165,7 @@ func TestExternalModel_ReconcileRoute_MissingExternalModel(t *testing.T) {
 func TestExternalModel_ReconcileRoute_WrongGateway(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
 	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
-	route := newHTTPRouteWithGateway("gpt-4o", "default", "wrong-gateway", "wrong-ns")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "wrong-gateway", "wrong-ns")
 
 	r, _ := newTestReconciler(model, externalModelCR, route)
 	r.GatewayName = "maas-default-gateway"
@@ -183,7 +184,7 @@ func TestExternalModel_ReconcileRoute_WrongGateway(t *testing.T) {
 
 func TestExternalModel_Status_Ready(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
-	model.Status.HTTPRouteName = "gpt-4o"
+	model.Status.HTTPRouteName = "maas-gpt-4o"
 	model.Status.HTTPRouteGatewayName = "maas-default-gateway"
 	model.Status.HTTPRouteHostnames = []string{"maas.example.com"}
 
@@ -305,8 +306,8 @@ func TestExternalModelRouteResolver(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HTTPRouteForModel: unexpected error: %v", err)
 	}
-	if routeName != "gpt-4o" {
-		t.Errorf("routeName = %q, want %q", routeName, "gpt-4o")
+	if routeName != "maas-gpt-4o" {
+		t.Errorf("routeName = %q, want %q", routeName, "maas-gpt-4o")
 	}
 	if routeNS != "default" {
 		t.Errorf("routeNS = %q, want %q", routeNS, "default")
