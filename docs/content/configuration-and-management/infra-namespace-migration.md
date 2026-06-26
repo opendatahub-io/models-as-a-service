@@ -74,28 +74,6 @@ kubectl get pods -n opendatahub  # Should NOT show maas-api
 ./scripts/validate-deployment.sh
 ```
 
-## Troubleshooting
-
-**maas-api in wrong namespace:**
-Check controller's INFRA_NAMESPACE env var:
-```bash
-kubectl get deployment maas-controller -n opendatahub \
-  -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="INFRA_NAMESPACE")]}'
-```
-Should show `"value": "AUTO"` (or explicit namespace), not `valueFrom.fieldRef`.
-
-**Database connection errors:**
-Ensure secret exists in infra namespace:
-```bash
-kubectl get secret maas-db-config -n odh-ai-gateway-infra
-```
-
-**Old maas-api not cleaned up:**
-Check controller logs for cleanup messages:
-```bash
-kubectl logs -l app.kubernetes.io/name=maas-controller -n opendatahub | grep -i cleanup
-```
-
 ## References
 
 - Component: `deployment/components/infra-namespace-separation/`
