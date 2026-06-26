@@ -1122,7 +1122,7 @@ func TestAITenantReconcile_GatewayClaimBlocksDuplicateGateway(t *testing.T) {
 	// First reconcile adds the finalizer.
 	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key2})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.Requeue).To(BeTrue())
+	g.Expect(res.RequeueAfter).To(Equal(time.Second))
 
 	// Second reconcile should fail due to gateway claim conflict.
 	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key2})

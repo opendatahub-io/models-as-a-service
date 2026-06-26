@@ -619,10 +619,14 @@ func (r *AITenantReconciler) upsertWithCreate(ctx context.Context, obj client.Ob
 
 // gatewayClaimName returns a deterministic ConfigMap name for a gateway claim.
 // The name is derived from the gateway namespace and name to ensure uniqueness.
+// Uses 32 hex chars (128 bits) from SHA256 to provide strong collision resistance
+// while staying within the 63-character ConfigMap name limit (14 + 32 = 46 chars).
+// Collision probability with 128 bits: ~1 in 2^64 for birthday attack, which is
+// 18 quintillion operations - effectively zero for realistic cluster sizes.
 func gatewayClaimName(gatewayRef maasv1alpha1.TenantGatewayRef) string {
 	raw := gatewayRef.Namespace + "/" + gatewayRef.Name
 	sum := sha256.Sum256([]byte(raw))
-	hash := hex.EncodeToString(sum[:])[:12]
+	hash := hex.EncodeToString(sum[:])[:32]
 	return "gateway-claim-" + hash
 }
 
@@ -696,6 +700,20 @@ func (r *AITenantReconciler) ensureGatewayClaim(ctx context.Context, aitenant *m
 			return fmt.Errorf("get existing gateway claim %s/%s: %w", claimNamespace, claimName, err)
 		}
 		if isClaimOwnedByAITenant(&existing, aitenant) {
+			// Validate that the existing claim's Data matches the current gateway reference.
+			// This prevents silent drift if a hash collision occurs or the tenant retargets
+			// to a different gateway that happens to produce the same claim name.
+			if existing.Data["gatewayNamespace"] != gatewayRef.Namespace ||
+				existing.Data["gatewayName"] != gatewayRef.Name {
+				return fmt.Errorf(
+					"claim %s/%s already exists for gateway %s/%s but tenant %s/%s needs %s/%s; "+
+						"this indicates a hash collision or stale claim",
+					claimNamespace, claimName,
+					existing.Data["gatewayNamespace"], existing.Data["gatewayName"],
+					aitenant.Namespace, aitenant.Name,
+					gatewayRef.Namespace, gatewayRef.Name,
+				)
+			}
 			prevRefs := make([]metav1.OwnerReference, len(existing.OwnerReferences))
 			copy(prevRefs, existing.OwnerReferences)
 			if err := controllerutil.SetControllerReference(aitenant, &existing, r.Scheme); err != nil {
