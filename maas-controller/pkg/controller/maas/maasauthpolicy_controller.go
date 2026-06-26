@@ -23,7 +23,6 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -114,11 +113,11 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 	return metadata
 }
 
-// fetchTenantIdentifier fetches the tenant name from the Tenant CR in the given namespace.
-// This returns the tenant name used for database queries and AuthPolicy headers
-// (e.g., "models-as-a-service" for default tenant, "redteam" for AITenant-managed tenants).
-// Returns the tenant name string, or "models-as-a-service" as fallback.
-func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) string {
+// fetchTenantIdentifier fetches the tenant identifier from the Tenant CR in the given namespace.
+// The missing-Tenant fallback preserves legacy default-tenant behavior; malformed
+// AITenant-managed Tenant metadata returns an error so callers do not collide with
+// the legacy/default resource names.
+func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) (string, error) {
 	tenant := &maasv1alpha1.Tenant{}
 	tenantKey := client.ObjectKey{
 		Name:      maasv1alpha1.TenantInstanceName,
@@ -131,24 +130,24 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, lo
 				"tenantName", maasv1alpha1.TenantInstanceName,
 				"tenantNamespace", policyNamespace)
 			// Fallback to default tenant identifier (empty string)
-			return ""
+			return "", nil
 		}
-		log.Error(err, "failed to get Tenant resource, using default tenant identifier as fallback",
+		log.Error(err, "failed to get Tenant resource",
 			"tenantName", maasv1alpha1.TenantInstanceName,
 			"tenantNamespace", policyNamespace)
-		return ""
+		return "", err
 	}
 
 	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
 	// Returns "" for default tenant, tenantID for others.
 	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
-		log.Error(err, "failed to determine tenant identifier, using empty string (default) as fallback")
-		return ""
+		log.Error(err, "failed to determine tenant identifier")
+		return "", err
 	}
 
 	log.V(1).Info("Tenant identifier resolved", "tenantIdentifier", tenantIdentifier, "namespace", policyNamespace)
-	return tenantIdentifier
+	return tenantIdentifier, nil
 }
 
 // fetchOIDCConfig fetches OIDC configuration from the Tenant CR in the given
@@ -301,15 +300,25 @@ const (
 )
 
 // celModelIdentity extracts model identity (namespace/name) from the request at gateway level.
-// For path-routed inference (/llm/<ns>/<name>/...), extract from URL.
+// For path-routed inference (/<model-namespace>/<model-name>/...), extract from URL.
 // For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc).
+// Canonical model IDs (publishers/{ns}/models/{name}) are normalized to {ns}/{name}.
 // For listing endpoints like /v1/models where no model target exists, returns empty string
 // so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
-const celModelIdentity = `(request.path.startsWith("/llm/")` +
-	` ? request.path.split("/").filter(x, x != "")[0] + "/" + request.path.split("/").filter(x, x != "")[1]` +
-	` : ("x-gateway-model-name" in request.headers` +
-	` ? request.headers["x-gateway-model-name"]` +
-	` : ""))`
+const (
+	celPathParts                  = `request.path.split("/").filter(x, x != "")`
+	celPathModelIdentityAvailable = `size(` + celPathParts + `) >= 2 && ` +
+		celPathParts + `[0] != "v1" && ` +
+		celPathParts + `[0] != "maas-api"`
+	celModelIdentityAvailable = `(` + celPathModelIdentityAvailable + ` || "x-gateway-model-name" in request.headers)`
+	celModelIdentity          = `(` + celPathModelIdentityAvailable +
+		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
+		` : ("x-gateway-model-name" in request.headers` +
+		`   ? (request.headers["x-gateway-model-name"].startsWith("publishers/")` +
+		`     ? request.headers["x-gateway-model-name"].split("/")[1] + "/" + request.headers["x-gateway-model-name"].split("/")[3]` +
+		`     : request.headers["x-gateway-model-name"])` +
+		`   : ""))`
+)
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
@@ -417,7 +426,11 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	}
 
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
-	tenantID := r.fetchTenantIdentifier(ctx, log, req.Namespace)
+	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
+	if err != nil {
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
 
 	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
 	if err != nil {
@@ -668,12 +681,18 @@ path_parts := [p | p := split(request_path, "/")[_]; p != ""]
 
 path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
 	count(path_parts) >= 2
+	path_parts[0] != "v1"
+	path_parts[0] != "maas-api"
 }
 
-header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
+raw_header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
+
+header_model_identity := sprintf("%%s/%%s", [split(raw_header_model_identity, "/")[1], split(raw_header_model_identity, "/")[3]]) {
+	startswith(raw_header_model_identity, "publishers/")
+} else := raw_header_model_identity
 
 model_identity := path_model_identity {
-	startswith(request_path, "/llm/")
+	path_model_identity != ""
 } else := header_model_identity {
 	header_model_identity != ""
 } else := ""
@@ -698,8 +717,8 @@ else := []
 
 model_rules := object.get(model_access, model_identity, null)
 
-# Management endpoints (e.g. /v1/models, /v1/api-keys) carry no model context.
-# Allow them here; subscription and rate-limit checks are gated by the /llm/ when-condition.
+# Management endpoints (e.g. /v1/models, /maas-api/v1/api-keys) carry no model context.
+# Allow them here; subscription and rate-limit checks are gated by model-route conditions.
 allow {
 	model_identity == ""
 }
@@ -748,7 +767,7 @@ allow {
 			"subscription-info": map[string]any{
 				"when": []any{
 					map[string]any{
-						"predicate": `request.path.startsWith("/llm/") || "x-gateway-model-name" in request.headers`,
+						"predicate": celModelIdentityAvailable,
 					},
 				},
 				"http": map[string]any{
@@ -794,7 +813,7 @@ allow {
 			"subscription-valid": map[string]any{
 				"when": []any{
 					map[string]any{
-						"predicate": `request.path.startsWith("/llm/") || "x-gateway-model-name" in request.headers`,
+						"predicate": celModelIdentityAvailable,
 					},
 				},
 				"metrics":  false,
@@ -891,34 +910,6 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					"X-MaaS-Tenant": map[string]any{
-						"when": []any{
-							map[string]any{
-								"selector": "request.headers.authorization",
-								"operator": "matches",
-								"value":    "^Bearer sk-oai-.*",
-							},
-						},
-						"plain": map[string]any{
-							"selector": "auth.metadata.apiKeyValidation.tenant",
-						},
-						"metrics":  false,
-						"priority": int64(0),
-					},
-					"X-MaaS-Tenant-Token": map[string]any{
-						"when": []any{
-							map[string]any{
-								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
-							},
-						},
-						"plain": map[string]any{
-							// Use tenantName (DB/header value) not tenantID (resource identifier)
-							"expression": strconv.Quote(tenantName),
-						},
-						"key":      "X-MaaS-Tenant",
-						"metrics":  false,
-						"priority": int64(1),
-					},
 					// Only inject X-MaaS-Subscription when there is a real value to inject.
 					// An empty string injected for K8s tokens without a subscription header
 					// causes maas-api to filter by an empty subscription name and return 0 models.
@@ -948,6 +939,9 @@ allow {
 								},
 								"keyId": map[string]any{
 									"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : ""`,
+								},
+								"keyName": map[string]any{
+									"expression": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyName : ""`,
 								},
 								"selected_subscription": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,

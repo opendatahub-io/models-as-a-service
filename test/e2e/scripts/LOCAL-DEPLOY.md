@@ -1,6 +1,6 @@
 # MaaS Local Deployment Guide
 
-One-click local deployment of the full MaaS + BBR platform on Kind (macOS + Linux/WSL2).
+One-click local deployment of the full MaaS + IPP platform on Kind (macOS + Linux/WSL2).
 
 ## Quick Start
 
@@ -9,7 +9,7 @@ One-click local deployment of the full MaaS + BBR platform on Kind (macOS + Linu
 ./test/e2e/scripts/local-deploy.sh
 
 # Rebuild a single component after code changes (~30 seconds)
-./test/e2e/scripts/local-deploy.sh --rebuild bbr
+./test/e2e/scripts/local-deploy.sh --rebuild ipp
 ./test/e2e/scripts/local-deploy.sh --rebuild maas-api
 ./test/e2e/scripts/local-deploy.sh --rebuild maas-controller
 ./test/e2e/scripts/local-deploy.sh --rebuild all
@@ -39,11 +39,11 @@ One-click local deployment of the full MaaS + BBR platform on Kind (macOS + Linu
 
 No other repos need to be cloned. The script auto-clones what it needs.
 
-> **How BBR works**: The BBR (payload-processing) **deployment manifests** (Deployment, Service,
+> **How IPP works**: The IPP (payload-processing) **deployment manifests** (Deployment, Service,
 > EnvoyFilter) live inside this repo at `deployment/base/payload-processing/`. This is the same
-> as OpenShift — the MaaS kustomize overlay includes BBR. The image tag and upstream source commit
+> as OpenShift — the MaaS kustomize overlay includes IPP. The image tag and upstream source commit
 > are pinned in `deployment/overlays/odh/params.env` (`payload-processing-image`); override locally
-> with `BBR_IMAGE` or `PAYLOAD_PROCESSING_COMMIT`. On Apple Silicon, the pre-built quay.io image is
+> with `IPP_IMAGE` or `PAYLOAD_PROCESSING_COMMIT`. On Apple Silicon, the pre-built quay.io image is
 > x86-only, so the script **auto-clones** `ai-gateway-payload-processing` to
 > `../ai-gateway-payload-processing`, checks out the pinned commit, and builds an arm64 image locally.
 > On x86, the pre-built image is used directly.
@@ -57,7 +57,7 @@ Kind cluster (maas-local)
 +-- istio-system (3 pods)
 |   +-- istiod                          # Istio control plane
 |   +-- maas-default-gateway-istio      # Gateway (MetalLB assigns LB IP)
-|   +-- payload-processing              # BBR ext-proc (body-based routing)
+|   +-- payload-processing              # IPP ext-proc (body-based routing)
 |
 +-- kuadrant-system (6 pods)
 |   +-- kuadrant-operator               # Manages auth/rate-limit policies
@@ -106,7 +106,7 @@ Kind cluster (maas-local)
 | Authorino CA trust | service-ca bundle in system trust store | Init container injects CA into SSL_CERT_FILE |
 | PostgreSQL | registry.redhat.io/rhel9/postgresql-16 | postgres:16-alpine |
 | LoadBalancer | Cloud provider / OpenShift router | MetalLB |
-| BBR EnvoyFilter | INSERT_AFTER openshift-ingress.kuadrant-... | INSERT_AFTER istio-system.kuadrant-... |
+| IPP EnvoyFilter | INSERT_AFTER openshift-ingress.kuadrant-... | INSERT_AFTER istio-system.kuadrant-... |
 | External model TLS | Real provider certs (trusted) | Let's Encrypt via sslip.io (trusted) |
 
 ## Request Flow
@@ -125,7 +125,7 @@ Gateway (port 80)                                    # identical to OpenShift
   |     +-- API key? -> Authorino -> maas-api:8443   # identical to OpenShift
   |     +-- K8s token? -> Authorino -> TokenReview   # identical to OpenShift
   |
-  +-- BBR ext-proc (payload-processing)              # identical to OpenShift
+  +-- IPP ext-proc (payload-processing)              # identical to OpenShift
   |     |
   |     +-- Extract model name from request body
   |     +-- Resolve ExternalModel -> set X-Gateway-Model-Name header
@@ -219,7 +219,7 @@ kubectl logs -n maas-system deployment/maas-controller -f
 # Authorino (auth decisions)
 kubectl logs -n kuadrant-system deployment/authorino -f
 
-# BBR (payload processing)
+# IPP (payload processing)
 kubectl logs -n istio-system deployment/payload-processing -f
 
 # Gateway proxy (Envoy access logs)
@@ -297,11 +297,11 @@ After the initial deploy, use `--rebuild` to quickly test code changes without
 redeploying the full infrastructure:
 
 ```bash
-# Example: you changed BBR plugin code
+# Example: you changed IPP plugin code
 cd ../ai-gateway-payload-processing
 # ... edit code ...
 cd ../models-as-a-service
-./test/e2e/scripts/local-deploy.sh --rebuild bbr    # ~30 seconds
+./test/e2e/scripts/local-deploy.sh --rebuild ipp    # ~30 seconds
 
 # Example: you changed maas-api handler
 # ... edit maas-api code ...
@@ -337,7 +337,7 @@ deployment. The cluster, Istio, Kuadrant, and all CRDs stay untouched.
 | MaaS (api + controller) | ~60m | ~640Mi |
 | PostgreSQL | ~100m | ~512Mi |
 | KServe (3 pods) | ~100m | ~384Mi |
-| BBR (payload-processing) | ~100m | ~128Mi |
+| IPP (payload-processing) | ~100m | ~128Mi |
 | llm-d simulator | ~100m | ~256Mi |
 | **Total** | **~1.5 CPU** | **~4Gi** |
 

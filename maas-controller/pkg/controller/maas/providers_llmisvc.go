@@ -187,8 +187,14 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
 }
 
+const (
+	addressNameGatewayExternal             = "gateway-external"
+	addressNameGatewayExternalModelRouting = "gateway-external-model-routing"
+)
+
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
-// When expectedHostnames is non-empty, only gateway-external addresses whose hostname matches
+// Prefers model-routing addresses (body-based /v1/chat/completions) over path-based addresses.
+// When expectedHostnames is non-empty, only addresses whose hostname matches
 // (case-insensitive per RFC 4343) are considered; this prevents selecting the wrong gateway
 // when multiple gateways exist.
 // When expectedHostnames is empty, preserves legacy behavior for single-gateway deployments.
@@ -201,30 +207,13 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	}
 	filtering := len(hostSet) > 0
 
-	var gatewayExternalURLs []string
-	for _, addr := range llmisvc.Status.Addresses {
-		if addr.Name != nil && *addr.Name == "gateway-external" && addr.URL != nil {
-			if filtering {
-				parsed := url.URL(*addr.URL)
-				host := strings.ToLower(parsed.Hostname())
-				if host == "" {
-					continue
-				}
-				if _, ok := hostSet[host]; !ok {
-					continue
-				}
-			}
-			gatewayExternalURLs = append(gatewayExternalURLs, addr.URL.String())
-		}
-	}
-	for _, u := range gatewayExternalURLs {
-		if strings.HasPrefix(u, "https://") {
+	// Prefer model-routing addresses (body-based routing), fall back to path-based.
+	for _, targetName := range []string{addressNameGatewayExternalModelRouting, addressNameGatewayExternal} {
+		if u := h.selectAddress(llmisvc, targetName, hostSet, filtering); u != "" {
 			return u
 		}
 	}
-	if len(gatewayExternalURLs) > 0 {
-		return gatewayExternalURLs[0]
-	}
+
 	// When filtering is active, don't fall back to unfiltered addresses — they may
 	// belong to the wrong gateway.
 	if filtering {
@@ -235,6 +224,35 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	}
 	if llmisvc.Status.URL != nil {
 		return llmisvc.Status.URL.String()
+	}
+	return ""
+}
+
+func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha1.LLMInferenceService, targetName string, hostSet map[string]struct{}, filtering bool) string {
+	var urls []string
+	for _, addr := range llmisvc.Status.Addresses {
+		if addr.Name == nil || *addr.Name != targetName || addr.URL == nil {
+			continue
+		}
+		if filtering {
+			parsed := url.URL(*addr.URL)
+			host := strings.ToLower(parsed.Hostname())
+			if host == "" {
+				continue
+			}
+			if _, ok := hostSet[host]; !ok {
+				continue
+			}
+		}
+		urls = append(urls, addr.URL.String())
+	}
+	for _, u := range urls {
+		if strings.HasPrefix(u, "https://") {
+			return u
+		}
+	}
+	if len(urls) > 0 {
+		return urls[0]
 	}
 	return ""
 }

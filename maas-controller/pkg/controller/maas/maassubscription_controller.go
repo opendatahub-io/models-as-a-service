@@ -133,7 +133,7 @@ func validateTokenRateLimit(limit int64, window string) error {
 	return nil
 }
 
-// ConditionSpecPriorityDuplicate is set True when another MaaSSubscription shares the same spec.priority
+// ConditionSpecPriorityDuplicate is set True when another MaaSSubscription in the same namespace shares the same spec.priority
 // (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
 const ConditionSpecPriorityDuplicate = "SpecPriorityDuplicate"
 
@@ -880,9 +880,13 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
 	// Status-only updates do not bump metadata.generation, so this reconcile may not re-queue.
 	// Merge SpecPriorityDuplicate from the API server so we do not clobber the async duplicate-priority scan.
+	statusTarget := subscription
+	currentStatus := *statusSnapshot
 	latest := &maasv1alpha1.MaaSSubscription{}
 	if err := r.Get(ctx, client.ObjectKeyFromObject(subscription), latest); err == nil {
-		if dup := apimeta.FindStatusCondition(latest.Status.Conditions, ConditionSpecPriorityDuplicate); dup != nil {
+		statusTarget = latest
+		currentStatus = statusTarget.Status
+		if dup := apimeta.FindStatusCondition(statusTarget.Status.Conditions, ConditionSpecPriorityDuplicate); dup != nil {
 			apimeta.SetStatusCondition(&subscription.Status.Conditions, *dup)
 		}
 	}
@@ -917,11 +921,12 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 		ObservedGeneration: subscription.GetGeneration(),
 	})
 
-	if equality.Semantic.DeepEqual(*statusSnapshot, subscription.Status) {
+	if equality.Semantic.DeepEqual(currentStatus, subscription.Status) {
 		return
 	}
 
-	if err := r.Status().Update(ctx, subscription); err != nil {
+	statusTarget.Status = subscription.Status
+	if err := r.Status().Update(ctx, statusTarget); err != nil {
 		log := logr.FromContextOrDiscard(ctx)
 		log.Error(err, "failed to update MaaSSubscription status", "name", subscription.Name)
 	}
@@ -945,26 +950,31 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 		}
 	}
 
-	byPriority := make(map[int32][]string)
+	type priorityScope struct {
+		namespace string
+		priority  int32
+	}
+
+	byPriority := make(map[priorityScope][]string)
 	for _, i := range liveIdx {
 		s := &list.Items[i]
-		p := s.Spec.Priority
 		k := s.Namespace + "/" + s.Name
-		byPriority[p] = append(byPriority[p], k)
+		scope := priorityScope{namespace: s.Namespace, priority: s.Spec.Priority}
+		byPriority[scope] = append(byPriority[scope], k)
 	}
-	for p := range byPriority {
-		sort.Strings(byPriority[p])
+	for scope := range byPriority {
+		sort.Strings(byPriority[scope])
 	}
 
 	var duplicateDetails []string
-	for p, keys := range byPriority {
+	for scope, keys := range byPriority {
 		if len(keys) > 1 {
-			duplicateDetails = append(duplicateDetails, fmt.Sprintf("priority=%d:%v", p, keys))
+			duplicateDetails = append(duplicateDetails, fmt.Sprintf("namespace=%s priority=%d:%v", scope.namespace, scope.priority, keys))
 		}
 	}
 	sort.Strings(duplicateDetails)
 	if len(duplicateDetails) > 0 {
-		log.Info("duplicate MaaSSubscription spec.priority groups — resolve ties for predictable API key mint / subscription selection",
+		log.Info("duplicate MaaSSubscription spec.priority groups within a namespace — resolve ties for predictable API key mint / subscription selection",
 			"groups", duplicateDetails)
 	}
 
@@ -972,7 +982,7 @@ func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Contex
 		s := &list.Items[i]
 		selfKey := s.Namespace + "/" + s.Name
 		p := s.Spec.Priority
-		keys := byPriority[p]
+		keys := byPriority[priorityScope{namespace: s.Namespace, priority: p}]
 		var peers []string
 		for _, k := range keys {
 			if k != selfKey {
@@ -1145,9 +1155,9 @@ func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context
 	return requests
 }
 
-// mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to any
-// MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model (aggregated),
-// so we use the model label to find a subscription to trigger reconciliation.
+// mapGeneratedTRLPToParent maps a generated TokenRateLimitPolicy back to every
+// MaaSSubscription that references the same model. The TokenRateLimitPolicy is per-model
+// and aggregated, so all contributing subscriptions need a status refresh.
 func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Context, obj client.Object) []reconcile.Request {
 	labels := obj.GetLabels()
 	if labels["app.kubernetes.io/managed-by"] != "maas-controller" {
@@ -1161,13 +1171,27 @@ func (r *MaaSSubscriptionReconciler) mapGeneratedTRLPToParent(ctx context.Contex
 	if modelNamespace == "" {
 		modelNamespace = obj.GetNamespace()
 	}
-	sub := r.findAnySubscriptionForModel(ctx, modelNamespace, modelName)
-	if sub == nil {
+	modelKey := modelNamespace + "/" + modelName
+	var subscriptions maasv1alpha1.MaaSSubscriptionList
+	if err := r.List(ctx, &subscriptions, client.MatchingFields{modelRefIndexKey: modelKey}); err != nil {
 		return nil
 	}
-	return []reconcile.Request{{
-		NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace},
-	}}
+	subscriptions.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, subscriptions.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+
+	seen := make(map[types.NamespacedName]struct{}, len(subscriptions.Items))
+	requests := make([]reconcile.Request, 0, len(subscriptions.Items))
+	for _, sub := range subscriptions.Items {
+		if !sub.GetDeletionTimestamp().IsZero() {
+			continue
+		}
+		key := types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}
+		if _, exists := seen[key]; exists {
+			continue
+		}
+		seen[key] = struct{}{}
+		requests = append(requests, reconcile.Request{NamespacedName: key})
+	}
+	return requests
 }
 
 // mapMaaSModelRefToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions
@@ -1233,16 +1257,4 @@ func (r *MaaSSubscriptionReconciler) mapHTTPRouteToMaaSSubscriptions(ctx context
 		}
 	}
 	return requests
-}
-
-func (r *MaaSSubscriptionReconciler) findAnySubscriptionForModel(ctx context.Context, modelNamespace, modelName string) *maasv1alpha1.MaaSSubscription {
-	subs, err := findAllSubscriptionsForModel(ctx, r.Client, modelNamespace, modelName)
-	if err != nil {
-		return nil
-	}
-	subs = filterSubscriptionsByTenantNamespace(ctx, r.Client, subs, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
-	if len(subs) == 0 {
-		return nil
-	}
-	return &subs[0]
 }

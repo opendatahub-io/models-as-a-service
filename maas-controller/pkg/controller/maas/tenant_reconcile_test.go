@@ -121,7 +121,7 @@ func TestTenantReconcile_NonSingletonNameIsNoOp(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty(), "non-singleton should not get a finalizer")
 }
 
-func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
+func TestTenantReconcile_DefaultTenantDoesNotAddCleanupFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -152,6 +152,85 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(BeEmpty(), "default-tenant teardown is Config-driven; no tenant-cleanup finalizer")
+}
+
+func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       maasv1alpha1.TenantInstanceName,
+			Namespace:  testNS,
+			Finalizers: []string{"maas.opendatahub.io/tenant-cleanup"},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(BeEmpty())
+}
+
+func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "ai-tenant-redteam"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: testNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "redteam",
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:                          cl,
+		Scheme:                          s,
+		AppNamespace:                    "opendatahub",
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     testTenantGatewayName,
+		GatewayNamespace:                testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
@@ -479,20 +558,16 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
 }
 
-func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespaceForAITenantManagedTenant(t *testing.T) {
+func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespace(t *testing.T) {
 	g := NewWithT(t)
 	r := &TenantReconciler{AppNamespace: "opendatahub"}
-
-	// All tenants deploy maas-api to operator namespace
-	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+	g.Expect(r.appNamespaceForTenant()).To(Equal("opendatahub"))
 }
 
-func TestTenantReconcile_AppNamespaceForLegacyTenant(t *testing.T) {
+func TestTenantReconcile_AppNamespaceReturnsRHOAINamespace(t *testing.T) {
 	g := NewWithT(t)
-	r := &TenantReconciler{AppNamespace: "opendatahub"}
-
-	// All tenants deploy maas-api to operator namespace
-	g.Expect(r.appNamespaceForTenant()).To(Equal(tenantreconcile.DefaultMaaSAPINamespace))
+	r := &TenantReconciler{AppNamespace: "redhat-ods-applications"}
+	g.Expect(r.appNamespaceForTenant()).To(Equal("redhat-ods-applications"))
 }
 
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
