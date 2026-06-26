@@ -92,7 +92,7 @@ func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, na
 	pathType := gatewayapiv1.PathMatchPathPrefix
 	pathPrefix := "/" + namespace + "/" + modelName
 	headerType := gatewayapiv1.HeaderMatchExact
-	gwPort := gatewayapiv1.PortNumber(port)
+	gwPort := port
 	timeout := gatewayapiv1.Duration("300s")
 
 	backendRefs := []gatewayapiv1.HTTPBackendRef{
