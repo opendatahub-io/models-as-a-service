@@ -1,5 +1,6 @@
 # This kustomization.yaml is used for CRD generation.
 resources:
+  - bases/components.platform.opendatahub.io_modelsasservices.yaml
   - bases/maas.opendatahub.io_aitenants.yaml
   - bases/maas.opendatahub.io_configs.yaml
   - bases/maas.opendatahub.io_externalmodels.yaml
