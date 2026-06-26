@@ -15,8 +15,8 @@
 #   KUADRANT_VERSION     - Kuadrant Helm chart version (default: 1.3.1)
 #   MAAS_NAMESPACE       - MaaS deployment namespace (default: maas-system)
 #   GATEWAY_NAMESPACE    - Gateway namespace (default: istio-system)
-#   BBR_IMAGE            - Payload-processing image (default: see params.env pin)
-#   PAYLOAD_PROCESSING_COMMIT - Upstream repo commit for local BBR builds (default: BBR_IMAGE tag)
+#   IPP_IMAGE            - Payload-processing image (default: see params.env pin)
+#   PAYLOAD_PROCESSING_COMMIT - Upstream repo commit for local IPP builds (default: IPP_IMAGE tag)
 
 set -euo pipefail
 
@@ -37,16 +37,16 @@ SUBSCRIPTION_NAMESPACE="models-as-a-service"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
 
-BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6}"
-PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${BBR_IMAGE##*:}}"
+_default_ipp_image=$(awk -F= '/^payload-processing-image=/ {print $2; exit}' "$PROJECT_ROOT/deployment/overlays/odh/params.env" 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")
+IPP_IMAGE="${IPP_IMAGE:-$_default_ipp_image}"
+PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${IPP_IMAGE##*:}}"
 
-# Path to BBR repo (for arm64 image builds)
-BBR_REPO="${BBR_REPO:-$(cd "$PROJECT_ROOT/../ai-gateway-payload-processing" 2>/dev/null && pwd || echo "")}"
+# Path to IPP repo (for arm64 image builds)
+IPP_REPO="${IPP_REPO:-$(cd "$PROJECT_ROOT/../ai-gateway-payload-processing" 2>/dev/null && pwd || echo "")}"
 
 # KServe (for LLMInferenceService / internal models)
 KSERVE_VERSION="${KSERVE_VERSION:-v0.15.2}"
 KSERVE_COMMIT="47894470ea49"  # opendatahub fork commit pinned in maas-controller go.mod
-KSERVE_ODH_IMAGE="quay.io/opendatahub/kserve-controller:latest"
 LLMISVC_IMAGE="quay.io/opendatahub/odh-kserve-llmisvc-controller:odh-stable"
 
 ARCH="$(uname -m)"
@@ -78,21 +78,21 @@ ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
 warn() { echo -e "  ${YELLOW}!${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1" >&2; }
 
-ensure_bbr_repo() {
-  if [[ -z "${BBR_REPO:-}" || ! -d "$BBR_REPO" ]]; then
-    BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
+ensure_ipp_repo() {
+  if [[ -z "${IPP_REPO:-}" || ! -d "$IPP_REPO" ]]; then
+    IPP_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
   fi
-  if [[ ! -d "$BBR_REPO/.git" ]]; then
+  if [[ ! -d "$IPP_REPO/.git" ]]; then
     echo "  Cloning ai-gateway-payload-processing..."
-    gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO"
+    gh repo clone opendatahub-io/ai-gateway-payload-processing "$IPP_REPO"
   fi
   local current
-  current="$(git -C "$BBR_REPO" rev-parse HEAD 2>/dev/null || echo "")"
+  current="$(git -C "$IPP_REPO" rev-parse HEAD 2>/dev/null || echo "")"
   if [[ "$current" != "$PAYLOAD_PROCESSING_COMMIT" ]]; then
     echo "  Checking out payload-processing commit ${PAYLOAD_PROCESSING_COMMIT:0:12}..."
-    git -C "$BBR_REPO" fetch origin "$PAYLOAD_PROCESSING_COMMIT" --depth 1 2>/dev/null \
-      || git -C "$BBR_REPO" fetch origin
-    git -C "$BBR_REPO" checkout "$PAYLOAD_PROCESSING_COMMIT"
+    git -C "$IPP_REPO" fetch origin "$PAYLOAD_PROCESSING_COMMIT" --depth 1 2>/dev/null \
+      || git -C "$IPP_REPO" fetch origin
+    git -C "$IPP_REPO" checkout "$PAYLOAD_PROCESSING_COMMIT"
   fi
 }
 
@@ -109,7 +109,7 @@ while [[ $# -gt 0 ]]; do
       ACTION="rebuild"
       REBUILD_COMPONENT="${2:-}"
       if [[ -z "$REBUILD_COMPONENT" ]] || [[ "$REBUILD_COMPONENT" == --* ]]; then
-        echo "Usage: $0 --rebuild <bbr|maas-api|maas-controller>"
+        echo "Usage: $0 --rebuild <ipp|maas-api|maas-controller>"
         exit 1
       fi
       shift
@@ -124,7 +124,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --status                Show component status"
       echo "  --validate              Run inference tests to verify the deployment works"
       echo "  --rebuild <component>   Rebuild and redeploy a component after code changes"
-      echo "                          Components: bbr, maas-api, maas-controller, all"
+      echo "                          Components: ipp, maas-api, maas-controller, all"
       echo "  --help                  Show this help message"
       echo ""
       echo "Environment variables:"
@@ -208,7 +208,7 @@ if [[ "$ACTION" == "validate" ]]; then
   _check "All pods running" '[[ $(kubectl get pods -A --no-headers | grep -v Running | grep -v Completed | wc -l) -eq 0 ]]'
   _check "maas-api ready" 'kubectl get deployment maas-api -n $MAAS_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "maas-controller ready" 'kubectl get deployment maas-controller -n $MAAS_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
-  _check "payload-processing (BBR) ready" 'kubectl get deployment payload-processing -n $GATEWAY_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
+  _check "payload-processing (IPP) ready" 'kubectl get deployment payload-processing -n $GATEWAY_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "Authorino ready" 'kubectl get deployment authorino -n kuadrant-system -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "Gateway programmed" 'kubectl get gateway maas-default-gateway -n $GATEWAY_NAMESPACE -o jsonpath="{.status.conditions[?(@.type==\"Programmed\")].status}" | grep -q True'
 
@@ -322,18 +322,18 @@ if [[ "$ACTION" == "rebuild" ]]; then
   fi
   kubectl config use-context "kind-${KIND_CLUSTER_NAME}" &>/dev/null
 
-  ensure_bbr_repo
+  ensure_ipp_repo
 
   case "$REBUILD_COMPONENT" in
-    bbr|payload-processing)
-      echo -e "${BOLD}Rebuilding BBR (payload-processing)${NC}"
-      (cd "$BBR_REPO" && \
+    ipp|payload-processing)
+      echo -e "${BOLD}Rebuilding IPP (payload-processing)${NC}"
+      (cd "$IPP_REPO" && \
         docker buildx build --platform "$DOCKER_PLATFORM" --load \
-          -t "$BBR_IMAGE" . 2>&1 | tail -3)
-      kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+          -t "$IPP_IMAGE" . 2>&1 | tail -3)
+      kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
       kubectl rollout restart deployment/payload-processing -n "$GATEWAY_NAMESPACE"
       kubectl rollout status deployment/payload-processing -n "$GATEWAY_NAMESPACE" --timeout=60s
-      ok "BBR rebuilt and redeployed"
+      ok "IPP rebuilt and redeployed"
       ;;
     maas-api|api)
       echo -e "${BOLD}Rebuilding maas-api${NC}"
@@ -372,11 +372,11 @@ if [[ "$ACTION" == "rebuild" ]]; then
           -t "$MAAS_CONTROLLER_IMAGE" . 2>&1 | tail -3)
       kind load docker-image "$MAAS_CONTROLLER_IMAGE" --name "$KIND_CLUSTER_NAME"
 
-      echo "  Building BBR..."
-      (cd "$BBR_REPO" && \
+      echo "  Building IPP..."
+      (cd "$IPP_REPO" && \
         docker buildx build --platform "$DOCKER_PLATFORM" --load \
-          -t "$BBR_IMAGE" . 2>&1 | tail -3)
-      kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+          -t "$IPP_IMAGE" . 2>&1 | tail -3)
+      kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
 
       kubectl rollout restart deployment/maas-api -n "$MAAS_NAMESPACE"
       kubectl rollout restart deployment/maas-controller -n "$MAAS_NAMESPACE"
@@ -388,7 +388,7 @@ if [[ "$ACTION" == "rebuild" ]]; then
       ;;
     *)
       fail "Unknown component: $REBUILD_COMPONENT"
-      echo "  Valid components: bbr, maas-api, maas-controller, all"
+      echo "  Valid components: ipp, maas-api, maas-controller, all"
       exit 1
       ;;
   esac
@@ -1075,13 +1075,13 @@ if [[ "$ARCH" == "arm64" ]]; then
         -t "$MAAS_CONTROLLER_IMAGE" . 2>&1 | tail -3)
     kind load docker-image "$MAAS_CONTROLLER_IMAGE" --name "$KIND_CLUSTER_NAME"
 
-    ensure_bbr_repo
+    ensure_ipp_repo
 
-    echo "  Building payload-processing (BBR)..."
-    (cd "$BBR_REPO" && \
+    echo "  Building payload-processing (IPP)..."
+    (cd "$IPP_REPO" && \
       docker buildx build --platform "$DOCKER_PLATFORM" --load \
-        -t "$BBR_IMAGE" . 2>&1 | tail -3)
-    kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+        -t "$IPP_IMAGE" . 2>&1 | tail -3)
+    kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
 
     ok "arm64 images built and loaded into Kind"
   else
@@ -1104,7 +1104,7 @@ ln -s "$PROJECT_ROOT/deployment" "$TEMP_DIR/deployment"
 cat > "$TEMP_DIR/params.env" <<EOF
 maas-api-image=${MAAS_API_IMAGE}
 maas-controller-image=${MAAS_CONTROLLER_IMAGE}
-payload-processing-image=${BBR_IMAGE}
+payload-processing-image=${IPP_IMAGE}
 maas-api-key-cleanup-image=docker.io/curlimages/curl:latest
 EOF
 
@@ -1194,7 +1194,7 @@ for _i in $(seq 1 36); do
   sleep 5
 done
 if kubectl get deployment payload-processing -n "$GATEWAY_NAMESPACE" &>/dev/null; then
-  # Disable sidecar injection on payload-processing (BBR uses self-signed TLS for ext-proc).
+  # Disable sidecar injection on payload-processing (IPP uses self-signed TLS for ext-proc).
   kubectl patch deployment payload-processing -n "$GATEWAY_NAMESPACE" --type=merge \
     -p='{"spec":{"template":{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}}}' 2>/dev/null || true
   kubectl rollout status deployment/payload-processing -n "$GATEWAY_NAMESPACE" --timeout=180s 2>/dev/null || \
@@ -1228,7 +1228,7 @@ metadata:
   name: llm-katan-creds
   namespace: ${MODEL_NAMESPACE}
   labels:
-    inference.networking.k8s.io/bbr-managed: "true"
+    inference.llm-d.ai/ipp-managed: "true"
 stringData:
   api-key: "llm-katan-openai-key"
 ---
