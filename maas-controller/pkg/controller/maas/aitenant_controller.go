@@ -639,13 +639,19 @@ func gatewayClaimName(gatewayRef maasv1alpha1.TenantGatewayRef) string {
 func isClaimOwnedByAITenant(claim *corev1.ConfigMap, aitenant *maasv1alpha1.AITenant) bool {
 	for _, ref := range claim.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller {
+			// Reject if Kind or Name don't match - this claim belongs to someone else.
 			if ref.Kind != "AITenant" || ref.Name != aitenant.Name {
 				return false
 			}
+			// If both UIDs are present, perform strict UID validation for tamper-resistance.
 			if aitenant.UID != "" && ref.UID != "" {
 				return ref.UID == aitenant.UID
 			}
-			return true
+			// If either UID is missing (legacy claims or test environments), we cannot
+			// perform UID-based validation. Fall through to annotation-based check for
+			// backward compatibility, but ONLY if the Kind and Name already matched above.
+			// Note: this means we trust Kind+Name match when UIDs aren't available.
+			break
 		}
 	}
 	return ownedByAITenant(claim, aitenant)
