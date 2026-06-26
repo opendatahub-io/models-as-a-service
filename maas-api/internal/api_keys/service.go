@@ -59,6 +59,7 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 	}
 }
 
+
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
