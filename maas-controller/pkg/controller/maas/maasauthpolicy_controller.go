@@ -1068,24 +1068,16 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	// Kubernetes garbage collection automatically deletes the AuthPolicy when the
 	// Gateway is deleted (e.g., via AITenant cascade deletion). This prevents
 	// orphaned gateway-scoped AuthPolicies from accumulating in the cluster.
+	var gateway *gatewayapiv1.Gateway
 	if isTenantGateway {
-		gateway := &gatewayapiv1.Gateway{}
+		gateway = &gatewayapiv1.Gateway{}
 		gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
 		if err := r.Get(ctx, gwKey, gateway); err != nil {
 			return fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, err)
 		}
-		isController := true
-		blockDeletion := true
-		gwPolicy.SetOwnerReferences([]metav1.OwnerReference{
-			{
-				APIVersion:         gatewayapiv1.GroupVersion.String(),
-				Kind:               "Gateway",
-				Name:               gateway.Name,
-				UID:                gateway.UID,
-				Controller:         &isController,
-				BlockOwnerDeletion: &blockDeletion,
-			},
-		})
+		if err := controllerutil.SetControllerReference(gateway, gwPolicy, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set controller reference on gateway AuthPolicy: %w", err)
+		}
 	}
 
 	existing := &unstructured.Unstructured{}
@@ -1118,7 +1110,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
 	// (handles upgrade from pre-ownerref versions).
 	if isTenantGateway {
-		existing.SetOwnerReferences(gwPolicy.GetOwnerReferences())
+		if err := controllerutil.SetControllerReference(gateway, existing, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set controller reference on existing gateway AuthPolicy: %w", err)
+		}
 	}
 	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
