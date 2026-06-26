@@ -79,7 +79,8 @@ class TestTenantNamespaceDiscovery:
         """1.1: Controller discovers labeled tenant namespaces and reconciles CRs."""
         case = new_discovery_case(use_default_gateway=True)
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             apply_maas_subscription(case["subscription_name"], case["tenant_ns"])
 
@@ -106,7 +107,8 @@ class TestTenantNamespaceDiscovery:
         """1.2: Removing discovery labels stops new reconciliation activity."""
         case = new_discovery_case(use_default_gateway=True)
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
 
@@ -156,7 +158,7 @@ class TestTenantNamespaceDiscovery:
             delete_namespace_best_effort(unlabeled_ns)
 
     def test_dynamic_discovery_after_label_added(self):
-        """1.2 variant: Pre-existing CRs reconcile after AITenant adopts and labels the namespace."""
+        """1.2 variant: Pre-existing CRs reconcile after namespace gains discovery labels."""
         case = new_discovery_case(use_default_gateway=True)
         try:
             ensure_namespace(case["tenant_ns"])
@@ -167,7 +169,7 @@ class TestTenantNamespaceDiscovery:
             assert before is not None
             assert FINALIZER_AUTHPOLICY not in ((before.get("metadata") or {}).get("finalizers") or [])
 
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
             wait_for_status_phase(
                 "maasauthpolicy",
@@ -179,7 +181,7 @@ class TestTenantNamespaceDiscovery:
             cleanup_discovery_case(case, delete_gateway=False)
 
     def test_per_tenant_oidc_configuration(self):
-        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects AITenant OIDC (#912)."""
+        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects Tenant externalOIDC (#912)."""
         if os.environ.get("EXTERNAL_OIDC") != "true" or not os.environ.get("OIDC_ISSUER_URL"):
             pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
 
@@ -187,7 +189,12 @@ class TestTenantNamespaceDiscovery:
         case = new_discovery_case(use_default_gateway=True)
 
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+            apply_tenant_cr(
+                case["tenant_ns"],
+                DEFAULT_GATEWAY_NAME,
+                external_oidc={"issuerUrl": issuer, "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client")},
+            )
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
 
@@ -215,7 +222,8 @@ class TestTenantNamespaceDiscovery:
 
         try:
             for case in (case_a, case_b):
-                bootstrap_aitenant_tenant(case, use_default_gateway=True)
+                apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
                 apply_maas_auth_policy(shared_policy_name, case["tenant_ns"])
                 apply_maas_subscription(shared_sub_name, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy_name, case["tenant_ns"], FINALIZER_AUTHPOLICY)

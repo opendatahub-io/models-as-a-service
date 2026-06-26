@@ -28,6 +28,7 @@ from multitenancy_helpers import (
     MODEL_NAMESPACE,
     MODEL_REF,
     TENANT_CR_NAME,
+    apply_discovery_labels,
     apply_maas_auth_policy,
     apply_maas_subscription,
     apply_tenant_cr,
@@ -144,7 +145,8 @@ class TestMultiTenantIntegration:
 
         try:
             for case in (case_a, case_b):
-                bootstrap_aitenant_tenant(case, use_default_gateway=True)
+                apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
                 apply_maas_auth_policy(shared_policy, case["tenant_ns"])
                 apply_maas_subscription(shared_sub, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
@@ -177,7 +179,7 @@ class TestMultiTenantIntegration:
             assert first is not None
             assert FINALIZER_AUTHPOLICY not in ((first.get("metadata") or {}).get("finalizers") or [])
 
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
             wait_for_finalizer("maasauthpolicy", first_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
             wait_for_status_phase("maasauthpolicy", first_policy, case["tenant_ns"], expected_phase="Active")
 
