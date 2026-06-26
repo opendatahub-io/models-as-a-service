@@ -31,7 +31,10 @@ spec:
           - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
-          - --maas-api-namespace=$(MAAS_API_NAMESPACE)
+          # --maas-api-namespace is NOT passed as CLI flag.
+          # Runtime fallback in main.go checks (in order):
+          #   1. APPLICATIONS_NAMESPACE env (module framework injection)
+          #   2. MAAS_API_NAMESPACE env (component handler downward API)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
           - --enable-tenant-namespace-discovery
@@ -54,6 +57,8 @@ spec:
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
             value: "ai-tenants"
+          # RELATED_IMAGE_* vars are injected by the ODH module injectModuleEnv action.
+          # For kustomize/local installs, deploy.sh may still populate maas-parameters.
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
@@ -106,10 +111,17 @@ spec:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: webhook-cert
           readOnly: true
+        - mountPath: /etc/ssl/certs/odh-trusted-ca-bundle
+          name: odh-trusted-ca-bundle
+          readOnly: true
       volumes:
       - name: webhook-cert
         secret:
           defaultMode: 420
           secretName: maas-controller-webhook-cert
+      - name: odh-trusted-ca-bundle
+        configMap:
+          name: odh-trusted-ca-bundle
+          optional: true
       serviceAccountName: maas-controller
       terminationGracePeriodSeconds: 30
