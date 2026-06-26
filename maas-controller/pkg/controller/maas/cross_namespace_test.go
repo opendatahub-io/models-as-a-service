@@ -645,7 +645,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		InfraNamespace: "opendatahub",
+		InfraNamespace:   "opendatahub",
 		GatewayName:      "default-gateway",
 		GatewayNamespace: gwNamespace,
 	}

@@ -1403,7 +1403,7 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		InfraNamespace: namespace,
+		InfraNamespace:   namespace,
 		GatewayName:      "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
@@ -1462,7 +1462,7 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		InfraNamespace: namespace,
+		InfraNamespace:   namespace,
 		GatewayName:      "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
@@ -1536,7 +1536,7 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		InfraNamespace: namespace,
+		InfraNamespace:   namespace,
 		GatewayName:      "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
