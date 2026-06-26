@@ -143,7 +143,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Validate config and gateway
-	mcfg, result, err := r.validateConfigAndGateway(ctx, log, &tenant, req)
+	mcfg, platformContext, result, err := r.validateConfigAndGateway(ctx, log, &tenant, req)
 	if result != nil {
 		return *result, err
 	}
@@ -154,7 +154,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Run platform reconciliation
-	if result, err := r.reconcilePlatform(ctx, log, &tenant, mcfg); result != nil {
+	if result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg); result != nil {
 		return *result, err
 	}
 
@@ -204,61 +204,73 @@ func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.L
 	return nil, nil
 }
 
-func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, req ctrl.Request) (*maasv1alpha1.Config, *ctrl.Result, error) {
+func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, req ctrl.Request) (*maasv1alpha1.Config, tenantreconcile.PlatformContext, *ctrl.Result, error) {
 	mcfg, wait, err := r.readyConfigOrWait(ctx, log, tenant)
 	if err != nil {
-		return nil, nil, err
+		return nil, tenantreconcile.PlatformContext{}, nil, err
 	}
 	if wait != nil {
-		return nil, wait, nil
+		return nil, tenantreconcile.PlatformContext{}, wait, nil
 	}
 
 	if managementState(tenant.Annotations) == managementStateRemoved {
 		log.V(1).Info("Tenant in Removed management state with live Config; waiting for anchor teardown")
 		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForRemovedTeardown",
 			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
-			return nil, nil, err
+			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return nil, &res, nil
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
 
-	orig := tenant.DeepCopy()
-	if err := r.applyGatewayDefaults(tenant); err != nil {
+	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
+	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackGatewayRef)
+	if err != nil {
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
-			return nil, nil, err2
+			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
 		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return nil, &res, nil
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
-	if orig.Spec.GatewayRef != tenant.Spec.GatewayRef {
-		if err := r.Patch(ctx, tenant, client.MergeFrom(orig)); err != nil {
-			return nil, nil, err
+
+	if !tenantreconcile.TenantUsesAITenantPlatformContext(tenant) {
+		orig := tenant.DeepCopy()
+		if err := r.applyGatewayDefaults(tenant); err != nil {
+			if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
+				return nil, tenantreconcile.PlatformContext{}, nil, err2
+			}
+			res := ctrl.Result{RequeueAfter: 30 * time.Second}
+			return nil, tenantreconcile.PlatformContext{}, &res, nil
 		}
-		if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
-			return nil, nil, err
+		if orig.Spec.GatewayRef != tenant.Spec.GatewayRef {
+			if err := r.Patch(ctx, tenant, client.MergeFrom(orig)); err != nil {
+				return nil, tenantreconcile.PlatformContext{}, nil, err
+			}
+			if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
+				return nil, tenantreconcile.PlatformContext{}, nil, err
+			}
 		}
 	}
 
-	if err := validateGatewayExists(ctx, r.Client, tenant.Spec.GatewayRef.Namespace, tenant.Spec.GatewayRef.Name); err != nil {
+	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
 		log.Info("gateway validation failed", "error", err)
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", err.Error()); err2 != nil {
-			return nil, nil, err2
+			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
 		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return nil, &res, nil
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
 
 	if r.ManifestPath == "" {
 		if err := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "ManifestPathUnset",
 			"MAAS_PLATFORM_MANIFESTS is not set and no default kustomize path resolved; cannot apply platform manifests"); err != nil {
-			return nil, nil, err
+			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
 		res := ctrl.Result{RequeueAfter: 2 * time.Minute}
-		return nil, &res, nil
+		return nil, tenantreconcile.PlatformContext{}, &res, nil
 	}
 
-	return mcfg, nil, nil
+	return mcfg, platformContext, nil, nil
 }
 
 func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.Tenant) (*ctrl.Result, error) {
@@ -299,9 +311,9 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	return nil, nil
 }
 
-func (r *TenantReconciler) reconcilePlatform(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, mcfg *maasv1alpha1.Config) (*ctrl.Result, error) {
+func (r *TenantReconciler) reconcilePlatform(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, platformContext tenantreconcile.PlatformContext, mcfg *maasv1alpha1.Config) (*ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, r.ManifestPath, appNs, r.ClusterAudience, mcfg)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ClusterAudience, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
