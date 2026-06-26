@@ -104,7 +104,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
