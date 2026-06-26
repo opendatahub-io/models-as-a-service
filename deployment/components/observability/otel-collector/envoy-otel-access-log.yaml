@@ -1,0 +1,230 @@
+# MaaS Usage Logs EnvoyFilter
+#
+# Emits structured usage logs for inference requests via OTel Access Log Service.
+#
+# Identity:  FILTER_STATE(wasm.kuadrant.auth.identity.*) — set by Kuadrant Wasm
+#            plugin before rate limiting, so available on both 2xx and 429.
+# Model:     json_to_metadata extracts "model" from request body (covers 429),
+#            then overwrites from response body on 200 (authoritative).
+# Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
+#            from response body (application/json only).
+# Scope:     CEL filter restricts to /v1/chat/completions and /v1/completions.
+# Targeting: Gateway API targetRefs.
+#
+# Streaming (Server-Sent Events):
+#            Token usage IS present in the last SSE chunk, but json_to_metadata
+#            checks the Content-Type header first — sees text/event-stream,
+#            not application/json — and fires on_error without reading the
+#            body at all. It cannot parse SSE framing or wait for the final
+#            event. Tokens report "0"; the request-extracted model stays in
+#            metadata (response model rule has on_present only). The SSE
+#            stream passes through untouched. Accurate streaming token
+#            extraction requires sse_to_metadata (Envoy 1.38+, not yet
+#            shipped in OpenShift Service Mesh).
+#
+# Safety:    on_error / on_missing rules guarantee fallback "0" for tokens.
+#            Model uses on_present only — if the body has no model field or
+#            parsing fails, metadata is simply not set (access log outputs "-").
+#            The OTel ALS gRPC channel is async; if the collector is
+#            unreachable, Envoy silently discards the log entry without
+#            affecting the request.
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: maas-model-access-logs
+  namespace: openshift-ingress
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+spec:
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: maas-default-gateway
+  configPatches:
+
+  # ── Cluster: gRPC endpoint to OTel Collector ──────────────────────────
+  - applyTo: CLUSTER
+    patch:
+      operation: ADD
+      value:
+        name: otel_als_cluster
+        type: STRICT_DNS
+        connect_timeout: 5s
+        http2_protocol_options: {}
+        load_assignment:
+          cluster_name: otel_als_cluster
+          endpoints:
+          - lb_endpoints:
+            - endpoint:
+                address:
+                  socket_address:
+                    address: usage-logs-collector.opendatahub.svc.cluster.local
+                    port_value: 4317
+
+  # ── json_to_metadata: Extract model + tokens from request/response ────
+  #
+  # Replaces both Lua filters with a single native Envoy filter.
+  #
+  # request_rules  — extracts "model" from the JSON request body.
+  # response_rules — extracts token counts and authoritative model from the
+  #                   JSON response body (application/json only).
+  #
+  # Streaming (SSE) responses:
+  #   Content-Type text/event-stream does NOT match the default
+  #   allow_content_types (application/json), so response_rules immediately
+  #   fire on_error — no body buffering, no interference with the SSE stream.
+  #   Token values default to "0". The response model rule has on_present
+  #   only, so the request-extracted model stays in metadata untouched.
+  #
+  # 429 (rate-limited) responses:
+  #   The error JSON body lacks usage/model fields, so response_rules fire
+  #   on_missing. Tokens default to "0", and the request-extracted model is
+  #   preserved via preserve_existing_metadata_value.
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: INSERT_FIRST
+      value:
+        name: envoy.filters.http.json_to_metadata
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.json_to_metadata.v3.JsonToMetadata
+          request_rules:
+            rules:
+            - selectors:
+              - key: model
+              on_present:
+                key: model
+          response_rules:
+            rules:
+            # ── Token counts ──
+            - selectors:
+              - key: usage
+              - key: total_tokens
+              on_present:
+                key: tokens_total
+              on_missing:
+                key: tokens_total
+                value: "0"
+              on_error:
+                key: tokens_total
+                value: "0"
+            - selectors:
+              - key: usage
+              - key: prompt_tokens
+              on_present:
+                key: tokens_prompt
+              on_missing:
+                key: tokens_prompt
+                value: "0"
+              on_error:
+                key: tokens_prompt
+                value: "0"
+            - selectors:
+              - key: usage
+              - key: completion_tokens
+              on_present:
+                key: tokens_completion
+              on_missing:
+                key: tokens_completion
+                value: "0"
+              on_error:
+                key: tokens_completion
+                value: "0"
+            # ── Authoritative model from response ──
+            # On 200 JSON: overwrites the request-extracted model with the
+            # response value (authoritative, not user-spoofable).
+            # On SSE/429: no on_missing/on_error configured, so the
+            # request-extracted model stays in metadata untouched.
+            - selectors:
+              - key: model
+              on_present:
+                key: model
+
+  # ── OTel Access Log Service ───────────────────────────────────────────
+  # CEL filter restricts to inference paths. Attributes streamed via gRPC.
+  - applyTo: NETWORK_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+    patch:
+      operation: MERGE
+      value:
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+          access_log:
+          - name: envoy.access_loggers.open_telemetry
+            filter:
+              extension_filter:
+                name: envoy.access_loggers.extension_filters.cel
+                typed_config:
+                  "@type": type.googleapis.com/envoy.extensions.access_loggers.filters.cel.v3.ExpressionFilter
+                  expression: >-
+                    request.method == 'POST'
+                    && (request.path.endsWith('/v1/chat/completions')
+                        || request.path.endsWith('/v1/completions'))
+            typed_config:
+              "@type": type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
+              common_config:
+                log_name: maas-usage-log
+                transport_api_version: V3
+                grpc_service:
+                  envoy_grpc:
+                    cluster_name: otel_als_cluster
+              body:
+                string_value: "%RESPONSE_CODE% %REQ(:PATH)%"
+              attributes:
+                values:
+                # ── Response ──
+                - key: response_code
+                  value:
+                    string_value: "%RESPONSE_CODE%"
+                - key: response_type
+                  value:
+                    string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
+                # ── Identity (Kuadrant WASM filter_state — survives 429) ──
+                - key: user_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
+                - key: subscription
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                - key: groups
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups_str:PLAIN)%"
+                - key: key_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
+                - key: organization_id
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%"
+                # ── Tokens (json_to_metadata → dynamic metadata) ──
+                - key: tokens_total
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_total)%"
+                - key: tokens_prompt
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_prompt)%"
+                - key: tokens_completion
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:tokens_completion)%"
+                # ── Model (json_to_metadata → dynamic metadata) ──
+                - key: model
+                  value:
+                    string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
+              resource_attributes:
+                values:
+                - key: service.name
+                  value:
+                    string_value: maas-gateway
+                - key: service.namespace
+                  value:
+                    string_value: openshift-ingress
