@@ -356,6 +356,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+//+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -1047,7 +1048,8 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
-	if gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName {
+	isTenantGateway := gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName
+	if isTenantGateway {
 		// This is a tenant-specific gateway, use dynamic naming
 		authPolicyName = fmt.Sprintf("%s-maas-auth", gatewayName)
 	}
@@ -1062,10 +1064,51 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		"app.kubernetes.io/component":  "gateway-auth",
 	})
 
+	// Load the existing AuthPolicy first, before fetching the Gateway.
+	// This ordering is important: if a pre-upgrade tenant AuthPolicy exists
+	// without OwnerReferences and the Gateway has already been deleted, we
+	// must be able to clean up the stale AuthPolicy rather than failing on
+	// the Gateway lookup.
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(gwPolicy.GroupVersionKind())
 	err := r.Get(ctx, client.ObjectKeyFromObject(gwPolicy), existing)
-	if apierrors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
+	}
+	existingFound := err == nil
+
+	// For tenant-specific gateways, fetch the Gateway so we can set an
+	// OwnerReference. This ensures Kubernetes garbage collection automatically
+	// deletes the AuthPolicy when the Gateway is deleted (e.g., via AITenant
+	// cascade deletion), preventing orphaned gateway-scoped AuthPolicies.
+	var gateway *gatewayapiv1.Gateway
+	if isTenantGateway {
+		gateway = &gatewayapiv1.Gateway{}
+		gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
+		if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
+			if apierrors.IsNotFound(gwErr) {
+				// Gateway is gone. If a managed tenant AuthPolicy still exists,
+				// delete it to prevent orphaned resources.
+				if existingFound && isManaged(existing) {
+					if delErr := r.Delete(ctx, existing); delErr != nil {
+						return fmt.Errorf("failed to delete stale tenant gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
+					}
+					log.Info("deleted stale tenant gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
+				}
+				// Nothing to create or update without a Gateway.
+				return nil
+			}
+			return fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, gwErr)
+		}
+	}
+
+	if !existingFound {
+		// Set OwnerReference on the new AuthPolicy for tenant gateways.
+		if isTenantGateway {
+			if err := controllerutil.SetControllerReference(gateway, gwPolicy, r.Scheme); err != nil {
+				return fmt.Errorf("failed to set controller reference on gateway AuthPolicy: %w", err)
+			}
+		}
 		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
 			return fmt.Errorf("failed to set gateway AuthPolicy spec: %w", err)
 		}
@@ -1076,9 +1119,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		r.deleteGatewayDefaultAuthPolicy(ctx, log)
 		return nil
 	}
-	if err != nil {
-		return fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
-	}
 
 	if !isManaged(existing) {
 		log.Info("gateway AuthPolicy opted out of management, skipping", "name", authPolicyName)
@@ -1088,6 +1128,13 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	snapshot := existing.DeepCopy()
 	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 		return fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
+	}
+	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
+	// (handles upgrade from pre-ownerref versions).
+	if isTenantGateway {
+		if err := controllerutil.SetControllerReference(gateway, existing, r.Scheme); err != nil {
+			return fmt.Errorf("failed to set controller reference on existing gateway AuthPolicy: %w", err)
+		}
 	}
 	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
