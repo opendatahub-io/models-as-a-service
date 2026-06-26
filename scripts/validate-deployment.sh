@@ -41,11 +41,20 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
+# Detect platform (RHOAI vs ODH) if NAMESPACE not set
+detect_controller_namespace() {
+  if kubectl get namespace redhat-ods-applications &>/dev/null; then
+    echo "redhat-ods-applications"
+  else
+    echo "opendatahub"
+  fi
+}
+
 # Infrastructure namespace - supports "AUTO" to derive from controller namespace
 INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-opendatahub}"
 if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
-  # Derive from NAMESPACE (controller namespace) or default to opendatahub
-  CONTROLLER_NS="${NAMESPACE:-opendatahub}"
+  # Derive from NAMESPACE (controller namespace) or auto-detect platform
+  CONTROLLER_NS="${NAMESPACE:-$(detect_controller_namespace)}"
   INFRA_NAMESPACE=$(derive_infra_namespace "$CONTROLLER_NS")
 else
   INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
