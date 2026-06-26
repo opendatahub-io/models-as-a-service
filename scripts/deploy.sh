@@ -813,7 +813,13 @@ validate_postgres_connection() {
 
 deploy_postgresql() {
   # Namespace where maas-api and postgres run (infrastructure namespace)
-  local infra_ns="${INFRA_NAMESPACE:-opendatahub}"
+  local infra_ns_raw="${INFRA_NAMESPACE:-opendatahub}"
+  local infra_ns
+  if [ "$infra_ns_raw" = "AUTO" ]; then
+    infra_ns=$(derive_infra_namespace "$NAMESPACE")
+  else
+    infra_ns="$infra_ns_raw"
+  fi
 
   if [[ -n "$POSTGRES_CONNECTION" ]]; then
     validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1

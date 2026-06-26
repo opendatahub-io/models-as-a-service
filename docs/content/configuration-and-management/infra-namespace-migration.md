@@ -16,6 +16,11 @@ Infrastructure runs in the controller namespace. This works on all clusters incl
 
 ### Quick Start
 
+!!! warning "ROSA Restriction"
+    **ODH on ROSA does not support namespace separation yet** due to OpenShift webhook restrictions that block namespace creation. The `INFRA_NAMESPACE=AUTO` deployment will fail when trying to create the infrastructure namespace.
+    
+    Until the ROSA restriction is lifted, **use the default behavior** (no separation) on ROSA clusters.
+
 ```bash
 export INFRA_NAMESPACE=AUTO
 ./scripts/deploy.sh
