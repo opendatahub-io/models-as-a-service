@@ -27,8 +27,11 @@ func TestResolveApplicationsNamespace(t *testing.T) {
 		want           string
 	}{
 		{name: "flag overrides env", flag: "custom-ns", applicationsNS: "from-env", maasAPINS: "from-downward", want: "custom-ns"},
+		{name: "whitespace flag falls back to applications env", flag: "   ", applicationsNS: "from-env", maasAPINS: "from-downward", want: "from-env"},
 		{name: "applications env", flag: "", applicationsNS: "from-env", maasAPINS: "", want: "from-env"},
+		{name: "whitespace env falls back to downward api env", flag: "", applicationsNS: "   ", maasAPINS: "from-downward-api", want: "from-downward-api"},
 		{name: "downward api env", flag: "", applicationsNS: "", maasAPINS: "from-downward-api", want: "from-downward-api"},
+		{name: "whitespace downward api falls back to empty", flag: "", applicationsNS: "", maasAPINS: "   ", want: ""},
 		{name: "empty", flag: "", applicationsNS: "", maasAPINS: "", want: ""},
 	}
 

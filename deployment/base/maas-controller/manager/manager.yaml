@@ -31,7 +31,10 @@ spec:
           - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
-          - --maas-api-namespace=$(MAAS_API_NAMESPACE)
+          # --maas-api-namespace is NOT passed as CLI flag.
+          # Runtime fallback in main.go checks (in order):
+          #   1. APPLICATIONS_NAMESPACE env (module framework injection)
+          #   2. MAAS_API_NAMESPACE env (component handler downward API)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
           - --enable-tenant-namespace-discovery
