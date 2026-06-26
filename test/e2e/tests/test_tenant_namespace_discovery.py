@@ -79,8 +79,7 @@ class TestTenantNamespaceDiscovery:
         """1.1: Controller discovers labeled tenant namespaces and reconciles CRs."""
         case = new_discovery_case(use_default_gateway=True)
         try:
-            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+            bootstrap_aitenant_tenant(case, use_default_gateway=True)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             apply_maas_subscription(case["subscription_name"], case["tenant_ns"])
 
@@ -107,8 +106,7 @@ class TestTenantNamespaceDiscovery:
         """1.2: Removing discovery labels stops new reconciliation activity."""
         case = new_discovery_case(use_default_gateway=True)
         try:
-            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+            bootstrap_aitenant_tenant(case, use_default_gateway=True)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
 
@@ -158,18 +156,18 @@ class TestTenantNamespaceDiscovery:
             delete_namespace_best_effort(unlabeled_ns)
 
     def test_dynamic_discovery_after_label_added(self):
-        """1.2 variant: Pre-existing CRs reconcile after namespace gains discovery labels."""
+        """1.2 variant: Pre-existing CRs reconcile after AITenant adopts and labels the namespace."""
         case = new_discovery_case(use_default_gateway=True)
         try:
             ensure_namespace(case["tenant_ns"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_reconcile(10)
             before = get_json_or_none("maasauthpolicy", case["policy_name"], case["tenant_ns"])
             assert before is not None
             assert FINALIZER_AUTHPOLICY not in ((before.get("metadata") or {}).get("finalizers") or [])
 
-            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
+            bootstrap_aitenant_tenant(case, use_default_gateway=True)
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
             wait_for_status_phase(
                 "maasauthpolicy",
@@ -181,21 +179,15 @@ class TestTenantNamespaceDiscovery:
             cleanup_discovery_case(case, delete_gateway=False)
 
     def test_per_tenant_oidc_configuration(self):
-        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects Tenant externalOIDC (#912)."""
-        if not os.environ.get("OIDC_ISSUER_URL"):
+        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects AITenant OIDC (#912)."""
+        if os.environ.get("EXTERNAL_OIDC") != "true" or not os.environ.get("OIDC_ISSUER_URL"):
             pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
 
         issuer = os.environ["OIDC_ISSUER_URL"]
         case = new_discovery_case(use_default_gateway=True)
 
         try:
-            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(
-                case["tenant_ns"],
-                DEFAULT_GATEWAY_NAME,
-                external_oidc={"issuerUrl": issuer, "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client")},
-                tenant_label_name=case["tenant_label_name"],
-            )
+            bootstrap_aitenant_tenant(case, use_default_gateway=True)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
 
@@ -223,8 +215,7 @@ class TestTenantNamespaceDiscovery:
 
         try:
             for case in (case_a, case_b):
-                apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+                bootstrap_aitenant_tenant(case, use_default_gateway=True)
                 apply_maas_auth_policy(shared_policy_name, case["tenant_ns"])
                 apply_maas_subscription(shared_sub_name, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy_name, case["tenant_ns"], FINALIZER_AUTHPOLICY)
@@ -365,7 +356,7 @@ class TestTenantDiscoveryDormantMode:
         policy_name = f"e2e-dormant-{case['suffix']}"
         try:
             apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
 
             patch_controller_tenant_namespace_discovery(enabled=False)
             apply_maas_auth_policy(policy_name, case["tenant_ns"])
