@@ -95,3 +95,93 @@ spec:
             envoy.filters.http.ext_proc.ipp-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
+    # Enforce stream_options.include_usage=true on streaming chat completion requests.
+    # Runs before ext_proc so the modified body flows through the payload-processing pipeline.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.ext_proc.ipp-pre
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.lua.stream-usage
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.lua.v3.Lua
+            default_source_code:
+              inline_string: |
+                function envoy_on_request(request_handle)
+                  if request_handle:headers():get(":method") ~= "POST" then
+                    return
+                  end
+                  local path = request_handle:headers():get(":path") or ""
+                  if not string.find(path, "/v1/chat/completions", 1, true) then
+                    return
+                  end
+                  local ct = request_handle:headers():get("content-type")
+                  if ct == nil or not string.find(ct, "application/json", 1, true) then
+                    return
+                  end
+                  local body = request_handle:body()
+                  if body == nil or body:length() == 0 then
+                    return
+                  end
+                  local raw = body:getBytes(0, body:length())
+                  if not string.find(raw, '"stream"%s*:%s*true') then
+                    return
+                  end
+                  if string.find(raw, '"stream_options"') then
+                    -- Extract stream_options object to scope include_usage matching
+                    local so_start = string.find(raw, '"stream_options"%s*:%s*{')
+                    if so_start == nil then
+                      return
+                    end
+                    -- Find the matching closing brace for stream_options
+                    local brace_start = string.find(raw, '{', so_start + 16)
+                    if brace_start == nil then
+                      return
+                    end
+                    local depth = 1
+                    local pos = brace_start + 1
+                    while pos <= #raw and depth > 0 do
+                      local ch = string.sub(raw, pos, pos)
+                      if ch == '{' then depth = depth + 1
+                      elseif ch == '}' then depth = depth - 1 end
+                      pos = pos + 1
+                    end
+                    if depth ~= 0 then
+                      return
+                    end
+                    local so_end = pos - 1
+                    local so_inner = string.sub(raw, brace_start, so_end)
+                    -- Check/modify include_usage only within the extracted stream_options
+                    if string.find(so_inner, '"include_usage"%s*:%s*true') then
+                      return
+                    elseif string.find(so_inner, '"include_usage"') then
+                      local new_inner = string.gsub(so_inner, '"include_usage"%s*:%s*%a+', '"include_usage":true')
+                      raw = string.sub(raw, 1, brace_start - 1) .. new_inner .. string.sub(raw, so_end + 1)
+                    else
+                      -- No include_usage in stream_options; inject it
+                      if so_inner == '{}' then
+                        raw = string.sub(raw, 1, brace_start - 1) .. '{"include_usage":true}' .. string.sub(raw, so_end + 1)
+                      else
+                        raw = string.sub(raw, 1, brace_start) .. '"include_usage":true,' .. string.sub(raw, brace_start + 1)
+                      end
+                    end
+                  else
+                    local i = #raw
+                    while i > 0 and string.byte(raw, i) ~= 125 do
+                      i = i - 1
+                    end
+                    if i < 2 then return end
+                    raw = string.sub(raw, 1, i - 1)
+                      .. ',"stream_options":{"include_usage":true}'
+                      .. string.sub(raw, i)
+                  end
+                  request_handle:headers():replace("content-length", tostring(#raw))
+                  body:setBytes(raw)
+                end

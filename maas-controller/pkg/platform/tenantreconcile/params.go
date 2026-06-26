@@ -400,8 +400,26 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 4 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 4 entries, got %d", len(configPatches))
+	if !found || len(configPatches) < 5 {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least 5 entries, got %d", len(configPatches))
+	}
+
+	// Validate that configPatches[4] is the stream-usage Lua filter with expected structure.
+	luaPatch, ok := configPatches[4].(map[string]any)
+	if !ok {
+		return errors.New("EnvoyFilter configPatches[4] is not an object")
+	}
+	luaOp, _, _ := unstructured.NestedString(luaPatch, "patch", "operation")
+	if luaOp != "INSERT_BEFORE" {
+		return fmt.Errorf("EnvoyFilter configPatches[4]: expected operation INSERT_BEFORE, got %q", luaOp)
+	}
+	luaSubFilter, _, _ := unstructured.NestedString(luaPatch, "match", "listener", "filterChain", "filter", "subFilter", "name")
+	if luaSubFilter != "envoy.filters.http.ext_proc.ipp-pre" {
+		return fmt.Errorf("EnvoyFilter configPatches[4]: expected subFilter name %q, got %q", "envoy.filters.http.ext_proc.ipp-pre", luaSubFilter)
+	}
+	luaFilterName, _, _ := unstructured.NestedString(luaPatch, "patch", "value", "name")
+	if luaFilterName != "envoy.filters.http.lua.stream-usage" {
+		return fmt.Errorf("EnvoyFilter configPatches[4]: expected filter name %q, got %q", "envoy.filters.http.lua.stream-usage", luaFilterName)
 	}
 
 	clusterByIndex := []string{beforeCluster, afterCluster}
