@@ -29,6 +29,7 @@ from typing import Optional
 import pytest
 import requests
 
+from multitenancy_helpers import controller_has_tenant_namespace_discovery
 from test_helper import (
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -46,6 +47,20 @@ from test_helper import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _skip_when_tenant_discovery_enabled():
+    if os.environ.get("ENABLE_TENANT_NAMESPACE_DISCOVERY", "").lower() == "true":
+        pytest.skip(
+            "test_namespace_scoping validates single-tenant dormant mode; "
+            "skipped when ENABLE_TENANT_NAMESPACE_DISCOVERY=true"
+        )
+    if controller_has_tenant_namespace_discovery():
+        pytest.skip(
+            "maas-controller has tenant namespace discovery enabled; "
+            "these tests assume dormant single-namespace reconciliation"
+        )
 
 
 def _get_token():
@@ -287,7 +302,6 @@ class TestMaaSControllerWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile(15)
             _wait_for_maas_auth_policy_phase("e2e-watched-auth", timeout=90)
             _wait_for_maas_subscription_phase("e2e-watched-sub", namespace=ns, timeout=90)
 

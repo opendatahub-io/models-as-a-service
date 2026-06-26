@@ -44,6 +44,11 @@ EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
+EXTERNAL_MODEL_RESOURCE_NAME = f"maas-{EXTERNAL_MODEL_NAME}"
+
+# MaaS ExternalModel CR (not inference.opendatahub.io ExternalModel — oc resolves the
+# short name "externalmodel" to the inference API group by default).
+MAAS_EXTERNAL_MODEL_KIND = "externalmodels.maas.opendatahub.io"
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -197,7 +202,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
               {"metadata": {"finalizers": []}})
     _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _delete_cr("externalmodel", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+    _delete_cr(MAAS_EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
     _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
 
 
@@ -212,14 +217,14 @@ class TestExternalModelDiscovery:
         assert cr is not None, f"MaaSModelRef {EXTERNAL_MODEL_NAME} not found"
 
     def test_reconciler_created_httproute(self, external_models_setup):
-        """Reconciler created HTTPRoute matching the ExternalModel name."""
-        cr = _get_cr("httproute", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-        assert cr is not None, f"HTTPRoute {EXTERNAL_MODEL_NAME} not found"
+        """Reconciler created a MaaS-owned HTTPRoute for the ExternalModel."""
+        cr = _get_cr("httproute", EXTERNAL_MODEL_RESOURCE_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"HTTPRoute {EXTERNAL_MODEL_RESOURCE_NAME} not found"
 
     def test_reconciler_created_backend_service(self, external_models_setup):
         """Reconciler created backend service."""
-        cr = _get_cr("service", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-        assert cr is not None, f"Service {EXTERNAL_MODEL_NAME} not found"
+        cr = _get_cr("service", EXTERNAL_MODEL_RESOURCE_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"Service {EXTERNAL_MODEL_RESOURCE_NAME} not found"
 
 
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
@@ -291,6 +296,7 @@ class TestExternalModelCleanup:
         garbage collection (ExternalModel owns all reconciled resources).
         """
         temp_name = "e2e-cleanup-test"
+        temp_resource_name = f"maas-{temp_name}"
 
         # Create temporary model
         _apply_cr({
@@ -313,16 +319,16 @@ class TestExternalModelCleanup:
             time.sleep(RECONCILE_WAIT * 2)
 
             # Verify HTTPRoute was created
-            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
-            assert route is not None, f"HTTPRoute {temp_name} should exist before deletion"
+            route = _get_cr("httproute", temp_resource_name, MODEL_NAMESPACE)
+            assert route is not None, f"HTTPRoute {temp_resource_name} should exist before deletion"
 
             # Delete the ExternalModel (owns the HTTPRoute via OwnerReference)
-            _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
+            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
             time.sleep(RECONCILE_WAIT)
 
             # Verify HTTPRoute was cleaned up by garbage collection
-            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
-            assert route is None, f"HTTPRoute {temp_name} should be cleaned up after ExternalModel deletion"
+            route = _get_cr("httproute", temp_resource_name, MODEL_NAMESPACE)
+            assert route is None, f"HTTPRoute {temp_resource_name} should be cleaned up after ExternalModel deletion"
         finally:
             # Always clean up to avoid resource leaks
-            _delete_cr("externalmodel", temp_name, MODEL_NAMESPACE)
+            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)

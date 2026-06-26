@@ -40,9 +40,10 @@ type ValidationResult struct {
 	UserID       string   `json:"userId,omitempty"`
 	Username     string   `json:"username,omitempty"`
 	KeyID        string   `json:"keyId,omitempty"`
+	KeyName      string   `json:"keyName,omitempty"`      // User-provided name for the key
 	Groups       []string `json:"groups,omitempty"`       // User groups for subscription-based authorization
 	Subscription string   `json:"subscription,omitempty"` // MaaSSubscription name from DB (Authorino → subscription-info)
-	Tenant       string   `json:"tenant,omitempty"`       // Tenant bound at key creation (Authorino → tenant context)
+	Tenant       string   `json:"tenant"`                 // Tenant bound at key creation (always present, empty string for legacy keys)
 	Reason       string   `json:"reason,omitempty"`       // If invalid: "key not found", "revoked", etc.
 }
 

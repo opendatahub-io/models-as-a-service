@@ -192,7 +192,7 @@ func createMockModelServerWithSubscriptionCheck(t *testing.T, modelID string, re
 	return server
 }
 
-func TestListingModels(t *testing.T) {
+func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test with many scenarios
 	testLogger := logger.Development()
 	strptr := func(s string) *string { return &s }
 
@@ -208,6 +208,7 @@ func TestListingModels(t *testing.T) {
 	llamaPrivateServer := createMockModelServer(t, "llama-7b-private-url")
 	fallbackServer := createMockModelServer(t, "fallback-model-name")
 	metadataServer := createMockModelServer(t, "model-with-metadata")
+	capabilitiesServer := createMockModelServer(t, "model-with-capabilities")
 	partialMetadataServer := createMockModelServer(t, "model-with-partial-metadata")
 	emptyMetadataServer := createMockModelServer(t, "model-with-empty-metadata")
 
@@ -286,6 +287,22 @@ func TestListingModels(t *testing.T) {
 			},
 		},
 		{
+			Name:             "model-with-capabilities",
+			Namespace:        "model-serving",
+			URL:              fixtures.PublicURL(capabilitiesServer.URL),
+			Ready:            true,
+			GatewayName:      testGatewayName,
+			GatewayNamespace: testGatewayNamespace,
+			Annotations: map[string]string{
+				constant.AnnotationModelCapabilities: `["audio-speech-recognition","image-text-inferencing"]`,
+			},
+			AssertDetails: func(t *testing.T, model models.Model) {
+				t.Helper()
+				require.NotNil(t, model.Details, "Expected modelDetails to be populated from capabilities annotation")
+				assert.Equal(t, []string{"audio-speech-recognition", "image-text-inferencing"}, model.Details.ModelCapabilities)
+			},
+		},
+		{
 			Name:             "model-with-partial-metadata",
 			Namespace:        "model-serving",
 			URL:              fixtures.PublicURL(partialMetadataServer.URL),
@@ -340,7 +357,7 @@ func TestListingModels(t *testing.T) {
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
 
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 
@@ -358,7 +375,6 @@ func TestListingModels(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer valid-token")
 	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
-	req.Header.Set(constant.HeaderTenant, "test-tenant")
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
@@ -459,7 +475,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		"premium": []string{"premium-users"},
 		"free":    []string{"free-users"},
 	}
-	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
 
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -502,7 +518,6 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			req.Header.Set("X-Maas-Subscription", tt.subscription)
 			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 			req.Header.Set(constant.HeaderGroup, tt.userGroups)
-			req.Header.Set(constant.HeaderTenant, "test-tenant")
 			router.ServeHTTP(w, req)
 
 			require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
@@ -524,7 +539,6 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer valid-token")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code, "Expected status OK")
@@ -547,7 +561,6 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		req.Header.Set("Authorization", "Bearer valid-token")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["free-users", "premium-users"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		// User token (no X-MaaS-Subscription header) returns all accessible models
@@ -596,7 +609,6 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			req.Header.Set("X-Maas-Subscription", tt.subscription)
 			req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 			req.Header.Set(constant.HeaderGroup, tt.userGroups)
-			req.Header.Set(constant.HeaderTenant, "test-tenant")
 			router.ServeHTTP(w, req)
 
 			require.Equal(t, http.StatusForbidden, w.Code, "Expected 403 Forbidden")
@@ -683,7 +695,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -705,7 +717,6 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a", "group-b"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -737,7 +748,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			},
 		}
 
-		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister, nil)
+		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister, nil, nil)
 		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -758,7 +769,6 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router2.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -780,7 +790,6 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		// No X-MaaS-Subscription header = user token authentication
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["group-a"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -875,7 +884,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -897,7 +906,6 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -994,7 +1002,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1016,7 +1024,6 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -1102,7 +1109,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1124,7 +1131,6 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -1209,7 +1215,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1231,7 +1237,6 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		req.Header.Set("X-Maas-Return-All-Models", "true")
 		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
-		req.Header.Set(constant.HeaderTenant, "test-tenant")
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
@@ -1303,7 +1308,7 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 	modelMgr, err := models.NewManager(testLogger, 15, "")
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister)
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister, nil)
 	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
@@ -1323,7 +1328,6 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 	req.Header.Set("Authorization", "Bearer valid-token")
 	req.Header.Set(constant.HeaderUsername, "test-user@example.com")
 	req.Header.Set(constant.HeaderGroup, `["free-users"]`)
-	req.Header.Set(constant.HeaderTenant, "test-tenant")
 	router.ServeHTTP(w, req)
 
 	require.Equal(t, http.StatusOK, w.Code)

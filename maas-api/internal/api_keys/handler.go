@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -22,6 +25,8 @@ const (
 	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
 )
 
+var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
+
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
 // to check if the user can create maasauthpolicies (RBAC-based admin detection).
@@ -33,6 +38,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+}
+
+func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"max_expiration_days":      h.service.GetMaxExpirationDays(),
+		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
+	})
 }
 
 func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
@@ -177,6 +189,20 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	name := req.Name
 	if req.Ephemeral && name == "" {
 		name = fmt.Sprintf("ephemeral-%d", time.Now().UnixNano())
+	} else {
+		name = strings.TrimSpace(name)
+		if len(name) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot be whitespace only"})
+			return
+		}
+		if utf8.RuneCountInString(name) > 128 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot exceed 128 characters"})
+			return
+		}
+		if invalidKeyNameCharsPattern.MatchString(name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name contains invalid control characters"})
+			return
+		}
 	}
 
 	// Parse expiration duration if provided

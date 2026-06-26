@@ -89,6 +89,29 @@ func TestIsTenantNamespace_EmptyDefault(t *testing.T) {
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_FetchTenantIdentifierRejectsInvalidDefaultLabels(t *testing.T) {
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-spoofed",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+			},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+
+	tenantID, err := r.fetchTenantIdentifier(context.Background(), ctrl.Log, tenant.Namespace)
+	if err == nil {
+		t.Fatalf("fetchTenantIdentifier error = nil, want invalid default tenant label error")
+	}
+	if tenantID != "" {
+		t.Fatalf("tenantID = %q, want empty on error", tenantID)
+	}
+}
+
 func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	const (
 		namespace  = "random-ns"
@@ -98,7 +121,7 @@ func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
-	route := newHTTPRoute(modelName, namespace)
+	route := newExternalModelHTTPRoute(modelName, namespace)
 	policy := newMaaSAuthPolicy(policyName, namespace, "team-a",
 		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 
@@ -120,7 +143,7 @@ func TestMaaSAuthPolicyReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile error: %v", err)
 	}
-	if res.Requeue {
+	if res.RequeueAfter != 0 {
 		t.Error("expected no requeue for non-tenant namespace")
 	}
 
@@ -169,9 +192,10 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		Scheme:                          scheme,
 		TenantNamespace:                 "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
-		GatewayName:                     "team-a-gateway",
-		GatewayNamespace:                gwNamespace,
-		MaaSAPINamespace:                "opendatahub",
+		// Controller's default gateway (different from tenant's gateway)
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "openshift-ingress",
+		MaaSAPINamespace: "opendatahub",
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}
@@ -182,7 +206,9 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
+	// Gateway AuthPolicy name is now dynamic: {gatewayName}-maas-auth
+	expectedAuthPolicyName := "team-a-gateway-maas-auth"
+	if err := c.Get(context.Background(), types.NamespacedName{Name: expectedAuthPolicyName, Namespace: gwNamespace}, gatewayAP); err != nil {
 		t.Errorf("Gateway AuthPolicy should be created for AITenant-labeled tenant namespace: %v", err)
 	}
 }
@@ -196,7 +222,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
-	route := newHTTPRoute(modelName, namespace)
+	route := newExternalModelHTTPRoute(modelName, namespace)
 	sub := &maasv1alpha1.MaaSSubscription{
 		ObjectMeta: metav1.ObjectMeta{Name: subName, Namespace: namespace},
 		Spec: maasv1alpha1.MaaSSubscriptionSpec{
@@ -222,7 +248,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reconcile error: %v", err)
 	}
-	if res.Requeue {
+	if res.RequeueAfter != 0 {
 		t.Error("expected no requeue for non-tenant namespace")
 	}
 }

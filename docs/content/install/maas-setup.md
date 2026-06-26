@@ -112,7 +112,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Managed (Recommended)"
 
-    The operator deploys `maas-controller`, which self-bootstraps a `default-tenant` CR and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
+    The operator deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant` and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -160,7 +160,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     kubectl rollout status deployment/maas-api -n opendatahub --timeout=120s
     ```
 
-    The `maas-controller` (deployed by the operator) will automatically create a `default-tenant` CR and reconcile:
+    The `maas-controller` (deployed by the operator) will automatically create `AITenant/models-as-a-service`, which creates or adopts `Tenant/default-tenant` and reconciles:
 
     - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
@@ -172,9 +172,9 @@ After creating the database Secret and Gateways, create or update your DataScien
 
     ### Tenant CR
 
-    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps a **namespace-scoped** `Tenant` object on startup. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
+    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `Tenant` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
 
-    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`. Going forward, set OIDC on `AITenant/models-as-a-service.spec.oidc`; the controller mirrors it into `Tenant/default-tenant.spec.externalOIDC` until the Tenant API is replaced.
 
     | Field | What to set |
     | ----- | ----------- |
@@ -279,6 +279,59 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
     These flags are defined in the odh-dashboard source. The `OdhDashboardConfig` CRD is of
     API version `opendatahub.io/v1alpha`. The operator re-creates this resource with factory
     defaults if it is deleted, but does not overwrite user changes to existing fields.
+
+## Creating Additional Tenants (Optional)
+
+The default installation creates a single tenant in the `models-as-a-service` namespace. To create additional isolated tenants:
+
+### 1. Create a Gateway
+
+Each tenant requires its own Gateway. Follow the [Gateway Patterns](../configuration-and-management/gateway-patterns.md) guide to create a gateway using the same pattern as `maas-default-gateway`.
+
+!!! warning "Avoid hostname filters"
+    Do not add `hostname` fields to Gateway listeners. Hostname-based routing can cause TLS/SNI issues. Use the default pattern with no hostname filter.
+
+### 2. Create AITenant CR
+
+Create an `AITenant` resource in the `ai-tenants` namespace:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: team-red
+  namespace: ai-tenants
+spec:
+  gateway:
+    name: team-red-gateway  # Must already exist in openshift-ingress
+```
+
+Apply the manifest:
+
+```bash
+kubectl apply -f aitenant.yaml
+```
+
+The controller will automatically create:
+- Tenant namespace: `ai-tenant-team-red`
+- Tenant CR: `default-tenant` in the tenant namespace
+- maas-api deployment: `maas-api-team-red`
+- HTTPRoute and AuthPolicy for the tenant
+
+### 3. Verify
+
+```bash
+# Check AITenant status
+kubectl get aitenant team-red -n ai-tenants -o yaml
+
+# Check tenant namespace was created
+kubectl get namespace ai-tenant-team-red
+
+# Check Tenant CR
+kubectl get tenant default-tenant -n ai-tenant-team-red
+```
+
+For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
 
 ## Next steps
 

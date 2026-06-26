@@ -97,6 +97,15 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
     return r  # last attempt's response — assertion will catch the failure
 
 
+def _get_models_with_gateway_retry(headers, retries=GATEWAY_PROPAGATION_RETRIES):
+    return _request_with_gateway_retry(
+        requests.get,
+        f"{_maas_api_url()}/v1/models",
+        retries=retries,
+        headers=headers,
+    )
+
+
 class TestModelsEndpoint:
     """
     End-to-end tests for the /v1/models endpoint that validate subscription-aware
@@ -491,14 +500,11 @@ class TestModelsEndpoint:
             _wait_reconcile()
 
             # Test with empty header value
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": "",  # Empty string
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should behave same as no header (auto-select single subscription)
@@ -548,28 +554,22 @@ class TestModelsEndpoint:
             _wait_reconcile()
 
             # Get models from simulator-subscription
-            r_simulator = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r_simulator = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": SIMULATOR_SUBSCRIPTION,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert r_simulator.status_code == 200
             simulator_models = r_simulator.json().get("data") or []
             simulator_model_ids = {m["id"] for m in simulator_models}
 
             # Get models from premium-simulator-subscription
-            r_premium = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r_premium = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": PREMIUM_SIMULATOR_SUBSCRIPTION,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert r_premium.status_code == 200
             premium_models = r_premium.json().get("data") or []
@@ -703,14 +703,11 @@ class TestModelsEndpoint:
 
             # Query /v1/models with our custom subscription
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -862,14 +859,11 @@ class TestModelsEndpoint:
 
             # Query /v1/models
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -1261,14 +1255,11 @@ class TestModelsEndpoint:
 
             # Query /v1/models - should return empty list (model has no auth policy)
             url = f"{_maas_api_url()}/v1/models"
-            r = requests.get(
-                url,
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": subscription_name,
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should get 200 even with no models
@@ -1316,11 +1307,8 @@ class TestModelsEndpoint:
 
             _wait_reconcile()
 
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -1381,11 +1369,8 @@ class TestModelsEndpoint:
 
             _wait_reconcile()
 
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -1449,13 +1434,10 @@ class TestModelsEndpoint:
 
             # Query with API key (no manual headers)
             log.info(f"Querying /v1/models with API key bound to {subscription_name}")
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, \
@@ -1521,13 +1503,12 @@ class TestModelsEndpoint:
 
             # Query with API key (gateway injects deleted subscription name)
             log.info("Querying /v1/models with API key bound to deleted subscription")
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 f"{_maas_api_url()}/v1/models",
                 headers={
                     "Authorization": f"Bearer {api_key}",
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             # Should return 403 because subscription doesn't exist
@@ -1785,14 +1766,11 @@ class TestModelsEndpoint:
 
             # Test: Send request with header pointing to sub2, but key is bound to sub1
             log.info(f"Querying /v1/models with API key bound to {sub1_name} but header={sub2_name}")
-            r = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r = _get_models_with_gateway_retry(
                 headers={
                     "Authorization": f"Bearer {api_key}",
                     "x-maas-subscription": sub2_name,  # Try to override with header
                 },
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -1890,11 +1868,8 @@ class TestModelsEndpoint:
 
             # Test key1 - should return models from sub1 only
             log.info(f"Testing API key 1 (bound to {sub1_name})")
-            r1 = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r1 = _get_models_with_gateway_retry(
                 headers={"Authorization": f"Bearer {api_key1}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert r1.status_code == 200, f"Expected 200 for key1, got {r1.status_code}: {r1.text}"
             models1 = r1.json().get("data") or []
@@ -1905,11 +1880,8 @@ class TestModelsEndpoint:
 
             # Test key2 - should return models from sub2 only
             log.info(f"Testing API key 2 (bound to {sub2_name})")
-            r2 = requests.get(
-                f"{_maas_api_url()}/v1/models",
+            r2 = _get_models_with_gateway_retry(
                 headers={"Authorization": f"Bearer {api_key2}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
             assert r2.status_code == 200, f"Expected 200 for key2, got {r2.status_code}: {r2.text}"
             models2 = r2.json().get("data") or []
@@ -2153,7 +2125,6 @@ class TestModelsEndpoint:
                 model_refs=[model_ref],
                 groups=["system:authenticated"]
             )
-            _wait_reconcile()
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
 
             # 2. Create subscription with low token limit
@@ -2165,7 +2136,6 @@ class TestModelsEndpoint:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_reconcile()
             _wait_for_maas_subscription_phase(subscription_name, timeout=90)
 
             # Wait for TRLP to be created and enforced
@@ -2214,9 +2184,8 @@ class TestModelsEndpoint:
 
             # 6. Verify central /v1/models endpoint still works
             log.info("Verifying central /v1/models endpoint is still accessible...")
-            url = f"{_maas_api_url()}/v1/models"
             headers = {"Authorization": f"Bearer {api_key}"}
-            r_models = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+            r_models = _get_models_with_gateway_retry(headers=headers)
 
             assert r_models.status_code == 200, \
                 f"Expected 200 for central /v1/models endpoint even when quota exhausted, got {r_models.status_code}. " \

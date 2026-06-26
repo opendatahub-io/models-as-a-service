@@ -30,6 +30,11 @@ type Config struct {
 
 	MaaSSubscriptionNamespace string
 
+	// TenantName is the tenant identifier for this maas-api instance.
+	// Set to "models-as-a-service" for default tenant, or AITenant name (e.g., "redteam") for other tenants.
+	// Used to filter database queries to enforce tenant isolation.
+	TenantName string
+
 	// Server configuration
 	Address string // Listen address for HTTPS (host:port)
 	Secure  bool   // Use HTTPS
@@ -72,12 +77,18 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 
+	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
+	if tenantName == "" {
+		panic("TENANT_NAME environment variable must be non-empty (tenant isolation required)")
+	}
+
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
 		Namespace:                 env.GetString("NAMESPACE", constant.DefaultNamespace),
 		GatewayName:               gatewayName,
 		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
 		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                tenantName,
 		Address:                   env.GetString("ADDRESS", ""),
 		Secure:                    secure,
 		TLS:                       loadTLSConfig(),
@@ -152,6 +163,11 @@ func (c *Config) Validate() error {
 	}
 	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
 		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
+	}
+
+	// Validate TenantName is non-empty and non-whitespace to ensure tenant isolation
+	if strings.TrimSpace(c.TenantName) == "" {
+		return errors.New("TENANT_NAME must be non-empty and non-whitespace to ensure tenant isolation")
 	}
 
 	// Validate API key max expiration days

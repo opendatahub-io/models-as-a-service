@@ -9,6 +9,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -28,23 +29,30 @@ type Lister interface {
 	List() ([]*unstructured.Unstructured, error)
 }
 
+// ModelAccessChecker determines whether a user has access to a specific model.
+type ModelAccessChecker interface {
+	AuthorizedModels(groups []string, username string) map[authpolicy.ModelKey]bool
+}
+
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister      Lister
-	modelLister models.MaaSModelRefLister
-	logger      *logger.Logger
+	lister        Lister
+	modelLister   models.MaaSModelRefLister
+	accessChecker ModelAccessChecker
+	logger        *logger.Logger
 }
 
 // NewSelector creates a new subscription selector.
 // modelLister is optional; when provided, model refs in list responses are enriched with displayName and description.
-func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister) *Selector {
+func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModelRefLister, accessChecker ModelAccessChecker) *Selector {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Selector{
-		lister:      lister,
-		modelLister: modelLister,
-		logger:      log,
+		lister:        lister,
+		modelLister:   modelLister,
+		accessChecker: accessChecker,
+		logger:        log,
 	}
 }
 
@@ -120,12 +128,34 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		accessible = append(accessible, toResponse(&sub))
 	}
 
+	if s.accessChecker != nil {
+		authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
+		filtered := accessible[:0]
+		for _, sub := range accessible {
+			sub.ModelRefs = filterAuthorizedModels(sub.ModelRefs, authorizedSet)
+			if len(sub.ModelRefs) > 0 {
+				filtered = append(filtered, sub)
+			}
+		}
+		accessible = filtered
+	}
+
 	// Sort for deterministic ordering
 	sort.Slice(accessible, func(i, j int) bool {
 		return accessible[i].Name < accessible[j].Name
 	})
 
 	return accessible, nil
+}
+
+func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.ModelKey]bool) []ModelRefInfo {
+	out := make([]ModelRefInfo, 0, len(refs))
+	for _, ref := range refs {
+		if authorizedSet[authpolicy.ModelKey{Namespace: ref.Namespace, Name: ref.Name}] {
+			out = append(out, ref)
+		}
+	}
+	return out
 }
 
 // Select implements the subscription selection logic.
@@ -649,14 +679,15 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 	}
 }
 
-// hasModel returns true if the subscription includes the given model name.
-func (s subscription) hasModel(modelID string) bool {
+// findModelNamespaces returns all namespaces where the given model name appears in the subscription's modelRefs.
+func (s subscription) findModelNamespaces(modelID string) []string {
+	var namespaces []string
 	for _, ref := range s.ModelRefs {
 		if ref.Name == modelID {
-			return true
+			namespaces = append(namespaces, ref.Namespace)
 		}
 	}
-	return false
+	return namespaces
 }
 
 // sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
@@ -680,11 +711,32 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
+	var authorizedSet map[authpolicy.ModelKey]bool
+	if s.accessChecker != nil {
+		authorizedSet = s.accessChecker.AuthorizedModels(groups, username)
+	}
+
 	result := []SubscriptionInfo{}
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) && sub.hasModel(modelID) {
-			result = append(result, toSubscriptionInfo(&sub))
+		modelNamespaces := sub.findModelNamespaces(modelID)
+		if !userHasAccess(&sub, username, groups) || len(modelNamespaces) == 0 {
+			continue
 		}
+
+		if s.accessChecker != nil {
+			authorized := false
+			for _, ns := range modelNamespaces {
+				if authorizedSet[authpolicy.ModelKey{Namespace: ns, Name: modelID}] {
+					authorized = true
+					break
+				}
+			}
+			if !authorized {
+				continue
+			}
+		}
+
+		result = append(result, toSubscriptionInfo(&sub))
 	}
 
 	// Sort for deterministic ordering
@@ -697,20 +749,13 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 
 // toSubscriptionInfo converts internal subscription to a list response item.
 func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
-	desc := sub.Description
-	if desc == "" {
-		desc = sub.DisplayName
-	}
-	if desc == "" {
-		desc = sub.Name
-	}
 	modelRefs := sub.ModelRefs
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
 	info := SubscriptionInfo{
 		SubscriptionIDHeader:    sub.Name,
-		SubscriptionDescription: desc,
+		SubscriptionDescription: sub.Description,
 		DisplayName:             sub.DisplayName,
 		Priority:                sub.Priority,
 		ModelRefs:               modelRefs,
@@ -723,20 +768,13 @@ func toSubscriptionInfo(sub *subscription) SubscriptionInfo {
 
 // ResponseToSubscriptionInfo converts a SelectResponse to a SubscriptionInfo.
 func ResponseToSubscriptionInfo(sub *SelectResponse) SubscriptionInfo {
-	desc := sub.Description
-	if desc == "" {
-		desc = sub.DisplayName
-	}
-	if desc == "" {
-		desc = sub.Name
-	}
 	modelRefs := sub.ModelRefs
 	if modelRefs == nil {
 		modelRefs = []ModelRefInfo{}
 	}
 	return SubscriptionInfo{
 		SubscriptionIDHeader:    sub.Name,
-		SubscriptionDescription: desc,
+		SubscriptionDescription: sub.Description,
 		DisplayName:             sub.DisplayName,
 		Priority:                sub.Priority,
 		ModelRefs:               modelRefs,
