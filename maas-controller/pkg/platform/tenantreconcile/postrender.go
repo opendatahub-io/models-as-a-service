@@ -58,7 +58,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		filteredResources = append(filteredResources, *resource)
 	}
 
-	if err := configureExternalOIDC(log, params, filteredResources); err != nil {
+	if err := configureExternalOIDC(log, params); err != nil {
 		return nil, err
 	}
 	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, params); err != nil {
@@ -155,7 +155,7 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 	return nil
 }
 
-func configureExternalOIDC(log logr.Logger, params PlatformParams, resources []unstructured.Unstructured) error {
+func configureExternalOIDC(log logr.Logger, params PlatformParams) error {
 	if params.ExternalOIDC == nil {
 		return nil
 	}

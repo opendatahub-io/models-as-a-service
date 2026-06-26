@@ -672,6 +672,15 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			Name: "partial-gateway",
 		}},
 	}
+	discoveredNamespaceWithoutTenant := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "ai-tenant-missing",
+			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	modelNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm"},
+	}
 
 	tests := []struct {
 		name             string
@@ -729,9 +738,20 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 		},
 		{
 			name:             "missing discovered tenant is an error",
-			tenantNamespace:  tenantNamespace,
+			tenantNamespace:  discoveredNamespaceWithoutTenant.Name,
 			discoveryEnabled: true,
+			objects:          []client.Object{discoveredNamespaceWithoutTenant},
 			wantErr:          true,
+		},
+		{
+			name:             "unlabeled model namespace without tenant falls back to flags",
+			tenantNamespace:  modelNamespace.Name,
+			discoveryEnabled: true,
+			objects:          []client.Object{modelNamespace},
+			want: maasv1alpha1.TenantGatewayRef{
+				Name:      fallbackName,
+				Namespace: fallbackNS,
+			},
 		},
 		{
 			name:             "discovery disabled uses legacy fallback",

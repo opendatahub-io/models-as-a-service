@@ -130,3 +130,26 @@ func TestResolvePlatformContext_AITenantStatusGatewayRequired(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "status.gatewayRef is not ready")
 }
+
+func TestResolvePlatformContext_AITenantNameAnnotationRequired(t *testing.T) {
+	scheme := platformContextTestScheme(t)
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "redteam",
+			},
+			Annotations: map[string]string{
+				AnnotationAITenantNamespace: DefaultAITenantNamespace,
+			},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant).Build()
+
+	_, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), AnnotationAITenantName)
+}

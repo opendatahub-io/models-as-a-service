@@ -67,7 +67,7 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 
 	aitenantName := annotationValue(tenant, AnnotationAITenantName)
 	if aitenantName == "" {
-		aitenantName = tenantName
+		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant %s/%s is missing %s", tenant.Namespace, tenant.Name, AnnotationAITenantName)
 	}
 	aitenantNamespace := annotationValue(tenant, AnnotationAITenantNamespace)
 	if aitenantNamespace == "" {

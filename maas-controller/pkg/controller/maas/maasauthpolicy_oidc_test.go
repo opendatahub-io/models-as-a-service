@@ -22,6 +22,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -33,6 +34,7 @@ import (
 func maasAuthPolicyOIDCTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	assert.NoError(t, corev1.AddToScheme(scheme))
 	assert.NoError(t, maasv1alpha1.AddToScheme(scheme))
 	return scheme
 }
@@ -49,6 +51,32 @@ func TestFetchOIDCConfig_NoTenant(t *testing.T) {
 
 	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "models-as-a-service")
 	assert.Nil(t, config, "should return nil when Tenant doesn't exist")
+}
+
+func TestFetchTenantPlatformContext_DiscoveredTenantMissingBridgeFailsClosed(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "ai-tenant-team-a",
+			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(namespace).Build()
+
+	reconciler := &MaaSAuthPolicyReconciler{
+		Client:                          client,
+		Scheme:                          scheme,
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     "maas-default-gateway",
+		GatewayNamespace:                "openshift-ingress",
+	}
+
+	platformContext, err := reconciler.fetchTenantPlatformContext(context.Background(), logr.Discard(), "ai-tenant-team-a")
+
+	assert.Nil(t, platformContext)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to use default platform context")
 }
 
 func TestFetchOIDCConfig_NoExternalOIDC(t *testing.T) {

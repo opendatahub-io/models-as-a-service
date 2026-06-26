@@ -156,11 +156,39 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Contex
 		Name:      maasv1alpha1.TenantInstanceName,
 		Namespace: tenantNamespace,
 	}
+	defaultTenantNamespace := r.TenantNamespace
+	if defaultTenantNamespace == "" {
+		defaultTenantNamespace = tenantreconcile.DefaultAITenantName
+	}
 	if err := r.Get(ctx, tenantKey, tenant); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			log.V(1).Info("Tenant CRD not installed or Tenant not found, using default platform context",
+		if apimeta.IsNoMatchError(err) {
+			log.V(1).Info("Tenant CRD not installed, using default platform context",
 				"tenantName", maasv1alpha1.TenantInstanceName,
 				"tenantNamespace", tenantNamespace)
+			platformContext := tenantreconcile.PlatformContext{
+				GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
+				Source:     "default",
+			}
+			return &platformContext, nil
+		}
+		if apierrors.IsNotFound(err) {
+			if !r.TenantNamespaceDiscoveryEnabled || tenantNamespace == defaultTenantNamespace {
+				log.V(1).Info("Tenant not found in default namespace, using default platform context",
+					"tenantName", maasv1alpha1.TenantInstanceName,
+					"tenantNamespace", tenantNamespace)
+				platformContext := tenantreconcile.PlatformContext{
+					GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
+					Source:     "default",
+				}
+				return &platformContext, nil
+			}
+			allowed, allowErr := tenantNamespaceAllowed(ctx, r.Client, tenantNamespace, defaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+			if allowErr != nil {
+				return nil, allowErr
+			}
+			if allowed {
+				return nil, fmt.Errorf("tenant %s/%s not found; refusing to use default platform context for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+			}
 			platformContext := tenantreconcile.PlatformContext{
 				GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
 				Source:     "default",

@@ -147,6 +147,9 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if result != nil {
 		return *result, err
 	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Check dependencies and prerequisites
 	if result, err := r.checkDependenciesAndPrerequisites(ctx, &tenant); result != nil {
@@ -154,8 +157,12 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Run platform reconciliation
-	if result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg); result != nil {
+	result, err = r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
+	if result != nil {
 		return *result, err
+	}
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	// Cleanup legacy resources

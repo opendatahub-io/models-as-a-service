@@ -221,6 +221,13 @@ func tenantGatewayRefForNamespace(
 		return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 	}
 	if apierrors.IsNotFound(err) {
+		allowed, allowErr := tenantNamespaceAllowed(ctx, c, tenantNamespace, defaultTenantNamespace, discoveryEnabled)
+		if allowErr != nil {
+			return maasv1alpha1.TenantGatewayRef{}, allowErr
+		}
+		if !allowed {
+			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
+		}
 		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
 	}
 	return maasv1alpha1.TenantGatewayRef{}, err
