@@ -1,0 +1,29 @@
+# User-scoped Loki datasource — routes through loki-query-proxy which injects
+# user_id filtering. Named "scoped-loki" to avoid prefix collision with "loki".
+---
+apiVersion: perses.dev/v1alpha1
+kind: PersesDatasource
+metadata:
+  name: scoped-loki
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: perses
+spec:
+  config:
+    display:
+      name: "Loki (User Scoped)"
+    default: false
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            url: http://loki-query-proxy-user.kuadrant-system.svc:8080
+            allowedEndpoints:
+              - endpointPattern: "/loki/api/v1/.*"
+                method: GET
+  client:
+    kubernetesAuth:
+      enable: true

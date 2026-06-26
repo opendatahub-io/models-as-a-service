@@ -10,6 +10,8 @@ resources:
   - prometheus-web-tls-ca-configmap.yaml
   - kuadrant-prometheus-datasource.yaml
   - usage-dashboard.yaml
+  - loki-datasource-scoped.yaml
+  - usage-user-loki-dashboard.yaml
 
 labels:
   - pairs:
