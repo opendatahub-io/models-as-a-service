@@ -36,26 +36,87 @@ kubectl annotate service authorino-authorino-authorization \
   service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
   --overwrite
 
-echo "🔧 Patching Authorino CR for TLS listener and CA bundle volume..."
-kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
-{
-  "spec": {
-    "listener": {
-      "tls": {
-        "enabled": true,
-        "certSecretRef": {
-          "name": "authorino-server-cert"
+# Authorino listener TLS: In operator mode, the ODH Model Controller creates an EnvoyFilter
+# with a TLS transport_socket for the gateway-to-Authorino gRPC connection (triggered by the
+# gateway annotation security.opendatahub.io/authorino-tls-bootstrap: "true"). In kustomize
+# mode, this controller doesn't run, so we must NOT enable listener TLS — the Kuadrant
+# operator's EnvoyFilter connects to Authorino with plain gRPC and cannot be patched
+# (operator reconciles and reverts changes, and MERGE EnvoyFilters don't apply to
+# ADD-created clusters).
+#
+# We still configure CA bundles so Authorino can make outbound TLS calls to maas-api
+# for API key validation.
+if [[ "${SKIP_LISTENER_TLS:-false}" != "true" ]]; then
+  echo "🔧 Patching Authorino CR for TLS listener..."
+  kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
+  {
+    "spec": {
+      "listener": {
+        "tls": {
+          "enabled": true,
+          "certSecretRef": {
+            "name": "authorino-server-cert"
+          }
         }
       }
     }
-  }
-}'
+  }'
+else
+  echo "⏭️  Skipping Authorino listener TLS (kustomize mode — gRPC stays plain)"
+  # Ensure listener TLS is disabled (may have been enabled by a previous operator-mode deploy)
+  kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
+  {
+    "spec": {
+      "listener": {
+        "tls": {
+          "enabled": false
+        }
+      }
+    }
+  }'
+fi
 
 # Note: The Authorino CR doesn't support envVars, so we patch the deployment directly
 echo "🌍 Adding environment variables to Authorino deployment..."
 kubectl -n "$NAMESPACE" set env deployment/authorino \
   SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
   REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
+
+# Ensure the openshift-service-ca.crt ConfigMap exists (created by service-ca operator)
+# and mount it into the Authorino deployment so the env vars above resolve to a real file
+echo "📂 Mounting OpenShift service CA bundle into Authorino deployment..."
+if ! kubectl get configmap openshift-service-ca.crt -n "$NAMESPACE" &>/dev/null; then
+  echo "  Creating openshift-service-ca.crt ConfigMap with CA injection annotation..."
+  kubectl create configmap openshift-service-ca.crt -n "$NAMESPACE"
+  kubectl annotate configmap openshift-service-ca.crt -n "$NAMESPACE" \
+    service.beta.openshift.io/inject-cabundle=true --overwrite
+  echo "  Waiting for service-ca operator to populate the ConfigMap..."
+  sleep 5
+fi
+
+kubectl patch deployment authorino -n "$NAMESPACE" --type=strategic -p '{
+  "spec": {
+    "template": {
+      "spec": {
+        "volumes": [{
+          "name": "openshift-service-ca",
+          "configMap": {
+            "name": "openshift-service-ca.crt",
+            "items": [{"key": "service-ca.crt", "path": "service-ca-bundle.crt"}]
+          }
+        }],
+        "containers": [{
+          "name": "authorino",
+          "volumeMounts": [{
+            "name": "openshift-service-ca",
+            "mountPath": "/etc/ssl/certs/openshift-service-ca",
+            "readOnly": true
+          }]
+        }]
+      }
+    }
+  }
+}'
 
 echo "✅ Authorino TLS configuration complete"
 echo ""
