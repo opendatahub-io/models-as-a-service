@@ -590,6 +590,12 @@ func main() {
 			"--aitenant-namespace must be non-empty")
 		os.Exit(1)
 	}
+	// Validate infraNamespace: empty string and "AUTO" are valid, but whitespace-only is not
+	if infraNamespace != "" && strings.TrimSpace(infraNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid infrastructure namespace configuration"),
+			"--infra-namespace must not be whitespace-only")
+		os.Exit(1)
+	}
 
 	// Derive infrastructure namespace if needed
 	infraNamespace = resolveInfraNamespace(infraNamespace, controllerNamespace)
