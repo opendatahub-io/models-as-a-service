@@ -231,8 +231,10 @@ def _assert_aitenant_bootstrap_resources(case):
     assert labels["maas.opendatahub.io/tenant-namespace"] == case["tenant_ns"]
     assert annotations[ANNOTATION_AITENANT_NAME] == case["aitenant_name"]
     assert annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
-    tenant_gateway_ref = (tenant.get("spec") or {}).get("gatewayRef") or {}
-    assert tenant_gateway_ref.get("name") != case["gateway_name"]
+    assert tenant["spec"]["gatewayRef"] == {
+        "namespace": GATEWAY_NAMESPACE,
+        "name": GATEWAY_NAME,
+    }
 
     assert _get_json_or_none("role", case["tenant_admin_role"], case["tenant_ns"]) is not None
     assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is not None
