@@ -1619,6 +1619,106 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization verifies that the generated
+// gateway AuthPolicy normalizes canonical model IDs (publishers/{ns}/models/{name})
+// to the internal {ns}/{name} format in both CEL and OPA Rego expressions.
+func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		httpRouteName  = modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	t.Run("CEL normalizes canonical publishers/ prefix", func(t *testing.T) {
+		// The CEL celModelIdentity is embedded in auth-valid authorization block.
+		// Check that the gateway AuthPolicy's auth-valid rego or CEL-based expressions
+		// contain the normalization for publishers/ prefix.
+		// celModelIdentity is used in the response and cache-key sections.
+		// It should handle: publishers/{ns}/models/{name} -> {ns}/{name}
+		if !strings.Contains(celModelIdentity, `startsWith("publishers/")`) {
+			t.Errorf("celModelIdentity should normalize canonical model IDs with publishers/ prefix, got: %s", celModelIdentity)
+		}
+		if !strings.Contains(celModelIdentity, `split("/")[1]`) || !strings.Contains(celModelIdentity, `split("/")[3]`) {
+			t.Errorf("celModelIdentity should extract ns (index 1) and name (index 3) from canonical format, got: %s", celModelIdentity)
+		}
+		if !strings.Contains(celModelIdentity, `x-gateway-model-name`) {
+			t.Errorf("celModelIdentity should read from x-gateway-model-name header, got: %s", celModelIdentity)
+		}
+	})
+
+	t.Run("OPA Rego normalizes canonical publishers/ prefix", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+
+		if !strings.Contains(rego, "raw_header_model_identity") {
+			t.Errorf("rego should extract raw header value before normalization, got: %s", rego)
+		}
+		if !strings.Contains(rego, `startswith(raw_header_model_identity, "publishers/")`) {
+			t.Errorf("rego should check for publishers/ prefix, got: %s", rego)
+		}
+		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[1]`) {
+			t.Errorf("rego should extract namespace at index 1 from canonical format, got: %s", rego)
+		}
+		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[3]`) {
+			t.Errorf("rego should extract model name at index 3 from canonical format, got: %s", rego)
+		}
+	})
+
+	t.Run("CEL passes through short model names unchanged", func(t *testing.T) {
+		// When the header doesn't start with "publishers/", the raw value should be used as-is
+		if !strings.Contains(celModelIdentity, `: request.headers["x-gateway-model-name"])`) {
+			t.Errorf("celModelIdentity should pass through non-canonical model names as-is, got: %s", celModelIdentity)
+		}
+	})
+
+	t.Run("OPA Rego passes through short model names unchanged", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+		// The else clause should assign the raw value when not canonical
+		if !strings.Contains(rego, "else := raw_header_model_identity") {
+			t.Errorf("rego should fall back to raw header value for non-canonical names, got: %s", rego)
+		}
+	})
+}
+
 // TestMaaSAuthPolicyReconciler_StaleEvent_NoOp verifies the W4a contract: a reconcile
 // request for a MaaSAuthPolicy that no longer exists (stale queue entry or deleted-race)
 // returns cleanly without error. After the W4a fix, fetchOIDCConfig is only called after
