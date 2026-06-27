@@ -359,6 +359,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -431,6 +432,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
+	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
 
 	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
 	if err != nil {
@@ -460,7 +462,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, tenantID, gatewayNs, gatewayName); err != nil {
+	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
@@ -591,7 +593,7 @@ type modelSubjectAllowlist struct {
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -609,6 +611,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
   "requestedSubscription": `+celSubscription+`,
   "requestedModel": %s
 }`, celGroups, celUsername, celModelIdentity)
+
+	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
 
 	authenticationRules := map[string]any{
 		"api-keys": map[string]any{
@@ -631,12 +635,27 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 			},
 			"when": []any{
 				map[string]any{
-					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+					"predicate": celIsNotAPIKey,
 				},
 			},
 			"metrics":  false,
 			"priority": int64(2),
 		},
+	}
+
+	if xAPIKeyEnabled {
+		authenticationRules["api-keys-x-api-key"] = map[string]any{
+			"plain": map[string]any{
+				"expression": `"Bearer " + request.headers["x-api-key"]`,
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": `"x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*") && !request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+		}
 	}
 
 	if oidc != nil {
@@ -647,7 +666,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 			},
 			"when": []any{
 				map[string]any{
-					"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-") && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+					"predicate": celIsNotAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
 				},
 			},
 			"metrics":  false,
@@ -655,7 +674,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 		}
 	}
 
-	authValidCacheKey := `"api-key|" + request.headers.authorization.replace("Bearer ", "") + "|" + ` + celModelIdentity
+	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
 	// tenantGatewayIsolationRule is a stub that always allows. It will be replaced with a real
 	// maas-api call to verify the API key's tenant matches the gateway hostname when multi-tenant
@@ -742,9 +761,7 @@ allow {
 			"apiKeyValidation": map[string]any{
 				"when": []any{
 					map[string]any{
-						"selector": "request.headers.authorization",
-						"operator": "matches",
-						"value":    "^Bearer sk-oai-.*",
+						"predicate": celIsAPIKey,
 					},
 				},
 				"http": map[string]any{
@@ -752,12 +769,12 @@ allow {
 					"contentType": "application/json",
 					"method":      "POST",
 					"body": map[string]any{
-						"expression": `{"key": request.headers.authorization.replace("Bearer ", "")}`,
+						"expression": `{"key": ` + celExtractKey + `}`,
 					},
 				},
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": `request.headers.authorization.replace("Bearer ", "")`,
+						"selector": celExtractKey,
 					},
 					"ttl": r.MetadataCacheTTL,
 				},
@@ -854,9 +871,7 @@ allow {
 					"X-MaaS-Username": map[string]any{
 						"when": []any{
 							map[string]any{
-								"selector": "request.headers.authorization",
-								"operator": "matches",
-								"value":    "^Bearer sk-oai-.*",
+								"predicate": celIsAPIKey,
 							},
 						},
 						"plain": map[string]any{
@@ -868,7 +883,7 @@ allow {
 					"X-MaaS-Username-Token": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+								"predicate": celIsNotAPIKey,
 							},
 						},
 						"plain": map[string]any{
@@ -881,9 +896,7 @@ allow {
 					"X-MaaS-Group": map[string]any{
 						"when": []any{
 							map[string]any{
-								"selector": "request.headers.authorization",
-								"operator": "matches",
-								"value":    "^Bearer sk-oai-.*",
+								"predicate": celIsAPIKey,
 							},
 						},
 						"plain": map[string]any{
@@ -898,7 +911,7 @@ allow {
 					"X-MaaS-Group-Token": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+								"predicate": celIsNotAPIKey,
 							},
 						},
 						"plain": map[string]any{
@@ -1020,8 +1033,8 @@ allow {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, tenantID, gatewayNamespace, gatewayName string) error {
-	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID)
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string) error {
+	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
 	// Calculate tenantName from tenantID
 	// Default tenant (tenantID="") uses "models-as-a-service", others use tenantID
@@ -1030,7 +1043,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
 
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
@@ -1432,6 +1445,64 @@ func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Co
 	}
 	log.Info("restored gateway-default-auth (no remaining MaaSAuthPolicies)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
 	return nil
+}
+
+// discoverXAPIKeyNeeded lists ExternalModel CRs from inference.opendatahub.io/v1alpha1
+// and returns true if any externalProviderRef uses apiFormat "messages" (Anthropic SDK),
+// which requires accepting API keys from the x-api-key header. Returns false if the
+// CRD is not installed or no "messages" format is found.
+func (r *MaaSAuthPolicyReconciler) discoverXAPIKeyNeeded(ctx context.Context, log logr.Logger) bool {
+	list := &unstructured.UnstructuredList{}
+	list.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "inference.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "ExternalModelList",
+	})
+	if err := r.List(ctx, list); err != nil {
+		if apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
+			log.V(1).Info("inference.opendatahub.io ExternalModel CRD not found, skipping x-api-key discovery")
+			return false
+		}
+		log.Error(err, "failed to list inference ExternalModels for x-api-key discovery (non-fatal)")
+		return false
+	}
+
+	for i := range list.Items {
+		refs, found, err := unstructured.NestedSlice(list.Items[i].Object, "spec", "externalProviderRefs")
+		if err != nil || !found {
+			continue
+		}
+		for _, ref := range refs {
+			refMap, ok := ref.(map[string]any)
+			if !ok {
+				continue
+			}
+			if fmt.Sprintf("%v", refMap["apiFormat"]) == "messages" {
+				log.V(1).Info("found ExternalModel with apiFormat=messages, enabling x-api-key identity source",
+					"externalModel", list.Items[i].GetName(), "namespace", list.Items[i].GetNamespace())
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// apiKeyCELPredicates returns CEL expressions for API key detection, negation, and
+// raw key extraction. When xAPIKeyEnabled is true, the expressions also accept
+// keys from the x-api-key header (Anthropic SDK format).
+func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRawKey string) {
+	if !xAPIKeyEnabled {
+		return `request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+			`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
+			`request.headers.authorization.replace("Bearer ", "")`
+	}
+	isAPIKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") || ` +
+		`("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	isNotAPIKey = `!(` + isAPIKey + `)`
+	extractRawKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") ` +
+		`? request.headers.authorization.replace("Bearer ", "") ` +
+		`: request.headers["x-api-key"]`
+	return isAPIKey, isNotAPIKey, extractRawKey
 }
 
 func (r *MaaSAuthPolicyReconciler) updateAuthPolicyRefStatus(ctx context.Context, log logr.Logger, policy *maasv1alpha1.MaaSAuthPolicy, refs []authPolicyRef) {
