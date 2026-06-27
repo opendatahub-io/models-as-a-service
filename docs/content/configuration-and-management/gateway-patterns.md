@@ -299,7 +299,7 @@ kubectl get secret maas-gw-service-tls -n openshift-ingress
 |---------|-------------|-----|
 | Gateway stays `NotProgrammed` | GatewayClass not accepted, or `gw-options` ConfigMap missing | Check `kubectl get gatewayclass`; verify ConfigMap in `openshift-ingress` |
 | Route shows `HostAlreadyClaimed` | Another Route uses the same hostname | Change `spec.host` to a unique FQDN |
-| `503` from the Route | Gateway Service not ready or certificate not yet provisioned | Wait for `service-ca-operator` to provision `maas-gw-service-tls`; check `kubectl get secret -n openshift-ingress` |
+| `503` from the Route | Gateway Service not ready, certificate not yet provisioned, or Route missing `destinationCACertificate` | Wait for `service-ca-operator` to provision `maas-gw-service-tls`; verify Route has `tls.destinationCACertificate` containing the service CA bundle (see [Apply](#apply) step) |
 | TLS handshake failure (re-encrypt) | Service CA cert not trusted by the Router | Ensure `tls.destinationCACertificate` contains the service CA bundle from `signing-cabundle` ConfigMap in `openshift-service-ca` namespace |
 | `certificateRefs` name mismatch | Secret name in Gateway does not match ConfigMap annotation | Verify both reference the same Secret name (`maas-gw-service-tls`) |
 
