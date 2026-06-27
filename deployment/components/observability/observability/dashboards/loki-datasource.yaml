@@ -1,0 +1,38 @@
+# Admin Loki datasource — direct to LokiStack, no user filtering.
+---
+apiVersion: perses.dev/v1alpha2
+kind: PersesDatasource
+metadata:
+  name: loki
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/managed-by: maas-observability
+    app.kubernetes.io/component: perses
+spec:
+  config:
+    display:
+      name: "Usage"
+    default: true
+    plugin:
+      kind: "LokiDatasource"
+      spec:
+        proxy:
+          kind: HTTPProxy
+          spec:
+            # LokiStack gateway URL — adjust name/namespace to match your LokiStack CR.
+            url: https://__LOKI_GATEWAY_SVC__.opendatahub.svc.cluster.local:8080/api/logs/v1/application
+            allowedEndpoints:
+              - endpointPattern: "/loki/api/v1/.*"
+                method: GET
+            secret: "loki-secret"
+  client:
+    kubernetesAuth:
+      enable: true
+    tls:
+      enable: true
+      insecureSkipVerify: false
+      caCert:
+        type: configmap
+        name: loki-gateway-serving-ca
+        namespace: opendatahub
+        certPath: service-ca.crt
