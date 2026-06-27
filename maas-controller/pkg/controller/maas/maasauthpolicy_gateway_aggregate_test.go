@@ -83,7 +83,7 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 		t.Fatalf("json.Marshal(allowlists) returned error: %v", err)
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(string(allowlistsJSON), nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec(string(allowlistsJSON), nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	defaults, ok := spec["defaults"].(map[string]any)
 	if !ok {
 		t.Fatalf("gateway spec missing defaults block")
