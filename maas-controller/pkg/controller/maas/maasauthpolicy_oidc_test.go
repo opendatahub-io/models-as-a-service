@@ -22,13 +22,25 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
-	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+
+	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-func TestFetchOIDCConfig_NoTenant(t *testing.T) {
+func maasAuthPolicyOIDCTestScheme(t *testing.T) *runtime.Scheme {
+	t.Helper()
 	scheme := runtime.NewScheme()
+	assert.NoError(t, corev1.AddToScheme(scheme))
+	assert.NoError(t, maasv1alpha1.AddToScheme(scheme))
+	return scheme
+}
+
+func TestFetchOIDCConfig_NoTenant(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
 	client := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 	reconciler := &MaaSAuthPolicyReconciler{
@@ -41,21 +53,40 @@ func TestFetchOIDCConfig_NoTenant(t *testing.T) {
 	assert.Nil(t, config, "should return nil when Tenant doesn't exist")
 }
 
+func TestFetchTenantPlatformContext_DiscoveredTenantMissingBridgeFailsClosed(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
+	namespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "ai-tenant-team-a",
+			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(namespace).Build()
+
+	reconciler := &MaaSAuthPolicyReconciler{
+		Client:                          client,
+		Scheme:                          scheme,
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     "maas-default-gateway",
+		GatewayNamespace:                "openshift-ingress",
+	}
+
+	platformContext, err := reconciler.fetchTenantPlatformContext(context.Background(), logr.Discard(), "ai-tenant-team-a")
+
+	assert.Nil(t, platformContext)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "refusing to use default platform context")
+}
+
 func TestFetchOIDCConfig_NoExternalOIDC(t *testing.T) {
-	scheme := runtime.NewScheme()
+	scheme := maasAuthPolicyOIDCTestScheme(t)
 
 	// Create Tenant without externalOIDC
-	tenant := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "maas.opendatahub.io/v1alpha1",
-			"kind":       "Tenant",
-			"metadata": map[string]any{
-				"name":      "default-tenant",
-				"namespace": "models-as-a-service",
-			},
-			"spec": map[string]any{
-				"otherField": "value",
-			},
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "models-as-a-service",
 		},
 	}
 
@@ -75,22 +106,18 @@ func TestFetchOIDCConfig_NoExternalOIDC(t *testing.T) {
 }
 
 func TestFetchOIDCConfig_WithExternalOIDC(t *testing.T) {
-	scheme := runtime.NewScheme()
+	scheme := maasAuthPolicyOIDCTestScheme(t)
 
 	// Create Tenant with externalOIDC
-	tenant := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "maas.opendatahub.io/v1alpha1",
-			"kind":       "Tenant",
-			"metadata": map[string]any{
-				"name":      "default-tenant",
-				"namespace": "models-as-a-service",
-			},
-			"spec": map[string]any{
-				"externalOIDC": map[string]any{
-					"issuerUrl": "https://keycloak.example.com/realms/test",
-					"clientId":  "test-client",
-				},
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "test-client",
 			},
 		},
 	}
@@ -112,23 +139,79 @@ func TestFetchOIDCConfig_WithExternalOIDC(t *testing.T) {
 	assert.Equal(t, "test-client", config.ClientID)
 }
 
+func TestFetchOIDCConfig_WithAITenantOIDC(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
+
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-team-a",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "team-a",
+				tenantreconcile.LabelTenantNamespace:   "ai-tenant-team-a",
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      "team-a",
+				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://stale.example.com",
+				ClientID:  "stale-client",
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/team-a",
+				ClientID:  "team-a-client",
+			},
+		},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "team-a-gateway",
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tenant, aitenant).
+		Build()
+
+	reconciler := &MaaSAuthPolicyReconciler{
+		Client:          client,
+		Scheme:          scheme,
+		TenantNamespace: "models-as-a-service",
+	}
+
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "ai-tenant-team-a")
+	assert.NotNil(t, config, "should return config from AITenant")
+	assert.Equal(t, "https://keycloak.example.com/realms/team-a", config.IssuerURL)
+	assert.Equal(t, "team-a-client", config.ClientID)
+}
+
 func TestFetchOIDCConfig_EmptyIssuerURL(t *testing.T) {
-	scheme := runtime.NewScheme()
+	scheme := maasAuthPolicyOIDCTestScheme(t)
 
 	// Create Tenant with empty issuerUrl
-	tenant := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "maas.opendatahub.io/v1alpha1",
-			"kind":       "Tenant",
-			"metadata": map[string]any{
-				"name":      "default-tenant",
-				"namespace": "models-as-a-service",
-			},
-			"spec": map[string]any{
-				"externalOIDC": map[string]any{
-					"issuerUrl": "",
-					"clientId":  "test-client",
-				},
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "",
+				ClientID:  "test-client",
 			},
 		},
 	}
@@ -149,22 +232,18 @@ func TestFetchOIDCConfig_EmptyIssuerURL(t *testing.T) {
 }
 
 func TestFetchOIDCConfig_EmptyClientID(t *testing.T) {
-	scheme := runtime.NewScheme()
+	scheme := maasAuthPolicyOIDCTestScheme(t)
 
 	// Create Tenant with empty clientId
-	tenant := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "maas.opendatahub.io/v1alpha1",
-			"kind":       "Tenant",
-			"metadata": map[string]any{
-				"name":      "default-tenant",
-				"namespace": "models-as-a-service",
-			},
-			"spec": map[string]any{
-				"externalOIDC": map[string]any{
-					"issuerUrl": "https://keycloak.example.com/realms/test",
-					"clientId":  "",
-				},
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			ExternalOIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "",
 			},
 		},
 	}
@@ -204,6 +283,12 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 		"celGroups should check for OIDC groups claim")
 	assert.Contains(t, celGroups, "auth.identity.user.groups",
 		"celGroups should fall back to K8s user.groups")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.groups) > 0",
+		"X-MaaS-Group expression should handle empty OIDC groups claim")
+	assert.Contains(t, celTokenGroupsHeaderJSON, `'["system:authenticated"]'`,
+		"X-MaaS-Group expression should preserve default subscription access for OIDC tokens with no groups")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.user.groups) > 0",
+		"X-MaaS-Group expression should avoid empty JSON group values for K8s tokens")
 }
 
 func TestCELExpressions_UserIDVsUsername(t *testing.T) {

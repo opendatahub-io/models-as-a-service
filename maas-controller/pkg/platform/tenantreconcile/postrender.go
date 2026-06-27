@@ -15,8 +15,8 @@ import (
 // dynamic values (images, gateway config, namespace, audience, env vars) and
 // applies OIDC, telemetry, and managed-annotation customizations.
 func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
 
 	var filteredResources []unstructured.Unstructured
@@ -58,13 +58,13 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 		filteredResources = append(filteredResources, *resource)
 	}
 
-	if err := configureExternalOIDC(log, tenant, filteredResources); err != nil {
+	if err := configureExternalOIDC(log, params); err != nil {
 		return nil, err
 	}
-	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, tenantID); err != nil {
+	if err := configureTelemetryPolicyResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
-	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, tenantID); err != nil {
+	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
@@ -155,8 +155,8 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 	return nil
 }
 
-func configureExternalOIDC(log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured) error {
-	if tenant.Spec.ExternalOIDC == nil {
+func configureExternalOIDC(log logr.Logger, params PlatformParams) error {
+	if params.ExternalOIDC == nil {
 		return nil
 	}
 	// OIDC is configured in the singleton maas-gateway-auth AuthPolicy managed by
@@ -245,13 +245,14 @@ func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	return *t.Enabled
 }
 
-func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
+func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, params PlatformParams) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
 	// Caller should have checked CRD; still skip if API missing at apply time.
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
+	tenantID := params.TenantIdentifier
 	metricLabels := buildTelemetryLabels(log, tenant.Spec.Telemetry)
 	tp := &unstructured.Unstructured{
 		Object: map[string]any{
@@ -286,12 +287,13 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 	return nil
 }
 
-func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, tenantID string) error {
+func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, params PlatformParams) error {
 	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
 		return nil
 	}
-	gatewayNamespace := tenant.Spec.GatewayRef.Namespace
-	gatewayName := tenant.Spec.GatewayRef.Name
+	gatewayNamespace := params.GatewayNamespace
+	gatewayName := params.GatewayName
+	tenantID := params.TenantIdentifier
 	istioTelemetry := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "telemetry.istio.io/v1",

@@ -14,6 +14,8 @@ AITENANT_KIND = "aitenant"
 CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"
 DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION = "maas.opendatahub.io/default-aitenant-bootstrapped"
+ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
+ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 TENANT_NAME = "default-tenant"
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
@@ -221,11 +223,18 @@ def _assert_aitenant_bootstrap_resources(case):
     assert namespace["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
 
     tenant = _wait_for_json("tenant", TENANT_NAME, case["tenant_ns"])
+    labels = tenant["metadata"].get("labels") or {}
+    annotations = tenant["metadata"].get("annotations") or {}
+    assert labels["maas.opendatahub.io/managed-by-aitenant"] == "true"
+    assert labels["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
+    assert labels["maas.opendatahub.io/tenant-name"] == case["aitenant_name"]
+    assert labels["maas.opendatahub.io/tenant-namespace"] == case["tenant_ns"]
+    assert annotations[ANNOTATION_AITENANT_NAME] == case["aitenant_name"]
+    assert annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
     assert tenant["spec"]["gatewayRef"] == {
         "namespace": GATEWAY_NAMESPACE,
-        "name": case["gateway_name"],
+        "name": GATEWAY_NAME,
     }
-    assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
 
     assert _get_json_or_none("role", case["tenant_admin_role"], case["tenant_ns"]) is not None
     assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is not None
@@ -283,6 +292,9 @@ class TestAITenantLifecycle:
         assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
         assert tenant["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == DEFAULT_AITENANT_NAME
         assert tenant["metadata"]["labels"]["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
+        tenant_annotations = tenant["metadata"].get("annotations") or {}
+        assert tenant_annotations[ANNOTATION_AITENANT_NAME] == DEFAULT_AITENANT_NAME
+        assert tenant_annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
         assert tenant["spec"]["gatewayRef"] == {
             "namespace": GATEWAY_NAMESPACE,
             "name": GATEWAY_NAME,
@@ -305,24 +317,11 @@ class TestAITenantLifecycle:
                     not expected_client_id or oidc.get("clientId") == expected_client_id
                 )
 
-            def tenant_oidc_converged(obj):
-                oidc = obj.get("spec", {}).get("externalOIDC") or {}
-                return oidc.get("issuerUrl") == expected_issuer and (
-                    not expected_client_id or oidc.get("clientId") == expected_client_id
-                )
-
             _wait_for_json(
                 AITENANT_KIND,
                 DEFAULT_AITENANT_NAME,
                 AITENANT_NAMESPACE,
                 predicate=aitenant_oidc_converged,
-                timeout=180,
-            )
-            _wait_for_json(
-                "tenant",
-                TENANT_NAME,
-                MAAS_SUBSCRIPTION_NAMESPACE,
-                predicate=tenant_oidc_converged,
                 timeout=180,
             )
 
