@@ -37,6 +37,7 @@ spec:
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
+          - --monitoring-namespace=$(MONITORING_NAMESPACE)
         env:
           - name: CONTROLLER_NAMESPACE
             valueFrom:
@@ -70,6 +71,12 @@ spec:
             valueFrom:
               configMapKeyRef:
                 key: maas-api-key-cleanup-image
+                name: maas-parameters
+                optional: true
+          - name: MONITORING_NAMESPACE
+            valueFrom:
+              configMapKeyRef:
+                key: monitoring-namespace
                 name: maas-parameters
                 optional: true
         image: maas-controller
