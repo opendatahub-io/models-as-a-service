@@ -89,6 +89,7 @@ type MaaSAuthPolicyReconciler struct {
 type oidcConfig struct {
 	IssuerURL string
 	ClientID  string
+	TTL       int
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
@@ -216,13 +217,25 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	// Extract TTL (optional, defaults to 300 seconds per CRD default)
+	ttl, found, err := unstructured.NestedInt64(oidcSpec, "ttl")
+	if err != nil {
+		log.Info("Tenant externalOIDC.ttl has invalid type, using default",
+			"error", err, "default", 300)
+		ttl = 300
+	} else if !found || ttl <= 0 {
+		ttl = 300 // Default TTL per CRD kubebuilder default
+	}
+
 	log.Info("OIDC configuration loaded from Tenant CR",
 		"issuerUrl", issuerURL,
-		"clientId", clientID)
+		"clientId", clientID,
+		"ttl", ttl)
 
 	return &oidcConfig{
 		IssuerURL: issuerURL,
 		ClientID:  clientID,
+		TTL:       int(ttl),
 	}
 }
 
@@ -662,7 +675,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 		authenticationRules["oidc-identities"] = map[string]any{
 			"jwt": map[string]any{
 				"issuerUrl": oidc.IssuerURL,
-				"ttl":       int64(300),
+				"audiences": []any{oidc.ClientID},
+				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
 				map[string]any{

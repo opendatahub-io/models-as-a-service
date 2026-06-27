@@ -15,9 +15,9 @@ resources:
 # included here. They are applied conditionally by install-observability.sh only
 # when the gateway deployment exists.
 #
-# NOTE: authorino-maas-metadata-evaluator-prometheusrule.yaml is NOT included here.
-# It has a hardcoded namespace (kuadrant-system) which causes problems in RHOAI
-# (rh-connectivity-link). The install-observability.sh script deploys it with
+# NOTE: authorino-maas-metadata-evaluator-prometheusrule.yaml and authorino-maas-oidc-prometheusrule.yaml
+# are NOT included here due to hardcoded namespace (kuadrant-system) which causes problems in RHOAI
+# (rh-connectivity-link). The install-observability.sh script deploys them with
 # dynamic namespace substitution.
 - gateway-telemetry-policy.yaml
 - istio-gateway-telemetry.yaml

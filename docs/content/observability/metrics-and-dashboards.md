@@ -73,7 +73,31 @@ Exposed on `/server-metrics` (port 8080):
 !!! note "Metadata evaluator metrics"
     Query `evaluator_type="METADATA_GENERIC_HTTP"` and `evaluator_name=~"apiKeyValidation|subscription-info"`. Series appear after traffic hits each evaluator.
 
-**Alert:** `authorino-maas-metadata-evaluator-prometheusrule.yaml` — **`MaaSAuthorinoMetadataEvaluatorHighFailureRate`** (`cancelled`/`total` > 10% over 5m, traffic guard, **`for: 5m`**). **Remediate:** maas-api health; Authorino → maas-api TLS/NetworkPolicy; confirm **`/server-metrics`** is scraped.
+#### Authorino Alerts
+
+**MaaSAuthorinoMetadataEvaluatorHighFailureRate**
+
+Fires when more than 10% of metadata evaluator calls (apiKeyValidation or subscription-info to maas-api) fail for 5 consecutive minutes.
+
+- **Severity:** Warning
+- **Indicates:** maas-api unhealthy, network policies blocking Authorino → maas-api, or TLS certificate issues
+- **Remediate:** Check maas-api health, Authorino → maas-api TLS/NetworkPolicy, confirm `/server-metrics` is scraped
+
+**MaaSAuthorinoOIDCAuthenticationHighFailureRate**
+
+Fires when more than 10% of OIDC authentication attempts fail for 5 consecutive minutes (when external OIDC is configured via `Tenant.spec.externalOIDC`).
+
+- **Severity:** Warning
+- **Indicates:** IdP unavailable, JWKS unreachable, or token validation failures
+
+**MaaSAuthorinoOIDCAuthenticationHighLatency**
+
+Fires when P95 OIDC authentication latency exceeds 2 seconds for 5 consecutive minutes.
+
+- **Severity:** Warning
+- **Indicates:** Slow IdP response, network latency, or excessive JWKS fetches
+
+Access alerts in **Observe → Alerting** (User workload monitoring). For OIDC behavior during IdP outages and detailed troubleshooting, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
 ### vLLM Metrics
 

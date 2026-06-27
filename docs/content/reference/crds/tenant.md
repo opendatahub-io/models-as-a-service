@@ -69,7 +69,7 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 |-------|------|----------|---------|-------------|
 | issuerUrl | string | Yes | — | OIDC issuer URL. Must start with `https://`. Max length: 2048 characters. |
 | clientId | string | Yes | — | OAuth2 client ID. Max length: 256 characters. |
-| ttl | int | No | `300` | JWKS cache duration in seconds. Minimum: 30. |
+| ttl | int | No | `300` | JWKS refresh interval in seconds. Controls how often Authorino fetches fresh JWKS from the IdP. Cached JWKS persists during IdP outages. Minimum: 30. |
 
 ---
 
