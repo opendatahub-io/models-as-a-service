@@ -877,6 +877,48 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     )
 
 
+def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for MaaSModelRef to reach Ready phase.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        namespace: Namespace (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The MaaSModelRef CR dict when Ready
+
+    Raises:
+        TimeoutError: If MaaSModelRef doesn't reach Ready within timeout
+    """
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSModelRef {namespace}/{model_ref} to reach phase 'Ready' (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maasmodelref", model_ref, namespace)
+        if cr:
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            endpoint = status.get("endpoint")
+
+            if phase == "Ready" and endpoint:
+                log.info(f"MaaSModelRef {namespace}/{model_ref} is Ready with endpoint: {endpoint}")
+                return cr
+
+            log.debug(f"MaaSModelRef {namespace}/{model_ref}: phase={phase}, endpoint={endpoint or 'none'}")
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maasmodelref", model_ref, namespace)
+    status = cr.get("status", {}) if cr else {}
+    conditions = status.get("conditions", [])
+    raise TimeoutError(
+        f"MaaSModelRef {namespace}/{model_ref} did not reach Ready within {timeout}s "
+        f"(current: phase={status.get('phase')}, endpoint={status.get('endpoint')}, "
+        f"conditions={[c.get('type') + '=' + str(c.get('status')) for c in conditions]})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Controller scaling utilities
 # ---------------------------------------------------------------------------
