@@ -1356,7 +1356,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 
 func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
