@@ -290,6 +290,18 @@ const (
 		`? auth.metadata.apiKeyValidation.groups ` +
 		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
 
+	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
+	// identities. OIDC tokens may omit or provide an empty groups claim, but API
+	// key minting still requires at least system:authenticated to match the
+	// default subscription.
+	celTokenGroupsHeaderJSON = `has(auth.identity.groups) ? ` +
+		`(size(auth.identity.groups) > 0 ? ` +
+		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
+		`'["system:authenticated"]') : ` +
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`'["' + auth.identity.user.groups.join('","') + '"]' : ` +
+		`'["system:authenticated"]')`
+
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
 		`? auth.metadata.apiKeyValidation.subscription : ` +
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
@@ -911,9 +923,7 @@ allow {
 							},
 						},
 						"plain": map[string]any{
-							"expression": `has(auth.identity.groups) ?` +
-								` '["system:authenticated","' + auth.identity.groups.join('","') + '"]'` +
-								` : '["' + auth.identity.user.groups.join('","') + '"]'`,
+							"expression": celTokenGroupsHeaderJSON,
 						},
 						"key":      "X-MaaS-Group",
 						"metrics":  false,

@@ -283,6 +283,12 @@ func TestCELExpressions_SupportOIDC(t *testing.T) {
 		"celGroups should check for OIDC groups claim")
 	assert.Contains(t, celGroups, "auth.identity.user.groups",
 		"celGroups should fall back to K8s user.groups")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.groups) > 0",
+		"X-MaaS-Group expression should handle empty OIDC groups claim")
+	assert.Contains(t, celTokenGroupsHeaderJSON, `'["system:authenticated"]'`,
+		"X-MaaS-Group expression should preserve default subscription access for OIDC tokens with no groups")
+	assert.Contains(t, celTokenGroupsHeaderJSON, "size(auth.identity.user.groups) > 0",
+		"X-MaaS-Group expression should avoid empty JSON group values for K8s tokens")
 }
 
 func TestCELExpressions_UserIDVsUsername(t *testing.T) {
