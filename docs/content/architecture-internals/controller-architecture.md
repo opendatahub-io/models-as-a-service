@@ -4,6 +4,26 @@ This document provides a technical deep-dive into the MaaS Controller architectu
 
 ---
 
+## Namespace Architecture
+
+MaaS uses multiple namespaces to separate concerns and enable flexible deployment patterns:
+
+| Namespace | Purpose | Default Value | Configurable |
+|-----------|---------|---------------|--------------|
+| **Controller Namespace** | Where maas-controller operator runs | `opendatahub` (ODH)<br/>`redhat-ods-applications` (RHOAI) | Set by operator/deployment |
+| **Infrastructure Namespace** | Where maas-api deployment and maas-db-config secret run | Same as controller (default)<br/>`odh-ai-gateway-infra` (ODH separated)<br/>`redhat-ai-gateway-infra` (RHOAI separated) | `--infra-namespace` flag |
+| **Default Tenant Namespace** | Where default Tenant CR and subscriptions live | `models-as-a-service` | `--maas-subscription-namespace` flag |
+| **AITenant Namespace** | Where AITenant CRs are created | `ai-tenants` | `--aitenant-namespace` flag |
+| **Gateway Namespace** | Where Gateway API resources live | `openshift-ingress` | `--gateway-namespace` flag |
+
+**Key points:**
+
+- **PostgreSQL location is independent:** The database can be external (AWS RDS, Azure Database, etc.) or in any namespace. Only the `maas-db-config` secret (containing the connection URL) needs to be in the infrastructure namespace.
+- **Default behavior (no separation):** Infrastructure namespace equals controller namespace. This works on all clusters including ODH on ROSA.
+- **Namespace separation:** When enabled, maas-api and related secrets deploy to a dedicated infrastructure namespace while the controller stays in its original namespace. See [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md) for migration details.
+
+---
+
 ## What Is the MaaS Controller?
 
 The **MaaS Controller** is a Kubernetes controller with two main responsibilities:

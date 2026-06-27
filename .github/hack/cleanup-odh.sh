@@ -113,6 +113,12 @@ echo "8a. Cleaning MaaS resources from application namespaces..."
 cleanup_maas_resources "redhat-ods-applications"
 cleanup_maas_resources "opendatahub"
 
+# 8a-infra. Clean MaaS resources from infrastructure namespaces (if namespace separation is enabled)
+# These are the AUTO-derived infrastructure namespaces for each controller namespace
+echo "8a-infra. Cleaning MaaS resources from infrastructure namespaces (if present)..."
+cleanup_maas_resources "redhat-ai-gateway-infra"  # derived from redhat-ods-applications
+cleanup_maas_resources "odh-ai-gateway-infra"     # derived from opendatahub
+
 # 8b. Delete opendatahub namespace
 echo "8b. Deleting opendatahub namespace..."
 kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true

@@ -284,7 +284,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "redhat-ai-gateway-infra", "https://kubernetes.default.svc", logr.Discard())
+		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "redteam", params.TenantIdentifier)

@@ -107,7 +107,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -168,7 +168,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -260,7 +260,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSAuthPolicy: %v", err)
 			}
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -319,7 +319,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -418,7 +418,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -560,7 +560,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -706,7 +706,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			r := &MaaSAuthPolicyReconciler{
 				Client:           c,
 				Scheme:           scheme,
-				MaaSAPINamespace: "maas-system",
+				InfraNamespace:   "maas-system",
 				GatewayName:      "maas-default-gateway",
 				GatewayNamespace: gatewayNS,
 				MetadataCacheTTL: tc.metadataTTL,
@@ -895,7 +895,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1016,7 +1016,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1109,7 +1109,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1216,7 +1216,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 
 func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -1356,7 +1356,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 
 func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -1475,10 +1475,10 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1534,10 +1534,10 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1608,10 +1608,10 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1659,7 +1659,7 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1719,7 +1719,7 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1804,7 +1804,7 @@ func TestMaaSAuthPolicyReconciler_StaleEvent_NoOp(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "gone-policy", Namespace: "default"}}
 
 	res, err := r.Reconcile(context.Background(), req)

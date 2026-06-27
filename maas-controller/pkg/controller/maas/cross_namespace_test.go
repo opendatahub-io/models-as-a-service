@@ -93,7 +93,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -188,7 +188,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -288,7 +288,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -645,7 +645,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "opendatahub",
+		InfraNamespace:   "opendatahub",
 		GatewayName:      "default-gateway",
 		GatewayNamespace: gwNamespace,
 	}

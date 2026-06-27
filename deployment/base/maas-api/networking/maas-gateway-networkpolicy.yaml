@@ -26,14 +26,14 @@ spec:
     - Ingress
   ingress:
     # Allow traffic from Gateway pods in openshift-ingress
-    # Restricts to router component pods only for security
+    # Matches all Istio-managed Gateway API Gateway pods (supports multi-tenant Gateways)
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
           podSelector:
             matchLabels:
-              app.kubernetes.io/component: router
+              gateway.istio.io/managed: istio.io-gateway-controller
       ports:
         - protocol: TCP
           port: 8443
