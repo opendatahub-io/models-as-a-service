@@ -1,0 +1,28 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-loki-proxy
+  annotations:
+    config.kubernetes.io/local-config: "true"
+
+# Default: kuadrant-system (MaaS gateway namespace).
+# Override via overlay for RHOAI (redhat-ods-monitoring) or other environments.
+namespace: kuadrant-system
+
+resources:
+  - proxy-source-configmap.yaml
+  - rbac.yaml
+  - service.yaml
+  - deployment-user.yaml
+
+replacements:
+  - source:
+      kind: ServiceAccount
+      name: loki-query-proxy
+      fieldPath: metadata.namespace
+    targets:
+      - select:
+          kind: ClusterRoleBinding
+        fieldPaths:
+          - subjects.[kind=ServiceAccount].namespace
