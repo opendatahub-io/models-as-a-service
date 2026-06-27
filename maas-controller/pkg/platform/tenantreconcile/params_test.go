@@ -1,7 +1,6 @@
 package tenantreconcile
 
 import (
-	"fmt"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -18,7 +17,6 @@ import (
 func TestBuildPlatformParams(t *testing.T) {
 	t.Run("if values are not set for optional fields, fall back to defaults", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
-		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
 
 		tenant := &maasv1alpha1.Tenant{
@@ -38,14 +36,12 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
 		assert.Equal(t, DefaultMaaSAPIImage, got.MaaSAPIImage)
-		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
 		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
 	})
 
 	t.Run("if values are set for optional fields, they should prevail", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
-		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
 
 		maxExpirationDays := int32(45)
@@ -69,7 +65,6 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "gateway-name", got.GatewayName)
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
 		assert.Equal(t, "quay.io/example/maas-api:test", got.MaaSAPIImage)
-		assert.Equal(t, "quay.io/example/payload:test", got.PayloadProcessingImage)
 		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
@@ -83,7 +78,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		GatewayName:             "custom-gateway",
 		ClusterAudience:         "openshift-custom",
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
-		PayloadProcessingImage:  "quay.io/example/payload:test",
 		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
 	}
@@ -103,10 +97,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		expectedTenantName = "models-as-a-service"
 	}
 	assert.Equal(t, expectedTenantName, requireEnvVarValue(t, maasAPIDeployment, "maas-api", "TENANT_NAME"))
-
-	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadDeployment.GetNamespace())
-	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadDeployment, "spec", "template", "spec", "containers"))
 
 	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
 		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
@@ -132,100 +122,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, found)
 	assert.Contains(t, maasAPIHost, "."+params.AppNamespace+".")
 
-	payloadDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadDestinationRule.GetNamespace())
-	payloadHost, found, err := unstructured.NestedString(payloadDestinationRule.Object, "spec", "host")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Contains(t, payloadHost, "."+params.GatewayNamespace+".")
-
-	payloadBeforeDestinationRule := requireResource(t, resources, GVKDestinationRule, PayloadPreProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeDestinationRule.GetNamespace())
-	preProcessingHost, found, err := unstructured.NestedString(payloadBeforeDestinationRule.Object, "spec", "host")
-	require.NoError(t, err)
-	require.True(t, found)
-	assert.Contains(t, preProcessingHost, "."+params.GatewayNamespace+".")
-
-	payloadService := requireResource(t, resources, GVKService, PayloadProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadService.GetNamespace())
-
-	payloadServiceAccount := requireResource(t, resources, GVKServiceAccount, PayloadProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadServiceAccount.GetNamespace())
-
-	payloadPluginsConfigMap := requireResource(t, resources, GVKConfigMap, PayloadProcessingPluginsConfigMapName)
-	assert.Equal(t, params.GatewayNamespace, payloadPluginsConfigMap.GetNamespace())
-
-	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
-	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotEmpty(t, targetRefs)
-	firstTargetRef, ok := targetRefs[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
-
-	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER,
-	// plus per-route disable patches: configPatches[2] and [3]=MERGE on maas-api-route rules.
-	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, configPatches, 4, "expected four configPatches (INSERT_BEFORE + INSERT_AFTER + 2x MERGE)")
-
-	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
-	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster}
-
-	for i, raw := range configPatches[:2] {
-		cp, ok := raw.(map[string]any)
-		require.True(t, ok, "configPatches[%d] should be a map", i)
-
-		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
-		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
-
-		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-		assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
-
-		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
-	}
-
-	// Verify per-route ext_proc disable on maas-api-route rules 0 and 1.
-	for i := 2; i < 4; i++ {
-		cp, ok := configPatches[i].(map[string]any)
-		require.True(t, ok, "configPatches[%d] should be a map", i)
-
-		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
-		assert.Equal(t, "MERGE", op, "configPatches[%d] operation", i)
-
-		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
-		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2)
-		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
-
-		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
-		require.NoError(t, err, "configPatches[%d] ipp-pre disabled field", i)
-		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
-		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
-	}
-
-	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
-	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeDeployment.GetNamespace())
-	assert.Equal(t, params.PayloadProcessingImage, requireContainerImage(t, payloadBeforeDeployment, "spec", "template", "spec", "containers"))
-
-	payloadBeforeService := requireResource(t, resources, GVKService, PayloadPreProcessingName)
-	assert.Equal(t, params.GatewayNamespace, payloadBeforeService.GetNamespace())
-
-	payloadClusterRoleBinding := requireResource(t, resources, GVKClusterRoleBinding, PayloadProcessingReaderClusterRoleBindingName)
-	subjects, found, err := unstructured.NestedSlice(payloadClusterRoleBinding.Object, "subjects")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.NotEmpty(t, subjects)
-	firstSubject, ok := subjects[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
