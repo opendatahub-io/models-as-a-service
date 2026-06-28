@@ -10,6 +10,11 @@ resources:
   - prometheus-web-tls-ca-configmap.yaml
   - kuadrant-prometheus-datasource.yaml
   - usage-dashboard.yaml
+  - loki-datasource.yaml
+  - usage-admin-loki-dashboard.yaml
+  - usage-user-loki-dashboard.yaml
+  # Loki infrastructure (CA, RBAC, secret, scoped datasource)
+  - ../../loki
 
 labels:
   - pairs:
