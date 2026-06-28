@@ -88,6 +88,11 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
+// NOTE: TenantReconciler actively creates and manages these Kuadrant resources per-tenant:
+// - authpolicies: For per-tenant Authorino authentication setup
+// - ratelimitpolicies/tokenratelimitpolicies: For per-tenant token-based rate limiting
+// - telemetrypolicies: For per-tenant observability and metrics collection
+// The create/patch/delete verbs are required for active resource management, not just status observation.
 // +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;patch;delete
