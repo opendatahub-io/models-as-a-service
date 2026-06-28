@@ -76,7 +76,7 @@ The deployment script creates the following core resources:
   - `gateway-default-auth` (deployed by Tenant reconciler) - Denies unauthenticated traffic
   - `gateway-default-deny` (deployed by Tenant reconciler) - Denies unsubscribed traffic
 - **MaaS API**: Deployment and service in the application namespace (deployed by Tenant reconciler)
-- **Tenant CR**: `default-tenant` in `models-as-a-service` namespace (self-bootstrapped by maas-controller)
+- **Default tenant**: `AITenant/models-as-a-service` in `ai-tenants`, plus `Tenant/default-tenant` in `models-as-a-service` (self-bootstrapped by maas-controller)
 - **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
 
 Check deployment status:
@@ -101,7 +101,8 @@ kubectl get svc -n ${APP_NS} maas-api
 # Check Kuadrant operators
 kubectl get pods -n kuadrant-system
 
-# Check Tenant CR
+# Check default AITenant and Tenant CR
+kubectl get aitenant models-as-a-service -n ai-tenants
 kubectl get tenant default-tenant -n models-as-a-service
 
 # Check RHOAI/KServe

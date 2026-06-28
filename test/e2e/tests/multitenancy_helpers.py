@@ -268,6 +268,25 @@ def wait_for_status_phase(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_status_condition(
+    kind: str,
+    name: str,
+    namespace: str,
+    *,
+    condition_type: str,
+    expected_status: str = "True",
+    timeout: int = 120,
+    interval: int = 5,
+) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for condition in (obj.get("status") or {}).get("conditions") or []:
+            if condition.get("type") == condition_type and condition.get("status") == expected_status:
+                return True
+        return False
+
+    return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
+
+
 def wait_for_deployment_available(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
@@ -402,6 +421,21 @@ def new_named_tenant_case(prefix: str) -> dict[str, str]:
     }
 
 
+def gateway_access_label_key(gateway_name: str) -> str:
+    return f"maas.opendatahub.io/gateway-access-{gateway_name}"
+
+
+def apply_gateway_access_label(namespace: str, gateway_name: str) -> None:
+    ensure_namespace(namespace, labels={gateway_access_label_key(gateway_name): "true"})
+
+
+def remove_gateway_access_label(namespace: str, gateway_name: str) -> None:
+    patch = {"metadata": {"labels": {gateway_access_label_key(gateway_name): None}}}
+    result = _oc_run(["patch", "namespace", namespace, "--type=merge", "-p", json.dumps(patch)])
+    if result.returncode != 0 and not _oc_output_not_found(result):
+        raise RuntimeError(f"failed to remove gateway access label from {namespace}: {result.stderr.strip()}")
+
+
 def admin_subject() -> str:
     whoami = _oc_run(["whoami"])
     if whoami.returncode == 0 and whoami.stdout.strip():
@@ -494,6 +528,30 @@ def apply_tenant_cr(
 
 
 def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
+    gw_options_name = f"{gateway_name}-gw-options"
+    service_ca_secret = f"{gateway_name}-gw-service-tls"
+    gateway_access_label = gateway_access_label_key(gateway_name)
+    apply_gateway_access_label(DEPLOYMENT_NAMESPACE, gateway_name)
+    _apply(
+        {
+            "apiVersion": "v1",
+            "kind": "ConfigMap",
+            "metadata": {
+                "name": gw_options_name,
+                "namespace": GATEWAY_NAMESPACE,
+                "labels": {"e2e.maas.opendatahub.io/fixture": fixture_label},
+            },
+            "data": {
+                "service": (
+                    "metadata:\n"
+                    "  annotations:\n"
+                    f"    service.beta.openshift.io/serving-cert-secret-name: \"{service_ca_secret}\"\n"
+                    "spec:\n"
+                    "  type: ClusterIP\n"
+                )
+            },
+        }
+    )
     _apply(
         {
             "apiVersion": "gateway.networking.k8s.io/v1",
@@ -501,14 +559,161 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
             "metadata": {
                 "name": gateway_name,
                 "namespace": GATEWAY_NAMESPACE,
-                "labels": {"e2e.maas.opendatahub.io/fixture": fixture_label},
+                "labels": {
+                    "app.kubernetes.io/component": "gateway",
+                    "app.kubernetes.io/instance": gateway_name,
+                    "app.kubernetes.io/name": "maas",
+                    "e2e.maas.opendatahub.io/fixture": fixture_label,
+                    "opendatahub.io/managed": "false",
+                },
+                "annotations": {
+                    "opendatahub.io/managed": "false",
+                    "security.opendatahub.io/authorino-tls-bootstrap": "true",
+                },
             },
             "spec": {
                 "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
-                "listeners": [{"name": "http", "port": 80, "protocol": "HTTP"}],
+                "infrastructure": {
+                    "parametersRef": {
+                        "group": "",
+                        "kind": "ConfigMap",
+                        "name": gw_options_name,
+                    }
+                },
+                "listeners": [
+                    {
+                        "name": "https",
+                        "port": 443,
+                        "protocol": "HTTPS",
+                        "allowedRoutes": {
+                            "namespaces": {
+                                "from": "Selector",
+                                "selector": {
+                                    "matchLabels": {
+                                        gateway_access_label: "true",
+                                    }
+                                },
+                            }
+                        },
+                        "tls": {
+                            "mode": "Terminate",
+                            "certificateRefs": [
+                                {"group": "", "kind": "Secret", "name": service_ca_secret}
+                            ],
+                        },
+                    }
+                ],
             },
         }
     )
+
+
+def cluster_domain_from_default_route() -> str:
+    for route_name in ("maas-gateway-route",):
+        route = get_json_or_none("route", route_name, GATEWAY_NAMESPACE)
+        host = ((route or {}).get("spec") or {}).get("host", "")
+        if host and "." in host:
+            return host.split(".", 1)[1]
+    gateway_host = os.environ.get("GATEWAY_HOST", "")
+    if gateway_host and "." in gateway_host:
+        return gateway_host.split(".", 1)[1]
+    routes = list_json("route", GATEWAY_NAMESPACE, labels="app.kubernetes.io/name=maas")
+    for route in routes:
+        host = ((route or {}).get("spec") or {}).get("host", "")
+        if host and "." in host:
+            return host.split(".", 1)[1]
+    raise RuntimeError(f"could not determine cluster apps domain from routes in {GATEWAY_NAMESPACE}")
+
+
+def wait_for_gateway_programmed(gateway_name: str, *, timeout: int = 180) -> None:
+    result = _oc_run(
+        [
+            "wait",
+            "--for=condition=Programmed",
+            f"gateway/{gateway_name}",
+            "-n",
+            GATEWAY_NAMESPACE,
+            f"--timeout={timeout}s",
+        ],
+        timeout=timeout + 30,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"gateway {GATEWAY_NAMESPACE}/{gateway_name} did not become Programmed: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
+
+
+def wait_for_route_admitted(route_name: str, *, timeout: int = 60, interval: int = 3) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for ingress in (obj.get("status") or {}).get("ingress") or []:
+            for condition in ingress.get("conditions") or []:
+                if condition.get("type") == "Admitted" and condition.get("status") == "True":
+                    return True
+        return False
+
+    return wait_for_json("route", route_name, GATEWAY_NAMESPACE, predicate=_predicate, timeout=timeout, interval=interval)
+
+
+def wait_for_httproute_accepted(
+    route_name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+    interval: int = 5,
+) -> dict:
+    def _predicate(obj: dict) -> bool:
+        for parent in (obj.get("status") or {}).get("parents") or []:
+            parent_ref = parent.get("parentRef") or {}
+            parent_namespace = parent_ref.get("namespace") or gateway_namespace
+            if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
+                continue
+            return any(
+                condition.get("type") == "Accepted" and condition.get("status") == "True"
+                for condition in parent.get("conditions") or []
+            )
+        return False
+
+    return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
+
+
+def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> None:
+    service_name = f"{gateway_name}-{AITENANT_GATEWAY_CLASS_NAME}"
+    route_name = f"{gateway_name}-route"
+    hostname = f"{gateway_name}.{cluster_domain_from_default_route()}"
+    wait_for_json("service", service_name, GATEWAY_NAMESPACE, timeout=120)
+
+    route: dict[str, Any] = {
+        "apiVersion": "route.openshift.io/v1",
+        "kind": "Route",
+        "metadata": {
+            "name": route_name,
+            "namespace": GATEWAY_NAMESPACE,
+            "labels": {
+                "app.kubernetes.io/component": "gateway",
+                "app.kubernetes.io/instance": gateway_name,
+                "app.kubernetes.io/name": "maas",
+                "e2e.maas.opendatahub.io/fixture": fixture_label,
+                "gateway.networking.k8s.io/gateway-name": gateway_name,
+            },
+        },
+        "spec": {
+            "host": hostname,
+            "to": {"kind": "Service", "name": service_name, "weight": 100},
+            "port": {"targetPort": 443},
+            "tls": {"termination": "reencrypt", "insecureEdgeTerminationPolicy": "Redirect"},
+        },
+    }
+
+    signing_ca = get_json_or_none("configmap", "signing-cabundle", "openshift-service-ca")
+    ca_bundle = ((signing_ca or {}).get("data") or {}).get("ca-bundle.crt", "")
+    if ca_bundle:
+        route["spec"]["tls"]["destinationCACertificate"] = ca_bundle
+
+    _apply(route)
+    wait_for_route_admitted(route_name)
 
 
 def apply_aitenant(case: dict[str, str]) -> None:
@@ -545,9 +750,18 @@ def aitenant_ready(obj: dict) -> bool:
 def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool = False) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
+        wait_for_gateway_programmed(case["gateway_name"])
+        apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"])
+    if not use_default_gateway:
+        apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
+        wait_for_httproute_accepted(
+            per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
+            DEPLOYMENT_NAMESPACE,
+            case["gateway_name"],
+        )
 
 
 def apply_maas_auth_policy(name: str, namespace: str, model_ref: str = MODEL_REF, model_namespace: str = MODEL_NAMESPACE) -> None:
@@ -599,6 +813,99 @@ def apply_maas_subscription(
             "metadata": {"name": name, "namespace": namespace},
             "spec": spec,
         }
+    )
+
+
+def provision_tenant_model(
+    model_name: str,
+    tenant_namespace: str,
+    gateway_name: str,
+    *,
+    ready_timeout: int = 180,
+) -> None:
+    """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
+
+    Creates LLMInferenceService + MaaSModelRef and waits for backend readiness.
+    The model is not Ready or accessible for inference or /v1/models until
+    MaasAuthPolicy and MaaSSubscription are created in the tenant admin namespace.
+    """
+    from test_helper import _create_llmis, _create_maas_model_ref
+
+    _create_llmis(model_name, tenant_namespace, gateway_name, GATEWAY_NAMESPACE)
+    wait_for_httproute_accepted(
+        f"{model_name}-kserve-route",
+        tenant_namespace,
+        gateway_name,
+        timeout=ready_timeout,
+    )
+    _create_maas_model_ref(model_name, tenant_namespace, model_name)
+    wait_for_status_condition(
+        "maasmodelref",
+        model_name,
+        tenant_namespace,
+        condition_type="RuntimeReady",
+        timeout=ready_timeout,
+    )
+
+
+def make_tenant_model_accessible(
+    model_name: str,
+    tenant_namespace: str,
+    auth_policy_name: str,
+    subscription_name: str,
+    *,
+    token_limit: int = 100,
+    window: str = "1m",
+    priority: Optional[int] = None,
+    trlp_timeout: int = 120,
+) -> None:
+    """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
+
+    Creates MaasAuthPolicy + MaasSubscription in the tenant namespace and waits
+    for controller reconciliation, including TokenRateLimitPolicy readiness on the
+    subscription status (required by maas-api subscription selection).
+    """
+    from test_helper import _wait_for_subscription_trlp_status
+
+    apply_maas_auth_policy(
+        auth_policy_name,
+        tenant_namespace,
+        model_ref=model_name,
+        model_namespace=tenant_namespace,
+    )
+    wait_for_status_phase(
+        "maasauthpolicy",
+        auth_policy_name,
+        tenant_namespace,
+        expected_phase="Active",
+    )
+    apply_maas_subscription(
+        subscription_name,
+        tenant_namespace,
+        model_ref=model_name,
+        model_namespace=tenant_namespace,
+        token_limit=token_limit,
+        window=window,
+        priority=priority,
+    )
+    wait_for_status_phase(
+        "maassubscription",
+        subscription_name,
+        tenant_namespace,
+        expected_phase=("Active", "Degraded"),
+    )
+    _wait_for_subscription_trlp_status(
+        subscription_name,
+        expected_ready=True,
+        namespace=tenant_namespace,
+        timeout=trlp_timeout,
+    )
+    wait_for_status_phase(
+        "maasmodelref",
+        model_name,
+        tenant_namespace,
+        expected_phase="Ready",
+        timeout=180,
     )
 
 
@@ -716,7 +1023,13 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
     delete_namespace_best_effort(case["tenant_ns"])
     if delete_gateway and case["gateway_name"] != DEFAULT_GATEWAY_NAME:
+        delete_best_effort("route", f"{case['gateway_name']}-route", GATEWAY_NAMESPACE)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+        delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
+        try:
+            remove_gateway_access_label(DEPLOYMENT_NAMESPACE, case["gateway_name"])
+        except Exception as exc:  # noqa: BLE001
+            print(f"[cleanup] failed to remove gateway access label for {case['gateway_name']}: {exc}")
 
 
 def legacy_default_namespace() -> str:
