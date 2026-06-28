@@ -9,7 +9,7 @@ import (
 )
 
 // buildService creates a Kubernetes ExternalName Service that maps an in-cluster
-// DNS name to the external FQDN. Uses the ExternalModel name directly.
+// DNS name to the external FQDN.
 func buildService(endpoint, name, namespace string, port int32, labels map[string]string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -87,19 +87,19 @@ func buildDestinationRule(endpoint, name, namespace string, labels map[string]st
 // Path prefix is /<namespace>/<name> for namespace isolation.
 // Only a Host header filter is set (required for TLS SNI).
 // IPP ext-proc handles path rewriting and provider-specific headers.
-func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
+func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
 	gwNamespace := gatewayapiv1.Namespace(gatewayNamespace)
 	pathType := gatewayapiv1.PathMatchPathPrefix
-	pathPrefix := "/" + namespace + "/" + name
+	pathPrefix := "/" + namespace + "/" + modelName
 	headerType := gatewayapiv1.HeaderMatchExact
-	gwPort := gatewayapiv1.PortNumber(port)
+	gwPort := port
 	timeout := gatewayapiv1.Duration("300s")
 
 	backendRefs := []gatewayapiv1.HTTPBackendRef{
 		{
 			BackendRef: gatewayapiv1.BackendRef{
 				BackendObjectReference: gatewayapiv1.BackendObjectReference{
-					Name: gatewayapiv1.ObjectName(name),
+					Name: gatewayapiv1.ObjectName(serviceName),
 					Port: &gwPort,
 				},
 			},
@@ -124,7 +124,7 @@ func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, g
 
 	return &gatewayapiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      routeName,
 			Namespace: namespace,
 			Labels:    labels,
 		},
