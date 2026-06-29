@@ -36,7 +36,6 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1903,12 +1902,13 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 // The OwnerReference without blockOwnerDeletion still enables Kubernetes garbage
 // collection (background deletion) of the AuthPolicy when the Gateway is deleted.
 func setGatewayOwnerReference(gateway *gatewayapiv1.Gateway, dependent metav1.Object) {
+	isController := true
 	ref := metav1.OwnerReference{
 		APIVersion: gatewayapiv1.GroupVersion.String(),
 		Kind:       "Gateway",
 		Name:       gateway.Name,
 		UID:        gateway.UID,
-		Controller: ptr.To(true),
+		Controller: &isController,
 	}
 	owners := dependent.GetOwnerReferences()
 	for i, existing := range owners {
