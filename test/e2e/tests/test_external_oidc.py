@@ -189,13 +189,25 @@ def _wait_for_api_key_revocation(
     """Poll until API key revocation is enforced by the gateway."""
     start = time.time()
     while time.time() - start < timeout:
-        response = requests.get(
-            f"{maas_api_base_url}/v1/models",
-            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        if response.status_code in (401, 403, 500):
+        try:
+            response = requests.get(
+                f"{maas_api_base_url}/v1/models",
+                headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
+        except requests.RequestException:
+            time.sleep(poll_interval)
+            continue
+
+        if response.status_code in (401, 403):
+            log.info("Revocation enforced after %.1fs (status=%d)", time.time() - start, response.status_code)
+            return
+        if (
+            response.status_code == 500
+            and "AUTH_FAILURE" in response.text
+            and "valid:false" in response.text
+        ):
             log.info("Revocation enforced after %.1fs (status=%d)", time.time() - start, response.status_code)
             return
         time.sleep(poll_interval)
