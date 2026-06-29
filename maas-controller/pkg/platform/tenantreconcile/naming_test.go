@@ -235,7 +235,11 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "", params.TenantIdentifier)
@@ -260,7 +264,11 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "", params.TenantIdentifier)
@@ -284,7 +292,11 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			},
 		}
 
-		params, err := BuildPlatformParams(tenant, "redhat-ai-gateway-infra", "https://kubernetes.default.svc", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "redteam-gateway",
+		}}
+		params, err := BuildPlatformParams(tenant, platformContext, "redhat-ai-gateway-infra", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "redteam", params.TenantIdentifier)
