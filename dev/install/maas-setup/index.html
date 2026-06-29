@@ -3299,7 +3299,7 @@ see <a href="#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags
 </ul>
 <h3 id="tenant-cr">Tenant CR</h3>
 <p>With <code>modelsAsService</code> <strong>Managed</strong>, the <a href="https://github.com/opendatahub-io/opendatahub-operator">Open Data Hub operator</a> deploys <code>maas-controller</code>, which self-bootstraps <code>AITenant/models-as-a-service</code> in <code>ai-tenants</code>. The AITenant reconciler creates or adopts a <strong>namespace-scoped</strong> <code>Tenant</code> object. The resource name <strong>must</strong> be <code>default-tenant</code> (enforced via CEL validation). The <code>Tenant</code> CR lives in the <code>models-as-a-service</code> namespace (same namespace as <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code>). The authoritative API definition is in the maas-controller repo: <a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go"><code>tenant_types.go</code></a>.</p>
-<p><strong>Nothing in <code>spec</code> is required for a default install.</strong> If you omit <code>spec</code>, the controller uses the same defaults as this guide: Gateway <strong><code>openshift-ingress</code> / <code>maas-default-gateway</code></strong>, and telemetry metric toggles use the defaults described below. During bootstrap, existing <code>Tenant/default-tenant.spec.externalOIDC</code> settings are automatically migrated to <code>AITenant/models-as-a-service.spec.oidc</code>. Going forward, set OIDC on <code>AITenant/models-as-a-service.spec.oidc</code>; the controller mirrors it into <code>Tenant/default-tenant.spec.externalOIDC</code> until the Tenant API is replaced.</p>
+<p><strong>Nothing in <code>spec</code> is required for a default install.</strong> If you omit <code>spec</code>, the controller uses the same defaults as this guide: Gateway <strong><code>openshift-ingress</code> / <code>maas-default-gateway</code></strong>, and telemetry metric toggles use the defaults described below. During bootstrap, existing <code>Tenant/default-tenant.spec.externalOIDC</code> settings are automatically migrated to <code>AITenant/models-as-a-service.spec.oidc</code>. Going forward, set OIDC on <code>AITenant/models-as-a-service.spec.oidc</code>. For AITenant-managed tenants, Gateway and OIDC platform context comes from <code>AITenant</code>; existing <code>Tenant.spec.gatewayRef</code> and <code>Tenant.spec.externalOIDC</code> values are preserved for compatibility but ignored.</p>
 <table>
 <thead>
 <tr>
@@ -3310,11 +3310,11 @@ see <a href="#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags
 <tbody>
 <tr>
 <td><code>spec.gatewayRef.namespace</code></td>
-<td>Namespace of your Gateway API <code>Gateway</code> (default <code>openshift-ingress</code>).</td>
+<td>Legacy/unmanaged Tenant Gateway namespace. Ignored for AITenant-managed tenants.</td>
 </tr>
 <tr>
 <td><code>spec.gatewayRef.name</code></td>
-<td>Name of that <code>Gateway</code> (default <code>maas-default-gateway</code>). Set these if your MaaS hostname is exposed through a different Gateway than the default.</td>
+<td>Legacy/unmanaged Tenant Gateway name. For AITenant-managed tenants, use <code>AITenant.spec.gateway.name</code>.</td>
 </tr>
 <tr>
 <td><code>spec.apiKeys.maxExpirationDays</code></td>
@@ -3322,11 +3322,11 @@ see <a href="#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags
 </tr>
 <tr>
 <td><code>spec.externalOIDC.issuerUrl</code></td>
-<td>OIDC issuer URL for external identity provider (optional; enables OIDC on the maas-api AuthPolicy).</td>
+<td>Legacy/unmanaged Tenant OIDC issuer URL. For AITenant-managed tenants, use <code>AITenant.spec.oidc.issuerUrl</code>.</td>
 </tr>
 <tr>
 <td><code>spec.externalOIDC.clientId</code></td>
-<td>OIDC client ID (required when <code>issuerUrl</code> is set).</td>
+<td>Legacy/unmanaged Tenant OIDC client ID. For AITenant-managed tenants, use <code>AITenant.spec.oidc.clientId</code>.</td>
 </tr>
 <tr>
 <td><code>spec.telemetry.enabled</code></td>
@@ -3357,16 +3357,13 @@ see <a href="#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags
 <a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-tenant</span>
 <a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
 <a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span><span class="nt">gatewayRef</span><span class="p">:</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-ingress</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-default-gateway</span>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">  </span><span class="nt">apiKeys</span><span class="p">:</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span><span class="nt">maxExpirationDays</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">  </span><span class="nt">telemetry</span><span class="p">:</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
-<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
-<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="w">  </span><span class="nt">apiKeys</span><span class="p">:</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="w">    </span><span class="nt">maxExpirationDays</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">90</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="w">  </span><span class="nt">telemetry</span><span class="p">:</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 </code></pre></div>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>tenant.yaml
 <a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>-o<span class="w"> </span>yaml
@@ -3513,7 +3510,7 @@ defaults if it is deleted, but does not overwrite user changes to existing field
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 25, 2026 12:25:42 UTC">June 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 29, 2026 18:40:07 UTC">June 29, 2026</span>
   </span>
 
     

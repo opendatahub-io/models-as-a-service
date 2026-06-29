@@ -2849,6 +2849,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ownership-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership Semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#aitenantgatewayref" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3066,6 +3077,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#ownership-semantics" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ownership Semantics
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#aitenantgatewayref" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3175,7 +3197,7 @@
 
 
 <h1 id="aitenant">AITenant</h1>
-<p>Bootstraps a MaaS tenant from an infrastructure namespace. <code>AITenant</code> creates or labels the derived tenant namespace, validates an existing tenant Gateway, creates the temporary <code>Tenant/default-tenant</code> MaaS config object, and grants tenant-admin RBAC.</p>
+<p>Bootstraps a MaaS tenant from an infrastructure namespace. <code>AITenant</code> creates or labels the derived tenant namespace, validates an existing tenant Gateway, owns tenant platform context such as Gateway and OIDC configuration, creates the temporary <code>Tenant/default-tenant</code> MaaS config object, and grants tenant-admin RBAC.</p>
 <p><code>AITenant</code> resources must be created in the controller-configured infrastructure namespace, which defaults to <code>ai-tenants</code>. The controller creates this namespace if it does not already exist. Set the controller <code>--aitenant-namespace</code> flag to use a different infrastructure namespace.</p>
 <p>Creates outside the configured infrastructure namespace are rejected by the validating admission webhook before the object is persisted.</p>
 <p>The controller automatically creates <code>AITenant/models-as-a-service</code> for the default tenant once per <code>Config/default</code> lifecycle. That AITenant targets the existing default Gateway and creates or adopts <code>Tenant/default-tenant</code> in the MaaS subscription namespace. For migration compatibility, the default tenant keeps legacy resource names such as <code>maas-api</code>, <code>maas-api-route</code>, and <code>maas-api-auth-policy</code>; non-default tenants use suffixed names. If an administrator deletes the default AITenant after bootstrap, the controller does not recreate it until the <code>Config/default</code> anchor is recreated.</p>
@@ -3202,7 +3224,7 @@
 <td>oidc</td>
 <td>TenantExternalOIDCConfig</td>
 <td>No</td>
-<td>OIDC settings mirrored into the temporary <code>Tenant/default-tenant</code> config object while the MaaS config CR rename is pending.</td>
+<td>OIDC settings for this tenant's AI Gateway platform context. AITenant-managed tenants do not mirror this into <code>Tenant.spec.externalOIDC</code>.</td>
 </tr>
 <tr>
 <td>rbac</td>
@@ -3218,7 +3240,16 @@
 <p>The controller does not delete the tenant namespace when an <code>AITenant</code> is deleted. During deletion, it removes the labels and annotations it added to that namespace. Gateway resources are never deleted or modified by <code>AITenant</code> reconciliation.</p>
 <hr />
 <h2 id="namespace-discovery">Namespace Discovery</h2>
-<p><code>AITenant</code> labels tenant namespaces with <code>ai-gateway.opendatahub.io/tenant=&lt;aitenant-name&gt;</code> and <code>maas.opendatahub.io/managed-by-aitenant=true</code>. When <code>maas-controller</code> runs with <code>--enable-tenant-namespace-discovery=true</code>, <code>MaaSAuthPolicy</code> and <code>MaaSSubscription</code> resources in those namespaces are reconciled against the namespace's <code>Tenant/default-tenant.spec.gatewayRef</code>.</p>
+<p><code>AITenant</code> labels tenant namespaces with <code>ai-gateway.opendatahub.io/tenant=&lt;aitenant-name&gt;</code> and <code>maas.opendatahub.io/managed-by-aitenant=true</code>. When <code>maas-controller</code> runs with <code>--enable-tenant-namespace-discovery=true</code>, <code>MaaSAuthPolicy</code> and <code>MaaSSubscription</code> resources in those namespaces are reconciled against the owning <code>AITenant</code> platform context (<code>status.gatewayRef</code> and <code>spec.oidc</code>), not the bridge <code>Tenant.spec.gatewayRef</code> or <code>Tenant.spec.externalOIDC</code> fields.</p>
+<hr />
+<h2 id="ownership-semantics">Ownership Semantics</h2>
+<p><code>AITenant</code> owns derived platform context for AITenant-managed tenants:</p>
+<ul>
+<li>Gateway context: <code>spec.gateway</code> intent and resolved <code>status.gatewayRef</code></li>
+<li>External OIDC context: <code>spec.oidc</code></li>
+<li>Tenant namespace metadata and tenant-admin RBAC</li>
+</ul>
+<p>The temporary <code>Tenant/default-tenant</code> object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. For backward compatibility, old <code>Tenant.spec.gatewayRef</code> and <code>Tenant.spec.externalOIDC</code> values may remain on existing objects, but AITenant-managed reconciliation ignores them.</p>
 <hr />
 <h2 id="aitenantgatewayref">AITenantGatewayRef</h2>
 <table>
@@ -3374,7 +3405,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 25, 2026 12:25:42 UTC">June 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 29, 2026 18:40:07 UTC">June 29, 2026</span>
   </span>
 
     

@@ -4213,45 +4213,40 @@
 <ol>
 <li><strong>Old CR cleanup</strong>: The operator's garbage collection removes the old <code>ModelsAsService</code> CR (the operator no longer creates it).</li>
 <li><strong>maas-controller deployment</strong>: The operator deploys <code>maas-controller</code> (CRDs, RBAC, Deployment) when <code>modelsAsService: Managed</code>.</li>
-<li><strong>Default tenant creation</strong>: <code>maas-controller</code> automatically creates <code>AITenant/models-as-a-service</code>; that AITenant creates or adopts <code>Tenant/default-tenant</code> with default values.</li>
+<li><strong>Default tenant creation</strong>: <code>maas-controller</code> automatically creates <code>AITenant/models-as-a-service</code>; that AITenant creates or adopts <code>Tenant/default-tenant</code>.</li>
 <li><strong>Platform reconciliation</strong>: <code>maas-controller</code> deploys maas-api, gateway policies, telemetry, and all other platform resources via the default Tenant CR.</li>
 </ol>
 <h3 id="manual-steps-re-applying-custom-configuration">Manual Steps: Re-applying Custom Configuration</h3>
-<p>If you had customized the <code>ModelsAsService</code> CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), those values are <strong>not</strong> migrated automatically to the new Tenant CR. The Tenant is created with defaults.</p>
+<p>If you had customized the <code>ModelsAsService</code> CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), re-apply those values to the new ownership locations. Gateway and external OIDC are AITenant-owned platform context; API key and telemetry settings are Tenant-owned MaaS config.</p>
 <p><strong>If all fields were at defaults, no manual steps are needed.</strong></p>
-<p>The following table maps old <code>ModelsAsService</code> spec fields to new <code>Tenant</code> spec fields:</p>
+<p>The following table maps old <code>ModelsAsService</code> spec fields to new fields:</p>
 <table>
 <thead>
 <tr>
 <th>Old ModelsAsService field</th>
-<th>New Tenant field</th>
+<th>New field</th>
 <th>Default value</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><code>spec.gatewayRef.namespace</code></td>
-<td><code>spec.gatewayRef.namespace</code></td>
-<td><code>openshift-ingress</code></td>
-</tr>
-<tr>
 <td><code>spec.gatewayRef.name</code></td>
-<td><code>spec.gatewayRef.name</code></td>
+<td><code>AITenant/models-as-a-service.spec.gateway.name</code></td>
 <td><code>maas-default-gateway</code></td>
 </tr>
 <tr>
 <td><code>spec.externalOIDC.issuerUrl</code></td>
-<td><code>spec.externalOIDC.issuerUrl</code></td>
+<td><code>AITenant/models-as-a-service.spec.oidc.issuerUrl</code></td>
 <td>(not set)</td>
 </tr>
 <tr>
 <td><code>spec.externalOIDC.clientId</code></td>
-<td><code>spec.externalOIDC.clientId</code></td>
+<td><code>AITenant/models-as-a-service.spec.oidc.clientId</code></td>
 <td>(not set)</td>
 </tr>
 <tr>
 <td><code>spec.externalOIDC.ttl</code></td>
-<td><code>spec.externalOIDC.ttl</code></td>
+<td><code>AITenant/models-as-a-service.spec.oidc.ttl</code></td>
 <td><code>300</code></td>
 </tr>
 <tr>
@@ -4286,20 +4281,28 @@
 </tr>
 </tbody>
 </table>
-<p>To re-apply custom values, patch the Tenant CR after the upgrade:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Example: Re-apply external OIDC and API key configuration</span>
-<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span><span class="se">\</span>
+<p>Gateway namespace is controller configuration (<code>--gateway-namespace</code>), not an AITenant spec field. If you previously used a non-default Gateway namespace, configure the controller with that namespace.</p>
+<p>To re-apply custom values, patch the AITenant and Tenant CRs after the upgrade:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-12-1" name="__codelineno-12-1" href="#__codelineno-12-1"></a><span class="c1"># Example: Re-apply external OIDC platform context</span>
+<a id="__codelineno-12-2" name="__codelineno-12-2" href="#__codelineno-12-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>aitenant<span class="w"> </span>models-as-a-service<span class="w"> </span>-n<span class="w"> </span>ai-tenants<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-12-3" name="__codelineno-12-3" href="#__codelineno-12-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{</span>
 <a id="__codelineno-12-4" name="__codelineno-12-4" href="#__codelineno-12-4"></a><span class="s1">    &quot;spec&quot;: {</span>
-<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="s1">      &quot;externalOIDC&quot;: {</span>
+<a id="__codelineno-12-5" name="__codelineno-12-5" href="#__codelineno-12-5"></a><span class="s1">      &quot;oidc&quot;: {</span>
 <a id="__codelineno-12-6" name="__codelineno-12-6" href="#__codelineno-12-6"></a><span class="s1">        &quot;issuerUrl&quot;: &quot;https://keycloak.example.com/realms/maas&quot;,</span>
 <a id="__codelineno-12-7" name="__codelineno-12-7" href="#__codelineno-12-7"></a><span class="s1">        &quot;clientId&quot;: &quot;maas-client&quot;</span>
-<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="s1">      },</span>
-<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="s1">      &quot;apiKeys&quot;: {</span>
-<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="s1">        &quot;maxExpirationDays&quot;: 90</span>
-<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a><span class="s1">      }</span>
-<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="s1">    }</span>
-<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a><span class="s1">  }&#39;</span>
+<a id="__codelineno-12-8" name="__codelineno-12-8" href="#__codelineno-12-8"></a><span class="s1">      }</span>
+<a id="__codelineno-12-9" name="__codelineno-12-9" href="#__codelineno-12-9"></a><span class="s1">    }</span>
+<a id="__codelineno-12-10" name="__codelineno-12-10" href="#__codelineno-12-10"></a><span class="s1">  }&#39;</span>
+<a id="__codelineno-12-11" name="__codelineno-12-11" href="#__codelineno-12-11"></a>
+<a id="__codelineno-12-12" name="__codelineno-12-12" href="#__codelineno-12-12"></a><span class="c1"># Example: Re-apply API key configuration</span>
+<a id="__codelineno-12-13" name="__codelineno-12-13" href="#__codelineno-12-13"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>tenant<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="w"> </span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-12-14" name="__codelineno-12-14" href="#__codelineno-12-14"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{</span>
+<a id="__codelineno-12-15" name="__codelineno-12-15" href="#__codelineno-12-15"></a><span class="s1">    &quot;spec&quot;: {</span>
+<a id="__codelineno-12-16" name="__codelineno-12-16" href="#__codelineno-12-16"></a><span class="s1">      &quot;apiKeys&quot;: {</span>
+<a id="__codelineno-12-17" name="__codelineno-12-17" href="#__codelineno-12-17"></a><span class="s1">        &quot;maxExpirationDays&quot;: 90</span>
+<a id="__codelineno-12-18" name="__codelineno-12-18" href="#__codelineno-12-18"></a><span class="s1">      }</span>
+<a id="__codelineno-12-19" name="__codelineno-12-19" href="#__codelineno-12-19"></a><span class="s1">    }</span>
+<a id="__codelineno-12-20" name="__codelineno-12-20" href="#__codelineno-12-20"></a><span class="s1">  }&#39;</span>
 </code></pre></div>
 <p><strong>Tip:</strong> If you backed up the old <code>ModelsAsService</code> CR before the upgrade, you can extract the spec values from the backup:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># If you captured the old CR before upgrading:</span>
@@ -4656,7 +4659,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 25, 2026 12:25:42 UTC">June 25, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="June 29, 2026 18:40:07 UTC">June 29, 2026</span>
   </span>
 
     
