@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -159,6 +160,25 @@ func TestIsAPIUnavailable(t *testing.T) {
 		{
 			"not found",
 			apierrors.NewNotFound(schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"}, "cluster"),
+			true,
+		},
+		{
+			"no resource match",
+			&apimeta.NoResourceMatchError{
+				PartialResource: schema.GroupVersionResource{
+					Group:    "config.openshift.io",
+					Version:  "v1",
+					Resource: "apiservers",
+				},
+			},
+			true,
+		},
+		{
+			"no kind match",
+			&apimeta.NoKindMatchError{
+				GroupKind:        schema.GroupKind{Group: "config.openshift.io", Kind: "APIServer"},
+				SearchedVersions: []string{"v1"},
+			},
 			true,
 		},
 		{

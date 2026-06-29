@@ -8,6 +8,7 @@ import (
 	confv1 "github.com/openshift/api/config/v1"
 	configclientset "github.com/openshift/client-go/config/clientset/versioned"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/rest"
 )
@@ -77,5 +78,5 @@ func IsAPIUnavailable(err error) bool {
 	if err == nil {
 		return false
 	}
-	return apierrors.IsNotFound(err)
+	return apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err)
 }
