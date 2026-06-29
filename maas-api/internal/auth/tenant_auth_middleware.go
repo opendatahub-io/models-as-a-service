@@ -5,8 +5,8 @@ import (
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	authenticationv1 "k8s.io/api/authentication/v1"
-	authv1 "k8s.io/api/authorization/v1"
+	authenticationv1 "k8s.io/api/authentication/v1" //nolint:importas // Must use distinct alias from authorization/v1
+	authorizationv1 "k8s.io/api/authorization/v1"  //nolint:importas // Must use distinct alias from authentication/v1
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -15,6 +15,8 @@ import (
 
 // TenantAuthMiddleware validates bearer tokens via TokenReview and checks tenant access via SubjectAccessReview.
 // It verifies that the caller is a member of the system:authenticated group, which includes all authenticated users.
+//
+//nolint:contextcheck // gin middleware extracts context from c.Request.Context() in handler
 func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
@@ -71,11 +73,11 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 		// This ensures the user has basic authenticated access to the cluster.
 		// We check this via SAR by verifying the user can perform a minimal operation
 		// that system:authenticated users can do (selfsubjectaccessreviews).
-		sar := &authv1.SubjectAccessReview{
-			Spec: authv1.SubjectAccessReviewSpec{
+		sar := &authorizationv1.SubjectAccessReview{
+			Spec: authorizationv1.SubjectAccessReviewSpec{
 				User:   username,
 				Groups: groups,
-				ResourceAttributes: &authv1.ResourceAttributes{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{
 					Group:    "authorization.k8s.io",
 					Resource: "selfsubjectaccessreviews",
 					Verb:     "create",
