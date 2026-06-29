@@ -231,10 +231,10 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
 
-	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview
+	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
 	v1Routes.GET("/tenant",
-		auth.TenantAuthMiddleware(log, cluster.ClientSet, cfg.AITenantNamespace, cfg.AITenantName),
+		auth.TenantAuthMiddleware(log, cluster.ClientSet),
 		tenantHandler.GetTenantInfo)
 
 	// Internal routes (no auth required - called by Authorino / CronJob)

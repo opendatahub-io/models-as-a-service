@@ -14,8 +14,8 @@ import (
 )
 
 // TenantAuthMiddleware validates bearer tokens via TokenReview and checks tenant access via SubjectAccessReview.
-// It verifies that the caller has permission to GET the AITenant CR for this maas-api instance.
-func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface, aitenantNamespace, aitenantName string) gin.HandlerFunc {
+// It verifies that the caller is a member of the system:authenticated group, which includes all authenticated users.
+func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Step 1: Extract and validate bearer token
 		authHeader := c.GetHeader("Authorization")
@@ -65,18 +65,18 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface, a
 
 		log.Debug("Token authenticated", "username", username, "groups", groups)
 
-		// Step 3: Check tenant access via SubjectAccessReview
-		// Verify caller has GET permission on the AITenant CR
+		// Step 3: Verify user is in system:authenticated group via SubjectAccessReview
+		// This ensures the user has basic authenticated access to the cluster.
+		// We check this via SAR by verifying the user can perform a minimal operation
+		// that system:authenticated users can do (selfsubjectaccessreviews).
 		sar := &authorizationv1.SubjectAccessReview{
 			Spec: authorizationv1.SubjectAccessReviewSpec{
 				User:   username,
 				Groups: groups,
 				ResourceAttributes: &authorizationv1.ResourceAttributes{
-					Namespace: aitenantNamespace,
-					Group:     "maas.opendatahub.io",
-					Resource:  "aitenants",
-					Verb:      "get",
-					Name:      aitenantName,
+					Group:    "authorization.k8s.io",
+					Resource: "selfsubjectaccessreviews",
+					Verb:     "create",
 				},
 			},
 		}
@@ -89,31 +89,27 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface, a
 			log.Error("SubjectAccessReview failed", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{
 				"error":   "Authorization check failed",
-				"details": "Unable to verify tenant access",
+				"details": "Unable to verify authenticated user status",
 			})
 			c.Abort()
 			return
 		}
 
 		if !sarResult.Status.Allowed {
-			log.Debug("Access denied to AITenant",
+			log.Debug("Access denied - not an authenticated user",
 				"username", username,
-				"aitenantName", aitenantName,
-				"aitenantNamespace", aitenantNamespace,
 				"reason", sarResult.Status.Reason)
 			c.JSON(http.StatusForbidden, gin.H{
 				"error":   "Insufficient permissions",
-				"details": "User does not have permission to access this tenant",
+				"details": "User is not authorized to access cluster resources",
 			})
 			c.Abort()
 			return
 		}
 
-		log.Debug("Tenant access granted",
-			"username", username,
-			"aitenantName", aitenantName)
+		log.Debug("Authenticated user access granted", "username", username)
 
-		// Token valid and user has tenant access - proceed
+		// Token valid and user is authenticated - proceed
 		c.Next()
 	}
 }
