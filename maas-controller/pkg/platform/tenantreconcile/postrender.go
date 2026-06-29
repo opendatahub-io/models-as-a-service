@@ -222,10 +222,12 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
 	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 ? ` +
+		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
-		`'["' + auth.identity.user.groups.join('","') + '"]'`
+		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
+		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
+		`'["system:authenticated"]')`
 	if err := unstructured.SetNestedField(resource.Object, map[string]any{
 		"expression": groupsExpr,
 	}, "spec", "rules", "response", "success", "headers", "X-MaaS-Group-OC", "plain"); err != nil {

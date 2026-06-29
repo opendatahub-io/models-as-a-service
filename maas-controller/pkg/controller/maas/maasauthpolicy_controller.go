@@ -290,16 +290,19 @@ const (
 		`? auth.metadata.apiKeyValidation.groups ` +
 		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
 
+	safeGroupNamePattern = `^[A-Za-z0-9:._/-]+$`
+	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
+
 	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
 	// identities. OIDC tokens may omit or provide an empty groups claim, but API
 	// key minting still requires at least system:authenticated to match the
 	// default subscription.
 	celTokenGroupsHeaderJSON = `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 ? ` +
+		`(size(auth.identity.groups) > 0 && ` + celOIDCGroupsSafe + ` ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
 		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
-		`'["' + auth.identity.user.groups.join('","') + '"]' : ` +
+		`'["system:authenticated","' + auth.identity.user.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]')`
 
 	celSubscription = `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
@@ -764,6 +767,87 @@ allow {
 }
 `, modelAccessJSON)
 
+	authorizationRules := map[string]any{
+		"tenant-gateway-isolation": tenantGatewayIsolationRule,
+		"auth-valid": map[string]any{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": `allow {
+  object.get(input.auth.metadata, "apiKeyValidation", {})
+  input.auth.metadata.apiKeyValidation.valid == true
+}
+allow {
+  not input.auth.metadata.apiKeyValidation
+}`,
+			},
+			"cache": map[string]any{
+				"key": map[string]any{
+					"selector": authValidCacheKey,
+				},
+				"ttl": r.authzCacheTTL(),
+			},
+		},
+		"subscription-valid": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celModelIdentityAvailable,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": `allow {
+	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
+	object.get(input.auth.metadata["subscription-info"], "error", "") == ""
+	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
+	any([phase == "Active", phase == "Degraded"])
+	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
+}`,
+			},
+			"cache": map[string]any{
+				"key": map[string]any{
+					"selector": subscriptionGatewayCacheKeySelector(),
+				},
+				"ttl": r.authzCacheTTL(),
+			},
+		},
+		"require-group-membership": map[string]any{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": requireGroupMembershipRego,
+			},
+			"cache": map[string]any{
+				"key": map[string]any{
+					"selector": gatewayAuthzCacheKeySelector(),
+				},
+				"ttl": r.authzCacheTTL(),
+			},
+		},
+	}
+	if oidc != nil {
+		authorizationRules["oidc-groups-safe"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey + ` && has(auth.identity.groups) && size(auth.identity.groups) > 0`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": `unsafe_group[g] {
+	g := input.auth.identity.groups[_]
+	not regex.match("` + safeGroupNamePattern + `", g)
+}
+
+allow {
+	count(unsafe_group) == 0
+}`,
+			},
+		}
+	}
+
 	defaultsRules := map[string]any{
 		"metadata": map[string]any{
 			"apiKeyValidation": map[string]any{
@@ -814,65 +898,7 @@ allow {
 			},
 		},
 		"authentication": authenticationRules,
-		"authorization": map[string]any{
-			"tenant-gateway-isolation": tenantGatewayIsolationRule,
-			"auth-valid": map[string]any{
-				"metrics":  false,
-				"priority": int64(0),
-				"opa": map[string]any{
-					"rego": `allow {
-  object.get(input.auth.metadata, "apiKeyValidation", {})
-  input.auth.metadata.apiKeyValidation.valid == true
-}
-allow {
-  not input.auth.metadata.apiKeyValidation
-}`,
-				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": authValidCacheKey,
-					},
-					"ttl": r.authzCacheTTL(),
-				},
-			},
-			"subscription-valid": map[string]any{
-				"when": []any{
-					map[string]any{
-						"predicate": celModelIdentityAvailable,
-					},
-				},
-				"metrics":  false,
-				"priority": int64(0),
-				"opa": map[string]any{
-					"rego": `allow {
-	object.get(input.auth.metadata["subscription-info"], "name", "") != ""
-	object.get(input.auth.metadata["subscription-info"], "error", "") == ""
-	phase := object.get(input.auth.metadata["subscription-info"], "phase", "")
-	any([phase == "Active", phase == "Degraded"])
-	object.get(input.auth.metadata["subscription-info"], "deletionTimestamp", "") == ""
-}`,
-				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": subscriptionGatewayCacheKeySelector(),
-					},
-					"ttl": r.authzCacheTTL(),
-				},
-			},
-			"require-group-membership": map[string]any{
-				"metrics":  false,
-				"priority": int64(0),
-				"opa": map[string]any{
-					"rego": requireGroupMembershipRego,
-				},
-				"cache": map[string]any{
-					"key": map[string]any{
-						"selector": gatewayAuthzCacheKeySelector(),
-					},
-					"ttl": r.authzCacheTTL(),
-				},
-			},
-		},
+		"authorization":  authorizationRules,
 		"response": map[string]any{
 			"success": map[string]any{
 				"headers": map[string]any{

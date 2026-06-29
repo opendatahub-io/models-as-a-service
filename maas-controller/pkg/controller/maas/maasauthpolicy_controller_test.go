@@ -1250,6 +1250,13 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		if _, exists := auth["api-keys-x-api-key"]; exists {
 			t.Error("api-keys-x-api-key should NOT be present when xAPIKeyEnabled is false")
 		}
+		authz, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authorization")
+		if err != nil || !found {
+			t.Fatalf("authorization block missing: found=%v err=%v", found, err)
+		}
+		if _, exists := authz["oidc-groups-safe"]; exists {
+			t.Error("oidc-groups-safe should NOT be present when OIDC config is nil")
+		}
 	})
 
 	t.Run("with OIDC", func(t *testing.T) {
@@ -1273,6 +1280,25 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		}
 		if issuer != oidc.IssuerURL {
 			t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+		}
+		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("oidc-groups-safe rego missing: found=%v err=%v", found, err)
+		}
+		if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
+			t.Errorf("oidc-groups-safe rego should reject unsafe group names, got: %s", rego)
+		}
+		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "when")
+		if err != nil || !found || len(when) == 0 {
+			t.Fatalf("oidc-groups-safe when condition missing: found=%v err=%v", found, err)
+		}
+		firstWhen, ok := when[0].(map[string]any)
+		if !ok {
+			t.Fatalf("oidc-groups-safe when[0] is not a map: %T", when[0])
+		}
+		predicate, _ := firstWhen["predicate"].(string)
+		if !contains(predicate, "has(auth.identity.groups)") {
+			t.Errorf("oidc-groups-safe should only run for OIDC group identities, got: %s", predicate)
 		}
 	})
 
