@@ -1214,7 +1214,8 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	})
 }
 
-func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
+func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructured.Unstructured {
+	t.Helper()
 	r := &MaaSAuthPolicyReconciler{
 		MaaSAPINamespace: "maas-system",
 		GatewayName:      "maas-default-gateway",
@@ -1223,101 +1224,98 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
+	spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+}
 
-	gwSpecToUnstructured := func(t *testing.T, spec map[string]any) *unstructured.Unstructured {
-		t.Helper()
-		obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
-		return obj
+func nestedMapRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) map[string]any {
+	t.Helper()
+	got, found, err := unstructured.NestedMap(obj.Object, fields...)
+	if err != nil || !found {
+		t.Fatalf("nested map %v missing: found=%v err=%v", fields, found, err)
+	}
+	return got
+}
+
+func nestedStringRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) string {
+	t.Helper()
+	got, found, err := unstructured.NestedString(obj.Object, fields...)
+	if err != nil || !found {
+		t.Fatalf("nested string %v missing: found=%v err=%v", fields, found, err)
+	}
+	return got
+}
+
+func nestedWhenPredicateRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) string {
+	t.Helper()
+	when, found, err := unstructured.NestedSlice(obj.Object, fields...)
+	if err != nil || !found || len(when) == 0 {
+		t.Fatalf("when condition %v missing: found=%v err=%v", fields, found, err)
+	}
+	firstWhen, ok := when[0].(map[string]any)
+	if !ok {
+		t.Fatalf("when[0] for %v is not a map: %T", fields, when[0])
+	}
+	pred, ok := firstWhen["predicate"].(string)
+	if !ok {
+		t.Fatalf("when[0] for %v has no predicate string", fields)
+	}
+	return pred
+}
+
+func TestBuildGatewayAuthPolicySpec_K8sAuth(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	auth := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authentication")
+	if _, exists := auth["api-keys"]; !exists {
+		t.Error("api-keys authentication should always be present")
+	}
+	if _, exists := auth["openshift-identities"]; !exists {
+		t.Error("openshift-identities should always be present")
+	}
+	if _, exists := auth["oidc-identities"]; exists {
+		t.Error("oidc-identities should NOT be present when OIDC config is nil")
+	}
+	if _, exists := auth["api-keys-x-api-key"]; exists {
+		t.Error("api-keys-x-api-key should NOT be present when xAPIKeyEnabled is false")
 	}
 
-	t.Run("without OIDC", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
+	authz := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization")
+	if _, exists := authz["oidc-groups-safe"]; exists {
+		t.Error("oidc-groups-safe should NOT be present when OIDC config is nil")
+	}
+}
 
-		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
-		if err != nil || !found {
-			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := auth["api-keys"]; !exists {
-			t.Error("api-keys authentication should always be present")
-		}
-		if _, exists := auth["openshift-identities"]; !exists {
-			t.Error("openshift-identities should always be present")
-		}
-		if _, exists := auth["oidc-identities"]; exists {
-			t.Error("oidc-identities should NOT be present when OIDC config is nil")
-		}
-		if _, exists := auth["api-keys-x-api-key"]; exists {
-			t.Error("api-keys-x-api-key should NOT be present when xAPIKeyEnabled is false")
-		}
-		authz, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authorization")
-		if err != nil || !found {
-			t.Fatalf("authorization block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := authz["oidc-groups-safe"]; exists {
-			t.Error("oidc-groups-safe should NOT be present when OIDC config is nil")
-		}
-	})
+func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
+	oidc := &oidcConfig{
+		IssuerURL: "https://keycloak.example.com/realms/test",
+		ClientID:  "maas-client",
+	}
+	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
-	t.Run("with OIDC", func(t *testing.T) {
-		oidc := &oidcConfig{
-			IssuerURL: "https://keycloak.example.com/realms/test",
-			ClientID:  "maas-client",
-		}
-		spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
+	auth := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authentication")
+	if _, exists := auth["oidc-identities"]; !exists {
+		t.Fatal("oidc-identities should be present when OIDC config is provided")
+	}
+	issuer := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
+	if issuer != oidc.IssuerURL {
+		t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+	}
+	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
+	if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
+		t.Errorf("oidc-groups-safe rego should reject unsafe group names, got: %s", rego)
+	}
+	predicate := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "when")
+	if !contains(predicate, "has(auth.identity.groups)") {
+		t.Errorf("oidc-groups-safe should only run for OIDC group identities, got: %s", predicate)
+	}
+}
 
-		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
-		if err != nil || !found {
-			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := auth["oidc-identities"]; !exists {
-			t.Fatal("oidc-identities should be present when OIDC config is provided")
-		}
-		issuer, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
-		if err != nil || !found {
-			t.Fatalf("oidc issuerUrl missing: found=%v err=%v", found, err)
-		}
-		if issuer != oidc.IssuerURL {
-			t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
-		}
-		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("oidc-groups-safe rego missing: found=%v err=%v", found, err)
-		}
-		if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
-			t.Errorf("oidc-groups-safe rego should reject unsafe group names, got: %s", rego)
-		}
-		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "when")
-		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("oidc-groups-safe when condition missing: found=%v err=%v", found, err)
-		}
-		firstWhen, ok := when[0].(map[string]any)
-		if !ok {
-			t.Fatalf("oidc-groups-safe when[0] is not a map: %T", when[0])
-		}
-		predicate, _ := firstWhen["predicate"].(string)
-		if !contains(predicate, "has(auth.identity.groups)") {
-			t.Errorf("oidc-groups-safe should only run for OIDC group identities, got: %s", predicate)
-		}
-	})
+func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
 	t.Run("subscription-info has model-route scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
-		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("subscription-info when condition missing: found=%v err=%v", found, err)
-		}
-		firstWhen, ok := when[0].(map[string]any)
-		if !ok {
-			t.Fatalf("subscription-info when[0] is not a map: %T", when[0])
-		}
-		pred, ok := firstWhen["predicate"].(string)
-		if !ok {
-			t.Fatal("subscription-info when[0] has no predicate string")
-		}
+		pred := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
 		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
 			t.Errorf("subscription-info when should scope to model routes and exclude management paths, got: %s", pred)
 		}
@@ -1327,21 +1325,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-valid has model-route scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
-		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("subscription-valid when condition missing: found=%v err=%v", found, err)
-		}
-		firstWhen, ok := when[0].(map[string]any)
-		if !ok {
-			t.Fatalf("subscription-valid when[0] is not a map: %T", when[0])
-		}
-		pred, ok := firstWhen["predicate"].(string)
-		if !ok {
-			t.Fatal("subscription-valid when[0] has no predicate string")
-		}
+		pred := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
 		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
 			t.Errorf("subscription-valid when should scope to model routes and exclude management paths, got: %s", pred)
 		}
@@ -1351,13 +1335,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("require-group-membership recognizes tenant model paths", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
-		}
+		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
 		if !contains(rego, `path_parts[0] != "maas-api"`) || !contains(rego, `path_parts[0] != "v1"`) {
 			t.Errorf("require-group-membership rego should treat tenant model paths as model routes and exclude management paths, got: %s", rego)
 		}
@@ -1367,13 +1345,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("auth-valid rego missing: found=%v err=%v", found, err)
-		}
+		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
 		if !contains(rego, "not input.auth.metadata.apiKeyValidation") {
 			t.Errorf("auth-valid rego should allow non-API-key tokens, got: %s", rego)
 		}
