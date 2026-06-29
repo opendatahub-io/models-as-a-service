@@ -321,9 +321,7 @@ class TestExternalModelBodyRouting:
     that header (exact: targetModel) and routes to the backend.
     """
 
-    def test_body_model_routes_correctly(self, external_models_setup):
-        """Correct targetModel in body passes auth and reaches backend."""
-        setup = external_models_setup
+    def _post_chat(self, setup, body):
         url = (
             f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
             f"/v1/chat/completions"
@@ -332,12 +330,14 @@ class TestExternalModelBodyRouting:
             "Content-Type": "application/json",
             "Authorization": f"Bearer {setup['api_key']}",
         }
-        body = {
+        return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+    def test_body_model_routes_correctly(self, external_models_setup):
+        """Correct targetModel in body passes auth and reaches backend."""
+        r = self._post_chat(external_models_setup, {
             "model": TARGET_MODEL,
             "messages": [{"role": "user", "content": "hello"}],
-        }
-
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        })
         assert r.status_code not in (401, 403), (
             f"Request was blocked by auth (HTTP {r.status_code}). "
             f"Expected the request to pass auth and reach the external endpoint "
@@ -350,20 +350,9 @@ class TestExternalModelBodyRouting:
 
     def test_missing_model_body_rejected(self, external_models_setup):
         """Request without model field in body does not cause 5xx."""
-        setup = external_models_setup
-        url = (
-            f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
-            f"/v1/chat/completions"
-        )
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {setup['api_key']}",
-        }
-        body = {
+        r = self._post_chat(external_models_setup, {
             "messages": [{"role": "user", "content": "hello"}],
-        }
-
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        })
         assert r.status_code < 500, (
             f"Server error (HTTP {r.status_code}) when model field is missing from body. "
             f"Expected graceful handling (4xx or successful path-based fallback)."
@@ -375,21 +364,10 @@ class TestExternalModelBodyRouting:
 
     def test_wrong_model_body_rejected(self, external_models_setup):
         """Wrong model name in body does not cause 5xx."""
-        setup = external_models_setup
-        url = (
-            f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
-            f"/v1/chat/completions"
-        )
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {setup['api_key']}",
-        }
-        body = {
+        r = self._post_chat(external_models_setup, {
             "model": "nonexistent-model-that-does-not-exist",
             "messages": [{"role": "user", "content": "hello"}],
-        }
-
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        })
         assert r.status_code < 500, (
             f"Server error (HTTP {r.status_code}) when body model does not match "
             f"any route. Expected graceful handling."
