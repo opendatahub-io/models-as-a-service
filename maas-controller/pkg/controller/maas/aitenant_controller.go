@@ -50,11 +50,9 @@ const (
 	aitenantManagedLabel = "maas.opendatahub.io/managed-by-aitenant"
 	aiGatewayTenantLabel = "ai-gateway.opendatahub.io/tenant"
 
-	aitenantNameAnnotation      = "maas.opendatahub.io/aitenant-name"
-	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
+	aitenantNameAnnotation      = tenantreconcile.AnnotationAITenantName
+	aitenantNamespaceAnnotation = tenantreconcile.AnnotationAITenantNamespace
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
-
-	tenantNamespacePrefix = "ai-tenant-"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
@@ -127,6 +125,10 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	statusSnapshot = aitenant.Status.DeepCopy()
 
 	if err := r.ensureGatewayClaim(ctx, &aitenant, gatewayRef); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "GatewayClaimFailed", err.Error())
@@ -144,7 +146,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	if err := r.ensureTenantConfig(ctx, &aitenant, gatewayRef); err != nil {
+	if err := r.ensureTenantConfig(ctx, &aitenant); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "TenantConfigReconcileFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
@@ -211,28 +213,7 @@ func (r *AITenantReconciler) aitenantNamespace() string {
 }
 
 func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant) string {
-	if r.isDefaultAITenant(aitenant) {
-		return r.defaultTenantNamespace()
-	}
-	return derivedTenantNamespaceName(aitenant.Name)
-}
-
-func (r *AITenantReconciler) isDefaultAITenant(aitenant *maasv1alpha1.AITenant) bool {
-	if aitenant.Name == tenantreconcile.DefaultAITenantName {
-		return true
-	}
-	return r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace
-}
-
-func (r *AITenantReconciler) defaultTenantNamespace() string {
-	if r.TenantNamespace != "" {
-		return r.TenantNamespace
-	}
-	return tenantreconcile.DefaultAITenantName
-}
-
-func derivedTenantNamespaceName(aitenantName string) string {
-	return tenantNamespacePrefix + aitenantName
+	return tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace)
 }
 
 func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -313,7 +294,7 @@ func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maas
 	return ref
 }
 
-func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	tenant := &maasv1alpha1.Tenant{
 		TypeMeta: metav1.TypeMeta{
@@ -331,11 +312,6 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 			return fmt.Errorf("expected Tenant, got %T", obj)
 		}
 		applyAITenantMetadata(t, aitenant, tenantNamespace)
-		// TODO: Move these mirrored platform values out of Tenant spec in a
-		// follow-up Jira once the MaaS config/status API is settled. The current
-		// post-render path still reads Tenant.spec.gatewayRef and externalOIDC.
-		t.Spec.GatewayRef = gatewayRef
-		t.Spec.ExternalOIDC = aitenant.Spec.OIDC
 		return nil
 	})
 }
