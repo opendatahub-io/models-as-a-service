@@ -1,8 +1,10 @@
 """
-E2E tests for /v1/tenant endpoint tenant isolation.
+E2E tests for /v1/tenant endpoint data isolation.
 
-Verifies that tenant A cannot access tenant B's gateway discovery endpoint,
-ensuring proper SubjectAccessReview-based authorization.
+Verifies that each tenant's maas-api instance returns its own configuration
+and does not leak data from other tenants. With system:authenticated authorization,
+any authenticated user can call any tenant's endpoint, but each endpoint must
+return only its own tenant's data.
 """
 
 import logging
@@ -90,33 +92,30 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
         r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
 
-        # Should succeed (200) or get 403 if RBAC not configured for this tenant
-        assert r.status_code in (200, 403), \
-            f"{tenant['name']} should access own endpoint (200 or 403), got {r.status_code}: {r.text[:400]}"
+        # Should succeed (200) with system:authenticated authorization
+        assert r.status_code == 200, \
+            f"{tenant['name']} should access endpoint with system:authenticated, got {r.status_code}: {r.text[:400]}"
 
-        if r.status_code == 200:
-            data = r.json()
-            assert data["tenant"]["name"] == tenant["aitenant_name"], \
-                f"Expected tenant name {tenant['aitenant_name']}, got {data['tenant']['name']}"
-            print(f"[isolation] ✓ {tenant['name']} can access own /v1/tenant endpoint")
-        else:
-            print(f"[isolation] {tenant['name']} got 403 (RBAC not configured, acceptable)")
+        data = r.json()
+        assert data["tenant"]["name"] == tenant["aitenant_name"], \
+            f"Expected tenant name {tenant['aitenant_name']}, got {data['tenant']['name']}"
+        print(f"[isolation] ✓ {tenant['name']} can access /v1/tenant endpoint (system:authenticated)")
 
 
 def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tokens):
     """
-    Verify tenant A CANNOT access tenant B's /v1/tenant endpoint.
+    Verify each tenant's endpoint returns its OWN data (no cross-tenant leakage).
 
-    This is the critical isolation test. Even though we're using the same token
-    (cluster token) for both requests, the SubjectAccessReview should check
-    permissions on the specific AITenant CR for each tenant.
+    With system:authenticated authorization, any authenticated user can call any
+    tenant's /v1/tenant endpoint. This is intentional - the endpoint is permissive.
 
-    In production with per-tenant service accounts, tenant A's SA would not have
-    GET permission on tenant B's AITenant CR, resulting in 403.
+    However, each maas-api instance MUST return only its own configuration:
+    - Tenant A's maas-api returns tenant A's name and gateway
+    - Tenant B's maas-api returns tenant B's name and gateway
 
-    NOTE: This test currently uses cluster token which may have access to all AITenants.
-    The test validates that the endpoint returns the CORRECT tenant's data (not leaked data).
-    True cross-tenant rejection requires per-tenant service accounts with scoped RBAC.
+    This test validates that calling different maas-api instances returns
+    different data (proving each instance is correctly configured and not
+    leaking data from other tenants).
     """
     tenant_a = tenant_service_urls["tenant_a"]
     tenant_b = tenant_service_urls["tenant_b"]
@@ -128,20 +127,15 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
 
     r_a = requests.get(url_a, headers=headers, timeout=10, verify=TLS_VERIFY)
 
-    if r_a.status_code == 403:
-        print(f"[isolation] Tenant A endpoint returned 403 (RBAC not configured, skipping cross-tenant test)")
-        pytest.skip("RBAC not configured for tenant endpoints")
-        return
-
-    assert r_a.status_code == 200, f"Tenant A endpoint should return 200, got {r_a.status_code}"
+    assert r_a.status_code == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {r_a.status_code}"
     data_a = r_a.json()
 
-    # Test: Call tenant B's endpoint
+    # Test: Call tenant B's endpoint (same token - should also work)
     url_b = f"{tenant_b['service_url']}/v1/tenant"
 
     r_b = requests.get(url_b, headers=headers, timeout=10, verify=TLS_VERIFY)
 
-    assert r_b.status_code == 200, f"Tenant B endpoint should return 200, got {r_b.status_code}"
+    assert r_b.status_code == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {r_b.status_code}"
     data_b = r_b.json()
 
     # Critical: Verify no data leakage
