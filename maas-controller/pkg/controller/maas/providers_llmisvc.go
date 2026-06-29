@@ -60,18 +60,24 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	route := &routeList.Items[0]
 	routeName := route.Name
 
-	// Get expected gateway from tenant's configuration
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
-
-	// For multi-tenant deployments, fetch the tenant's gateway
-	tenant, err := fetchTenantForNamespace(ctx, h.r.Client, model.Namespace)
-	if err == nil && tenant.Spec.GatewayRef.Name != "" {
-		expectedGatewayName = tenant.Spec.GatewayRef.Name
-		expectedGatewayNamespace = tenant.Spec.GatewayRef.Namespace
-		log.V(4).Info("Using tenant-specific gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenant", tenant.Name)
-	} else if err != nil {
-		log.V(4).Info("No tenant found for namespace, using default gateway", "namespace", model.Namespace, "error", err)
+	gatewayRef, err := tenantGatewayRefForNamespace(
+		ctx,
+		h.r.Client,
+		model.Namespace,
+		h.r.DefaultTenantNamespace,
+		h.r.gatewayName(),
+		h.r.gatewayNamespace(),
+		h.r.TenantNamespaceDiscoveryEnabled,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve tenant gateway for namespace %s: %w", model.Namespace, err)
+	}
+	if gatewayRef.Name != "" {
+		expectedGatewayName = gatewayRef.Name
+		expectedGatewayNamespace = gatewayRef.Namespace
+		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantNamespace", model.Namespace)
 	}
 
 	gatewayFound := false

@@ -1,6 +1,6 @@
 # Tenant
 
-Configures the MaaS platform tenant. The Tenant CRD is a namespace-scoped singleton — the resource name must be `default-tenant` (enforced by CEL validation). It specifies the gateway used to expose model endpoints, API key policies, external OIDC authentication, and telemetry settings.
+Configures MaaS-specific tenant settings. The Tenant CRD is a namespace-scoped singleton — the resource name must be `default-tenant` (enforced by CEL validation). For AITenant-managed tenants, platform-derived context such as Gateway and external OIDC is owned by `AITenant`; `Tenant` owns MaaS-specific user configuration such as API key policies and telemetry settings.
 
 ## Multi-Tenant Deployment
 
@@ -18,6 +18,7 @@ In multi-tenant deployments, each tenant has its own Tenant CR in a dedicated na
 - All maas-api Services deploy to the operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI), not to tenant namespaces
 - Each tenant has an isolated maas-api instance for API key and subscription management
 - Tenant CRs for additional tenants have the finalizer `maas.opendatahub.io/tenant-cleanup`
+- For AITenant-managed tenants, `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` are ignored. Gateway comes from the owning `AITenant.status.gatewayRef`; OIDC comes from `AITenant.spec.oidc`.
 
 **Naming conventions:**
 - `TenantIdentifier`: Used for Kubernetes resource naming (empty string for default, `{tenantID}` for additional tenants)
@@ -33,16 +34,16 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| gatewayRef | TenantGatewayRef | No | Reference to the Gateway (Gateway API) used for exposing model endpoints. Defaults to `openshift-ingress/maas-default-gateway`. |
+| gatewayRef | TenantGatewayRef | No | Legacy/unmanaged Tenant reference to the Gateway (Gateway API) used for exposing model endpoints. Ignored for AITenant-managed tenants. |
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
-| externalOIDC | TenantExternalOIDCConfig | No | External OIDC identity provider settings for the maas-api AuthPolicy |
+| externalOIDC | TenantExternalOIDCConfig | No | Legacy/unmanaged Tenant external OIDC identity provider settings for the maas-api AuthPolicy. Ignored for AITenant-managed tenants; use `AITenant.spec.oidc`. |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
 
 ---
 
 ## TenantGatewayRef
 
-`spec.gatewayRef` identifies the Gateway API Gateway resource that the controller uses for model endpoint routing.
+`spec.gatewayRef` identifies the Gateway API Gateway resource that the controller uses for model endpoint routing only for legacy/unmanaged Tenant resources. For AITenant-managed tenants, this value comes from the owning `AITenant.status.gatewayRef`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -63,7 +64,7 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ## TenantExternalOIDCConfig
 
-`spec.externalOIDC` configures an external OIDC identity provider for token-based authentication.
+`spec.externalOIDC` configures an external OIDC identity provider for token-based authentication only for legacy/unmanaged Tenant resources. For AITenant-managed tenants, configure `AITenant.spec.oidc`.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
@@ -123,15 +124,8 @@ metadata:
   name: default-tenant
   namespace: models-as-a-service
 spec:
-  gatewayRef:
-    namespace: openshift-ingress
-    name: maas-default-gateway
   apiKeys:
     maxExpirationDays: 90
-  externalOIDC:
-    issuerUrl: "https://keycloak.example.com/realms/maas"
-    clientId: maas-api
-    ttl: 300
   telemetry:
     enabled: true
     metrics:
