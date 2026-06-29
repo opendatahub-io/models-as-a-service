@@ -105,11 +105,8 @@ rules:
   resources:
   - cronjobs
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - config.openshift.io
@@ -124,11 +121,8 @@ rules:
   resources:
   - telemetrypolicies
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - gateway.networking.k8s.io
@@ -202,11 +196,8 @@ rules:
   - ratelimitpolicies
   - telemetrypolicies
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - maas.opendatahub.io
@@ -261,38 +252,13 @@ rules:
   - podmonitors
   - servicemonitors
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - networking.istio.io
   resources:
   - destinationrules
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
-- apiGroups:
-  - networking.istio.io
-  resources:
-  - envoyfilters
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - networking.istio.io
-  resources:
   - serviceentries
   verbs:
   - create
@@ -300,6 +266,14 @@ rules:
   - get
   - list
   - update
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - envoyfilters
+  verbs:
+  - get
+  - list
   - watch
 - apiGroups:
   - networking.k8s.io
@@ -326,11 +300,8 @@ rules:
   - persesdashboards
   - persesdatasources
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
@@ -370,9 +341,6 @@ rules:
   resources:
   - telemetries
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - watch

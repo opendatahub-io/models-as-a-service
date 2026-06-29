@@ -88,17 +88,25 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
-// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
+// NOTE: TenantReconciler only watches (reads) these resources for status reporting and reconciliation logic.
+// The actual resource creation is handled by specialized sub-controllers:
+// - MaaSAuthPolicyReconciler creates authpolicies for per-tenant Authorino authentication setup
+// - MaaSSubscriptionReconciler creates ratelimitpolicies/tokenratelimitpolicies for rate limiting
+// - MaaSSubscriptionReconciler creates telemetrypolicies for observability and metrics collection
+// - Istio controllers create destination rules, envoy filters, telemetries
+// - Other systems create cronjobs, monitoring resources, and perses dashboards
+// TenantReconciler only needs read-only access (get;list;watch) to observe these resources for status.
+// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch
+// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch
 
 // clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
 // ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
