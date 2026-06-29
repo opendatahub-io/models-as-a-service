@@ -1,6 +1,11 @@
 """
 E2E tests for tenant-scoped authentication and API-key isolation.
 
+Covers [MT S7] acceptance criteria (RHOAIENG-62570):
+- No cross-tenant key leakage (tests 3.3, 3.5, 3.6)
+- Identity isolation (tests 3.1, 3.2, 3.4, 3.6)
+- Negative paths for cross-tenant access (tests 3.3, 3.6)
+
 These tests use shared_test_tenants fixture to create two AITenant instances
 and validate API key isolation between tenants.
 """
@@ -183,6 +188,37 @@ class TestTenantAuthIsolation:
         ids_b = {item["id"] for item in response_b.json().get("data", [])}
         assert tenant_api_keys["b"]["id"] in ids_b
         assert tenant_api_keys["a"]["id"] not in ids_b
+
+    def test_api_key_metadata_not_leaked_cross_tenant(self, tenant_auth_setup, tenant_api_keys):
+        """3.6: Tenant B cannot retrieve Tenant A's key metadata via GET /v1/api-keys/{id}."""
+        oc_token = _get_cluster_token()
+
+        # Try to GET tenant A's key from tenant B's gateway (should be rejected)
+        response = get_api_key_at(
+            tenant_auth_setup["tenant_b"]["base_url"],
+            oc_token,
+            tenant_api_keys["a"]["id"],
+        )
+        assert response.status_code == 404, (
+            f"Tenant B should not retrieve Tenant A's key metadata "
+            f"(expected 404, got {response.status_code}): {response_summary(response)}"
+        )
+
+        # Verify response body is exactly {"error": "API key not found"} with no leaked metadata
+        body = response.json()
+        assert body == {"error": "API key not found"}, (
+            f"404 response should contain only error message, got: {redact_sensitive(body)}"
+        )
+
+        # Verify tenant A can still GET its own key (sanity check)
+        response_a = get_api_key_at(
+            tenant_auth_setup["tenant_a"]["base_url"],
+            oc_token,
+            tenant_api_keys["a"]["id"],
+        )
+        assert response_a.status_code == 200, (
+            f"Tenant A should still retrieve its own key: {response_summary(response_a)}"
+        )
 
     def test_api_key_subscription_selection_uses_tenant_namespace(self, tenant_auth_setup, tenant_api_keys):
         """3.x/4.x: Internal subscription selection reports the tenant-local subscription namespace."""
