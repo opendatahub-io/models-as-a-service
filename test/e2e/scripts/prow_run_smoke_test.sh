@@ -810,6 +810,7 @@ run_e2e_tests() {
         "$test_dir/tests/test_tenant_namespace_discovery.py" \
         "$test_dir/tests/test_gateway_scoped_authpolicy.py" \
         "$test_dir/tests/test_multi_tenant_integration.py" \
+        "$test_dir/tests/test_tenant_model_inference.py" \
         "$test_dir/tests/test_multi_tenant_maas_api.py" \
         "$test_dir/tests/test_tenant_auth_isolation.py" \
         "$test_dir/tests/test_tenant_subscription_isolation.py" \

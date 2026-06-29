@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
@@ -22,6 +24,8 @@ const (
 	apiKeySubscriptionResolutionErrCode = "invalid_subscription"
 	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
 )
+
+var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
 
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
@@ -185,6 +189,20 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	name := req.Name
 	if req.Ephemeral && name == "" {
 		name = fmt.Sprintf("ephemeral-%d", time.Now().UnixNano())
+	} else {
+		name = strings.TrimSpace(name)
+		if len(name) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot be whitespace only"})
+			return
+		}
+		if utf8.RuneCountInString(name) > 128 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot exceed 128 characters"})
+			return
+		}
+		if invalidKeyNameCharsPattern.MatchString(name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name contains invalid control characters"})
+			return
+		}
 	}
 
 	// Parse expiration duration if provided

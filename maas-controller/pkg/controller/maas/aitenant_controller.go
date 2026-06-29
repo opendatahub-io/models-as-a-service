@@ -54,7 +54,6 @@ const (
 	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
 
-	defaultAITenantName   = "models-as-a-service"
 	tenantNamespacePrefix = "ai-tenant-"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
@@ -105,7 +104,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
@@ -210,7 +209,7 @@ func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant
 }
 
 func (r *AITenantReconciler) isDefaultAITenant(aitenant *maasv1alpha1.AITenant) bool {
-	if aitenant.Name == defaultAITenantName {
+	if aitenant.Name == tenantreconcile.DefaultAITenantName {
 		return true
 	}
 	return r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace
@@ -220,7 +219,7 @@ func (r *AITenantReconciler) defaultTenantNamespace() string {
 	if r.TenantNamespace != "" {
 		return r.TenantNamespace
 	}
-	return defaultAITenantName
+	return tenantreconcile.DefaultAITenantName
 }
 
 func derivedTenantNamespaceName(aitenantName string) string {

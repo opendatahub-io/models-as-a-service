@@ -252,6 +252,74 @@ class TestOIDCTokenFlow:
             f"Expected 401 for missing auth header, got {response.status_code}: {response.text}"
         )
 
+    def test_tampered_expired_oidc_token_gets_401(self, maas_api_base_url: str):
+        """JWT with modified exp claim (and therefore invalid signature) is rejected.
+
+        This test modifies the payload to set exp in the past, which also
+        invalidates the signature. It verifies the gateway rejects tampered
+        tokens — Authorino checks signature before expiration, so this is
+        effectively a signature-tampering test. See the companion slow test
+        test_real_expired_oidc_token_gets_401 for true expiration validation.
+        """
+        token = _request_oidc_token()
+        parts = token.split(".")
+        assert len(parts) == 3, "Token is not a valid JWT"
+
+        payload = _decode_jwt_payload(token)
+        payload["exp"] = int(time.time()) - 3600
+
+        modified_payload = base64.urlsafe_b64encode(
+            json.dumps(payload).encode()
+        ).rstrip(b"=").decode()
+        expired_token = f"{parts[0]}.{modified_payload}.{parts[2]}"
+
+        response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {expired_token}", "Content-Type": "application/json"},
+            json={"name": f"e2e-oidc-expired-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 401, (
+            f"Expected 401 for tampered/expired OIDC token, got {response.status_code}: {response.text}"
+        )
+
+    @pytest.mark.slow
+    def test_real_expired_oidc_token_gets_401(self, maas_api_base_url: str):
+        """Genuine expired OIDC token (untampered, valid signature) is rejected.
+
+        Requests a token from Keycloak, waits for it to expire naturally,
+        then verifies the gateway rejects it. This isolates expiration
+        handling from signature validation.
+
+        The tenant-a realm is configured with accessTokenLifespan: 60s,
+        so the wait is ~65 seconds.
+        """
+        token = _request_oidc_token()
+        payload = _decode_jwt_payload(token)
+        assert "exp" in payload and isinstance(payload["exp"], (int, float)), (
+            f"OIDC token missing numeric 'exp' claim — cannot test expiration: {sorted(payload.keys())}"
+        )
+        exp = payload["exp"]
+        wait_seconds = max(0, exp - int(time.time())) + 5
+
+        if wait_seconds > 120:
+            pytest.skip(f"Token expiry too far out ({wait_seconds}s) — realm accessTokenLifespan may not be set to 60s")
+
+        log.info(f"Waiting {wait_seconds}s for OIDC token to expire naturally...")
+        time.sleep(wait_seconds)
+
+        response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            json={"name": f"e2e-oidc-realexp-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 401, (
+            f"Expected 401 for genuinely expired OIDC token, got {response.status_code}: {response.text}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # Tests — OIDC Token Claims

@@ -1,15 +1,11 @@
 """
-E2E tests for per-tenant maas-api infrastructure (MT S24 / RHOAIENG-66483).
+E2E tests for per-tenant maas-api infrastructure.
 
-These tests validate the expected Phase 1 contract once the per-tenant maas-api
-implementation is available:
+These tests validate the Phase 1 multi-tenant contract:
   - AITenant creates dedicated maas-api Deployment/Service/HTTPRoute/AuthPolicy
   - TENANT_NAME is set on each maas-api Deployment
   - HTTPRoutes attach to the tenant Gateway and route to the tenant Service
   - Default and multiple tenant maas-api instances coexist
-
-Run with ENABLE_S24_E2E=true. The current mainline-compatible E2E smoke path
-does not enable this module until S24 lands.
 """
 
 import pytest
@@ -35,10 +31,7 @@ from multitenancy_helpers import (
 )
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S24_E2E"),
-    reason="S24 per-tenant maas-api E2E is gated; set ENABLE_S24_E2E=true once the backing implementation lands",
-)
+# Multi-tenant maas-api tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")

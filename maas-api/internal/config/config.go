@@ -165,6 +165,11 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)
 	}
 
+	// Validate TenantName is non-empty and non-whitespace to ensure tenant isolation
+	if strings.TrimSpace(c.TenantName) == "" {
+		return errors.New("TENANT_NAME must be non-empty and non-whitespace to ensure tenant isolation")
+	}
+
 	// Validate API key max expiration days
 	if c.APIKeyMaxExpirationDays < 1 {
 		return errors.New("API_KEY_MAX_EXPIRATION_DAYS must be at least 1")
