@@ -545,6 +545,57 @@ func TestMapNamespaceToMaaSSubscriptions_EnqueuesWhenDiscoveryEnabled(t *testing
 	}
 }
 
+func TestMapAITenantToMaaSSubscriptions(t *testing.T) {
+	tenantNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "ai-tenant-team-a",
+			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	tenantSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "sub-a", Namespace: tenantNS.Name},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "llm", Namespace: "models"}},
+		},
+	}
+	defaultSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: "sub-default", Namespace: "models-as-a-service"},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{{Name: "llm", Namespace: "models"}},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenantNS, tenantSub, defaultSub).Build()
+	r := &MaaSSubscriptionReconciler{
+		Client:                          c,
+		Scheme:                          scheme,
+		DefaultTenantNamespace:          "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+	}
+
+	requests := r.mapAITenantToMaaSSubscriptions(context.Background(), &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace},
+	})
+	if len(requests) != 1 || requests[0].Name != "sub-a" || requests[0].Namespace != tenantNS.Name {
+		t.Fatalf("team AITenant should enqueue tenant subscription, got %#v", requests)
+	}
+
+	requests = r.mapAITenantToMaaSSubscriptions(context.Background(), &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.DefaultAITenantName, Namespace: tenantreconcile.DefaultAITenantNamespace},
+	})
+	if len(requests) != 1 || requests[0].Name != "sub-default" || requests[0].Namespace != "models-as-a-service" {
+		t.Fatalf("default AITenant should enqueue default subscription, got %#v", requests)
+	}
+
+	r.TenantNamespaceDiscoveryEnabled = false
+	requests = r.mapAITenantToMaaSSubscriptions(context.Background(), &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-a", Namespace: tenantreconcile.DefaultAITenantNamespace},
+	})
+	if len(requests) != 0 {
+		t.Fatalf("discovered AITenant should not enqueue subscriptions when discovery is disabled, got %#v", requests)
+	}
+}
+
 func TestFetchTenantForNamespace(t *testing.T) {
 	tenant := &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{
@@ -593,11 +644,42 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 	defaultTenantWithoutRef := &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: defaultNamespace},
 	}
+	managedTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-team-managed",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "team-managed",
+				tenantreconcile.LabelTenantNamespace:   "ai-tenant-team-managed",
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      "team-managed",
+				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	managedAITenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "team-managed", Namespace: tenantreconcile.DefaultAITenantNamespace},
+		Status: maasv1alpha1.AITenantStatus{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Name:      "team-managed-gateway",
+			Namespace: "team-managed-gateway-ns",
+		}},
+	}
 	partialTenant := &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: "partial-ns"},
 		Spec: maasv1alpha1.TenantSpec{GatewayRef: maasv1alpha1.TenantGatewayRef{
 			Name: "partial-gateway",
 		}},
+	}
+	discoveredNamespaceWithoutTenant := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   "ai-tenant-missing",
+			Labels: map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	modelNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "llm"},
 	}
 
 	tests := []struct {
@@ -616,6 +698,16 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			want: maasv1alpha1.TenantGatewayRef{
 				Name:      "team-a-gateway",
 				Namespace: "team-a-gateway-ns",
+			},
+		},
+		{
+			name:             "AITenant-managed tenant resolves gateway from AITenant status",
+			tenantNamespace:  "ai-tenant-team-managed",
+			discoveryEnabled: true,
+			objects:          []client.Object{managedTenant, managedAITenant},
+			want: maasv1alpha1.TenantGatewayRef{
+				Name:      "team-managed-gateway",
+				Namespace: "team-managed-gateway-ns",
 			},
 		},
 		{
@@ -646,9 +738,20 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 		},
 		{
 			name:             "missing discovered tenant is an error",
-			tenantNamespace:  tenantNamespace,
+			tenantNamespace:  discoveredNamespaceWithoutTenant.Name,
 			discoveryEnabled: true,
+			objects:          []client.Object{discoveredNamespaceWithoutTenant},
 			wantErr:          true,
+		},
+		{
+			name:             "unlabeled model namespace without tenant falls back to flags",
+			tenantNamespace:  modelNamespace.Name,
+			discoveryEnabled: true,
+			objects:          []client.Object{modelNamespace},
+			want: maasv1alpha1.TenantGatewayRef{
+				Name:      fallbackName,
+				Namespace: fallbackNS,
+			},
 		},
 		{
 			name:             "discovery disabled uses legacy fallback",

@@ -267,6 +267,31 @@ print_info() {
     echo -e "${BLUE}ℹ️  $1${NC}"
 }
 
+should_retry_api_key_mint() {
+    local http_code="$1"
+    local body="$2"
+    local compact_body
+    compact_body="$(echo "$body" | tr -d '[:space:]')"
+
+    # Empty 403 = gateway/AuthPolicy propagation delay.
+    if [[ "$http_code" == "403" ]] && [[ -z "$compact_body" ]]; then
+        return 0
+    fi
+
+    # 401 and the two 500 bodies below are observed while Authorino/Envoy has
+    # accepted the policy but identity headers are not consistently injected yet.
+    if [[ "$http_code" == "401" ]]; then
+        return 0
+    fi
+    if [[ "$http_code" == "500" ]] && {
+        [[ "$body" == *"AUTH_FAILURE"* ]] || [[ "$body" == *"Internal Server Error."* ]]
+    }; then
+        return 0
+    fi
+
+    return 1
+}
+
 # Check if running on OpenShift
 # First check if kubectl is working, then check for OpenShift-specific API resources
 api_resources=$(kubectl api-resources 2>/dev/null)
@@ -498,7 +523,7 @@ else
     if [ -n "$OC_TOKEN" ]; then
         print_check "MaaS API key creation"
         API_KEY_NAME="validate-test-$(date +%s)"
-        mint_retries=6
+        mint_retries=12
         mint_delay=5
         for mint_attempt in $(seq 1 $mint_retries); do
             API_KEY_RESPONSE=$(curl -sSk --connect-timeout 10 --max-time 30 \
@@ -510,10 +535,9 @@ else
                 "${HOST}/maas-api/v1/api-keys" 2>/dev/null || echo "")
             API_KEY_HTTP_CODE=$(echo "$API_KEY_RESPONSE" | tail -n1)
             API_KEY_BODY=$(echo "$API_KEY_RESPONSE" | sed '$d')
-            # Empty 403 = gateway propagation delay, retry
-            if [[ "$API_KEY_HTTP_CODE" == "403" ]] && [[ -z "$(echo "$API_KEY_BODY" | tr -d '[:space:]')" ]]; then
+            if should_retry_api_key_mint "$API_KEY_HTTP_CODE" "$API_KEY_BODY"; then
                 if [[ $mint_attempt -lt $mint_retries ]]; then
-                    echo "  Gateway returned empty 403 (attempt $mint_attempt/$mint_retries), retrying in ${mint_delay}s..."
+                    echo "  API key mint auth path not ready yet (HTTP $API_KEY_HTTP_CODE, attempt $mint_attempt/$mint_retries), retrying in ${mint_delay}s..."
                     sleep $mint_delay
                     continue
                 fi

@@ -211,19 +211,23 @@ func tenantGatewayRefForNamespace(
 ) (maasv1alpha1.TenantGatewayRef, error) {
 	tenant, err := fetchTenantForNamespace(ctx, c, tenantNamespace)
 	if err == nil {
-		ref := tenant.Spec.GatewayRef
-		if ref.Name != "" && ref.Namespace != "" {
-			return ref, nil
+		platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, c, tenant, fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace))
+		if err != nil {
+			return maasv1alpha1.TenantGatewayRef{}, err
 		}
-		if ref.Name == "" && ref.Namespace == "" && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
-			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
-		}
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s spec.gatewayRef must set both name and namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+		return platformContext.GatewayRef, nil
 	}
 	if apierrors.IsNotFound(err) && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
 		return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 	}
 	if apierrors.IsNotFound(err) {
+		allowed, allowErr := tenantNamespaceAllowed(ctx, c, tenantNamespace, defaultTenantNamespace, discoveryEnabled)
+		if allowErr != nil {
+			return maasv1alpha1.TenantGatewayRef{}, allowErr
+		}
+		if !allowed {
+			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
+		}
 		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
 	}
 	return maasv1alpha1.TenantGatewayRef{}, err

@@ -143,6 +143,17 @@ func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Obje
 	}}}
 }
 
+func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj client.Object) []reconcile.Request {
+	aitenant, ok := obj.(*maasv1alpha1.AITenant)
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace),
+	}}}
+}
+
 // crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
 func crdLabeledForMaaSComponent() predicate.Predicate {
 	key := tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName
@@ -213,6 +224,10 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}}
 			}),
 			builder.WithPredicates(configResourceDefault()),
+		).
+		Watches(
+			&maasv1alpha1.AITenant{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
 		Watches(
 			&extv1.CustomResourceDefinition{},

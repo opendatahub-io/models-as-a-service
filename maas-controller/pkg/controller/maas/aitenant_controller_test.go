@@ -149,14 +149,11 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-a"}, &tenant)).To(Succeed())
-	g.Expect(tenant.Spec.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{
-		Namespace: "openshift-ingress",
-		Name:      "team-a",
-	}))
-	g.Expect(tenant.Spec.ExternalOIDC).NotTo(BeNil())
-	g.Expect(tenant.Spec.ExternalOIDC.IssuerURL).To(Equal("https://issuer.example.com/realms/team-a"))
-	g.Expect(tenant.Spec.ExternalOIDC.ClientID).To(Equal("team-a-client"))
+	g.Expect(tenant.Spec.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{}))
+	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
 	g.Expect(tenant.Labels).To(HaveKeyWithValue(aiGatewayTenantLabel, "team-a"))
+	g.Expect(tenant.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-a"))
+	g.Expect(tenant.Annotations).To(HaveKeyWithValue(aitenantNamespaceAnnotation, tenantreconcile.DefaultAITenantNamespace))
 
 	var tenantRole rbacv1.Role
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aitenant), Namespace: "ai-tenant-team-a"}, &tenantRole)).To(Succeed())
@@ -196,6 +193,49 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Status).To(Equal(metav1.ConditionTrue))
 	g.Expect(ready.Reason).To(Equal("Reconciled"))
+}
+
+func TestAITenantReconcile_PersistsGatewayStatusBeforeTenantCreate(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	gateway := existingAITenantGateway("team-a")
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Create: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+				if _, ok := obj.(*maasv1alpha1.Tenant); ok {
+					var current maasv1alpha1.AITenant
+					g.Expect(c.Get(ctx, key, &current)).To(Succeed())
+					g.Expect(current.Status.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{
+						Name:      "team-a",
+						Namespace: "openshift-ingress",
+					}))
+				}
+				return c.Create(ctx, obj, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	reconcileAITenantTwice(t, r, key)
 }
 
 func TestAITenantReconcile_MissingGatewaySetsFailedStatus(t *testing.T) {
@@ -292,7 +332,7 @@ func TestAITenantReconcile_ExplicitGatewayNameResolvesExistingGateway(t *testing
 
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-explicit"}, &tenant)).To(Succeed())
-	g.Expect(tenant.Spec.GatewayRef.Name).To(Equal("network-approved-gw"))
+	g.Expect(tenant.Spec.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{}))
 }
 
 func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
@@ -345,10 +385,10 @@ func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-adoptcfg"}, &tenant)).To(Succeed())
 	g.Expect(tenant.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-adoptcfg"))
 	g.Expect(tenant.Spec.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{
-		Namespace: "openshift-ingress",
-		Name:      "team-adoptcfg",
+		Namespace: "old-gateway-ns",
+		Name:      "old-gateway",
 	}))
-	g.Expect(tenant.Spec.ExternalOIDC).To(Equal(aitenant.Spec.OIDC))
+	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
 }
 
 func TestAITenantReconcile_LabelsPreExistingDerivedNamespace(t *testing.T) {
@@ -496,7 +536,7 @@ func TestAITenantReconcile_RejectsDerivedNamespaceOverDNSLabelLimit(t *testing.T
 	g.Expect(ready.Reason).To(Equal("InvalidPlacement"))
 	g.Expect(ready.Message).To(ContainSubstring("derived tenant namespace"))
 	g.Expect(ready.Message).To(ContainSubstring("must be no more than 63 characters"))
-	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: tenantNamespacePrefix + aitenantName}, &corev1.Namespace{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.TenantNamespaceForAITenant(aitenantName, "models-as-a-service")}, &corev1.Namespace{}))).To(BeTrue())
 }
 
 func TestAITenantReconcile_AllowsDefaultTenantNamespaceFromInfraNamespace(t *testing.T) {
@@ -911,7 +951,7 @@ func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
 		},
 	}
 	err := r.upsert(context.Background(), configMap, aitenant, func(obj client.Object) error {
-		applyAITenantMetadata(obj, aitenant, derivedTenantNamespaceName(aitenant.Name))
+		applyAITenantMetadata(obj, aitenant, tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, ""))
 		cm, ok := obj.(*corev1.ConfigMap)
 		g.Expect(ok).To(BeTrue())
 		cm.Data = map[string]string{"fresh": "true"}
@@ -925,7 +965,7 @@ func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
 	g.Expect(updated.Data).To(HaveKeyWithValue("fresh", "true"))
 }
 
-func TestAITenantReconcile_OIDCFullMirror(t *testing.T) {
+func TestAITenantReconcile_OIDCStaysInAITenantSpec(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
@@ -961,7 +1001,7 @@ func TestAITenantReconcile_OIDCFullMirror(t *testing.T) {
 
 	var tenant maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-oidc"}, &tenant)).To(Succeed())
-	g.Expect(tenant.Spec.ExternalOIDC).To(Equal(aitenant.Spec.OIDC))
+	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
 }
 
 func TestAITenantReconcile_NoOIDCSetsTenantOIDCNil(t *testing.T) {
