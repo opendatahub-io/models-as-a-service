@@ -45,6 +45,9 @@ func (v *MaaSAuthPolicyValidator) SetupWebhookWithManager(mgr ctrl.Manager) erro
 
 // ValidateCreate validates MaaSAuthPolicy on creation.
 func (v *MaaSAuthPolicyValidator) ValidateCreate(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy) (admission.Warnings, error) {
+	if policy == nil {
+		return nil, errors.New("MaaSAuthPolicy object is nil")
+	}
 	if v.Validator == nil {
 		return nil, errors.New("webhook validator not configured")
 	}

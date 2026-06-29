@@ -282,6 +282,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		UserID:       metadata.ID, // Database-assigned UUID (immutable, collision-resistant)
 		Username:     metadata.Username,
 		KeyID:        metadata.ID,
+		KeyName:      metadata.Name,
 		Groups:       groups, // Original user groups for subscription-based authorization
 		Subscription: metadata.Subscription,
 		Tenant:       metadata.Tenant,

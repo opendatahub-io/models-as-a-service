@@ -45,6 +45,9 @@ func (v *MaaSSubscriptionValidator) SetupWebhookWithManager(mgr ctrl.Manager) er
 
 // ValidateCreate validates MaaSSubscription on creation.
 func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
+	if sub == nil {
+		return nil, errors.New("MaaSSubscription object is nil")
+	}
 	if v.Validator == nil {
 		return nil, errors.New("webhook validator not configured")
 	}

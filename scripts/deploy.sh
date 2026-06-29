@@ -549,7 +549,7 @@ main() {
     [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
-    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:ed049f48739fc4c52f30080c4337073595fd95b6")}"
+    local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
 
     log_info "  Ensuring maas-parameters ConfigMap..."
@@ -639,8 +639,9 @@ EOF
     return 1
   fi
 
-  # External OIDC: Patch Tenant CR with externalOIDC so the MaaSAuthPolicy controller
-  # adds oidc-identities authentication to the gateway-level AuthPolicy (maas-gateway-auth).
+  # External OIDC: Patch the default AITenant (source of truth for tenant OIDC)
+  # and the mirrored Tenant CR so the MaaSAuthPolicy controller can add
+  # oidc-identities authentication to the gateway-level AuthPolicy.
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
     if ! configure_tenant_external_oidc; then
@@ -1448,19 +1449,15 @@ MANIFEST_EOF
   return $rc
 }
 # configure_tenant_external_oidc
-#   Patches the default-tenant Tenant CR with spec.externalOIDC so the
-#   MaaSAuthPolicy controller adds oidc-identities authentication to the
-#   gateway-level AuthPolicy (maas-gateway-auth).
+#   Patches the default AITenant with spec.oidc and, when present, the
+#   mirrored default-tenant Tenant CR with spec.externalOIDC.
 configure_tenant_external_oidc() {
+  local aitenant_name="${DEFAULT_AITENANT_NAME:-models-as-a-service}"
+  local aitenant_ns="${AITENANT_NAMESPACE:-ai-tenants}"
   local tenant_name="default-tenant"
   local tenant_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
-  log_info "Configuring Tenant CR with external OIDC..."
-
-  if ! kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
-    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping OIDC config"
-    return 0
-  fi
+  log_info "Configuring default tenant with external OIDC..."
 
   local oidc_issuer_url
   oidc_issuer_url="$(resolve_external_oidc_issuer)" || {
@@ -1474,14 +1471,45 @@ configure_tenant_external_oidc() {
     return 1
   }
 
-  log_info "  Patching Tenant '$tenant_name' with externalOIDC (issuer: $oidc_issuer_url, clientId: $oidc_client_id)"
-  if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p \
-    "{\"spec\":{\"externalOIDC\":{\"issuerUrl\":\"$oidc_issuer_url\",\"clientId\":\"$oidc_client_id\"}}}"; then
-    log_error "  Failed to patch Tenant CR with external OIDC"
+  local aitenant_patch tenant_patch
+  aitenant_patch=$(jq -nc \
+    --arg issuerUrl "$oidc_issuer_url" \
+    --arg clientId "$oidc_client_id" \
+    '{spec:{oidc:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
+  tenant_patch=$(jq -nc \
+    --arg issuerUrl "$oidc_issuer_url" \
+    --arg clientId "$oidc_client_id" \
+    '{spec:{externalOIDC:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
+
+  local patched_any="false"
+  if kubectl get aitenant "$aitenant_name" -n "$aitenant_ns" &>/dev/null; then
+    log_info "  Patching AITenant '$aitenant_name' with external OIDC"
+    if ! kubectl patch aitenant "$aitenant_name" -n "$aitenant_ns" --type=merge -p "$aitenant_patch"; then
+      log_error "  Failed to patch AITenant with external OIDC"
+      return 1
+    fi
+    patched_any="true"
+  else
+    log_warn "AITenant '$aitenant_name' not found in namespace '$aitenant_ns', skipping AITenant OIDC patch"
+  fi
+
+  if kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
+    log_info "  Patching Tenant '$tenant_name' with external OIDC"
+    if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p "$tenant_patch"; then
+      log_error "  Failed to patch Tenant CR with external OIDC"
+      return 1
+    fi
+    patched_any="true"
+  else
+    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping Tenant OIDC patch"
+  fi
+
+  if [[ "$patched_any" != "true" ]]; then
+    log_error "No default tenant resources were found to patch with external OIDC"
     return 1
   fi
 
-  log_info "  Tenant CR patched with externalOIDC successfully"
+  log_info "  Default tenant OIDC configuration patched successfully"
 }
 
 #──────────────────────────────────────────────────────────────

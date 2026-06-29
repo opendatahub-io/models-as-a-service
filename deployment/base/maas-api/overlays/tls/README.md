@@ -31,7 +31,12 @@ DestinationRule is the current workaround for backend TLS origination in this de
 Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TLS origination)
 ```
 
-> **Future:** Once the managed Gateway provider supports BackendTLSPolicy for this deployment, this DestinationRule can be replaced with a standard Gateway API resource.
+> **Current PR decision:** Keep this DestinationRule for now. BackendTLSPolicy is
+> the preferred future replacement, but it depends on the supported OpenShift
+> baseline and on the managed `openshift-default` gateway provider supporting the
+> service-ca CA reference that MaaS needs. Team discussion indicates
+> BackendTLSPolicy may only be available from OpenShift 4.22, so replacing the
+> DestinationRule unconditionally could break older supported clusters.
 
 ## Usage
 

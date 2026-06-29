@@ -22,12 +22,16 @@ import (
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 // routeConditionProgrammed is the "Programmed" condition type for route parent status.
@@ -35,29 +39,76 @@ import (
 // but gateway controllers commonly set it on route parent status as well.
 const routeConditionProgrammed = "Programmed"
 
+var inferenceExternalModelGVK = schema.GroupVersionKind{
+	Group:   "inference.opendatahub.io",
+	Version: "v1alpha1",
+	Kind:    "ExternalModel",
+}
+
+//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=get;list;watch
+
 // externalModelHandler implements BackendHandler for kind "ExternalModel".
 type externalModelHandler struct {
 	r *MaaSModelRefReconciler
 }
 
 // ReconcileRoute validates the HTTPRoute for an external model and populates status.
-// The ExternalModel reconciler creates the "maas-model-<model.Name>" HTTPRoute in the
+// The ExternalModel reconciler creates a MaaS-prefixed HTTPRoute in the
 // model's namespace. This method validates that it exists and is accepted by the gateway.
 func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
-	// Fetch the referenced ExternalModel CR to get provider configuration
-	externalModel := &maasv1alpha1.ExternalModel{}
 	externalModelKey := types.NamespacedName{
 		Name:      model.Spec.ModelRef.Name,
 		Namespace: model.Namespace,
 	}
-	if err := h.r.Get(ctx, externalModelKey, externalModel); err != nil {
-		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("ExternalModel %s not found in namespace %s", model.Spec.ModelRef.Name, model.Namespace)
+
+	var externalModelName string
+	var providerInfo string
+	var routeName string
+
+	// Try inference.opendatahub.io/ExternalModel first (canonical), fall back to maas.opendatahub.io (legacy)
+	inferenceEM := &unstructured.Unstructured{}
+	inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
+	err := h.r.Get(ctx, externalModelKey, inferenceEM)
+	if err == nil {
+		externalModelName = inferenceEM.GetName()
+		if refs, found, _ := unstructured.NestedSlice(inferenceEM.Object, "spec", "externalProviderRefs"); found && len(refs) > 0 {
+			if ref, ok := refs[0].(map[string]any); ok {
+				if refObj, ok := ref["ref"].(map[string]any); ok {
+					if name, ok := refObj["name"].(string); ok {
+						providerInfo = name
+					}
+				}
+			}
 		}
+		if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+			routeName = name
+		} else {
+			log.Info("inference ExternalModel found but status.httpRouteName not set yet, waiting for reconciler",
+				"name", externalModelName, "namespace", model.Namespace)
+			model.Status.Endpoint = ""
+			model.Status.HTTPRouteName = ""
+			model.Status.HTTPRouteNamespace = ""
+			model.Status.HTTPRouteGatewayName = ""
+			model.Status.HTTPRouteGatewayNamespace = ""
+			model.Status.HTTPRouteHostnames = nil
+			return nil
+		}
+	} else if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		externalModel := &maasv1alpha1.ExternalModel{}
+		if err := h.r.Get(ctx, externalModelKey, externalModel); err != nil {
+			if apierrors.IsNotFound(err) {
+				return fmt.Errorf("ExternalModel %s not found in namespace %s (checked inference.opendatahub.io and maas.opendatahub.io)",
+					model.Spec.ModelRef.Name, model.Namespace)
+			}
+			return fmt.Errorf("failed to get maas ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
+		}
+		externalModelName = externalModel.Name
+		providerInfo = externalModel.Spec.Provider
+		routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
+		log.Info("resolved ExternalModel from legacy maas.opendatahub.io", "name", externalModelName, "namespace", model.Namespace)
+	} else {
 		return fmt.Errorf("failed to get ExternalModel %s: %w", model.Spec.ModelRef.Name, err)
 	}
-
-	routeName := model.Spec.ModelRef.Name
 	routeNS := model.Namespace
 
 	route := &gatewayapiv1.HTTPRoute{}
@@ -155,7 +206,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 
 	log.Info("HTTPRoute validated for ExternalModel",
 		"routeName", routeName, "namespace", routeNS, "model", model.Name,
-		"externalModel", externalModel.Name, "provider", externalModel.Spec.Provider,
+		"externalModel", externalModelName, "provider", providerInfo,
 		"gateway", fmt.Sprintf("%s/%s", gatewayNamespace, gatewayName), "hostnames", hostnames)
 
 	return nil
@@ -177,8 +228,9 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 }
 
 // GetModelEndpoint returns the endpoint URL for the ExternalModel.
-// Uses ExternalModel name (spec.modelRef.name) in the path to match the HTTPRoute
-// created by the reconciler and BBR's model-provider-resolver store key.
+// Uses ExternalModel name (spec.modelRef.name) in the path to match IPP's
+// model-provider-resolver store key. The HTTPRoute object name itself is
+// MaaS-prefixed to avoid colliding with the upstream inference ExternalModel controller.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	extModelName := model.Spec.ModelRef.Name
 	if len(model.Status.HTTPRouteHostnames) > 0 {
@@ -225,7 +277,23 @@ func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Log
 type externalModelRouteResolver struct{}
 
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
-	routeName = model.Spec.ModelRef.Name
 	routeNamespace = model.Namespace
+
+	// Read route name from inference ExternalModel status if available
+	if c != nil {
+		key := types.NamespacedName{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+		inferenceEM := &unstructured.Unstructured{}
+		inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
+		if err := c.Get(ctx, key, inferenceEM); err == nil {
+			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+				return name, routeNamespace, nil
+			}
+		} else if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			return "", routeNamespace, fmt.Errorf("failed to get inference ExternalModel %s/%s: %w",
+				model.Namespace, model.Spec.ModelRef.Name, err)
+		}
+	}
+
+	routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	return routeName, routeNamespace, nil
 }

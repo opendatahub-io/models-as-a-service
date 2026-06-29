@@ -188,7 +188,7 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 	for i := range models {
 		model := models[i]
 		// External models cannot be probed — their /v1/models endpoint requires
-		// the provider API key (injected by BBR), not the user's MaaS token.
+		// the provider API key (injected by IPP), not the user's MaaS token.
 		// Include them directly if they are Ready; access is enforced by the
 		// gateway auth policy at inference time.
 		if model.Kind == "ExternalModel" {

@@ -105,7 +105,12 @@ Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TL
 ```
 
 !!! info "Future consideration"
-    Once the managed Gateway provider supports BackendTLSPolicy for this deployment, the DestinationRule can be replaced with a standard Gateway API resource.
+    MaaS intentionally keeps the DestinationRule path in this PR. BackendTLSPolicy
+    is the preferred future replacement, but it should only replace the
+    DestinationRule after the supported OpenShift baseline and the managed
+    `openshift-default` CA-reference behavior are confirmed. Team discussion
+    indicates BackendTLSPolicy may only be available from OpenShift 4.22, so
+    using it unconditionally could break older supported clusters.
 
 ## Cluster TLS Security Profile
 
@@ -159,6 +164,12 @@ does not currently mount or receive the OpenShift service-CA bundle that signs t
 platform wiring that makes the service CA available to the gateway proxy, or a managed
 Gateway implementation that supports BackendTLSPolicy with the required CA reference.
 
+For this PR, the chosen scope is to complete central TLS profile integration for
+the MaaS servers and keep the gateway backend-verification gap documented. A
+follow-up can replace the DestinationRule with BackendTLSPolicy if the target
+RHOAI/OpenShift support matrix allows OpenShift 4.22+ only and RHCL/Kuadrant
+confirm the exact service-CA reference shape for the managed gateway.
+
 ## Custom maas-api TLS Configuration
 
 This section covers how `maas-api` is configured to use TLS certificates. These settings are automatically configured by the kustomize overlays; manual configuration is only needed for custom deployments or non-OpenShift environments.
@@ -195,7 +206,8 @@ The `tls` base overlay includes:
 
 maas-api is deployed by the Tenant reconciler in `maas-controller`. The `deploy.sh` script
 installs prerequisites (policy engine, PostgreSQL, Authorino TLS) and then deploys
-`maas-controller`, which creates the `default-tenant` CR and reconciles maas-api via SSA.
+`maas-controller`, which creates `AITenant/models-as-a-service`; that AITenant creates or
+adopts `Tenant/default-tenant`, and maas-api is reconciled via SSA.
 
 To verify that the overlay builds correctly:
 
