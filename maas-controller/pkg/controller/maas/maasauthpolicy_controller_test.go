@@ -2033,8 +2033,8 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference(t *testing.T) {
 	if ref.Controller == nil || !*ref.Controller {
 		t.Error("OwnerReference Controller should be true")
 	}
-	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
-		t.Error("OwnerReference BlockOwnerDeletion should be true")
+	if ref.BlockOwnerDeletion != nil && *ref.BlockOwnerDeletion {
+		t.Error("OwnerReference BlockOwnerDeletion should not be true (requires finalizer permissions on Gateway)")
 	}
 }
 

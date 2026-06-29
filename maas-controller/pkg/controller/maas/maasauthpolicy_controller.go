@@ -36,6 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1105,9 +1106,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	if !existingFound {
 		// Set OwnerReference on the new AuthPolicy for tenant gateways.
 		if isTenantGateway {
-			if err := controllerutil.SetControllerReference(gateway, gwPolicy, r.Scheme); err != nil {
-				return fmt.Errorf("failed to set controller reference on gateway AuthPolicy: %w", err)
-			}
+			setGatewayOwnerReference(gateway, gwPolicy)
 		}
 		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
 			return fmt.Errorf("failed to set gateway AuthPolicy spec: %w", err)
@@ -1132,9 +1131,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
 	// (handles upgrade from pre-ownerref versions).
 	if isTenantGateway {
-		if err := controllerutil.SetControllerReference(gateway, existing, r.Scheme); err != nil {
-			return fmt.Errorf("failed to set controller reference on existing gateway AuthPolicy: %w", err)
-		}
+		setGatewayOwnerReference(gateway, existing)
 	}
 	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
@@ -1896,6 +1893,33 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 		}
 	}
 	return requests
+}
+
+// setGatewayOwnerReference sets an OwnerReference on the dependent object pointing to
+// the given Gateway. Unlike controllerutil.SetControllerReference, this does NOT set
+// blockOwnerDeletion, which would require the controller to have permissions to set
+// finalizers on the Gateway resource. The controller only has get/list/watch on Gateways,
+// so blockOwnerDeletion would cause a "forbidden: cannot set blockOwnerDeletion" error.
+// The OwnerReference without blockOwnerDeletion still enables Kubernetes garbage
+// collection (background deletion) of the AuthPolicy when the Gateway is deleted.
+func setGatewayOwnerReference(gateway *gatewayapiv1.Gateway, dependent metav1.Object) {
+	ref := metav1.OwnerReference{
+		APIVersion: gatewayapiv1.GroupVersion.String(),
+		Kind:       "Gateway",
+		Name:       gateway.Name,
+		UID:        gateway.UID,
+		Controller: ptr.To(true),
+	}
+	owners := dependent.GetOwnerReferences()
+	for i, existing := range owners {
+		if existing.UID == ref.UID {
+			owners[i] = ref
+			dependent.SetOwnerReferences(owners)
+			return
+		}
+	}
+	owners = append(owners, ref)
+	dependent.SetOwnerReferences(owners)
 }
 
 // deduplicateAndSort removes duplicates from a string slice and sorts it.
