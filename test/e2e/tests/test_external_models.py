@@ -43,6 +43,9 @@ EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-externa
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
 
+GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
+TARGET_MODEL = "gpt-3.5-turbo"
+
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 EXTERNAL_MODEL_RESOURCE_NAME = f"maas-{EXTERNAL_MODEL_NAME}"
 
@@ -60,6 +63,22 @@ def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
         capture_output=True, text=True,
     )
 
+
+
+def _check_payload_processing_pods():
+    """Check if payload-processing (IPP) pods are deployed."""
+    for name in ("payload-pre-processing", "payload-processing"):
+        result = subprocess.run(
+            ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
+             "-o", "jsonpath={.status.readyReplicas}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            return False
+        ready = result.stdout.strip()
+        if not ready or ready == "0":
+            return False
+    return True
 
 
 # ─── Connectivity check ──────────────────────────────────────────────────────
@@ -283,6 +302,102 @@ class TestExternalModelEgress:
         # httpbin.org may return 404 for unknown paths — that's fine,
         # it means the request left the cluster and reached the endpoint.
         log.info(f"Egress test: HTTP {r.status_code} from external endpoint")
+
+
+# ─── Tests: Body-based routing ──────────────────────────────────────────────
+
+requires_ipp = pytest.mark.skipif(
+    not _check_payload_processing_pods(),
+    reason="Payload-processing (IPP) pods not deployed; body routing tests require IPP",
+)
+
+
+@requires_ipp
+class TestExternalModelBodyRouting:
+    """Verify that the model field in the request body drives routing.
+
+    IPP pre-processing extracts the ``model`` field from the JSON body and
+    sets the ``X-Gateway-Model-Name`` header.  HTTPRoute Rule 2 matches on
+    that header (exact: targetModel) and routes to the backend.
+    """
+
+    def test_body_model_routes_correctly(self, external_models_setup):
+        """Correct targetModel in body passes auth and reaches backend."""
+        setup = external_models_setup
+        url = (
+            f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
+            f"/v1/chat/completions"
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {
+            "model": TARGET_MODEL,
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code not in (401, 403), (
+            f"Request was blocked by auth (HTTP {r.status_code}). "
+            f"Expected the request to pass auth and reach the external endpoint "
+            f"via body-based routing (model={TARGET_MODEL})."
+        )
+        log.info(
+            "Body routing test: HTTP %d from external endpoint (model=%s)",
+            r.status_code, TARGET_MODEL,
+        )
+
+    def test_missing_model_body_rejected(self, external_models_setup):
+        """Request without model field in body does not cause 5xx."""
+        setup = external_models_setup
+        url = (
+            f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
+            f"/v1/chat/completions"
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code < 500, (
+            f"Server error (HTTP {r.status_code}) when model field is missing from body. "
+            f"Expected graceful handling (4xx or successful path-based fallback)."
+        )
+        log.info(
+            "Missing model body test: HTTP %d (body had no model field)",
+            r.status_code,
+        )
+
+    def test_wrong_model_body_rejected(self, external_models_setup):
+        """Wrong model name in body does not cause 5xx."""
+        setup = external_models_setup
+        url = (
+            f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}"
+            f"/v1/chat/completions"
+        )
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {
+            "model": "nonexistent-model-that-does-not-exist",
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code < 500, (
+            f"Server error (HTTP {r.status_code}) when body model does not match "
+            f"any route. Expected graceful handling."
+        )
+        log.info(
+            "Wrong model body test: HTTP %d (body model=nonexistent-model-that-does-not-exist)",
+            r.status_code,
+        )
 
 
 # ─── Tests: Cleanup ─────────────────────────────────────────────────────────
