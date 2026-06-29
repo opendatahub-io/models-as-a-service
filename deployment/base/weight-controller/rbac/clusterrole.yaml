@@ -1,0 +1,28 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: weight-controller
+  labels:
+    app.kubernetes.io/name: weight-controller
+    app.kubernetes.io/component: controller
+    app.kubernetes.io/part-of: models-as-a-service
+rules:
+  # Watch and patch ODH Payload Processing ExternalModel
+  - apiGroups: ["inference.opendatahub.io"]
+    resources: ["externalmodels"]
+    verbs: ["get", "list", "watch", "patch"]
+
+  # Update ExternalModel status (Phase 3: report weight calculation results)
+  - apiGroups: ["inference.opendatahub.io"]
+    resources: ["externalmodels/status"]
+    verbs: ["get", "update", "patch"]
+
+  # Read ODH Payload Processing ExternalProvider (for endpoint info)
+  - apiGroups: ["inference.opendatahub.io"]
+    resources: ["externalproviders"]
+    verbs: ["get", "list", "watch"]
+
+  # Emit Kubernetes events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]

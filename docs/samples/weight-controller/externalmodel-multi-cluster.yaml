@@ -1,0 +1,56 @@
+# ExternalModel with multiple providers for multi-cluster routing
+# The Weight Controller watches this CR and updates the weights based on cluster metrics.
+#
+# Usage:
+#   kubectl apply -f externalmodel-multi-cluster.yaml
+#
+# Prerequisites:
+#   - ExternalProvider CRs for cluster-b and cluster-c must exist
+#   - Weight Controller must be deployed
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: maas-cluster-b
+  namespace: maas-system
+spec:
+  provider: remote-maas
+  endpoint: cluster-b.example.com
+  auth:
+    type: simple
+    secretRef:
+      name: cluster-b-credentials
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalProvider
+metadata:
+  name: maas-cluster-c
+  namespace: maas-system
+spec:
+  provider: remote-maas
+  endpoint: cluster-c.example.com
+  auth:
+    type: simple
+    secretRef:
+      name: cluster-c-credentials
+---
+apiVersion: inference.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: llama-3-70b-multi
+  namespace: maas-system
+spec:
+  modelName: llama-3-70b
+  externalProviderRefs:
+    - ref:
+        name: maas-cluster-b
+      targetModel: llama-3-70b
+      apiFormat: openai-chat
+      path: /v1/chat/completions
+      weight: 50  # Weight Controller will dynamically update this
+    - ref:
+        name: maas-cluster-c
+      targetModel: llama-3-70b
+      apiFormat: openai-chat
+      path: /v1/chat/completions
+      weight: 50  # Weight Controller will dynamically update this
