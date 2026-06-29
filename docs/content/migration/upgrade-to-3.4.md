@@ -282,24 +282,23 @@ The following happen without admin intervention during the upgrade:
 
 1. **Old CR cleanup**: The operator's garbage collection removes the old `ModelsAsService` CR (the operator no longer creates it).
 2. **maas-controller deployment**: The operator deploys `maas-controller` (CRDs, RBAC, Deployment) when `modelsAsService: Managed`.
-3. **Default tenant creation**: `maas-controller` automatically creates `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant` with default values.
+3. **Default tenant creation**: `maas-controller` automatically creates `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant`.
 4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the default Tenant CR.
 
 ### Manual Steps: Re-applying Custom Configuration
 
-If you had customized the `ModelsAsService` CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), those values are **not** migrated automatically to the new Tenant CR. The Tenant is created with defaults.
+If you had customized the `ModelsAsService` CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), re-apply those values to the new ownership locations. Gateway and external OIDC are AITenant-owned platform context; API key and telemetry settings are Tenant-owned MaaS config.
 
 **If all fields were at defaults, no manual steps are needed.**
 
-The following table maps old `ModelsAsService` spec fields to new `Tenant` spec fields:
+The following table maps old `ModelsAsService` spec fields to new fields:
 
-| Old ModelsAsService field | New Tenant field | Default value |
-|---------------------------|------------------|---------------|
-| `spec.gatewayRef.namespace` | `spec.gatewayRef.namespace` | `openshift-ingress` |
-| `spec.gatewayRef.name` | `spec.gatewayRef.name` | `maas-default-gateway` |
-| `spec.externalOIDC.issuerUrl` | `spec.externalOIDC.issuerUrl` | (not set) |
-| `spec.externalOIDC.clientId` | `spec.externalOIDC.clientId` | (not set) |
-| `spec.externalOIDC.ttl` | `spec.externalOIDC.ttl` | `300` |
+| Old ModelsAsService field | New field | Default value |
+|---------------------------|-----------|---------------|
+| `spec.gatewayRef.name` | `AITenant/models-as-a-service.spec.gateway.name` | `maas-default-gateway` |
+| `spec.externalOIDC.issuerUrl` | `AITenant/models-as-a-service.spec.oidc.issuerUrl` | (not set) |
+| `spec.externalOIDC.clientId` | `AITenant/models-as-a-service.spec.oidc.clientId` | (not set) |
+| `spec.externalOIDC.ttl` | `AITenant/models-as-a-service.spec.oidc.ttl` | `300` |
 | `spec.telemetry.enabled` | `spec.telemetry.enabled` | `true` |
 | `spec.telemetry.metrics.captureOrganization` | `spec.telemetry.metrics.captureOrganization` | `true` |
 | `spec.telemetry.metrics.captureUser` | `spec.telemetry.metrics.captureUser` | `false` |
@@ -307,17 +306,26 @@ The following table maps old `ModelsAsService` spec fields to new `Tenant` spec 
 | `spec.telemetry.metrics.captureModelUsage` | `spec.telemetry.metrics.captureModelUsage` | `true` |
 | `spec.apiKeys.maxExpirationDays` | `spec.apiKeys.maxExpirationDays` | (not set) |
 
-To re-apply custom values, patch the Tenant CR after the upgrade:
+Gateway namespace is controller configuration (`--gateway-namespace`), not an AITenant spec field. If you previously used a non-default Gateway namespace, configure the controller with that namespace.
+
+To re-apply custom values, patch the AITenant and Tenant CRs after the upgrade:
 
 ```bash
-# Example: Re-apply external OIDC and API key configuration
+# Example: Re-apply external OIDC platform context
+kubectl patch aitenant models-as-a-service -n ai-tenants --type merge \
+  -p '{
+    "spec": {
+      "oidc": {
+        "issuerUrl": "https://keycloak.example.com/realms/maas",
+        "clientId": "maas-client"
+      }
+    }
+  }'
+
+# Example: Re-apply API key configuration
 kubectl patch tenant default-tenant -n models-as-a-service --type merge \
   -p '{
     "spec": {
-      "externalOIDC": {
-        "issuerUrl": "https://keycloak.example.com/realms/maas",
-        "clientId": "maas-client"
-      },
       "apiKeys": {
         "maxExpirationDays": 90
       }
