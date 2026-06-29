@@ -88,22 +88,25 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
-// NOTE: TenantReconciler actively creates and manages these Kuadrant resources per-tenant:
-// - authpolicies: For per-tenant Authorino authentication setup
-// - ratelimitpolicies/tokenratelimitpolicies: For per-tenant token-based rate limiting
-// - telemetrypolicies: For per-tenant observability and metrics collection
-// The create/patch/delete verbs are required for active resource management, not just status observation.
-// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
+// NOTE: TenantReconciler only watches (reads) these resources for status reporting and reconciliation logic.
+// The actual Kuadrant resources are created and managed by specialized sub-controllers:
+// - MaaSAuthPolicyReconciler creates authpolicies for per-tenant Authorino authentication setup
+// - MaaSSubscriptionReconciler creates ratelimitpolicies/tokenratelimitpolicies for rate limiting
+// - MaaSSubscriptionReconciler creates telemetrypolicies for observability and metrics collection
+// TenantReconciler only needs read-only access (get;list;watch) to observe these resources for status.
+// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
+// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
+// Istio resources are created by other controllers or Istio itself; TenantReconciler only watches for status.
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch
+// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch
+// Cronjobs, monitoring, and perses resources are created by other systems; TenantReconciler only watches.
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch
+// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch
 
 // clusterroles/clusterrolebindings: TenantReconciler reads RBAC state for validation only.
 // Removed create/patch/delete verbs to eliminate RBAC privilege escalation vectors (CWE-269).
