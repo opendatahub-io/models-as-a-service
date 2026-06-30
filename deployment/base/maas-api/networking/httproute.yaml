@@ -15,7 +15,7 @@ spec:
             value: /v1/models
       backendRefs:
         - name: maas-api
-          port: 8080
+          port: 8443
           weight: 100
     # /v1/subscriptions endpoint at top level
     - matches:
@@ -24,7 +24,7 @@ spec:
             value: /v1/subscriptions
       backendRefs:
         - name: maas-api
-          port: 8080
+          port: 8443
           weight: 100
     # /v1/api-keys endpoint at top level
     - matches:
@@ -33,7 +33,7 @@ spec:
             value: /v1/api-keys
       backendRefs:
         - name: maas-api
-          port: 8080
+          port: 8443
           weight: 100
     # IMPORTANT: /v1/tenants is NOT routed through Gateway (internal-only)
     # It must be called via maas-api Service directly for tenant-scoped auth
@@ -50,5 +50,5 @@ spec:
               replacePrefixMatch: /
       backendRefs:
         - name: maas-api
-          port: 8080
+          port: 8443
           weight: 100
