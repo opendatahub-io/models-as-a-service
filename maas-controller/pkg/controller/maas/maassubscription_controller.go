@@ -48,6 +48,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // MaaSSubscriptionReconciler reconciles a MaaSSubscription object
@@ -71,6 +72,7 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/finalizers,verbs=update
@@ -1092,6 +1094,11 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// Watch generated TokenRateLimitPolicies so manual edits get overwritten by the controller.
 		Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedTRLPToParent,
+		)).
+		// Watch AITenants so gateway/OIDC platform-context changes refresh subscription
+		// gateway validation for the affected tenant namespace.
+		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapAITenantToMaaSSubscriptions,
 		))
 
 	if r.TenantNamespaceDiscoveryEnabled {
@@ -1103,6 +1110,28 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	return b.Complete(r)
+}
+
+func (r *MaaSSubscriptionReconciler) mapAITenantToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {
+	aitenant, ok := obj.(*maasv1alpha1.AITenant)
+	if !ok {
+		return nil
+	}
+	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.DefaultTenantNamespace)
+	subList := &maasv1alpha1.MaaSSubscriptionList{}
+	if err := r.List(ctx, subList, client.InNamespace(tenantNamespace)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription resources for AITenant change",
+			"tenantNamespace", tenantNamespace,
+			"aitenant", obj.GetNamespace()+"/"+obj.GetName())
+		return nil
+	}
+	subList.Items = filterSubscriptionsByTenantNamespace(ctx, r.Client, subList.Items, r.DefaultTenantNamespace, r.TenantNamespaceDiscoveryEnabled)
+
+	requests := make([]reconcile.Request, len(subList.Items))
+	for i, sub := range subList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: sub.Namespace}}
+	}
+	return requests
 }
 
 // duplicatePriorityScanHandler runs a full duplicate-priority scan without enqueuing reconciles.
