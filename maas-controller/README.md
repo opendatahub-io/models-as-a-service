@@ -501,4 +501,5 @@ The controller accepts the following command-line flags:
 - **AITenant infrastructure namespace**: Default is `ai-tenants`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
 - **AITenant tenant namespace**: For non-default tenants, the controller derives the tenant namespace as `ai-tenant-<aitenant-name>`. The default tenant keeps the configured MaaS subscription namespace, usually `models-as-a-service`.
 - **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
-- **Gateway name/namespace**: Legacy/default Tenant routing uses `spec.gatewayRef` with controller defaults. `AITenant` validates an existing tenant Gateway in `--gateway-namespace`; `spec.gateway.name` defaults to the `AITenant` name.
+- **Gateway name/namespace**: Legacy/unmanaged Tenant routing uses `spec.gatewayRef` with controller defaults. AITenant-managed tenants use the owning `AITenant` as the platform context source: `spec.gateway.name` is intent, `status.gatewayRef` is the resolved Gateway, and the bridge `Tenant.spec.gatewayRef` is ignored.
+- **External OIDC**: For AITenant-managed tenants, configure OIDC on `AITenant.spec.oidc`. Existing `Tenant.spec.externalOIDC` values are preserved for compatibility but ignored once the Tenant is AITenant-managed.

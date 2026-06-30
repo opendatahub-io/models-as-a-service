@@ -21,6 +21,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -916,7 +917,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	// Test 1: apiKeyValidation cache key must include API key material (gateway policy)
 	t.Run("apiKeyValidation includes API key", func(t *testing.T) {
 		assertCacheKeyContains(t, gwPolicy,
-			[]string{"request.headers.authorization", `replace("Bearer ", "")`},
+			[]string{`replace("Bearer ", "")`},
 			"spec", "defaults", "rules", "metadata", "apiKeyValidation", "cache", "key", "selector",
 		)
 	})
@@ -945,8 +946,8 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 		if !contains(key, "x-gateway-model-name") && !contains(key, "request.path") {
 			t.Errorf("auth-valid cache key must include dynamic model identity (header or path), got: %s", key)
 		}
-		if !contains(key, "authorization") {
-			t.Errorf("auth-valid cache key must include authorization header for key identity, got: %s", key)
+		if !contains(key, `replace("Bearer ", "")`) {
+			t.Errorf("auth-valid cache key must include API key extraction expression, got: %s", key)
 		}
 	})
 
@@ -1213,7 +1214,8 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	})
 }
 
-func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
+func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructured.Unstructured {
+	t.Helper()
 	r := &MaaSAuthPolicyReconciler{
 		MaaSAPINamespace: "maas-system",
 		GatewayName:      "maas-default-gateway",
@@ -1222,72 +1224,98 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
+	spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+}
 
-	gwSpecToUnstructured := func(t *testing.T, spec map[string]any) *unstructured.Unstructured {
-		t.Helper()
-		obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
-		return obj
+func nestedMapRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) map[string]any {
+	t.Helper()
+	got, found, err := unstructured.NestedMap(obj.Object, fields...)
+	if err != nil || !found {
+		t.Fatalf("nested map %v missing: found=%v err=%v", fields, found, err)
+	}
+	return got
+}
+
+func nestedStringRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) string {
+	t.Helper()
+	got, found, err := unstructured.NestedString(obj.Object, fields...)
+	if err != nil || !found {
+		t.Fatalf("nested string %v missing: found=%v err=%v", fields, found, err)
+	}
+	return got
+}
+
+func nestedWhenPredicateRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) string {
+	t.Helper()
+	when, found, err := unstructured.NestedSlice(obj.Object, fields...)
+	if err != nil || !found || len(when) == 0 {
+		t.Fatalf("when condition %v missing: found=%v err=%v", fields, found, err)
+	}
+	firstWhen, ok := when[0].(map[string]any)
+	if !ok {
+		t.Fatalf("when[0] for %v is not a map: %T", fields, when[0])
+	}
+	pred, ok := firstWhen["predicate"].(string)
+	if !ok {
+		t.Fatalf("when[0] for %v has no predicate string", fields)
+	}
+	return pred
+}
+
+func TestBuildGatewayAuthPolicySpec_K8sAuth(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	auth := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authentication")
+	if _, exists := auth["api-keys"]; !exists {
+		t.Error("api-keys authentication should always be present")
+	}
+	if _, exists := auth["openshift-identities"]; !exists {
+		t.Error("openshift-identities should always be present")
+	}
+	if _, exists := auth["oidc-identities"]; exists {
+		t.Error("oidc-identities should NOT be present when OIDC config is nil")
+	}
+	if _, exists := auth["api-keys-x-api-key"]; exists {
+		t.Error("api-keys-x-api-key should NOT be present when xAPIKeyEnabled is false")
 	}
 
-	t.Run("without OIDC", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
+	authz := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization")
+	if _, exists := authz["oidc-groups-safe"]; exists {
+		t.Error("oidc-groups-safe should NOT be present when OIDC config is nil")
+	}
+}
 
-		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
-		if err != nil || !found {
-			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := auth["api-keys"]; !exists {
-			t.Error("api-keys authentication should always be present")
-		}
-		if _, exists := auth["openshift-identities"]; !exists {
-			t.Error("openshift-identities should always be present")
-		}
-		if _, exists := auth["oidc-identities"]; exists {
-			t.Error("oidc-identities should NOT be present when OIDC config is nil")
-		}
-	})
+func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
+	oidc := &oidcConfig{
+		IssuerURL: "https://keycloak.example.com/realms/test",
+		ClientID:  "maas-client",
+	}
+	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
-	t.Run("with OIDC", func(t *testing.T) {
-		oidc := &oidcConfig{
-			IssuerURL: "https://keycloak.example.com/realms/test",
-			ClientID:  "maas-client",
-		}
-		spec := r.buildGatewayAuthPolicySpec("{}", oidc, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
+	auth := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authentication")
+	if _, exists := auth["oidc-identities"]; !exists {
+		t.Fatal("oidc-identities should be present when OIDC config is provided")
+	}
+	issuer := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
+	if issuer != oidc.IssuerURL {
+		t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
+	}
+	rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "opa", "rego")
+	if !contains(rego, safeGroupNamePattern) || !contains(rego, "unsafe_group") {
+		t.Errorf("oidc-groups-safe rego should reject unsafe group names, got: %s", rego)
+	}
+	predicate := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "oidc-groups-safe", "when")
+	if !contains(predicate, "has(auth.identity.groups)") {
+		t.Errorf("oidc-groups-safe should only run for OIDC group identities, got: %s", predicate)
+	}
+}
 
-		auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
-		if err != nil || !found {
-			t.Fatalf("authentication block missing: found=%v err=%v", found, err)
-		}
-		if _, exists := auth["oidc-identities"]; !exists {
-			t.Fatal("oidc-identities should be present when OIDC config is provided")
-		}
-		issuer, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "issuerUrl")
-		if err != nil || !found {
-			t.Fatalf("oidc issuerUrl missing: found=%v err=%v", found, err)
-		}
-		if issuer != oidc.IssuerURL {
-			t.Errorf("oidc issuerUrl = %v, want %v", issuer, oidc.IssuerURL)
-		}
-	})
+func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
 	t.Run("subscription-info has model-route scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
-		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("subscription-info when condition missing: found=%v err=%v", found, err)
-		}
-		firstWhen, ok := when[0].(map[string]any)
-		if !ok {
-			t.Fatalf("subscription-info when[0] is not a map: %T", when[0])
-		}
-		pred, ok := firstWhen["predicate"].(string)
-		if !ok {
-			t.Fatal("subscription-info when[0] has no predicate string")
-		}
+		pred := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "metadata", "subscription-info", "when")
 		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
 			t.Errorf("subscription-info when should scope to model routes and exclude management paths, got: %s", pred)
 		}
@@ -1297,21 +1325,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("subscription-valid has model-route scoped when condition", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		when, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
-		if err != nil || !found || len(when) == 0 {
-			t.Fatalf("subscription-valid when condition missing: found=%v err=%v", found, err)
-		}
-		firstWhen, ok := when[0].(map[string]any)
-		if !ok {
-			t.Fatalf("subscription-valid when[0] is not a map: %T", when[0])
-		}
-		pred, ok := firstWhen["predicate"].(string)
-		if !ok {
-			t.Fatal("subscription-valid when[0] has no predicate string")
-		}
+		pred := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "subscription-valid", "when")
 		if !contains(pred, "x-gateway-model-name") || !contains(pred, "maas-api") || !contains(pred, "v1") {
 			t.Errorf("subscription-valid when should scope to model routes and exclude management paths, got: %s", pred)
 		}
@@ -1321,13 +1335,7 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("require-group-membership recognizes tenant model paths", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
-		}
+		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
 		if !contains(rego, `path_parts[0] != "maas-api"`) || !contains(rego, `path_parts[0] != "v1"`) {
 			t.Errorf("require-group-membership rego should treat tenant model paths as model routes and exclude management paths, got: %s", rego)
 		}
@@ -1337,17 +1345,81 @@ func TestBuildGatewayAuthPolicySpec_K8sAndOIDCAuth(t *testing.T) {
 	})
 
 	t.Run("auth-valid supports non-API-key tokens", func(t *testing.T) {
-		spec := r.buildGatewayAuthPolicySpec("{}", nil, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
-		obj := gwSpecToUnstructured(t, spec)
-
-		rego, found, err := unstructured.NestedString(obj.Object, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("auth-valid rego missing: found=%v err=%v", found, err)
-		}
+		rego := nestedStringRequired(t, obj, "spec", "defaults", "rules", "authorization", "auth-valid", "opa", "rego")
 		if !contains(rego, "not input.auth.metadata.apiKeyValidation") {
 			t.Errorf("auth-valid rego should allow non-API-key tokens, got: %s", rego)
 		}
 	})
+}
+
+func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "gateway-ns",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	spec := r.buildGatewayAuthPolicySpec("{}", nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+
+	auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
+	if err != nil || !found {
+		t.Fatalf("authentication block missing: found=%v err=%v", found, err)
+	}
+	xAPIKey, exists := auth["api-keys-x-api-key"]
+	if !exists {
+		t.Fatal("api-keys-x-api-key should be present when xAPIKeyEnabled is true")
+	}
+	xAPIKeyMap, ok := xAPIKey.(map[string]any)
+	if !ok {
+		t.Fatalf("api-keys-x-api-key is not a map: %T", xAPIKey)
+	}
+	expr, _, _ := unstructured.NestedString(xAPIKeyMap, "plain", "expression")
+	if !contains(expr, "x-api-key") {
+		t.Errorf("api-keys-x-api-key plain.expression should reference x-api-key header, got: %s", expr)
+	}
+
+	priority, ok := xAPIKeyMap["priority"].(int64)
+	if !ok || priority != 1 {
+		t.Errorf("api-keys-x-api-key priority should be 1 (fallback after api-keys), got: %v", xAPIKeyMap["priority"])
+	}
+
+	xAPIKeyWhen, found2, err2 := unstructured.NestedSlice(xAPIKeyMap, "when")
+	if err2 != nil || !found2 || len(xAPIKeyWhen) == 0 {
+		t.Fatalf("api-keys-x-api-key when missing: found=%v err=%v", found2, err2)
+	}
+	xWhenPred, _ := xAPIKeyWhen[0].(map[string]any)["predicate"].(string)
+	if !contains(xWhenPred, `!request.headers.authorization.matches`) {
+		t.Errorf("api-keys-x-api-key when should exclude requests with Authorization Bearer sk-oai-, got: %s", xWhenPred)
+	}
+
+	apiKeyWhen, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "metadata", "apiKeyValidation", "when")
+	if err != nil || !found || len(apiKeyWhen) == 0 {
+		t.Fatalf("apiKeyValidation when missing: found=%v err=%v", found, err)
+	}
+	whenMap, ok := apiKeyWhen[0].(map[string]any)
+	if !ok {
+		t.Fatalf("apiKeyValidation when[0] is not a map")
+	}
+	pred, ok := whenMap["predicate"].(string)
+	if !ok {
+		t.Fatal("apiKeyValidation when should use predicate (not selector) when x-api-key enabled")
+	}
+	if !contains(pred, "x-api-key") {
+		t.Errorf("apiKeyValidation when predicate should include x-api-key check, got: %s", pred)
+	}
+
+	osWhen, found, err := unstructured.NestedSlice(obj.Object, "spec", "defaults", "rules", "authentication", "openshift-identities", "when")
+	if err != nil || !found || len(osWhen) == 0 {
+		t.Fatalf("openshift-identities when missing")
+	}
+	osPred, _ := osWhen[0].(map[string]any)["predicate"].(string)
+	if !contains(osPred, "x-api-key") {
+		t.Errorf("openshift-identities when should exclude x-api-key requests, got: %s", osPred)
+	}
 }
 
 // contains is a helper to check if a string contains a substring (case-sensitive).
@@ -1619,6 +1691,106 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 	}
 }
 
+// TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization verifies that the generated
+// gateway AuthPolicy normalizes canonical model IDs (publishers/{ns}/models/{name})
+// to the internal {ns}/{name} format in both CEL and OPA Rego expressions.
+func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		httpRouteName  = modelName
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	t.Run("CEL normalizes canonical publishers/ prefix", func(t *testing.T) {
+		// The CEL celModelIdentity is embedded in auth-valid authorization block.
+		// Check that the gateway AuthPolicy's auth-valid rego or CEL-based expressions
+		// contain the normalization for publishers/ prefix.
+		// celModelIdentity is used in the response and cache-key sections.
+		// It should handle: publishers/{ns}/models/{name} -> {ns}/{name}
+		if !strings.Contains(celModelIdentity, `startsWith("publishers/")`) {
+			t.Errorf("celModelIdentity should normalize canonical model IDs with publishers/ prefix, got: %s", celModelIdentity)
+		}
+		if !strings.Contains(celModelIdentity, `split("/")[1]`) || !strings.Contains(celModelIdentity, `split("/")[3]`) {
+			t.Errorf("celModelIdentity should extract ns (index 1) and name (index 3) from canonical format, got: %s", celModelIdentity)
+		}
+		if !strings.Contains(celModelIdentity, `x-gateway-model-name`) {
+			t.Errorf("celModelIdentity should read from x-gateway-model-name header, got: %s", celModelIdentity)
+		}
+	})
+
+	t.Run("OPA Rego normalizes canonical publishers/ prefix", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+
+		if !strings.Contains(rego, "raw_header_model_identity") {
+			t.Errorf("rego should extract raw header value before normalization, got: %s", rego)
+		}
+		if !strings.Contains(rego, `startswith(raw_header_model_identity, "publishers/")`) {
+			t.Errorf("rego should check for publishers/ prefix, got: %s", rego)
+		}
+		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[1]`) {
+			t.Errorf("rego should extract namespace at index 1 from canonical format, got: %s", rego)
+		}
+		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[3]`) {
+			t.Errorf("rego should extract model name at index 3 from canonical format, got: %s", rego)
+		}
+	})
+
+	t.Run("CEL passes through short model names unchanged", func(t *testing.T) {
+		// When the header doesn't start with "publishers/", the raw value should be used as-is
+		if !strings.Contains(celModelIdentity, `: request.headers["x-gateway-model-name"])`) {
+			t.Errorf("celModelIdentity should pass through non-canonical model names as-is, got: %s", celModelIdentity)
+		}
+	})
+
+	t.Run("OPA Rego passes through short model names unchanged", func(t *testing.T) {
+		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+		// The else clause should assign the raw value when not canonical
+		if !strings.Contains(rego, "else := raw_header_model_identity") {
+			t.Errorf("rego should fall back to raw header value for non-canonical names, got: %s", rego)
+		}
+	})
+}
+
 // TestMaaSAuthPolicyReconciler_StaleEvent_NoOp verifies the W4a contract: a reconcile
 // request for a MaaSAuthPolicy that no longer exists (stale queue entry or deleted-race)
 // returns cleanly without error. After the W4a fix, fetchOIDCConfig is only called after
@@ -1640,4 +1812,121 @@ func TestMaaSAuthPolicyReconciler_StaleEvent_NoOp(t *testing.T) {
 	if res != (ctrl.Result{}) {
 		t.Errorf("expected empty Result, got %+v", res)
 	}
+}
+
+func TestDiscoverXAPIKeyNeeded(t *testing.T) {
+	t.Run("returns true when ExternalModel has messages apiFormat", func(t *testing.T) {
+		extModel := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "inference.opendatahub.io/v1alpha1",
+			"kind":       "ExternalModel",
+			"metadata":   map[string]any{"name": "claude-model", "namespace": "default"},
+			"spec": map[string]any{
+				"externalProviderRefs": []any{
+					map[string]any{
+						"ref":         map[string]any{"name": "anthropic-provider"},
+						"targetModel": "claude-sonnet-4-5-20241022",
+						"apiFormat":   "messages",
+					},
+				},
+			},
+		}}
+		extModel.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel",
+		})
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithRESTMapper(testRESTMapper()).
+			WithObjects(extModel).
+			Build()
+
+		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
+		if !got {
+			t.Error("expected true when ExternalModel has apiFormat=messages")
+		}
+	})
+
+	t.Run("returns false when only openai-chat apiFormat", func(t *testing.T) {
+		extModel := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "inference.opendatahub.io/v1alpha1",
+			"kind":       "ExternalModel",
+			"metadata":   map[string]any{"name": "gpt-model", "namespace": "default"},
+			"spec": map[string]any{
+				"externalProviderRefs": []any{
+					map[string]any{
+						"ref":         map[string]any{"name": "openai-provider"},
+						"targetModel": "gpt-4o",
+						"apiFormat":   "openai-chat",
+					},
+				},
+			},
+		}}
+		extModel.SetGroupVersionKind(schema.GroupVersionKind{
+			Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel",
+		})
+
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithRESTMapper(testRESTMapper()).
+			WithObjects(extModel).
+			Build()
+
+		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
+		if got {
+			t.Error("expected false when only openai-chat apiFormat is present")
+		}
+	})
+
+	t.Run("returns false when CRD not found", func(t *testing.T) {
+		c := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithRESTMapper(testRESTMapper()).
+			Build()
+
+		r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme}
+		got := r.discoverXAPIKeyNeeded(context.Background(), logr.Discard())
+		if got {
+			t.Error("expected false when inference CRD is not installed")
+		}
+	})
+}
+
+func TestAPIKeyCELPredicates(t *testing.T) {
+	t.Run("disabled returns original expressions", func(t *testing.T) {
+		isAPIKey, isNotAPIKey, extractKey := apiKeyCELPredicates(false)
+		if contains(isAPIKey, "x-api-key") {
+			t.Errorf("isAPIKey should not reference x-api-key when disabled, got: %s", isAPIKey)
+		}
+		if contains(isNotAPIKey, "x-api-key") {
+			t.Errorf("isNotAPIKey should not reference x-api-key when disabled, got: %s", isNotAPIKey)
+		}
+		if contains(extractKey, "x-api-key") {
+			t.Errorf("extractKey should not reference x-api-key when disabled, got: %s", extractKey)
+		}
+	})
+
+	t.Run("enabled includes x-api-key in all expressions", func(t *testing.T) {
+		isAPIKey, isNotAPIKey, extractKey := apiKeyCELPredicates(true)
+		if !contains(isAPIKey, "x-api-key") {
+			t.Errorf("isAPIKey should reference x-api-key when enabled, got: %s", isAPIKey)
+		}
+		if !contains(isNotAPIKey, "x-api-key") {
+			t.Errorf("isNotAPIKey should reference x-api-key when enabled, got: %s", isNotAPIKey)
+		}
+		if !contains(extractKey, "x-api-key") {
+			t.Errorf("extractKey should reference x-api-key when enabled, got: %s", extractKey)
+		}
+		if !contains(isAPIKey, "authorization") {
+			t.Errorf("isAPIKey should still reference authorization header, got: %s", isAPIKey)
+		}
+	})
+
+	t.Run("enabled extractKey prefers Authorization over x-api-key", func(t *testing.T) {
+		_, _, extractKey := apiKeyCELPredicates(true)
+		if !strings.HasPrefix(extractKey, `request.headers.authorization.matches`) {
+			t.Errorf("extractKey should check Authorization first (prefer Bearer over x-api-key), got: %s", extractKey)
+		}
+	})
 }
