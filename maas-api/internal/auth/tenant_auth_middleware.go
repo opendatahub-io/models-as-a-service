@@ -69,7 +69,7 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 		username := result.Status.User.Username
 		groups := result.Status.User.Groups
 
-		log.Debug("Token authenticated", "username", username, "groups", groups)
+		log.Debug("Token authenticated successfully")
 
 		// Step 3: Verify user is in system:authenticated group via SubjectAccessReview
 		// This ensures the user has basic authenticated access to the cluster.
@@ -103,7 +103,6 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 
 		if !sarResult.Status.Allowed {
 			log.Debug("Access denied - not an authenticated user",
-				"username", username,
 				"reason", sarResult.Status.Reason)
 			c.JSON(http.StatusForbidden, gin.H{
 				"error":   "Insufficient permissions",
@@ -113,7 +112,7 @@ func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) g
 			return
 		}
 
-		log.Debug("Authenticated user access granted", "username", username)
+		log.Debug("Authenticated user access granted")
 
 		// Token valid and user is authenticated - proceed
 		c.Next()

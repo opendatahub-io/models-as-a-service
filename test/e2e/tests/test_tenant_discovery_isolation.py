@@ -29,13 +29,13 @@ def tenant_service_urls(shared_test_tenants):
     tenant_a, tenant_b = shared_test_tenants
 
     # Construct internal service URLs
-    # Format: http://{service-name}.{namespace}.svc.cluster.local:{port}
+    # Format: https://{service-name}.{namespace}.svc.cluster.local:{port}
     def service_url(tenant):
         namespace = tenant["namespace"]
         # Service name follows pattern: maas-api-{tenant-name}
         service_name = f"maas-api-{tenant['name']}"
-        port = "8080"
-        return f"http://{service_name}.{namespace}.svc.cluster.local:{port}"
+        port = "8443"  # HTTPS port - bearer tokens must not be sent over cleartext
+        return f"https://{service_name}.{namespace}.svc.cluster.local:{port}"
 
     return {
         "tenant_a": {
@@ -205,11 +205,9 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
 
         r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
 
-        if r.status_code == 403:
-            print(f"[isolation] {tenant['name']} returned 403, skipping gateway validation")
-            continue
-
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+        # With system:authenticated authorization, 403 indicates auth/RBAC regression
+        assert r.status_code == 200, \
+            f"Expected 200 (system:authenticated), got {r.status_code}: {r.text[:400]}"
 
         data = r.json()
         tenant_data = data["tenants"][0]

@@ -262,9 +262,57 @@ func (h *Handler) findRouteHostname(ctx context.Context) string {
 			continue
 		}
 
+		// Verify Route is admitted (prevents poisoning from unadmitted Routes)
+		status, ok := item.Object["status"].(map[string]any)
+		if !ok {
+			continue
+		}
+
+		ingress, ok := status["ingress"].([]any)
+		if !ok || len(ingress) == 0 {
+			continue
+		}
+
+		// Check if any ingress entry has Admitted=True condition
+		admitted := false
+		for _, ing := range ingress {
+			ingMap, ok := ing.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			conditions, ok := ingMap["conditions"].([]any)
+			if !ok {
+				continue
+			}
+
+			for _, cond := range conditions {
+				condMap, ok := cond.(map[string]any)
+				if !ok {
+					continue
+				}
+
+				if condType, _ := condMap["type"].(string); condType == "Admitted" {
+					if condStatus, _ := condMap["status"].(string); condStatus == "True" {
+						admitted = true
+						break
+					}
+				}
+			}
+
+			if admitted {
+				break
+			}
+		}
+
+		if !admitted {
+			h.log.Debug("Skipping unadmitted Route", "route", item.GetName())
+			continue
+		}
+
 		// Extract hostname from Route spec
 		if host, ok := spec["host"].(string); ok && host != "" {
-			h.log.Debug("Found external hostname from Route",
+			h.log.Debug("Found external hostname from admitted Route",
 				"route", item.GetName(),
 				"hostname", host)
 			return host
