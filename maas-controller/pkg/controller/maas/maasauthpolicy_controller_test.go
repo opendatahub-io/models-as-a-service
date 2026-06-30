@@ -641,7 +641,11 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	if !ok || len(whenSlice) == 0 {
 		t.Fatal("gateway-default-auth should have a 'when' predicate to scope deny-all to model inference paths")
 	}
-	predicate, ok, _ := unstructured.NestedString(whenSlice[0].(map[string]any), "predicate")
+	whenEntry, entryOk := whenSlice[0].(map[string]any)
+	if !entryOk {
+		t.Fatal("gateway-default-auth 'when' entry is not a map")
+	}
+	predicate, ok, _ := unstructured.NestedString(whenEntry, "predicate")
 	if !ok || predicate == "" {
 		t.Fatal("gateway-default-auth 'when' predicate should not be empty")
 	}
