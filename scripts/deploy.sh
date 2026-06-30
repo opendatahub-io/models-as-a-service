@@ -654,7 +654,7 @@ EOF
   # Infrastructure namespace is configurable via deployment overlays (params.env).
   log_info ""
   log_info "Waiting for Tenant reconciler to deploy maas-api..."
-  local infra_namespace_raw="${INFRA_NAMESPACE:-opendatahub}"
+  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
@@ -1619,7 +1619,7 @@ configure_tls_backend() {
   log_info "Restarting deployments to pick up TLS configuration..."
 
   # maas-api deploys to infrastructure namespace
-  local infra_namespace_raw="${INFRA_NAMESPACE:-opendatahub}"
+  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")

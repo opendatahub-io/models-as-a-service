@@ -1,7 +1,7 @@
 # Default namespace: opendatahub (ODH overlay). Override via kustomize.
 # INFRA_NAMESPACE: infrastructure namespace where maas-api and maas-db-config run.
 # Note: PostgreSQL can be external - only the maas-api deployment and connection secret are here.
-# Defaults to controller namespace (no separation). Set to "AUTO" to enable namespace separation.
+# Defaults to AUTO (namespace separation enabled). Set to "" (empty) to disable for ROSA.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -47,13 +47,10 @@ spec:
             value: "maas-default-gateway"
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
-          # TODO: When namespace separation becomes the default, change to:
-          #   - name: INFRA_NAMESPACE
-          #     value: "AUTO"
+          # AUTO = derive infra namespace from controller namespace (opendatahub → odh-ai-gateway-infra)
+          # To disable namespace separation (required for ROSA), override to empty string via kustomize
           - name: INFRA_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+            value: "AUTO"
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE

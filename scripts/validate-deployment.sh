@@ -50,8 +50,8 @@ detect_controller_namespace() {
   fi
 }
 
-# Infrastructure namespace - supports "AUTO" to derive from controller namespace
-INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-opendatahub}"
+# Infrastructure namespace - defaults to AUTO (namespace separation enabled)
+INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-AUTO}"
 if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
   # Derive from NAMESPACE (controller namespace) or auto-detect platform
   CONTROLLER_NS="${NAMESPACE:-$(detect_controller_namespace)}"

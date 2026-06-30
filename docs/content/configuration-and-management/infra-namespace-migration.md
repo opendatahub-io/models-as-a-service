@@ -2,58 +2,83 @@
 
 ## Overview
 
-MaaS can separate infrastructure services (maas-api deployment and maas-db-config secret) from controller components into dedicated namespaces. 
+MaaS separates infrastructure services (maas-api deployment and maas-db-config secret) from controller components into dedicated namespaces **by default**.
 
 **Note:** PostgreSQL itself can be external (e.g., AWS RDS, Azure Database). Only the maas-api deployment and the database connection secret (`maas-db-config`) move to the infrastructure namespace.
 
 For details on the full namespace architecture, see [Controller Architecture](../architecture-internals/controller-architecture.md).
 
-## Default Behavior (No Separation)
+## Default Behavior (Namespace Separation Enabled)
 
-Infrastructure runs in the controller namespace. This works on all clusters including **ODH on ROSA** (which has webhook restrictions on namespace creation).
+By default, MaaS automatically derives the infrastructure namespace from the controller namespace:
 
-## Enabling Namespace Separation
+- **ODH**: `opendatahub` (controller) → `odh-ai-gateway-infra` (infrastructure)
+- **RHOAI**: `redhat-ods-applications` (controller) → `redhat-ai-gateway-infra` (infrastructure)
 
-### Quick Start
+This provides better security isolation and simpler upgrades.
 
-!!! warning "ROSA Restriction"
-    **ODH on ROSA does not support namespace separation yet** due to OpenShift webhook restrictions that block namespace creation. The `INFRA_NAMESPACE=AUTO` deployment will fail when trying to create the infrastructure namespace.
+### What Gets Deployed Where
+
+**Infrastructure namespace** (`odh-ai-gateway-infra` or `redhat-ai-gateway-infra`):
+- maas-api Deployment
+- maas-db-config Secret
+- PostgreSQL (if using built-in, development only)
+
+**Controller namespace** (`opendatahub` or `redhat-ods-applications`):
+- maas-controller Deployment
+- CRDs and RBAC
+- Webhook
+
+## Disabling Namespace Separation (ROSA Only)
+
+!!! warning "ROSA Clusters Only"
+    **ODH on ROSA does not support namespace separation** due to OpenShift webhook restrictions that block namespace creation.
     
-    Until the ROSA restriction is lifted, **use the default behavior** (no separation) on ROSA clusters.
+    On ROSA clusters, you **must disable** namespace separation by setting `INFRA_NAMESPACE=""` (empty string).
+
+### Disable via Script
 
 ```bash
-export INFRA_NAMESPACE=AUTO
+export INFRA_NAMESPACE=""
 ./scripts/deploy.sh
 ```
 
-**What happens:**
-- maas-api deployed to `odh-ai-gateway-infra` (or `redhat-ai-gateway-infra` for RHOAI)
-- `maas-db-config` secret created in infrastructure namespace
-- Old maas-api in controller namespace **automatically cleaned up**
-- Controller deployment automatically patched
+### Disable via Kustomize
 
-**PostgreSQL:** If using the built-in PostgreSQL (development only), it deploys to the infrastructure namespace. If using external PostgreSQL, the connection string in `maas-db-config` points to wherever your database actually lives.
+In your overlay's `kustomization.yaml`, add a patch:
 
-### Alternative: Kustomize Component
-
-Add to your overlay `kustomization.yaml`:
 ```yaml
-components:
-- ../../components/infra-namespace-separation
+patches:
+- target:
+    kind: Deployment
+    name: maas-controller
+  patch: |-
+    - op: replace
+      path: /spec/template/spec/containers/0/env
+      value:
+      - name: INFRA_NAMESPACE
+        value: ""
 ```
 
-Then redeploy via operator or `kustomize build . | kubectl apply -f -`.
+**What happens when disabled:**
+- maas-api deploys to controller namespace (same as controller)
+- No separate infrastructure namespace created
+- Works on ROSA clusters with namespace creation restrictions
 
-### Custom Namespace
+## Custom Infrastructure Namespace
+
+You can override the auto-derived namespace with a custom value:
 
 ```bash
 export INFRA_NAMESPACE=my-custom-namespace
 ./scripts/deploy.sh
 ```
 
+Or via kustomize patch (similar to ROSA disable above, but set `value: "my-custom-namespace"`).
+
 ## Migration & Cleanup
 
-Migration is **automatic** when enabling separation:
+Migration happens **automatically** when switching between modes:
 
 1. Scripts detect existing PostgreSQL (if present) in controller namespace
 2. `maas-db-config` secret copied to new infra namespace
@@ -63,19 +88,33 @@ Migration is **automatic** when enabling separation:
 
 ## Verification
 
+### With Namespace Separation (Default)
+
 ```bash
-# Check separation is active
+# Check infrastructure namespace has maas-api
 kubectl get pods -n odh-ai-gateway-infra  # Should show maas-api (and postgres if using built-in)
 
-# Old namespace should only have controller
-kubectl get pods -n opendatahub  # Should NOT show maas-api
+# Controller namespace should NOT have maas-api
+kubectl get pods -n opendatahub  # Should only show maas-controller
 
 # Validate everything works
 ./scripts/validate-deployment.sh
 ```
 
+### Without Namespace Separation (ROSA)
+
+```bash
+# Check controller namespace has both controller and maas-api
+kubectl get pods -n opendatahub  # Should show both maas-controller and maas-api
+
+# No separate infrastructure namespace
+kubectl get namespace odh-ai-gateway-infra  # Should not exist (or be empty)
+
+# Validate everything works
+INFRA_NAMESPACE="" ./scripts/validate-deployment.sh
+```
+
 ## References
 
-- Component: `deployment/components/infra-namespace-separation/`
-- Auto-derivation logic: mirrors Go code in `main.go` and scripts
+- Auto-derivation logic: `resolveInfraNamespace()` in `main.go` and `derive_infra_namespace()` in scripts
 - Namespace architecture: [Controller Architecture](../architecture-internals/controller-architecture.md)
