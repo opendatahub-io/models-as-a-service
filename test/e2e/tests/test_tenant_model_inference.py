@@ -15,6 +15,9 @@ Prerequisites:
 """
 
 import json
+import logging
+import subprocess
+
 import pytest
 import requests
 
@@ -44,6 +47,8 @@ from test_helper import (
     _wait_reconcile,
     chat,
 )
+
+log = logging.getLogger(__name__)
 
 
 # Multi-tenant model inference tests are enabled by default (Phase 1 implementation)
@@ -273,4 +278,150 @@ class TestTenantModelInference:
             assert api_key_response.status_code in (401, 403), (
                 f"Unexpected API key creation failure: {api_key_response.status_code} "
                 f"{redact_sensitive(api_key_response.text)}"
+            )
+
+
+# ─── Body-based routing ────────────────────────────────────────────────────
+
+
+def _check_payload_processing_pods():
+    """Check if payload-processing (IPP) pods are deployed."""
+    for name in ("payload-pre-processing", "payload-processing"):
+        result = subprocess.run(
+            ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
+             "-o", "jsonpath={.status.readyReplicas}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log.debug("oc check for %s failed: %s", name, result.stderr.strip())
+            return False
+        ready = result.stdout.strip()
+        if not ready or ready == "0":
+            log.debug("Deployment %s has no ready replicas", name)
+            return False
+    return True
+
+
+requires_ipp = pytest.mark.skipif(
+    not _check_payload_processing_pods(),
+    reason="Payload-processing (IPP) pods not deployed; body routing tests require IPP",
+)
+
+
+def _create_tenant_api_key(gateway_url, case):
+    """Create an API key for a tenant and return (api_key, gateway_url)."""
+    oc_token = _get_cluster_token()
+    r = requests.post(
+        f"{gateway_url}/maas-api/v1/api-keys",
+        headers={
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "name": f"e2e-body-routing-{case['suffix']}",
+            "subscription": f"{case['model_name']}-sub",
+        },
+        timeout=45,
+        verify=TLS_VERIFY,
+    )
+    assert r.status_code in (200, 201), (
+        f"Failed to create API key: {r.status_code} {redact_sensitive(r.text)}"
+    )
+    api_key = r.json().get("key")
+    assert api_key, f"API key missing in response: {redact_sensitive(r.json())}"
+    return api_key
+
+
+@requires_ipp
+class TestTenantBodyRouting:
+    """Verify body-based routing in a multi-tenant context.
+
+    IPP pre-processing extracts the ``model`` field from the JSON body and
+    sets the ``X-Gateway-Model-Name`` header. These tests prove the body
+    model field drives routing: a correct model succeeds while a wrong
+    model is rejected by the model-provider-resolver plugin.
+    """
+
+    def _post_chat(self, gateway_url, model_path, api_key, body):
+        url = f"{gateway_url}{model_path}/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}",
+        }
+        return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+    def test_correct_model_in_body_succeeds(self, tenant_inference_cases):
+        """Correct model name in body passes through IPP and reaches backend."""
+        case_a, _ = tenant_inference_cases
+        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
+        api_key = _create_tenant_api_key(gateway_url, case_a)
+        _wait_reconcile()
+
+        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
+            "model": case_a["model_name"],
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code == 200, (
+            f"Expected 200 with correct model in body, got {r.status_code}. "
+            f"Response: {redact_sensitive(r.text[:500])}"
+        )
+        data = r.json()
+        assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
+        log.info("Body routing (correct model): HTTP %d", r.status_code)
+
+    def test_wrong_model_in_body_rejected(self, tenant_inference_cases):
+        """Wrong model name in body is rejected by IPP model-provider-resolver."""
+        case_a, _ = tenant_inference_cases
+        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
+        api_key = _create_tenant_api_key(gateway_url, case_a)
+        _wait_reconcile()
+
+        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
+            "model": "nonexistent-model",
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code != 200, (
+            f"Expected rejection for wrong model in body, got 200. "
+            f"Body routing may not be active — request succeeded via path routing alone."
+        )
+        log.info("Body routing (wrong model): HTTP %d", r.status_code)
+
+    def test_missing_model_in_body_rejected(self, tenant_inference_cases):
+        """Missing model field in body is rejected by IPP."""
+        case_a, _ = tenant_inference_cases
+        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
+        api_key = _create_tenant_api_key(gateway_url, case_a)
+        _wait_reconcile()
+
+        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code != 200, (
+            f"Expected rejection for missing model in body, got 200. "
+            f"Body routing may not be active — request succeeded without model field."
+        )
+        log.info("Body routing (missing model): HTTP %d", r.status_code)
+
+    def test_each_tenant_routes_to_own_model(self, tenant_inference_cases):
+        """Both tenants route correctly with their own model in body."""
+        case_a, case_b = tenant_inference_cases
+
+        for case in (case_a, case_b):
+            gateway_url = _get_tenant_gateway_url(case["gateway_name"])
+            api_key = _create_tenant_api_key(gateway_url, case)
+            _wait_reconcile()
+
+            r = self._post_chat(gateway_url, case["model_path"], api_key, {
+                "model": case["model_name"],
+                "messages": [{"role": "user", "content": "hello"}],
+            })
+            assert r.status_code == 200, (
+                f"Tenant {case['gateway_name']}: expected 200, got {r.status_code}. "
+                f"Response: {redact_sensitive(r.text[:500])}"
+            )
+            data = r.json()
+            assert "choices" in data
+            log.info(
+                "Body routing tenant %s: HTTP %d",
+                case["gateway_name"], r.status_code,
             )
