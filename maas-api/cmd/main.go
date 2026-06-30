@@ -234,7 +234,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
 	v1Routes.GET("/tenants",
-		auth.TenantAuthMiddleware(log, cluster.ClientSet),
+		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		tenantHandler.GetTenantInfo)
 
 	// Internal routes (no auth required - called by Authorino / CronJob)

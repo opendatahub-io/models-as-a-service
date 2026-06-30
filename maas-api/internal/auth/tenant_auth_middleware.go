@@ -6,7 +6,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	authenticationv1 "k8s.io/api/authentication/v1" //nolint:importas // Must use distinct alias from authorization/v1
-	authorizationv1 "k8s.io/api/authorization/v1" //nolint:importas // Must use distinct alias from authentication/v1
+	authorizationv1 "k8s.io/api/authorization/v1"  //nolint:importas // Must use distinct alias from authentication/v1
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 

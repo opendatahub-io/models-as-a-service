@@ -122,8 +122,8 @@ func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string
 	}
 
 	// Find first ready listener (has attached routes)
-	var port int64 = 443     // default
-	var protocol string = "HTTPS" // default
+	var port int64 = 443 // default
+	var protocol = "HTTPS" // default
 	var hostname string
 
 	for _, l := range listenersRaw {
