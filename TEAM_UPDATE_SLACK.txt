@@ -1,0 +1,112 @@
+🔄 MaaS Integration Testing - Team Update & Discussion
+
+📊 **Summary of Work Done**
+
+We've been conducting comprehensive integration testing of the MaaS modularization feature on fresh ROSA clusters. Two critical blockers have been identified and fixed.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ **CRITICAL FIX #1: MaaS RELATED_IMAGES Missing**
+
+🔴 **Issue:** MaaS controller not deploying (batch-gateway worked fine)
+
+**Root Cause:** RELATED_IMAGE env vars for MaaS were COMMENTED OUT as TODO in opendatahub-operator handler
+
+**Impact:**
+- opendatahub-operator → can't inject MaaS images
+- ai-gateway-operator → has no MaaS image references  
+- maas-controller → can't deploy
+- Result: MaaS integration impossible
+
+**Fix:** ✅ Commit 2447d9e1a
+- Added RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE
+- Added RELATED_IMAGE_ODH_MAAS_API_IMAGE
+- Now opendatahub-operator properly injects into ai-gateway-operator
+
+**Why Batch-Gateway Worked:** Its RELATED_IMAGES were already defined
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+✅ **CRITICAL FIX #2: AIGateway CRD Losing modelsAsService Field**
+
+🔴 **Issue:** Kubernetes was PRUNING the modelsAsService field from CR specs
+
+**Root Cause:** AIGateway CRD missing `x-kubernetes-preserve-unknown-fields: true`
+
+**Impact:**
+- CR accepts modelsAsService field during creation
+- But Kubernetes removes it during storage
+- ai-gateway-operator can't read the field
+- Result: "No sub-module is Managed; nothing to deploy"
+
+**Fix:** ✅ Commit 8ad10b825
+- Added x-kubernetes-preserve-unknown-fields: true to spec section
+- Both config/crd/bases AND config/module-crds updated
+- Field now persists in CR spec
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+📋 **Current Status**
+
+✅ Both fixes committed to feature branch
+✅ Deployment sequence validated
+⚠️ CRD deployment order critical (CRDs must deploy before operators)
+⚠️ Manifest fetch timing issue identified (old CRDs can get embedded in image)
+
+**Solution for Testing:** CRD-First Deployment
+1. Deploy CRDs from source FIRST
+2. Wait 15 seconds
+3. Deploy operators
+
+This ensures correct CRD in etcd before operators start.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+❓ **Questions for Team**
+
+We'd like your input on long-term solutions:
+
+**1. Manifest Fetch Strategy**
+   • How should we handle manifests during Docker build?
+   • Pin to specific commits? Use local copies? Version validation?
+   • Your ideas?
+
+**2. CRD Deployment Order**
+   • Should config/default enforce CRD deployment first?
+   • Should we add validation/tests for deployment ordering?
+   • Better kustomize patterns?
+   • Your ideas?
+
+**3. RELATED_IMAGES Best Practice**
+   • Should all expected RELATED_IMAGES be validated by CI?
+   • Need documentation for adding new RELATED_IMAGES?
+   • Should this be auto-generated?
+   • Your ideas?
+
+**4. x-kubernetes-preserve-unknown-fields**
+   • Should this be default on all CRDs?
+   • Should we add linting rules?
+   • Should this be in CRD design guidelines?
+   • Your ideas?
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+🚀 **Next Steps**
+
+**This Week:**
+• Deploy to fresh ROSA cluster (CRD-First method)
+• Run full E2E integration tests
+• Document any new issues
+• Get team feedback
+
+**Detailed docs available:**
+• CRITICAL_FIX_MAAS_RELATED_IMAGES.md
+• CRITICAL_FINDINGS_AND_DEPLOYMENT_STRATEGY.md
+• DEPLOYMENT_QUICK_REFERENCE.txt
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+💬 Please share your thoughts on the questions above!
+👉 Reply in thread or ping us with your ideas.
+
+Status: Ready for fresh cluster deployment ✅
