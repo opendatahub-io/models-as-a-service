@@ -2,6 +2,8 @@
 
 `AITenant` creates the Roles required for tenant administration, but it does not bind users, groups, or ServiceAccounts to those Roles. Platform administrators grant tenant access by creating standard Kubernetes `RoleBinding` resources.
 
+These `RoleBinding` resources are fully user-managed. Deleting an `AITenant` does not remove user-managed RoleBindings, and recreating the same tenant name can re-enable access if stale RoleBindings still reference the recreated Roles. Review or delete tenant RoleBindings before deleting or recreating a tenant.
+
 ## Controller-Created Roles
 
 For each `AITenant`, the controller creates two Roles.

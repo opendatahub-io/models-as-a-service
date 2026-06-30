@@ -18,6 +18,9 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 |-------|------|----------|-------------|
 | gateway | AITenantGatewayRef | No | Existing Gateway to reference. If omitted, the Gateway name defaults to the `AITenant` name. |
 | oidc | TenantExternalOIDCConfig | No | OIDC settings for this tenant's AI Gateway platform context. AITenant-managed tenants do not mirror this into `Tenant.spec.externalOIDC`. |
+| rbac | AITenantRBACConfig | No | Deprecated compatibility field. Accepted but ignored; create standard Kubernetes RoleBindings instead. |
+
+`spec.rbac` remains in the served schema only for upgrade compatibility with existing manifests. New manifests should omit it. The controller does not create, update, or delete user-managed RoleBindings from this field.
 
 ---
 
@@ -59,7 +62,7 @@ The Gateway namespace is controller configuration, not an `AITenant` spec field.
 
 ## Tenant Administration
 
-The controller creates tenant-admin Roles but does not create RoleBindings. Platform administrators grant tenant access by creating standard Kubernetes `RoleBinding` resources that reference those Roles. See [Tenant RBAC](../../configuration-and-management/tenant-rbac.md) for Role names, permissions, and examples for users, groups, and ServiceAccounts.
+The controller creates tenant-admin Roles but does not create RoleBindings from `spec.rbac` or any other `AITenant` field. Platform administrators grant tenant access by creating standard Kubernetes `RoleBinding` resources that reference those Roles. See [Tenant RBAC](../../configuration-and-management/tenant-rbac.md) for Role names, permissions, lifecycle cleanup notes, and examples for users, groups, and ServiceAccounts.
 
 ---
 

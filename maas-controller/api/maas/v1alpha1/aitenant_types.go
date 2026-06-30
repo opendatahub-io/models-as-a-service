@@ -65,6 +65,13 @@ type AITenantSpec struct {
 	// bridge Tenant config object owns MaaS-specific user config only.
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
+
+	// RBAC is retained only for compatibility with existing AITenant manifests.
+	// The controller ignores this field and does not create RoleBindings from it.
+	// Deprecated: create standard Kubernetes RoleBindings that reference the
+	// controller-created tenant-admin Roles instead.
+	// +kubebuilder:validation:Optional
+	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
@@ -75,6 +82,34 @@ type AITenantGatewayRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	Name string `json:"name,omitempty"`
+}
+
+// AITenantRBACConfig is the deprecated compatibility schema for tenant-admin subjects.
+// Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
+type AITenantRBACConfig struct {
+	// Admins are ignored by the controller and retained only for schema compatibility.
+	// Deprecated: create Kubernetes RoleBindings directly.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=128
+	Admins []AITenantRBACSubject `json:"admins,omitempty"`
+}
+
+// AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+// Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
+type AITenantRBACSubject struct {
+	// Kind is the RBAC subject kind.
+	// +kubebuilder:validation:Enum=User;Group;ServiceAccount
+	Kind string `json:"kind"`
+
+	// Name is the subject name.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+
+	// Namespace is required only for ServiceAccount subjects.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace,omitempty"`
 }
 
 // AITenantStatus defines the observed tenant bootstrap state.

@@ -101,6 +101,11 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 				IssuerURL: "https://issuer.example.com/realms/team-a",
 				ClientID:  "team-a-client",
 			},
+			RBAC: &maasv1alpha1.AITenantRBACConfig{
+				Admins: []maasv1alpha1.AITenantRBACSubject{
+					{Kind: "User", Name: "alice@example.com"},
+				},
+			},
 		},
 	}
 	gateway := existingAITenantGateway("team-a")
@@ -709,7 +714,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	g.Expect(ready.Message).To(ContainSubstring("another AITenant"))
 }
 
-func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayAndRoleBindingsUntouched(t *testing.T) {
+func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesGatewayAndUserRoleBindingsUntouched(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -770,6 +775,16 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayAndRoleBindings
 		},
 		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: tenantAdminRoleName(aitenant)},
 	}
+	userBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-del-manual-admin",
+			Namespace: "ai-tenant-team-del",
+		},
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: tenantAdminRoleName(aitenant)},
+		Subjects: []rbacv1.Subject{
+			{Kind: "User", APIGroup: rbacv1.GroupName, Name: "alice@example.com"},
+		},
+	}
 	objRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      aitenantAccessRoleName(aitenant),
@@ -798,7 +813,7 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayAndRoleBindings
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, gateway, tenant, role, binding, objRole, objBinding).
+		WithObjects(aitenant, ns, gateway, tenant, role, binding, userBinding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -824,11 +839,11 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayAndRoleBindings
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: maasv1alpha1.TenantInstanceName}, &maasv1alpha1.Tenant{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 
-	var survivingTenantBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &survivingTenantBinding)).To(Succeed())
-	var survivingObjectBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &survivingObjectBinding)).To(Succeed())
+	var survivingUserBinding rbacv1.RoleBinding
+	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: "team-del-manual-admin"}, &survivingUserBinding)).To(Succeed())
 
 	var surviving corev1.Namespace
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-del"}, &surviving)).To(Succeed())

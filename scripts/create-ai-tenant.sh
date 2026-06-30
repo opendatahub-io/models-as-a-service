@@ -28,6 +28,12 @@ if [ -z "$TENANT_NAME" ]; then
     exit 1
 fi
 
+if ! [[ "$TENANT_NAME" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]] || [ "${#TENANT_NAME}" -gt 41 ]; then
+    echo "Error: tenant name must be a valid DNS-1123 label and at most 41 characters"
+    echo "Use lowercase alphanumeric characters and hyphens, starting and ending with alphanumeric."
+    exit 1
+fi
+
 TENANT_NAMESPACE="ai-tenant-${TENANT_NAME}"
 
 # Auto-detect cluster domain if hostname not provided

@@ -104,6 +104,46 @@ spec:
                 - clientId
                 - issuerUrl
                 type: object
+              rbac:
+                description: |-
+                  RBAC is retained only for compatibility with existing AITenant manifests.
+                  The controller ignores this field and does not create RoleBindings from it.
+                  Deprecated: create standard Kubernetes RoleBindings that reference the
+                  controller-created tenant-admin Roles instead.
+                properties:
+                  admins:
+                    description: |-
+                      Admins are ignored by the controller and retained only for schema compatibility.
+                      Deprecated: create Kubernetes RoleBindings directly.
+                    items:
+                      description: |-
+                        AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+                        Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
+                      properties:
+                        kind:
+                          description: Kind is the RBAC subject kind.
+                          enum:
+                          - User
+                          - Group
+                          - ServiceAccount
+                          type: string
+                        name:
+                          description: Name is the subject name.
+                          maxLength: 253
+                          minLength: 1
+                          type: string
+                        namespace:
+                          description: Namespace is required only for ServiceAccount
+                            subjects.
+                          maxLength: 63
+                          type: string
+                      required:
+                      - kind
+                      - name
+                      type: object
+                    maxItems: 128
+                    type: array
+                type: object
             type: object
           status:
             description: AITenantStatus defines the observed tenant bootstrap state.
