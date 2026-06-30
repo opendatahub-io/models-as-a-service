@@ -2,6 +2,7 @@ package api_keys_test
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
@@ -625,7 +627,7 @@ func TestCreateAPIKey_MaxExpirationLimit(t *testing.T) {
 		require.Error(t, err, "should reject expiration exceeding default max (90 days)")
 		assert.Nil(t, result)
 		require.ErrorIs(t, err, api_keys.ErrExpirationExceedsMax)
-		assert.Contains(t, err.Error(), "90 days")
+		assert.Contains(t, err.Error(), fmt.Sprintf("%d days", constant.DefaultAPIKeyMaxExpirationDays))
 	})
 
 	t.Run("ZeroConfigEnforcesDefaultMax", func(t *testing.T) {
@@ -985,6 +987,77 @@ func TestCreateAPIKey_ValidatesSubscriptionPhase(t *testing.T) {
 			}
 		})
 	}
+}
+
+// ============================================================
+// GET MAX EXPIRATION DAYS TESTS (NIL SAFETY)
+// ============================================================
+
+func TestGetMaxExpirationDays_NilConfig(t *testing.T) {
+	// Service with nil config should not panic and should return default
+	store := api_keys.NewMockStore()
+	svc := api_keys.NewServiceWithLogger(store, nil, serviceTestSubSelector{}, logger.Development())
+
+	result := svc.GetMaxExpirationDays()
+
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config is nil")
+}
+
+func TestGetMaxExpirationDays_ZeroValue(t *testing.T) {
+	// Config with zero APIKeyMaxExpirationDays should return default
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{APIKeyMaxExpirationDays: 0}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	result := svc.GetMaxExpirationDays()
+
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config value is 0")
+}
+
+func TestGetMaxExpirationDays_CustomValue(t *testing.T) {
+	// Config with custom value should return that value
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{APIKeyMaxExpirationDays: 30}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	result := svc.GetMaxExpirationDays()
+
+	assert.Equal(t, 30, result, "Should return custom config value")
+}
+
+func TestGetMaxExpirationDays_NegativeValue(t *testing.T) {
+	// Config with negative value should return default (treated as invalid)
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{APIKeyMaxExpirationDays: -10}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	result := svc.GetMaxExpirationDays()
+
+	assert.Equal(t, constant.DefaultAPIKeyMaxExpirationDays, result, "Should return default when config value is negative")
+}
+
+func TestGetMaxExpirationDays_UsedByCreateAPIKey(t *testing.T) {
+	// Verify that CreateAPIKey uses GetMaxExpirationDays (integration test)
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+
+	// Test with custom max expiration days
+	cfg := &config.Config{APIKeyMaxExpirationDays: 15}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	// Try to create a key that exceeds the custom limit (should fail)
+	expiresIn := 20 * 24 * time.Hour // 20 days
+	_, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "", "")
+
+	require.Error(t, err, "Should reject expiration exceeding custom max")
+	assert.Contains(t, err.Error(), "exceeds maximum allowed (15 days)", "Error should reference custom max from GetMaxExpirationDays")
+
+	// Create a key within the custom limit (should succeed)
+	expiresIn = 10 * 24 * time.Hour // 10 days
+	resp, err := svc.CreateAPIKey(ctx, "alice", []string{}, "Test Key", "", &expiresIn, false, "", "")
+
+	require.NoError(t, err, "Should accept expiration within custom max")
+	assert.NotNil(t, resp)
 }
 
 // mockHealthSelector implements SubscriptionSelector for health testing.
