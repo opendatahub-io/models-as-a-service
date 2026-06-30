@@ -3,6 +3,7 @@ package maas
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -91,23 +92,24 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-a",
-			Namespace: tenantreconcile.DefaultAITenantNamespace,
+	aitenant := &maasv1alpha1.AITenant{}
+	g.Expect(json.Unmarshal([]byte(`{
+		"metadata": {
+			"name": "team-a",
+			"namespace": "ai-tenants"
 		},
-		Spec: maasv1alpha1.AITenantSpec{
-			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
-				IssuerURL: "https://issuer.example.com/realms/team-a",
-				ClientID:  "team-a-client",
+		"spec": {
+			"oidc": {
+				"issuerUrl": "https://issuer.example.com/realms/team-a",
+				"clientId": "team-a-client"
 			},
-			RBAC: &maasv1alpha1.AITenantRBACConfig{
-				Admins: []maasv1alpha1.AITenantRBACSubject{
-					{Kind: "User", Name: "alice@example.com"},
-				},
-			},
-		},
-	}
+			"rbac": {
+				"admins": [
+					{"kind": "User", "name": "alice@example.com"}
+				]
+			}
+		}
+	}`), aitenant)).To(Succeed())
 	gateway := existingAITenantGateway("team-a")
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
