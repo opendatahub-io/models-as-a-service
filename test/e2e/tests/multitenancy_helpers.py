@@ -978,7 +978,7 @@ def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:
     return {
         "deployment": f"maas-api-{tenant_name}",
         "service": f"maas-api-{tenant_name}",
-        "httproute": f"maas-api-{tenant_name}-route",
+        "httproute": f"maas-api-route-{tenant_name}",
         "authpolicy": f"maas-api-{tenant_name}-auth",
     }
 
