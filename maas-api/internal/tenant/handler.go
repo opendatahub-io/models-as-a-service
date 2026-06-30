@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
@@ -75,9 +76,27 @@ func (h *Handler) GetTenantInfo(c *gin.Context) {
 			"gatewayName", h.gatewayName,
 			"gatewayNamespace", h.gatewayNamespace,
 			"error", err)
-		c.JSON(http.StatusNotFound, gin.H{
-			"error":   "Gateway not found",
-			"details": fmt.Sprintf("Gateway %s not found in namespace %s", h.gatewayName, h.gatewayNamespace),
+
+		// Distinguish NotFound from other Kubernetes API errors
+		if apierrors.IsNotFound(err) {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error":   "Gateway not found",
+				"details": fmt.Sprintf("Gateway %s not found in namespace %s", h.gatewayName, h.gatewayNamespace),
+			})
+			return
+		}
+
+		// RBAC, timeout, or apiserver issues
+		statusCode := http.StatusInternalServerError
+		if apierrors.IsForbidden(err) {
+			statusCode = http.StatusForbidden
+		} else if apierrors.IsTimeout(err) {
+			statusCode = http.StatusGatewayTimeout
+		}
+
+		c.JSON(statusCode, gin.H{
+			"error":   "Failed to fetch Gateway",
+			"details": "Unable to query Gateway resource",
 		})
 		return
 	}

@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	authenticationv1 "k8s.io/api/authentication/v1" //nolint:importas // Must use distinct alias from authorization/v1
@@ -17,7 +19,9 @@ import (
 // It verifies that the caller is a member of the system:authenticated group, which includes all authenticated users.
 func TenantAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		ctx := c.Request.Context()
+		// Set a hard timeout for all Kubernetes API calls to prevent hangs
+		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
+		defer cancel()
 
 		// Step 1: Extract and validate bearer token
 		authHeader := c.GetHeader("Authorization")
