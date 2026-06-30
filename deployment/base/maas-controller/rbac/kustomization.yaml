@@ -2,6 +2,8 @@ resources:
   - clusterrole.yaml
   - clusterrole_maas_configs.yaml
   - clusterrolebinding_maas_configs.yaml
+  - clusterrole_modelsasservice_crd.yaml
+  - clusterrolebinding_modelsasservice_crd.yaml
   - clusterrole_binding.yaml
   - service_account.yaml
   - leader_election_role.yaml
