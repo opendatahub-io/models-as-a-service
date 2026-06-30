@@ -15,6 +15,10 @@ import (
 type MockStore struct {
 	mu   sync.RWMutex
 	keys map[string]*storedKey // keyed by ID
+
+	// UpdateLastUsedCount tracks how many times UpdateLastUsed has been called.
+	// Useful for asserting debounce behavior in tests.
+	UpdateLastUsedCount int
 }
 
 type storedKey struct {
@@ -469,6 +473,7 @@ func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 
 	now := time.Now().UTC()
 	k.lastUsedAt = &now
+	m.UpdateLastUsedCount++
 	return nil
 }
 

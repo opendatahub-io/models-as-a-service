@@ -3,6 +3,7 @@ package api_keys_test
 import (
 	"context"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -207,6 +208,68 @@ func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 	metaAfter, err := store.Get(ctx, keyID)
 	require.NoError(t, err)
 	assert.NotEmpty(t, metaAfter.LastUsedAt, "LastUsedAt should be updated after validation")
+}
+
+// TestValidateAPIKey_DebounceSuppressesExtraWrites verifies that rapid consecutive
+// validations of the same key only trigger one last_used_at DB write within the
+// debounce window (simulating a high-concurrency single-key scenario).
+func TestValidateAPIKey_DebounceSuppressesExtraWrites(t *testing.T) {
+	ctx := context.Background()
+
+	store := api_keys.NewMockStore()
+	// 1-second debounce window — long enough for the test to stay within it.
+	cfg := &config.Config{LastUsedDebounceSecs: 1}
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	keyID := "550e8400-e29b-41d4-a716-446655440020"
+	plainKey, hash := createTestAPIKey(t)
+	err := store.AddKey(ctx, "frank", keyID, hash, "Debounce Test", "", []string{"tier-basic"}, "default-sub", "", nil, false)
+	require.NoError(t, err)
+
+	const concurrentRequests = 10
+	var wg sync.WaitGroup
+	for range concurrentRequests {
+		wg.Go(func() {
+			result, validateErr := svc.ValidateAPIKey(ctx, plainKey)
+			require.NoError(t, validateErr)
+			assert.True(t, result.Valid)
+		})
+	}
+	wg.Wait()
+
+	// Give async goroutines time to complete their DB writes.
+	time.Sleep(100 * time.Millisecond)
+
+	// Only one write should have reached the store within the debounce window.
+	assert.Equal(t, 1, store.UpdateLastUsedCount,
+		"debounce should collapse %d concurrent validations into a single DB write", concurrentRequests)
+}
+
+// TestValidateAPIKey_DebounceAllowsWriteAfterTTLExpires verifies that after the
+// debounce TTL expires a new validation does issue a fresh last_used_at write.
+func TestValidateAPIKey_DebounceAllowsWriteAfterTTLExpires(t *testing.T) {
+	ctx := context.Background()
+
+	store := api_keys.NewMockStore()
+	// Very short TTL so the test can advance past it quickly.
+	cfg := &config.Config{LastUsedDebounceSecs: 0} // 0 == disabled, always write
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	keyID := "550e8400-e29b-41d4-a716-446655440021"
+	plainKey, hash := createTestAPIKey(t)
+	err := store.AddKey(ctx, "grace", keyID, hash, "Debounce TTL Test", "", []string{"tier-basic"}, "default-sub", "", nil, false)
+	require.NoError(t, err)
+
+	// With debouncing disabled every call should write.
+	for range 3 {
+		result, validateErr := svc.ValidateAPIKey(ctx, plainKey)
+		require.NoError(t, validateErr)
+		assert.True(t, result.Valid)
+	}
+	time.Sleep(100 * time.Millisecond)
+
+	assert.Equal(t, 3, store.UpdateLastUsedCount,
+		"with debounce disabled all validations should write to the DB")
 }
 
 // TestValidateAPIKey_ReturnsTenant verifies that a valid key's tenant is included

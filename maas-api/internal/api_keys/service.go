@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -33,6 +34,12 @@ type Service struct {
 	logger      *logger.Logger
 	config      *config.Config
 	subSelector SubscriptionSelector
+
+	// lastUsedDebounce throttles last_used_at writes per key.
+	// Maps key ID (string) → time.Time of last successful DB write.
+	// Prevents Postgres row-lock storms when many requests share one key.
+	lastUsedDebounce    sync.Map
+	lastUsedDebounceTTL time.Duration
 }
 
 func (s *Service) GetMaxExpirationDays() int {
@@ -51,11 +58,18 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 	if log == nil {
 		log = logger.Production()
 	}
+
+	debounceTTL := 60 * time.Second
+	if cfg != nil && cfg.LastUsedDebounceSecs >= 0 {
+		debounceTTL = time.Duration(cfg.LastUsedDebounceSecs) * time.Second
+	}
+
 	return &Service{
-		store:       store,
-		logger:      log,
-		config:      cfg,
-		subSelector: sub,
+		store:               store,
+		logger:              log,
+		config:              cfg,
+		subSelector:         sub,
+		lastUsedDebounceTTL: debounceTTL,
 	}
 }
 
@@ -229,25 +243,33 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		return nil, fmt.Errorf("validation lookup failed: %w", err)
 	}
 
-	// Update last_used_at asynchronously (don't block validation response)
+	// Update last_used_at asynchronously (don't block validation response).
+	// Debounce: skip the DB write if we already wrote within lastUsedDebounceTTL for
+	// this key. Under high concurrency with a shared key (e.g. load tests) this
+	// prevents hundreds of goroutines from racing to UPDATE the same row in Postgres,
+	// which causes row-lock contention and "context deadline exceeded" errors.
 	//nolint:contextcheck // Intentionally using background context - original may be cancelled.
-	go func() {
-		// Recover from panics to prevent crashing the entire process
-		defer func() {
-			if r := recover(); r != nil {
-				s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+	if s.shouldUpdateLastUsed(metadata.ID) {
+		go func() {
+			// Recover from panics to prevent crashing the entire process
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+				}
+			}()
+
+			// Use background context with timeout since original may be cancelled
+			updateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			if err := s.store.UpdateLastUsed(updateCtx, metadata.ID); err != nil {
+				// Reset the debounce timestamp so the next request retries.
+				s.lastUsedDebounce.Delete(metadata.ID)
+				// Log warning but don't fail validation - this is best-effort tracking
+				s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 			}
 		}()
-
-		// Use background context with timeout since original may be cancelled
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		if err := s.store.UpdateLastUsed(ctx, metadata.ID); err != nil {
-			// Log warning but don't fail validation - this is best-effort tracking
-			s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
-		}
-	}()
+	}
 
 	// Return the user's groups (stored at key creation time)
 	// These groups are used directly by subscription-based authorization
@@ -313,6 +335,31 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant
 		return 0, errors.New("username is required")
 	}
 	return s.store.InvalidateAll(ctx, username, tenant)
+}
+
+// shouldUpdateLastUsed returns true if a last_used_at DB write should be issued
+// for keyID. It records the current time in the debounce map when returning true,
+// so only one caller per TTL window proceeds.
+// When debouncing is disabled (TTL == 0) it always returns true.
+func (s *Service) shouldUpdateLastUsed(keyID string) bool {
+	if s.lastUsedDebounceTTL == 0 {
+		return true
+	}
+	now := time.Now()
+	// LoadOrStore is atomic: the first caller stores `now` and gets loaded=false,
+	// all concurrent callers within the same window get loaded=true and skip.
+	actual, loaded := s.lastUsedDebounce.LoadOrStore(keyID, now)
+	if !loaded {
+		return true // we were the first — proceed with the write
+	}
+	lastTime, ok := actual.(time.Time)
+	if ok && now.Sub(lastTime) >= s.lastUsedDebounceTTL {
+		// TTL expired; attempt to replace the stored timestamp.
+		// A tiny race here is acceptable for best-effort tracking.
+		s.lastUsedDebounce.Store(keyID, now)
+		return true
+	}
+	return false
 }
 
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.

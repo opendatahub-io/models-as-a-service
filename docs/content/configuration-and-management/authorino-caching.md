@@ -4,6 +4,17 @@ This document describes how to tune Authorino cache TTLs for metadata and author
 
 ---
 
+## Caching and Write Debounce Overview
+
+MaaS has two complementary mechanisms that reduce database pressure under high request rates:
+
+1. **Authorino metadata cache** — Authorino caches the response from `POST /internal/v1/api-keys/validate` so that repeated requests with the same key do not call maas-api on every inference request.
+2. **`last_used_at` write debounce** — maas-api debounces the `UPDATE api_keys SET last_used_at` write so that a burst of requests sharing one key issues at most one DB write per window, preventing Postgres row-lock contention.
+
+Both mechanisms default to a 60-second window and should be kept in sync (see [Tuning](#when-to-tune)).
+
+---
+
 ## What is Cached
 
 MaaS-generated AuthPolicy resources enable caching on:
@@ -21,7 +32,7 @@ Caching reduces load on maas-api and OPA CPU by reusing results when the cache k
 
 ## Configuration
 
-### CLI Flags
+### Authorino cache TTLs (maas-controller CLI flags)
 
 The maas-controller deployment configures cache TTLs with command-line flags:
 

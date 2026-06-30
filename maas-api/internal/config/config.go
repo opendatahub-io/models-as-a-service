@@ -61,6 +61,13 @@ type Config struct {
 	// Bounds memory usage under high-cardinality user traffic. Default: 8192.
 	SARCacheMaxSize int
 
+	// LastUsedDebounceSecs is the minimum number of seconds between consecutive
+	// last_used_at writes to Postgres for the same API key. When many requests
+	// share a single key (e.g. load tests), only one UPDATE is issued per window
+	// instead of one per request, preventing row-lock contention.
+	// Set to 0 to disable debouncing (every validation writes to DB). Default: 60.
+	LastUsedDebounceSecs int
+
 	MetricsPort int
 
 	// Deprecated flag (backward compatibility with pre-TLS version)
@@ -75,6 +82,7 @@ func Load() *Config {
 	maxExpirationDays, _ := env.GetInt("API_KEY_MAX_EXPIRATION_DAYS", constant.DefaultAPIKeyMaxExpirationDays)
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
+	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 
 	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
@@ -97,6 +105,7 @@ func Load() *Config {
 		APIKeyMaxExpirationDays:   maxExpirationDays,
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
 		SARCacheMaxSize:           sarCacheMaxSize,
+		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
