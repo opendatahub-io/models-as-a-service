@@ -1989,7 +1989,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}
@@ -2064,7 +2064,7 @@ func TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference(t *testing.T) 
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      gatewayName,
 	}
@@ -2151,7 +2151,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}
@@ -2235,7 +2235,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}
