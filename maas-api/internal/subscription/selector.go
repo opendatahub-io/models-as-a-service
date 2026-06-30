@@ -41,11 +41,11 @@ type ExternalModelNameResolver interface {
 
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister               Lister
-	modelLister          models.MaaSModelRefLister
-	accessChecker        ModelAccessChecker
+	lister                Lister
+	modelLister           models.MaaSModelRefLister
+	accessChecker         ModelAccessChecker
 	externalModelResolver ExternalModelNameResolver
-	logger               *logger.Logger
+	logger                *logger.Logger
 }
 
 // NewSelector creates a new subscription selector.
