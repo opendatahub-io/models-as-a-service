@@ -46,6 +46,18 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+# Infrastructure namespace where maas-api deployment and HTTPRoutes are created
+# Handles: not set → AUTO-derived, "" → no separation (use DEPLOYMENT_NAMESPACE), "AUTO" → derive, explicit value → use it
+_infra_ns_raw = os.environ.get("INFRA_NAMESPACE")
+if _infra_ns_raw is None or _infra_ns_raw == "AUTO":
+    # Default to AUTO-derived (opendatahub → odh-ai-gateway-infra, redhat-ods-applications → redhat-ai-gateway-infra)
+    INFRA_NAMESPACE = "odh-ai-gateway-infra" if DEPLOYMENT_NAMESPACE == "opendatahub" else "redhat-ai-gateway-infra"
+elif _infra_ns_raw == "":
+    # Empty string means no separation (ROSA case)
+    INFRA_NAMESPACE = DEPLOYMENT_NAMESPACE
+else:
+    # Explicit custom namespace
+    INFRA_NAMESPACE = _infra_ns_raw
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
@@ -525,7 +537,8 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
     gw_options_name = f"{gateway_name}-gw-options"
     service_ca_secret = f"{gateway_name}-gw-service-tls"
     gateway_access_label = gateway_access_label_key(gateway_name)
-    apply_gateway_access_label(DEPLOYMENT_NAMESPACE, gateway_name)
+    # Apply gateway access label to infra namespace where HTTPRoutes are created
+    apply_gateway_access_label(INFRA_NAMESPACE, gateway_name)
     _apply(
         {
             "apiVersion": "v1",
@@ -774,7 +787,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(
             per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
-            DEPLOYMENT_NAMESPACE,
+            INFRA_NAMESPACE,
             case["gateway_name"],
         )
 
