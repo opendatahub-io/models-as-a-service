@@ -357,6 +357,12 @@ rules:
   - update
   - watch
 - apiGroups:
+  - route.openshift.io
+  resources:
+  - routes
+  verbs:
+  - list
+- apiGroups:
   - serving.kserve.io
   resources:
   - llminferenceservices
