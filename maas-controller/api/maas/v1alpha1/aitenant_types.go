@@ -40,7 +40,7 @@ const (
 
 // AITenant bootstraps one tenant slice: a tenant namespace, an existing
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
-// and tenant-admin RBAC.
+// and tenant-admin Roles.
 //
 // The AITenant name is used as a suffix for per-tenant maas-api resources
 // (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -65,10 +65,6 @@ type AITenantSpec struct {
 	// bridge Tenant config object owns MaaS-specific user config only.
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
-
-	// RBAC configures tenant-admin access to the tenant namespace and this AITenant object.
-	// +kubebuilder:validation:Optional
-	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
@@ -79,31 +75,6 @@ type AITenantGatewayRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$`
 	Name string `json:"name,omitempty"`
-}
-
-// AITenantRBACConfig defines tenant-admin subjects.
-type AITenantRBACConfig struct {
-	// Admins are bound to tenant-admin roles for this AITenant and tenant namespace.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxItems=128
-	Admins []AITenantRBACSubject `json:"admins,omitempty"`
-}
-
-// AITenantRBACSubject mirrors RBAC Subject for the supported tenant-admin cases.
-type AITenantRBACSubject struct {
-	// Kind is the RBAC subject kind.
-	// +kubebuilder:validation:Enum=User;Group;ServiceAccount
-	Kind string `json:"kind"`
-
-	// Name is the subject name.
-	// +kubebuilder:validation:MinLength=1
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name"`
-
-	// Namespace is required only for ServiceAccount subjects.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:MaxLength=63
-	Namespace string `json:"namespace,omitempty"`
 }
 
 // AITenantStatus defines the observed tenant bootstrap state.

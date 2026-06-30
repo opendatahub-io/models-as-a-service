@@ -38,7 +38,7 @@ spec:
         description: |-
           AITenant bootstraps one tenant slice: a tenant namespace, an existing
           network-admin-provisioned Gateway reference, the MaaS tenant config object,
-          and tenant-admin RBAC.
+          and tenant-admin Roles.
 
           The AITenant name is used as a suffix for per-tenant maas-api resources
           (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -103,41 +103,6 @@ spec:
                 required:
                 - clientId
                 - issuerUrl
-                type: object
-              rbac:
-                description: RBAC configures tenant-admin access to the tenant namespace
-                  and this AITenant object.
-                properties:
-                  admins:
-                    description: Admins are bound to tenant-admin roles for this AITenant
-                      and tenant namespace.
-                    items:
-                      description: AITenantRBACSubject mirrors RBAC Subject for the
-                        supported tenant-admin cases.
-                      properties:
-                        kind:
-                          description: Kind is the RBAC subject kind.
-                          enum:
-                          - User
-                          - Group
-                          - ServiceAccount
-                          type: string
-                        name:
-                          description: Name is the subject name.
-                          maxLength: 253
-                          minLength: 1
-                          type: string
-                        namespace:
-                          description: Namespace is required only for ServiceAccount
-                            subjects.
-                          maxLength: 63
-                          type: string
-                      required:
-                      - kind
-                      - name
-                      type: object
-                    maxItems: 128
-                    type: array
                 type: object
             type: object
           status:

@@ -154,11 +154,6 @@ kind: AITenant
 metadata:
   name: ${TENANT_NAME}
   namespace: ${AITENANT_NAMESPACE}
-spec:
-  rbac:
-    admins:
-    - kind: User
-      name: $(oc whoami 2>/dev/null || echo "system:admin")
 EOF
 
 echo ""
@@ -178,6 +173,14 @@ echo ""
 echo "Monitor status:"
 echo "  oc get aitenant ${TENANT_NAME} -n ${AITENANT_NAMESPACE} -w"
 echo "  oc get tenant default-tenant -n ${TENANT_NAMESPACE} -w"
+echo ""
+echo "Grant tenant-admin access with a standard RoleBinding, for example:"
+echo "  oc create rolebinding ${TENANT_NAME}-tenant-admin \\"
+echo "    --role=aitenant-${TENANT_NAME}-tenant-admin \\"
+echo "    --user=<user@example.com> \\"
+echo "    -n ${TENANT_NAMESPACE}"
+echo ""
+echo "See docs/content/configuration-and-management/tenant-rbac.md for group, ServiceAccount, and AITenant read-access examples."
 echo ""
 echo "Access tenant gateway:"
 echo "  https://${GATEWAY_HOSTNAME}/maas-api/v1/models"
