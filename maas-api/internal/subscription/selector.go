@@ -34,12 +34,18 @@ type ModelAccessChecker interface {
 	AuthorizedModels(groups []string, username string) map[authpolicy.ModelKey]bool
 }
 
+// ExternalModelNameResolver resolves an ExternalModel CRD name to its spec.modelName.
+type ExternalModelNameResolver interface {
+	ResolveModelName(namespace, name string) string
+}
+
 // Selector handles subscription selection logic.
 type Selector struct {
-	lister        Lister
-	modelLister   models.MaaSModelRefLister
-	accessChecker ModelAccessChecker
-	logger        *logger.Logger
+	lister               Lister
+	modelLister          models.MaaSModelRefLister
+	accessChecker        ModelAccessChecker
+	externalModelResolver ExternalModelNameResolver
+	logger               *logger.Logger
 }
 
 // NewSelector creates a new subscription selector.
@@ -54,6 +60,13 @@ func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModel
 		accessChecker: accessChecker,
 		logger:        log,
 	}
+}
+
+// WithExternalModelResolver sets the ExternalModel name resolver for
+// mapping raw model names (e.g. "claude-opus-4-8") to subscription model refs.
+func (s *Selector) WithExternalModelResolver(r ExternalModelNameResolver) *Selector {
+	s.externalModelResolver = r
+	return s
 }
 
 // buildModelIndex builds a lookup map keyed by "namespace/name" from the MaaSModelRef cache.
@@ -331,6 +344,12 @@ func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstru
 			switch kind {
 			case "ExternalModel":
 				refs[i].Source = "external"
+				if s.externalModelResolver != nil {
+					refName, _, _ := unstructured.NestedString(u.Object, "spec", "modelRef", "name")
+					if refName != "" {
+						refs[i].ModelName = s.externalModelResolver.ResolveModelName(u.GetNamespace(), refName)
+					}
+				}
 			case "LLMInferenceService":
 				refs[i].Source = "internal"
 			}
@@ -555,15 +574,25 @@ func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 
 	// Parse the requested model (format: "namespace/name")
 	parts := strings.SplitN(requestedModel, "/", 2)
-	if len(parts) != 2 {
-		return false // invalid format
+	if len(parts) == 2 {
+		requestedNS := parts[0]
+		requestedName := parts[1]
+		for _, ref := range sub.ModelRefs {
+			if ref.Namespace == requestedNS && ref.Name == requestedName {
+				return true
+			}
+		}
 	}
-	requestedNS := parts[0]
-	requestedName := parts[1]
 
-	// Check if any modelRef in the subscription matches
+	// Also match by raw model name (e.g. "claude-opus-4-8") against
+	// ModelRefInfo.ModelName which carries the ExternalModel's spec.modelName.
+	// This supports body-routed requests where X-Gateway-Model-Name holds
+	// the model name from the request body, not the CRD namespace/name.
 	for _, ref := range sub.ModelRefs {
-		if ref.Namespace == requestedNS && ref.Name == requestedName {
+		if ref.ModelName != "" && ref.ModelName == requestedModel {
+			return true
+		}
+		if ref.Name == requestedModel {
 			return true
 		}
 	}

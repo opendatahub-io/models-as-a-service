@@ -1219,7 +1219,38 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 		}
 	}
 
+	// Add aliases keyed by modelName so body-routed requests (where
+	// X-Gateway-Model-Name carries the raw model name like "claude-opus-4-8")
+	// can match the model_access map in the OPA Rego policy.
+	for key, entry := range aggregate {
+		parts := strings.SplitN(key, "/", 2)
+		if len(parts) != 2 {
+			continue
+		}
+		ns, name := parts[0], parts[1]
+		modelName := r.resolveModelName(ctx, ns, name)
+		if modelName != "" && modelName != key {
+			if _, exists := aggregate[modelName]; !exists {
+				aggregate[modelName] = entry
+			}
+		}
+	}
+
 	return aggregate, nil
+}
+
+func (r *MaaSAuthPolicyReconciler) resolveModelName(ctx context.Context, namespace, name string) string {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "inference.opendatahub.io",
+		Version: "v1alpha1",
+		Kind:    "ExternalModel",
+	})
+	if err := r.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, obj); err != nil {
+		return ""
+	}
+	modelName, _, _ := unstructured.NestedString(obj.Object, "spec", "modelName")
+	return modelName
 }
 
 func (r *MaaSAuthPolicyReconciler) modelAuthPolicyExists(ctx context.Context, modelNamespace, modelName string) (bool, error) {
