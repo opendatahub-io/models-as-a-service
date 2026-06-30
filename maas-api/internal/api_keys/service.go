@@ -354,10 +354,13 @@ func (s *Service) shouldUpdateLastUsed(keyID string) bool {
 	}
 	lastTime, ok := actual.(time.Time)
 	if ok && now.Sub(lastTime) >= s.lastUsedDebounceTTL {
-		// TTL expired; attempt to replace the stored timestamp.
-		// A tiny race here is acceptable for best-effort tracking.
-		s.lastUsedDebounce.Store(keyID, now)
-		return true
+		// TTL expired. Use CompareAndSwap so only one concurrent caller wins
+		// the refresh slot — prevents a TOCTOU storm at every debounce boundary
+		// where many goroutines could all observe the same stale timestamp and
+		// all return true simultaneously (CWE-362).
+		if s.lastUsedDebounce.CompareAndSwap(keyID, actual, now) {
+			return true
+		}
 	}
 	return false
 }

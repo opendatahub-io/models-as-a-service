@@ -477,6 +477,14 @@ func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 	return nil
 }
 
+// GetUpdateLastUsedCount returns the current call count under the store's read lock,
+// safe for concurrent use with in-flight UpdateLastUsed calls.
+func (m *MockStore) GetUpdateLastUsedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.UpdateLastUsedCount
+}
+
 // DeleteExpiredEphemeral removes expired ephemeral keys from the mock store.
 // Mirrors PostgresStore: only deletes keys expired for at least 30 minutes.
 func (m *MockStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {

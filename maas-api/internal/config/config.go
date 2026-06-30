@@ -188,6 +188,10 @@ func (c *Config) Validate() error {
 		return errors.New("ACCESS_CHECK_TIMEOUT_SECONDS must be at least 1")
 	}
 
+	if c.LastUsedDebounceSecs < 0 {
+		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
 		return errors.New("METRICS_PORT must be between 1 and 65535")
 	}

@@ -210,7 +210,7 @@ func TestValidateAPIKey_UpdatesLastUsed(t *testing.T) {
 	assert.NotEmpty(t, metaAfter.LastUsedAt, "LastUsedAt should be updated after validation")
 }
 
-// TestValidateAPIKey_DebounceSuppressesExtraWrites verifies that rapid consecutive
+// TestValidateAPIKey_DebounceSuppressesExtraWrites verifies that rapid concurrent
 // validations of the same key only trigger one last_used_at DB write within the
 // debounce window (simulating a high-concurrency single-key scenario).
 func TestValidateAPIKey_DebounceSuppressesExtraWrites(t *testing.T) {
@@ -237,39 +237,79 @@ func TestValidateAPIKey_DebounceSuppressesExtraWrites(t *testing.T) {
 	}
 	wg.Wait()
 
-	// Give async goroutines time to complete their DB writes.
-	time.Sleep(100 * time.Millisecond)
-
-	// Only one write should have reached the store within the debounce window.
-	assert.Equal(t, 1, store.UpdateLastUsedCount,
+	// Poll instead of a fixed sleep: wait until the single debounced write completes.
+	require.Eventually(t, func() bool {
+		return store.GetUpdateLastUsedCount() == 1
+	}, time.Second, 10*time.Millisecond,
 		"debounce should collapse %d concurrent validations into a single DB write", concurrentRequests)
 }
 
-// TestValidateAPIKey_DebounceAllowsWriteAfterTTLExpires verifies that after the
-// debounce TTL expires a new validation does issue a fresh last_used_at write.
-func TestValidateAPIKey_DebounceAllowsWriteAfterTTLExpires(t *testing.T) {
+// TestValidateAPIKey_DebounceDisabled_WritesEveryTime verifies that when
+// LAST_USED_DEBOUNCE_SECS=0 every validation issues a last_used_at write.
+func TestValidateAPIKey_DebounceDisabled_WritesEveryTime(t *testing.T) {
 	ctx := context.Background()
 
 	store := api_keys.NewMockStore()
-	// Very short TTL so the test can advance past it quickly.
 	cfg := &config.Config{LastUsedDebounceSecs: 0} // 0 == disabled, always write
 	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
 
 	keyID := "550e8400-e29b-41d4-a716-446655440021"
 	plainKey, hash := createTestAPIKey(t)
-	err := store.AddKey(ctx, "grace", keyID, hash, "Debounce TTL Test", "", []string{"tier-basic"}, "default-sub", "", nil, false)
+	err := store.AddKey(ctx, "grace", keyID, hash, "Debounce Disabled Test", "", []string{"tier-basic"}, "default-sub", "", nil, false)
 	require.NoError(t, err)
 
-	// With debouncing disabled every call should write.
-	for range 3 {
+	const calls = 3
+	for range calls {
 		result, validateErr := svc.ValidateAPIKey(ctx, plainKey)
 		require.NoError(t, validateErr)
 		assert.True(t, result.Valid)
 	}
-	time.Sleep(100 * time.Millisecond)
 
-	assert.Equal(t, 3, store.UpdateLastUsedCount,
-		"with debounce disabled all validations should write to the DB")
+	require.Eventually(t, func() bool {
+		return store.GetUpdateLastUsedCount() == calls
+	}, time.Second, 10*time.Millisecond,
+		"with debounce disabled all %d validations should write to the DB", calls)
+}
+
+// TestValidateAPIKey_DebounceWritesAfterTTLExpiry verifies that after the debounce
+// TTL expires a second validation issues a fresh last_used_at write.
+func TestValidateAPIKey_DebounceWritesAfterTTLExpiry(t *testing.T) {
+	ctx := context.Background()
+
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{LastUsedDebounceSecs: 1} // 1-second TTL
+	svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+	keyID := "550e8400-e29b-41d4-a716-446655440022"
+	plainKey, hash := createTestAPIKey(t)
+	err := store.AddKey(ctx, "henry", keyID, hash, "TTL Expiry Test", "", []string{"tier-basic"}, "default-sub", "", nil, false)
+	require.NoError(t, err)
+
+	// First validation triggers a write.
+	result, err := svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	require.Eventually(t, func() bool {
+		return store.GetUpdateLastUsedCount() == 1
+	}, time.Second, 10*time.Millisecond, "first write should complete")
+
+	// Second validation within the TTL window should NOT trigger a write.
+	result, err = svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	time.Sleep(50 * time.Millisecond)
+	assert.Equal(t, 1, store.GetUpdateLastUsedCount(), "no write should occur within debounce window")
+
+	// Wait for the TTL to expire.
+	time.Sleep(1100 * time.Millisecond)
+
+	// Third validation — TTL has expired, a new write should be issued.
+	result, err = svc.ValidateAPIKey(ctx, plainKey)
+	require.NoError(t, err)
+	assert.True(t, result.Valid)
+	require.Eventually(t, func() bool {
+		return store.GetUpdateLastUsedCount() == 2
+	}, time.Second, 10*time.Millisecond, "write should happen after TTL expiry")
 }
 
 // TestValidateAPIKey_ReturnsTenant verifies that a valid key's tenant is included
