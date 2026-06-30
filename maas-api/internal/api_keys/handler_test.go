@@ -1081,6 +1081,25 @@ func TestCreateAPIKey_SubscriptionSelectErrors(t *testing.T) {
 			},
 			body: `{"name": "k1"}`,
 		},
+		{
+			name: "multiple accessible subscriptions when omitting field",
+			sel: errSubSelector{
+				highestPriorityErr: &subscription.MultipleSubscriptionsError{
+					Subscriptions: []string{"sub-a", "sub-b"},
+				},
+			},
+			body: `{"name": "k1"}`,
+		},
+		{
+			name: "requested model not in explicit subscription",
+			sel: errSubSelector{
+				selectErr: &subscription.ModelNotInSubscriptionError{
+					Subscription: "custom-sub",
+					Model:        "llm/missing-model",
+				},
+			},
+			body: `{"name": "k1", "subscription": "custom-sub"}`,
+		},
 	}
 
 	for _, tt := range tests {
@@ -2158,9 +2177,9 @@ func TestCreateAPIKey_NameValidation(t *testing.T) {
 	}
 
 	invalidNames := []struct {
-		name      string
-		reason    string
-		errMsg    string
+		name   string
+		reason string
+		errMsg string
 	}{
 		{"   ", "whitespace only", "whitespace only"},
 		{"\t\t", "tabs only", "whitespace only"},
