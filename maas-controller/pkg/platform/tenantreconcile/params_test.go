@@ -30,7 +30,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
@@ -61,7 +65,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "tenant-ns", "cluster-audience", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "gateway-ns",
+			Name:      "gateway-name",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "cluster-audience", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
