@@ -50,12 +50,9 @@ func TestExtractGatewayMetadata_Success(t *testing.T) {
 	assert.NotNil(t, metadata)
 	assert.Equal(t, "test-gateway", metadata.Name)
 	assert.Equal(t, "test-ns", metadata.Namespace)
-	assert.Equal(t, "maas.apps.example.com", metadata.ExternalHost)
 	assert.Equal(t, "https://maas.apps.example.com", metadata.ExternalURL)
 	assert.Equal(t, "https", metadata.Protocol)
 	assert.Equal(t, int64(443), metadata.Port)
-	assert.Len(t, metadata.Listeners, 1)
-	assert.Equal(t, "https", metadata.Listeners[0].Name)
 }
 
 func TestExtractGatewayMetadata_NonStandardPort(t *testing.T) {
@@ -149,5 +146,5 @@ func TestExtractGatewayMetadata_NoReadyListeners(t *testing.T) {
 	_, err := handler.extractGatewayMetadata(ctx, gateway)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "no ready listeners")
+	assert.Contains(t, err.Error(), "could not determine external hostname")
 }

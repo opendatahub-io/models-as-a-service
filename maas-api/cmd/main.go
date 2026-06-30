@@ -233,7 +233,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
-	v1Routes.GET("/tenant",
+	v1Routes.GET("/tenants",
 		auth.TenantAuthMiddleware(log, cluster.ClientSet),
 		tenantHandler.GetTenantInfo)
 

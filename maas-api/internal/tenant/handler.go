@@ -35,38 +35,29 @@ func NewHandler(log *logger.Logger, dynamicClient dynamic.Interface, tenantName,
 	}
 }
 
-// TenantInfo represents the tenant and gateway metadata response.
-type TenantInfo struct {
-	Tenant  TenantMetadata  `json:"tenant"`
-	Gateway GatewayMetadata `json:"gateway"`
+// TenantsResponse represents the response for GET /v1/tenants.
+// For 3.5, returns a single-element array containing this instance's tenant.
+type TenantsResponse struct {
+	Tenants []TenantInfo `json:"tenants"`
 }
 
-// TenantMetadata contains tenant identification.
-type TenantMetadata struct {
-	Name string `json:"name"`
+// TenantInfo contains tenant identification and gateway metadata.
+type TenantInfo struct {
+	Name    string          `json:"name"`
+	Gateway GatewayMetadata `json:"gateway"`
 }
 
 // GatewayMetadata contains gateway connection details.
 type GatewayMetadata struct {
-	Name         string             `json:"name"`
-	Namespace    string             `json:"namespace"`
-	ExternalHost string             `json:"externalHost"`
-	ExternalURL  string             `json:"externalUrl"`
-	Protocol     string             `json:"protocol"`
-	Port         int64              `json:"port"`
-	Listeners    []ListenerMetadata `json:"listeners,omitempty"`
-}
-
-// ListenerMetadata contains individual listener details.
-type ListenerMetadata struct {
-	Name     string `json:"name"`
-	Hostname string `json:"hostname"`
-	Port     int64  `json:"port"`
-	Protocol string `json:"protocol"`
+	Name        string `json:"name"`
+	Namespace   string `json:"namespace"`
+	Protocol    string `json:"protocol"`
+	ExternalURL string `json:"externalUrl"`
+	Port        int64  `json:"port"`
 }
 
 // GetTenantInfo returns tenant name and gateway connection metadata.
-// GET /v1/tenant.
+// GET /v1/tenants.
 func (h *Handler) GetTenantInfo(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
@@ -102,11 +93,13 @@ func (h *Handler) GetTenantInfo(c *gin.Context) {
 		return
 	}
 
-	response := TenantInfo{
-		Tenant: TenantMetadata{
-			Name: h.tenantName,
+	response := TenantsResponse{
+		Tenants: []TenantInfo{
+			{
+				Name:    h.tenantName,
+				Gateway: *gatewayMetadata,
+			},
 		},
-		Gateway: *gatewayMetadata,
 	}
 
 	c.JSON(http.StatusOK, response)
@@ -122,14 +115,16 @@ func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string
 		return nil, errors.New("gateway status not found")
 	}
 
-	// Extract listeners from status
+	// Extract listeners from status to get port and protocol
 	listenersRaw, ok := status["listeners"].([]any)
 	if !ok || len(listenersRaw) == 0 {
 		return nil, errors.New("gateway has no listeners in status")
 	}
 
-	listeners := make([]ListenerMetadata, 0, len(listenersRaw))
-	var primaryListener *ListenerMetadata
+	// Find first ready listener (has attached routes)
+	var port int64 = 443     // default
+	var protocol string = "HTTPS" // default
+	var hostname string
 
 	for _, l := range listenersRaw {
 		listener, ok := l.(map[string]any)
@@ -137,63 +132,37 @@ func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string
 			continue
 		}
 
-		name, _ := listener["name"].(string)
-
 		// Get attached routes count to determine if listener is ready
 		attachedRoutes, _ := listener["attachedRoutes"].(int64)
 		if attachedRoutes == 0 {
-			// Skip listeners with no attached routes
 			continue
 		}
 
-		// Extract hostname from listener status
-		hostname := ""
-		if hostnameVal, ok := listener["hostname"].(string); ok {
-			hostname = hostnameVal
-		}
-
-		// Extract port from listener status
-		port := int64(443) // default
+		// Extract port
 		if portVal, ok := listener["port"].(int64); ok {
 			port = portVal
 		}
 
 		// Extract protocol
-		protocol := "HTTPS"
 		if protocolVal, ok := listener["protocol"].(string); ok {
 			protocol = protocolVal
 		}
 
-		listenerMeta := ListenerMetadata{
-			Name:     name,
-			Hostname: hostname,
-			Port:     port,
-			Protocol: protocol,
+		// Extract hostname for fallback
+		if hostnameVal, ok := listener["hostname"].(string); ok {
+			hostname = hostnameVal
 		}
 
-		listeners = append(listeners, listenerMeta)
-
-		// Use first HTTPS/TLS listener as primary
-		if primaryListener == nil && (protocol == "HTTPS" || protocol == "TLS") {
-			primaryListener = &listenerMeta
-		}
-	}
-
-	if primaryListener == nil && len(listeners) > 0 {
-		// Fallback to first listener if no HTTPS/TLS found
-		primaryListener = &listeners[0]
-	}
-
-	if primaryListener == nil {
-		return nil, errors.New("gateway has no ready listeners")
+		// Use first ready listener
+		break
 	}
 
 	// Try to find external hostname from OpenShift Route (preferred for external access)
 	externalHost := h.findRouteHostname(ctx)
 
-	// Fallback: try hostname from primary listener
+	// Fallback: try hostname from listener
 	if externalHost == "" {
-		externalHost = primaryListener.Hostname
+		externalHost = hostname
 	}
 
 	// Fallback: try status.addresses
@@ -213,24 +182,22 @@ func (h *Handler) extractGatewayMetadata(ctx context.Context, gateway map[string
 
 	// Build external URL
 	scheme := "https"
-	if primaryListener.Protocol == "HTTP" {
+	if protocol == "HTTP" {
 		scheme = "http"
 	}
 
 	externalURL := fmt.Sprintf("%s://%s", scheme, externalHost)
 	// Include port if non-standard
-	if (scheme == "https" && primaryListener.Port != 443) || (scheme == "http" && primaryListener.Port != 80) {
-		externalURL = fmt.Sprintf("%s:%d", externalURL, primaryListener.Port)
+	if (scheme == "https" && port != 443) || (scheme == "http" && port != 80) {
+		externalURL = fmt.Sprintf("%s:%d", externalURL, port)
 	}
 
 	return &GatewayMetadata{
-		Name:         h.gatewayName,
-		Namespace:    h.gatewayNamespace,
-		ExternalHost: externalHost,
-		ExternalURL:  externalURL,
-		Protocol:     scheme,
-		Port:         primaryListener.Port,
-		Listeners:    listeners,
+		Name:        h.gatewayName,
+		Namespace:   h.gatewayNamespace,
+		Protocol:    scheme,
+		ExternalURL: externalURL,
+		Port:        port,
 	}, nil
 }
 

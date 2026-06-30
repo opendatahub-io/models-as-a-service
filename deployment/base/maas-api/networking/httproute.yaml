@@ -8,7 +8,7 @@ spec:
       namespace: openshift-ingress
   rules:
     # OpenAI-compatible /v1/models endpoint at top level
-    # NOTE: Using PathPrefix /v1/models (not /v1) to exclude /v1/tenant which is internal-only
+    # NOTE: Using PathPrefix /v1/models (not /v1) to exclude /v1/tenants which is internal-only
     - matches:
         - path:
             type: PathPrefix
@@ -35,7 +35,7 @@ spec:
         - name: maas-api
           port: 8080
           weight: 100
-    # IMPORTANT: /v1/tenant is NOT routed through Gateway (internal-only)
+    # IMPORTANT: /v1/tenants is NOT routed through Gateway (internal-only)
     # It must be called via maas-api Service directly for tenant-scoped auth
     # All other maas-api endpoints remain under /maas-api prefix
     - matches:

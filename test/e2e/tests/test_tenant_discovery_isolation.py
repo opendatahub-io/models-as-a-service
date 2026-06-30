@@ -1,5 +1,5 @@
 """
-E2E tests for /v1/tenant endpoint data isolation.
+E2E tests for /v1/tenants endpoint data isolation.
 
 Verifies that each tenant's maas-api instance returns its own configuration
 and does not leak data from other tenants. With system:authenticated authorization,
@@ -24,7 +24,7 @@ def tenant_service_urls(shared_test_tenants):
     Get internal service URLs for each tenant's maas-api.
 
     Each tenant has its own maas-api deployment in its own namespace.
-    The /v1/tenant endpoint must be called via the Service (not Gateway).
+    The /v1/tenants endpoint must be called via the Service (not Gateway).
     """
     tenant_a, tenant_b = shared_test_tenants
 
@@ -85,7 +85,7 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
         tenant = tenant_service_urls[tenant_key]
         token = tenant_tokens["cluster"]  # Using cluster token (has access)
 
-        url = f"{tenant['service_url']}/v1/tenant"
+        url = f"{tenant['service_url']}/v1/tenants"
         headers = {"Authorization": f"Bearer {token}"}
 
         log.info(f"[isolation] Testing {tenant['name']} can access own endpoint")
@@ -97,9 +97,11 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
             f"{tenant['name']} should access endpoint with system:authenticated, got {r.status_code}: {r.text[:400]}"
 
         data = r.json()
-        assert data["tenant"]["name"] == tenant["aitenant_name"], \
-            f"Expected tenant name {tenant['aitenant_name']}, got {data['tenant']['name']}"
-        print(f"[isolation] ✓ {tenant['name']} can access /v1/tenant endpoint (system:authenticated)")
+        assert "tenants" in data and len(data["tenants"]) == 1, "Should return single tenant in array"
+        tenant_data = data["tenants"][0]
+        assert tenant_data["name"] == tenant["aitenant_name"], \
+            f"Expected tenant name {tenant['aitenant_name']}, got {tenant_data['name']}"
+        print(f"[isolation] ✓ {tenant['name']} can access /v1/tenants endpoint (system:authenticated)")
 
 
 def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tokens):
@@ -122,42 +124,44 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     cluster_token = tenant_tokens["cluster"]
 
     # Test: Call tenant A's endpoint
-    url_a = f"{tenant_a['service_url']}/v1/tenant"
+    url_a = f"{tenant_a['service_url']}/v1/tenants"
     headers = {"Authorization": f"Bearer {cluster_token}"}
 
     r_a = requests.get(url_a, headers=headers, timeout=10, verify=TLS_VERIFY)
 
     assert r_a.status_code == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {r_a.status_code}"
     data_a = r_a.json()
+    tenant_a_data = data_a["tenants"][0]
 
     # Test: Call tenant B's endpoint (same token - should also work)
-    url_b = f"{tenant_b['service_url']}/v1/tenant"
+    url_b = f"{tenant_b['service_url']}/v1/tenants"
 
     r_b = requests.get(url_b, headers=headers, timeout=10, verify=TLS_VERIFY)
 
     assert r_b.status_code == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {r_b.status_code}"
     data_b = r_b.json()
+    tenant_b_data = data_b["tenants"][0]
 
     # Critical: Verify no data leakage
     # Each endpoint should return its OWN tenant data, not the other's
-    assert data_a["tenant"]["name"] == tenant_a["aitenant_name"], \
-        f"Tenant A endpoint should return tenant A data, got {data_a['tenant']['name']}"
+    assert tenant_a_data["name"] == tenant_a["aitenant_name"], \
+        f"Tenant A endpoint should return tenant A data, got {tenant_a_data['name']}"
 
-    assert data_b["tenant"]["name"] == tenant_b["aitenant_name"], \
-        f"Tenant B endpoint should return tenant B data, got {data_b['tenant']['name']}"
+    assert tenant_b_data["name"] == tenant_b["aitenant_name"], \
+        f"Tenant B endpoint should return tenant B data, got {tenant_b_data['name']}"
 
-    assert data_a["tenant"]["name"] != data_b["tenant"]["name"], \
+    assert tenant_a_data["name"] != tenant_b_data["name"], \
         "Tenant A and B should return different tenant names"
 
     # Verify gateway isolation
-    assert data_a["gateway"]["name"] != data_b["gateway"]["name"], \
+    assert tenant_a_data["gateway"]["name"] != tenant_b_data["gateway"]["name"], \
         "Each tenant should have its own gateway"
 
-    assert data_a["gateway"]["externalHost"] != data_b["gateway"]["externalHost"], \
-        "Each tenant should have its own gateway hostname"
+    assert tenant_a_data["gateway"]["externalUrl"] != tenant_b_data["gateway"]["externalUrl"], \
+        "Each tenant should have its own gateway URL"
 
-    print(f"[isolation] ✓ Tenant A: {data_a['tenant']['name']} / Gateway: {data_a['gateway']['name']}")
-    print(f"[isolation] ✓ Tenant B: {data_b['tenant']['name']} / Gateway: {data_b['gateway']['name']}")
+    print(f"[isolation] ✓ Tenant A: {tenant_a_data['name']} / Gateway: {tenant_a_data['gateway']['name']}")
+    print(f"[isolation] ✓ Tenant B: {tenant_b_data['name']} / Gateway: {tenant_b_data['gateway']['name']}")
     print(f"[isolation] ✓ No data leakage - each tenant returns own data")
 
 
@@ -169,7 +173,7 @@ def test_tenant_discovery_unauthorized_access(tenant_service_urls):
     """
     for tenant_key in ["tenant_a", "tenant_b"]:
         tenant = tenant_service_urls[tenant_key]
-        url = f"{tenant['service_url']}/v1/tenant"
+        url = f"{tenant['service_url']}/v1/tenants"
 
         # Test 1: No auth header
         r = requests.get(url, timeout=10, verify=TLS_VERIFY)
@@ -196,7 +200,7 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
 
     for tenant_key in ["tenant_a", "tenant_b"]:
         tenant = tenant_service_urls[tenant_key]
-        url = f"{tenant['service_url']}/v1/tenant"
+        url = f"{tenant['service_url']}/v1/tenants"
         headers = {"Authorization": f"Bearer {cluster_token}"}
 
         r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
@@ -208,10 +212,11 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
         assert r.status_code == 200, f"Expected 200, got {r.status_code}"
 
         data = r.json()
+        tenant_data = data["tenants"][0]
 
         # The gateway name should match this tenant's gateway
         # (not hardcoded to 'maas-default-gateway')
-        gateway_name = data["gateway"]["name"]
+        gateway_name = tenant_data["gateway"]["name"]
 
         # Each tenant's gateway name should contain their tenant name or suffix
         # to prove it's NOT using a hardcoded default
