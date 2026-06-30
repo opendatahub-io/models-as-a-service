@@ -108,16 +108,19 @@ spec:
                 description: |-
                   RBAC is retained only for compatibility with existing AITenant manifests.
                   The controller ignores this field and does not create RoleBindings from it.
+
                   Deprecated: create standard Kubernetes RoleBindings that reference the
                   controller-created tenant-admin Roles instead.
                 properties:
                   admins:
                     description: |-
                       Admins are ignored by the controller and retained only for schema compatibility.
+
                       Deprecated: create Kubernetes RoleBindings directly.
                     items:
                       description: |-
                         AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+
                         Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
                       properties:
                         kind:

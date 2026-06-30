@@ -68,6 +68,7 @@ type AITenantSpec struct {
 
 	// RBAC is retained only for compatibility with existing AITenant manifests.
 	// The controller ignores this field and does not create RoleBindings from it.
+	//
 	// Deprecated: create standard Kubernetes RoleBindings that reference the
 	// controller-created tenant-admin Roles instead.
 	// +kubebuilder:validation:Optional
@@ -85,9 +86,11 @@ type AITenantGatewayRef struct {
 }
 
 // AITenantRBACConfig is the deprecated compatibility schema for tenant-admin subjects.
+//
 // Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
 type AITenantRBACConfig struct {
 	// Admins are ignored by the controller and retained only for schema compatibility.
+	//
 	// Deprecated: create Kubernetes RoleBindings directly.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=128
@@ -95,6 +98,7 @@ type AITenantRBACConfig struct {
 }
 
 // AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+//
 // Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
 type AITenantRBACSubject struct {
 	// Kind is the RBAC subject kind.
