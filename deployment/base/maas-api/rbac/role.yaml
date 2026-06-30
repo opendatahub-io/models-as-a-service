@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: maas-api-resources
+  namespace: models-as-a-service
+rules:
+# MaaS CRs for the models endpoint and subscription selector (cached via informer)
+# These resources are namespace-scoped in the models-as-a-service namespace
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["maassubscriptions", "maasauthpolicies"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["maas.opendatahub.io"]
+  resources: ["tenants", "configs", "externalmodels"]
+  verbs: ["get", "list", "watch"]

@@ -1,0 +1,14 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: maas-api-resources
+  namespace: models-as-a-service
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: maas-api-resources
+subjects:
+# Reference to service account in maas-api namespace
+- kind: ServiceAccount
+  name: maas-api
+  namespace: maas-api
