@@ -630,6 +630,24 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); err != nil {
 		t.Errorf("gateway-default-auth should be recreated after last MaaSAuthPolicy is deleted: %v", err)
 	}
+
+	// Verify the recreated policy scopes deny-all to model inference paths only,
+	// so management endpoints (/v1/*, /maas-api/*) remain accessible.
+	defaults, ok, _ := unstructured.NestedMap(defaultAuth.Object, "spec", "defaults")
+	if !ok {
+		t.Fatal("gateway-default-auth missing spec.defaults")
+	}
+	whenSlice, ok, _ := unstructured.NestedSlice(defaults, "when")
+	if !ok || len(whenSlice) == 0 {
+		t.Fatal("gateway-default-auth should have a 'when' predicate to scope deny-all to model inference paths")
+	}
+	predicate, ok, _ := unstructured.NestedString(whenSlice[0].(map[string]any), "predicate")
+	if !ok || predicate == "" {
+		t.Fatal("gateway-default-auth 'when' predicate should not be empty")
+	}
+	if predicate != celModelIdentityAvailable {
+		t.Errorf("gateway-default-auth 'when' predicate mismatch:\ngot:  %s\nwant: %s", predicate, celModelIdentityAvailable)
+	}
 }
 
 // TestMaaSAuthPolicyReconciler_CachingConfiguration verifies that the controller

@@ -1464,6 +1464,8 @@ func (r *MaaSAuthPolicyReconciler) deleteGatewayDefaultAuthPolicy(ctx context.Co
 
 // ensureGatewayDefaultAuthPolicy recreates the static deny-all gateway-default-auth policy
 // after the last MaaSAuthPolicy is removed, so unconfigured model routes remain denied.
+// Management endpoints (/v1/*, /maas-api/*) are excluded so they remain accessible even
+// when no MaaSAuthPolicy CRs exist (e.g. fresh cluster with zero subscriptions).
 func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) error {
 	policy := &unstructured.Unstructured{}
 	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
@@ -1489,6 +1491,14 @@ func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Co
 			"name":  r.GatewayName,
 		},
 		"defaults": map[string]any{
+			// Only enforce deny-all on model inference paths. Management endpoints
+			// (/v1/*, /maas-api/*) are excluded so the API Keys page and other
+			// management UIs remain accessible even with zero MaaSAuthPolicy CRs.
+			"when": []any{
+				map[string]any{
+					"predicate": celModelIdentityAvailable,
+				},
+			},
 			"rules": map[string]any{
 				"authentication": map[string]any{},
 				"authorization": map[string]any{
