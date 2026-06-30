@@ -236,8 +236,11 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		var notFound *subscription.SubscriptionNotFoundError
 		var accessDenied *subscription.AccessDeniedError
 		var noSub *subscription.NoSubscriptionError
+		var multipleSubs *subscription.MultipleSubscriptionsError
+		var modelNotInSub *subscription.ModelNotInSubscriptionError
 		var modelUnhealthy *subscription.ModelUnhealthyError
-		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) {
+		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) ||
+			errors.As(err, &multipleSubs) || errors.As(err, &modelNotInSub) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
