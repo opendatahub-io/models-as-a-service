@@ -358,7 +358,7 @@ class TestTenantBodyRouting:
         _wait_reconcile()
 
         r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "model": case_a["model_name"],
+            "model": "facebook/opt-125m",
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert r.status_code == 200, (
@@ -412,7 +412,7 @@ class TestTenantBodyRouting:
             _wait_reconcile()
 
             r = self._post_chat(gateway_url, case["model_path"], api_key, {
-                "model": case["model_name"],
+                "model": "facebook/opt-125m",
                 "messages": [{"role": "user", "content": "hello"}],
             })
             assert r.status_code == 200, (
