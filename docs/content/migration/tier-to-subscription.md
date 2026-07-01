@@ -85,9 +85,9 @@ Run both old and new systems in parallel, validate the new system, then switch o
 
 **Approach:**
 1. Install maas-controller (creates gateway defaults)
-2. Create new MaaS CRs alongside existing tier configuration
+2. Create new MaaS CRs alongside existing tier configuration (`migrate-tier-to-subscription.sh`)
 3. Validate new system works correctly
-4. Remove old tier-based configuration
+4. Remove old tier-based configuration (`cleanup-tier-resources.sh`)
 
 ### Option B: Full Cutover (Requires Downtime)
 
@@ -382,93 +382,52 @@ rm -f ~/.kube/tokens/current
 
 ### Phase 4: Remove Old Configuration
 
-Once new system is validated and working correctly:
+> **Important:** Only run this phase after Phase 3 validation confirms the new subscription system is working correctly. Removing old tier resources before the new system is validated will leave models without auth or rate-limiting.
 
-#### 4.1 Remove tier annotations from models
+Use the cleanup script to remove old tier-based resources:
 
 ```bash
-# Remove tier annotations from all models
-# Track failures to ensure all annotations are removed
-failed_models=()
+# Step 1: Preview what will be removed (safe, read-only)
+./scripts/cleanup-tier-resources.sh --dry-run --verbose
 
-# Use process substitution to avoid subshell issue with pipe
-while read model; do
-  if kubectl annotate $model -n llm alpha.maas.opendatahub.io/tiers- --ignore-not-found; then
-    echo "✓ Removed tier annotation from $model"
-  else
-    echo "✗ Failed to remove tier annotation from $model" >&2
-    failed_models+=("$model")
-  fi
-done < <(kubectl get llminferenceservice -n llm -o name)
-
-# Report any failures
-if [ ${#failed_models[@]} -gt 0 ]; then
-  echo ""
-  echo "⚠️  WARNING: Failed to remove tier annotations from the following models:" >&2
-  printf '  - %s\n' "${failed_models[@]}" >&2
-  echo ""
-  echo "Please manually remove annotations from these models:" >&2
-  for model in "${failed_models[@]}"; do
-    echo "  kubectl annotate $model -n llm alpha.maas.opendatahub.io/tiers-" >&2
-  done
-  exit 1
-else
-  echo ""
-  echo "✓ Successfully removed tier annotations from all models"
-fi
+# Step 2: Remove old tier resources
+./scripts/cleanup-tier-resources.sh --verbose
 ```
 
-#### 4.2 Delete old gateway-auth-policy (if exists)
+The script removes:
+
+- `gateway-auth-policy` AuthPolicy in `openshift-ingress`
+- `gateway-tier-rate-limits` TokenRateLimitPolicy in `openshift-ingress`
+- `tier-to-group-mapping` ConfigMap in `maas-api`
+- `alpha.maas.opendatahub.io/tiers` annotation from all LLMInferenceServices in the model namespace
+
+The script is idempotent — running it multiple times on an already-clean cluster produces no errors.
+
+For custom model namespaces, pass `--model-ns`:
 
 ```bash
-# Check if gateway-auth-policy exists
-kubectl get authpolicy gateway-auth-policy -n openshift-ingress
+./scripts/cleanup-tier-resources.sh --model-ns my-models --verbose
+```
 
-# Delete it (gateway-default-auth replaces it)
+#### Manual Cleanup (Fallback)
+
+If you need to remove specific resources selectively:
+
+```bash
+# Delete old gateway auth policy
 kubectl delete authpolicy gateway-auth-policy -n openshift-ingress --ignore-not-found
-```
 
-#### 4.3 Update or remove gateway-level TokenRateLimitPolicy
+# Delete old tier rate limits
+kubectl delete tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress --ignore-not-found
 
-The old TokenRateLimitPolicy has tier-based predicates that are no longer needed.
+# Delete tier-to-group-mapping ConfigMap
+kubectl delete configmap tier-to-group-mapping -n maas-api --ignore-not-found
 
-**Option A: Remove tier-based limits**
-```bash
-# Edit and remove tier-based limit rules
-kubectl edit tokenratelimitpolicy <policy-name> -n openshift-ingress
-
-# Remove sections like:
-#   premium-user-tokens:
-#     when:
-#       - predicate: auth.identity.tier == "premium"
-```
-
-**Option B: Delete if fully replaced**
-```bash
-# If gateway-default-deny provides sufficient default, delete old policy
-kubectl delete tokenratelimitpolicy <old-policy-name> -n openshift-ingress
-```
-
-**Note:** `gateway-default-deny` (created by maas-controller) provides default rate limiting (0 tokens for unconfigured models).
-
-#### 4.4 Handle tier-to-group-mapping ConfigMap
-
-**Option A: Keep ConfigMap** (if MaaS API uses it for other features)
-```bash
-# Keep ConfigMap but document that tiers are deprecated
-kubectl annotate configmap tier-to-group-mapping -n maas-api \
-  deprecated="true" \
-  deprecated-reason="Migrated to subscription model" \
-  --overwrite
-```
-
-**Option B: Delete ConfigMap** (if no longer needed)
-```bash
-# Verify MaaS API doesn't use /v1/tiers/lookup endpoint
-# Check maas-api logs for tier lookup calls
-
-# Delete ConfigMap
-kubectl delete configmap tier-to-group-mapping -n maas-api
+# Remove tier annotations from all models (adjust namespace if not using 'llm')
+MODEL_NS=llm
+for model in $(kubectl get llminferenceservice -n "$MODEL_NS" -o name); do
+  kubectl annotate "$model" -n "$MODEL_NS" alpha.maas.opendatahub.io/tiers- --ignore-not-found
+done
 ```
 
 ### Phase 5: ODH Model Controller Considerations
@@ -618,6 +577,38 @@ kubectl get configmap tier-to-group-mapping -n maas-api -o yaml
     ] | join(",")') \
   --rate-limit 50000 \
   --output migration-crs/premium/
+```
+
+## Cleanup Script
+
+A separate cleanup script is provided to remove old tier-based resources after migration and validation (Phase 4).
+
+### Usage
+
+```bash
+./scripts/cleanup-tier-resources.sh [OPTIONS]
+```
+
+### Options
+
+| Flag | Description | Example |
+|------|-------------|---------|
+| `--model-ns <ns>` | Model namespace (default: llm) | `--model-ns my-models` |
+| `--dry-run` | Show what would be removed without making changes | `--dry-run` |
+| `--verbose` | Enable verbose logging | `--verbose` |
+| `--help` | Show help message | `--help` |
+
+### Examples
+
+```bash
+# Preview what will be removed
+./scripts/cleanup-tier-resources.sh --dry-run --verbose
+
+# Remove old tier resources
+./scripts/cleanup-tier-resources.sh --verbose
+
+# Custom model namespace
+./scripts/cleanup-tier-resources.sh --model-ns my-models --verbose
 ```
 
 ## Conversion Worksheet
