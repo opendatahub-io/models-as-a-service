@@ -2,8 +2,8 @@
 #
 # Emits structured usage logs for inference requests via OTel Access Log Service.
 #
-# Identity:  user_id/subscription/groups from X-MaaS-* request headers;
-#            key_id/key_name/organization_id from auth identity filter.
+# Identity:  All identity fields from auth identity FILTER_STATE
+#            (wasm.kuadrant.auth.identity.*), set by Kuadrant WASM plugin.
 # Model:     json_to_metadata extracts "model" from request body (covers 429),
 #            then overwrites from response body on 200 (authoritative).
 # Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
@@ -295,13 +295,13 @@ spec:
                 # ── Identity ──
                 - key: user_id
                   value:
-                    string_value: "%REQ(X-MaaS-Username)%"
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
                 - key: subscription
                   value:
-                    string_value: "%REQ(X-MaaS-Subscription)%"
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
                 - key: groups
                   value:
-                    string_value: "%REQ(X-MaaS-Group)%"
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups:PLAIN)%"
                 - key: key_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
