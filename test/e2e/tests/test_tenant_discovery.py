@@ -72,7 +72,7 @@ def test_tenant_discovery_requires_auth(maas_api_internal_url: str):
     Note: This endpoint is internal-only (not exposed through Gateway),
     so we use kubectl run with curl to access it from inside the cluster.
     """
-    url = maas_api_internal_url.replace("https://", "https://") + "/v1/tenants"
+    url = maas_api_internal_url + "/v1/tenants"
     namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
 
     # Attempt without Authorization header
