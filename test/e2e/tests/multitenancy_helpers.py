@@ -33,6 +33,8 @@ LABEL_AI_GATEWAY_TENANT = "ai-gateway.opendatahub.io/tenant"
 LABEL_MANAGED_BY_AITENANT = "maas.opendatahub.io/managed-by-aitenant"
 LABEL_TENANT_NAME = "maas.opendatahub.io/tenant-name"
 LABEL_TENANT_NAMESPACE = "maas.opendatahub.io/tenant-namespace"
+ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
+ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 
 FINALIZER_SUBSCRIPTION = "maas.opendatahub.io/subscription-cleanup"
 FINALIZER_AUTHPOLICY = "maas.opendatahub.io/authpolicy-cleanup"
@@ -498,7 +500,6 @@ def apply_tenant_cr(
     *,
     gateway_namespace: str = GATEWAY_NAMESPACE,
     external_oidc: Optional[dict[str, str]] = None,
-    tenant_label_name: Optional[str] = None,
 ) -> None:
     spec: dict[str, Any] = {
         "gatewayRef": {
@@ -510,18 +511,11 @@ def apply_tenant_cr(
         external_oidc = external_oidc_from_env()
     if external_oidc:
         spec["externalOIDC"] = external_oidc
-    metadata: dict[str, Any] = {"name": TENANT_CR_NAME, "namespace": namespace}
-    if tenant_label_name:
-        metadata["labels"] = {
-            LABEL_MANAGED_BY_AITENANT: "true",
-            LABEL_TENANT_NAME: tenant_label_name,
-            LABEL_TENANT_NAMESPACE: namespace,
-        }
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "Tenant",
-            "metadata": metadata,
+            "metadata": {"name": TENANT_CR_NAME, "namespace": namespace},
             "spec": spec,
         }
     )
@@ -747,6 +741,22 @@ def aitenant_ready(obj: dict) -> bool:
     )
 
 
+def bridge_tenant_owned_by_aitenant(case: dict[str, str]):
+    def _predicate(obj: dict) -> bool:
+        metadata = obj.get("metadata") or {}
+        labels = metadata.get("labels") or {}
+        annotations = metadata.get("annotations") or {}
+        return (
+            labels.get(LABEL_MANAGED_BY_AITENANT) == "true"
+            and labels.get(LABEL_TENANT_NAME) == case["tenant_label_name"]
+            and labels.get(LABEL_TENANT_NAMESPACE) == case["tenant_ns"]
+            and annotations.get(ANNOTATION_AITENANT_NAME) == case["tenant_label_name"]
+            and annotations.get(ANNOTATION_AITENANT_NAMESPACE) == AITENANT_NAMESPACE
+        )
+
+    return _predicate
+
+
 def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool = False) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
@@ -754,7 +764,12 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         apply_gateway_route_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
-    wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"])
+    wait_for_json(
+        "tenant",
+        TENANT_CR_NAME,
+        case["tenant_ns"],
+        predicate=bridge_tenant_owned_by_aitenant(case),
+    )
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(

@@ -21,6 +21,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -133,12 +134,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	ns := extModel.Namespace
 	name := extModel.Name
+	resourceName := modelnaming.ExternalModelResourceName(name)
 	gwName := r.gatewayName()
 	gwNamespace := r.gatewayNamespace()
 	labels := commonLabels(name)
 
 	// 1. ExternalName Service (backend for HTTPRoute)
-	svc := buildService(extModel.Spec.Endpoint, name, ns, port, labels)
+	svc := buildService(extModel.Spec.Endpoint, resourceName, ns, port, labels)
 	if err := controllerutil.SetControllerReference(extModel, svc, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on Service: %w", err)
 	}
@@ -147,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 2. ServiceEntry (registers external host in mesh)
-	se := buildServiceEntry(extModel.Spec.Endpoint, name, ns, port, tls, labels)
+	se := buildServiceEntry(extModel.Spec.Endpoint, resourceName, ns, port, tls, labels)
 	if err := r.setUnstructuredOwner(extModel, se); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on ServiceEntry: %w", err)
 	}
@@ -157,7 +159,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// 3. DestinationRule (only if TLS; delete stale DR when TLS is disabled)
 	if tls {
-		dr := buildDestinationRule(extModel.Spec.Endpoint, name, ns, labels)
+		dr := buildDestinationRule(extModel.Spec.Endpoint, resourceName, ns, labels)
 		if err := r.setUnstructuredOwner(extModel, dr); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set owner on DestinationRule: %w", err)
 		}
@@ -165,7 +167,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("failed to create DestinationRule: %w", err)
 		}
 	} else {
-		if err := r.deleteIfExists(ctx, logger, "DestinationRule", name, ns, schema.GroupVersionKind{
+		if err := r.deleteIfExists(ctx, logger, "DestinationRule", resourceName, ns, schema.GroupVersionKind{
 			Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule",
 		}); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to delete stale DestinationRule: %w", err)
@@ -173,7 +175,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 4. HTTPRoute (routes requests to external provider via gateway)
-	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, extModel.Spec.TargetModel, ns, port, gwName, gwNamespace, labels)
+	hr := buildHTTPRoute(extModel.Spec.Endpoint, resourceName, resourceName, name, extModel.Spec.TargetModel, ns, port, gwName, gwNamespace, labels)
 	if err := controllerutil.SetControllerReference(extModel, hr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on HTTPRoute: %w", err)
 	}

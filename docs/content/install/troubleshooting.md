@@ -52,7 +52,11 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
 
-7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
+7. **High-concurrency inference returns intermittent `500` or `503` errors**: The RHCL/Kuadrant WASM authentication path may be timing out under burst load.
+      - [ ] Confirm the errors occur during concurrent request scenarios and not for low-volume requests
+      - [ ] Increase `AUTH_SERVICE_TIMEOUT` from the default `200ms` to `2s` through the RHCL operator Subscription configuration. See [High-concurrency authentication timeout](platform-setup.md#high-concurrency-authentication-timeout).
+
+8. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
       - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
       - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
@@ -67,7 +71,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get servicemonitor,podmonitor -A | grep -E "(maas|kuadrant|limitador)"
       ```
 
-8. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
+9. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
       - [ ] Enable observability on Kuadrant CR:
 
       ```bash
@@ -81,7 +85,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get podmonitor -n kuadrant-system
       ```
 
-9. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
+10. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
 
       The error typically appears as `{"statusCode": 503, "code": "FST_REPLY_FROM_SERVICE_UNAVAILABLE", ...}`.
       This is a Fastify/Dashboard-level error (not a gateway 503) indicating the monitoring stack
@@ -90,13 +94,13 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
-10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
+11. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-11. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+12. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
 
-12. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+13. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
 
       MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
 
@@ -120,7 +124,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
-13. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+14. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
 
       - [ ] Check which namespace the controller is configured to accept:
 

@@ -13,20 +13,6 @@ import (
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
-// OptionalAPIGroups lists API groups whose CRDs are installed by optional platform
-// components (e.g. COO for Perses). Resources in these groups are skipped gracefully
-// when their CRDs are not yet registered, instead of failing the Tenant reconcile.
-// The CRD watch in the controller re-triggers reconcile once the CRDs appear.
-var OptionalAPIGroups = map[string]bool{
-	"perses.dev": true, // Cluster Observability Operator (COO) — Perses dashboards and datasources
-}
-
-// isOptionalAPIGroup returns true when missing CRDs for the given group should not
-// fail the reconcile (i.e. the dependency is installed by an optional operator).
-func isOptionalAPIGroup(group string) bool {
-	return OptionalAPIGroups[group]
-}
-
 const (
 	// AnnotationManaged is the opt-out annotation key used by the ODH operator and MaaS
 	// controller. Resources annotated with this key set to "false" are skipped on both
@@ -53,6 +39,10 @@ const (
 
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
+
+	// DefaultAITenantName is the AITenant that represents the legacy/default
+	// models-as-a-service installation during single-tenant to multi-tenant migration.
+	DefaultAITenantName = "models-as-a-service"
 
 	// DefaultMaaSAPINamespace is the fallback namespace for maas-api workloads when
 	// --maas-api-namespace flag is not specified (kustomize standalone deployments).
@@ -194,8 +184,9 @@ func MaaSAPIServiceName(tenantID string) string {
 // TenantIdentifierFor extracts the tenant identifier from a Tenant CR.
 //
 // Returns:
-//   - Empty string ("") for default/legacy tenant (not managed by AITenant)
-//   - Tenant name (e.g., "redteam") for AITenant-managed tenants
+//   - Empty string ("") for the default/legacy Tenant, whether unlabeled or managed
+//     by AITenant/models-as-a-service (preserves legacy resource names)
+//   - Tenant name (e.g., "redteam") for non-default AITenant-managed tenants
 //   - Error if LabelManagedByAITenant is true but LabelTenantName is missing (invalid state)
 //
 // The tenant identifier is used to generate unique per-tenant resource names.
@@ -231,6 +222,19 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 				"tenantNameLabel", LabelTenantName)
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
 				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+		}
+		if tenantName == DefaultAITenantName {
+			if tenant.Name != maasv1alpha1.TenantInstanceName {
+				return "", fmt.Errorf("tenant %s/%s has %s=%q but is not the default Tenant resource %q",
+					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, maasv1alpha1.TenantInstanceName)
+			}
+			if labels[LabelTenantNamespace] == "" || labels[LabelTenantNamespace] != tenant.Namespace {
+				return "", fmt.Errorf("tenant %s/%s has %s=%q but %s must match the Tenant namespace",
+					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
+			}
+			log.Info("Using default AITenant legacy resource identifier (empty string)",
+				"tenantName", tenantName)
+			return "", nil
 		}
 		log.Info("Resolved tenant identifier from AITenant label", "tenantIdentifier", tenantName)
 		return tenantName, nil

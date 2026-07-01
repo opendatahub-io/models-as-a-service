@@ -11,9 +11,18 @@ import pytest
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
+CONFIG_CRD = "configs.maas.opendatahub.io"
+CONFIG_NAME = "default"
+DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION = "maas.opendatahub.io/default-aitenant-bootstrapped"
+ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
+ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 TENANT_NAME = "default-tenant"
+DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
+MAAS_SUBSCRIPTION_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
+GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
+DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
@@ -214,11 +223,21 @@ def _assert_aitenant_bootstrap_resources(case):
     assert namespace["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
 
     tenant = _wait_for_json("tenant", TENANT_NAME, case["tenant_ns"])
+    labels = tenant["metadata"].get("labels") or {}
+    annotations = tenant["metadata"].get("annotations") or {}
+    assert labels["maas.opendatahub.io/managed-by-aitenant"] == "true"
+    assert labels["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
+    assert labels["maas.opendatahub.io/tenant-name"] == case["aitenant_name"]
+    assert labels["maas.opendatahub.io/tenant-namespace"] == case["tenant_ns"]
+    assert annotations[ANNOTATION_AITENANT_NAME] == case["aitenant_name"]
+    assert annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
+    # AITenant-managed bridge Tenants keep legacy/default spec values. The
+    # tenant Gateway under test is reported in AITenant.status.gatewayRef.
     assert tenant["spec"]["gatewayRef"] == {
         "namespace": GATEWAY_NAMESPACE,
-        "name": case["gateway_name"],
+        "name": GATEWAY_NAME,
     }
-    assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
+    assert tenant["spec"]["gatewayRef"]["name"] != case["gateway_name"]
 
     assert _get_json_or_none("role", case["tenant_admin_role"], case["tenant_ns"]) is not None
     assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is not None
@@ -234,6 +253,81 @@ def _delete_aitenant(case):
 class TestAITenantLifecycle:
     # TODO: Add e2e coverage that Policies, Subscriptions, Models, and inference requests
     # work end-to-end in a newly created AITenant tenant namespace.
+    def test_default_aitenant_bootstraps_legacy_tenant_without_gateway_mutation(self):
+        aitenant = _wait_for_json(
+            AITENANT_KIND,
+            DEFAULT_AITENANT_NAME,
+            AITENANT_NAMESPACE,
+            predicate=_aitenant_ready,
+            timeout=240,
+        )
+        assert aitenant["status"]["tenantNamespace"] == MAAS_SUBSCRIPTION_NAMESPACE
+        assert aitenant["status"]["gatewayRef"] == {
+            "namespace": GATEWAY_NAMESPACE,
+            "name": GATEWAY_NAME,
+        }
+        _wait_for_json(
+            CONFIG_CRD,
+            CONFIG_NAME,
+            predicate=lambda obj: (
+                (obj.get("metadata", {}).get("annotations") or {}).get(DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION)
+                == "true"
+            ),
+            timeout=180,
+        )
+
+        gateway = _wait_for_json("gateway", GATEWAY_NAME, GATEWAY_NAMESPACE, timeout=180)
+        gateway_labels = gateway["metadata"].get("labels") or {}
+        gateway_annotations = gateway["metadata"].get("annotations") or {}
+        assert gateway_labels.get("ai-gateway.opendatahub.io/tenant") is None
+        assert gateway_labels.get("maas.opendatahub.io/managed-by-aitenant") is None
+        assert gateway_annotations.get("maas.opendatahub.io/aitenant-name") is None
+        assert gateway_annotations.get("maas.opendatahub.io/aitenant-namespace") is None
+
+        namespace = _wait_for_json("namespace", MAAS_SUBSCRIPTION_NAMESPACE, timeout=180)
+        namespace_labels = namespace["metadata"].get("labels") or {}
+        assert namespace_labels["maas.opendatahub.io/managed-by-aitenant"] == "true"
+        assert namespace_labels["ai-gateway.opendatahub.io/tenant"] == DEFAULT_AITENANT_NAME
+        assert namespace_labels["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
+        assert namespace_labels["maas.opendatahub.io/tenant-namespace"] == MAAS_SUBSCRIPTION_NAMESPACE
+
+        tenant = _wait_for_json("tenant", TENANT_NAME, MAAS_SUBSCRIPTION_NAMESPACE, timeout=180)
+        assert tenant["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
+        assert tenant["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == DEFAULT_AITENANT_NAME
+        assert tenant["metadata"]["labels"]["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
+        tenant_annotations = tenant["metadata"].get("annotations") or {}
+        assert tenant_annotations[ANNOTATION_AITENANT_NAME] == DEFAULT_AITENANT_NAME
+        assert tenant_annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
+        assert tenant["spec"]["gatewayRef"] == {
+            "namespace": GATEWAY_NAMESPACE,
+            "name": GATEWAY_NAME,
+        }
+
+        assert _wait_for_json("deployment", "maas-api", DEPLOYMENT_NAMESPACE, timeout=180) is not None
+        assert _wait_for_json("service", "maas-api", DEPLOYMENT_NAMESPACE, timeout=180) is not None
+        assert _wait_for_json("httproute", "maas-api-route", DEPLOYMENT_NAMESPACE, timeout=180) is not None
+        assert _get_json_or_none("deployment", "maas-api-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
+        assert _get_json_or_none("service", "maas-api-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
+        assert _get_json_or_none("httproute", "maas-api-route-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
+
+        if os.environ.get("EXTERNAL_OIDC") == "true" and os.environ.get("OIDC_ISSUER_URL"):
+            expected_issuer = os.environ["OIDC_ISSUER_URL"]
+            expected_client_id = os.environ.get("OIDC_CLIENT_ID")
+
+            def aitenant_oidc_converged(obj):
+                oidc = obj.get("spec", {}).get("oidc") or {}
+                return oidc.get("issuerUrl") == expected_issuer and (
+                    not expected_client_id or oidc.get("clientId") == expected_client_id
+                )
+
+            _wait_for_json(
+                AITENANT_KIND,
+                DEFAULT_AITENANT_NAME,
+                AITENANT_NAMESPACE,
+                predicate=aitenant_oidc_converged,
+                timeout=180,
+            )
+
     def test_aitenant_rejected_outside_ai_tenants_namespace(self):
         suffix = uuid.uuid4().hex[:8]
         wrong_ns = f"e2e-ait-wrong-{suffix}"

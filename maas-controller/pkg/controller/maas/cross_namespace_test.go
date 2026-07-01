@@ -43,7 +43,7 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = modelName
+		httpRouteName   = "maas-" + modelName
 		authPolicyName  = "maas-auth-" + modelName
 		maasPolicyName  = "cross-ns-policy"
 		gatewayNS       = "openshift-ingress"
@@ -139,7 +139,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = modelName
+		httpRouteName   = "maas-" + modelName
 		authPolicyName  = "maas-auth-" + modelName
 		maasPolicyName  = "selective-policy"
 		gatewayNS       = "openshift-ingress"
@@ -234,7 +234,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 		modelName      = "shared-model"
 		namespaceA     = "team-a"
 		namespaceB     = "team-b"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		authPolicyName = "maas-auth-" + modelName
 		gatewayNS      = "openshift-ingress"
 	)
@@ -342,7 +342,7 @@ func TestMaaSSubscriptionReconciler_CrossNamespace(t *testing.T) {
 		modelNamespaceA = "model-ns-a"
 		modelNamespaceB = "model-ns-b"
 		modelName       = "test-model"
-		httpRouteName   = modelName
+		httpRouteName   = "maas-" + modelName
 		trlpName        = "maas-trlp-" + modelName
 		subName         = "cross-ns-subscription"
 	)
@@ -454,7 +454,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	const (
 		modelName        = "llm"
 		modelNamespace   = "models"
-		httpRouteName    = modelName
+		httpRouteName    = "maas-" + modelName
 		trlpName         = "maas-trlp-" + modelName
 		subscriptionName = "gold" // SAME name in both namespaces
 		namespaceA       = "tenant-a"
@@ -631,7 +631,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 	)
 
 	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
-	route := newHTTPRoute(modelName, modelNamespace)
+	route := newExternalModelHTTPRoute(modelName, modelNamespace)
 	policyA := newMaaSAuthPolicy(policyName, namespaceA, "team-a",
 		maasv1alpha1.ModelRef{Name: modelName, Namespace: modelNamespace})
 
@@ -701,7 +701,7 @@ func TestMaaSModelRefDeletion_CrossNamespaceIsolation(t *testing.T) {
 		modelName      = "shared-model"
 		namespaceA     = "team-a"
 		namespaceB     = "team-b"
-		httpRouteName  = modelName
+		httpRouteName  = "maas-" + modelName
 		authPolicyName = "maas-auth-" + modelName
 	)
 
