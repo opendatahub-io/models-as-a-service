@@ -249,7 +249,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	// prevents hundreds of goroutines from racing to UPDATE the same row in Postgres,
 	// which causes row-lock contention and "context deadline exceeded" errors.
 	//nolint:contextcheck // Intentionally using background context - original may be cancelled.
-	if s.shouldUpdateLastUsed(metadata.ID) {
+	if proceed, slot := s.shouldUpdateLastUsed(metadata.ID); proceed {
 		go func() {
 			// Recover from panics to prevent crashing the entire process
 			defer func() {
@@ -263,8 +263,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 			defer cancel()
 
 			if err := s.store.UpdateLastUsed(updateCtx, metadata.ID); err != nil {
-				// Reset the debounce timestamp so the next request retries.
-				s.lastUsedDebounce.Delete(metadata.ID)
+				// Clear only the slot this goroutine reserved (CWE-362/CWE-667 mitigation).
+				// A bare Delete would remove any newer slot written by a CAS refresh
+				// if this goroutine was delayed by the scheduler after its context expired.
+				s.clearDebounceSlot(metadata.ID, slot)
 				// Log warning but don't fail validation - this is best-effort tracking
 				s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 			}
@@ -371,20 +373,22 @@ func (s *Service) StartDebounceCleanup(ctx context.Context) {
 	}()
 }
 
-// shouldUpdateLastUsed returns true if a last_used_at DB write should be issued
-// for keyID. It records the current time in the debounce map when returning true,
-// so only one caller per TTL window proceeds.
-// When debouncing is disabled (TTL == 0) it always returns true.
-func (s *Service) shouldUpdateLastUsed(keyID string) bool {
+// shouldUpdateLastUsed returns (proceed, slot) where proceed is true when a
+// last_used_at DB write should be issued for keyID. slot is the timestamp value
+// written into the debounce map for this reservation; callers must pass it to
+// clearDebounceSlot on write failure so only the reserving goroutine can evict
+// its own slot (CWE-362/CWE-667 mitigation).
+// When debouncing is disabled (TTL == 0) it always returns (true, zero time).
+func (s *Service) shouldUpdateLastUsed(keyID string) (bool, time.Time) {
 	if s.lastUsedDebounceTTL == 0 {
-		return true
+		return true, time.Time{}
 	}
 	now := time.Now()
 	// LoadOrStore is atomic: the first caller stores `now` and gets loaded=false,
 	// all concurrent callers within the same window get loaded=true and skip.
 	actual, loaded := s.lastUsedDebounce.LoadOrStore(keyID, now)
 	if !loaded {
-		return true // we were the first — proceed with the write
+		return true, now // we were the first — proceed with the write
 	}
 	lastTime, ok := actual.(time.Time)
 	if ok && now.Sub(lastTime) >= s.lastUsedDebounceTTL {
@@ -393,10 +397,22 @@ func (s *Service) shouldUpdateLastUsed(keyID string) bool {
 		// where many goroutines could all observe the same stale timestamp and
 		// all return true simultaneously (CWE-362).
 		if s.lastUsedDebounce.CompareAndSwap(keyID, actual, now) {
-			return true
+			return true, now
 		}
 	}
-	return false
+	return false, time.Time{}
+}
+
+// clearDebounceSlot removes the debounce entry for keyID only if it still holds
+// slotTime — the value this goroutine stored via shouldUpdateLastUsed. Using
+// CompareAndDelete instead of bare Delete prevents a delayed goroutine from
+// evicting a newer slot written by a concurrent CAS refresh after TTL expiry
+// (CWE-362/CWE-667 mitigation). No-op when debouncing is disabled.
+func (s *Service) clearDebounceSlot(keyID string, slotTime time.Time) {
+	if s.lastUsedDebounceTTL == 0 {
+		return
+	}
+	s.lastUsedDebounce.CompareAndDelete(keyID, slotTime)
 }
 
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.
