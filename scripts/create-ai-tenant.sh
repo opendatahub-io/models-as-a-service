@@ -21,6 +21,28 @@ TENANT_NAME=${1:-}
 GATEWAY_HOSTNAME=${2:-}
 GATEWAY_NAMESPACE="openshift-ingress"
 AITENANT_NAMESPACE="ai-tenants"
+HOSTNAME_AUTO_DETECTED=false
+
+validate_dns1123_subdomain() {
+    local value=$1
+    local field=$2
+    local -a labels
+    local label
+
+    if [ -z "$value" ] || [ "${#value}" -gt 253 ] || ! [[ "$value" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ ]]; then
+        echo "Error: ${field} must be a valid DNS-1123 subdomain and at most 253 characters"
+        echo "Use lowercase alphanumeric characters, hyphens, and dots; each label must start and end with alphanumeric."
+        return 1
+    fi
+
+    IFS='.' read -r -a labels <<< "$value"
+    for label in "${labels[@]}"; do
+        if [ "${#label}" -gt 63 ]; then
+            echo "Error: ${field} labels must be at most 63 characters"
+            return 1
+        fi
+    done
+}
 
 if [ -z "$TENANT_NAME" ]; then
     echo "Error: Tenant name is required"
@@ -44,12 +66,20 @@ if [ -z "$GATEWAY_HOSTNAME" ]; then
     if [ -n "$DEFAULT_HOSTNAME" ]; then
         CLUSTER_DOMAIN="${DEFAULT_HOSTNAME#*.}"
         GATEWAY_HOSTNAME="${TENANT_NAME}-maas.${CLUSTER_DOMAIN}"
-        echo "Auto-detected hostname: $GATEWAY_HOSTNAME"
+        HOSTNAME_AUTO_DETECTED=true
     else
         echo "Error: Could not auto-detect cluster domain"
         echo "Please provide hostname: $0 $TENANT_NAME <gateway-hostname>"
         exit 1
     fi
+fi
+
+if ! validate_dns1123_subdomain "$GATEWAY_HOSTNAME" "gateway hostname"; then
+    exit 1
+fi
+
+if [ "$HOSTNAME_AUTO_DETECTED" = true ]; then
+    echo "Auto-detected hostname: $GATEWAY_HOSTNAME"
 fi
 
 echo "Creating tenant: $TENANT_NAME"
@@ -139,7 +169,7 @@ metadata:
     app.kubernetes.io/instance: ${TENANT_NAME}
     gateway.networking.k8s.io/gateway-name: ${TENANT_NAME}
 spec:
-  host: ${GATEWAY_HOSTNAME}
+  host: "${GATEWAY_HOSTNAME}"
   to:
     kind: Service
     name: ${GATEWAY_SERVICE_NAME}
