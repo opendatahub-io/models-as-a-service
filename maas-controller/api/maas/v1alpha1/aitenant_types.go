@@ -61,8 +61,8 @@ type AITenantSpec struct {
 	Gateway *AITenantGatewayRef `json:"gateway,omitempty"`
 
 	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
-	// The controller mirrors this into the temporary Tenant config object until
-	// the MaaS config CR rename lands.
+	// AITenant is the source of truth for this derived platform context; the
+	// bridge Tenant config object owns MaaS-specific user config only.
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
 

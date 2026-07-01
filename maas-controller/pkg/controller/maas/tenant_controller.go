@@ -18,7 +18,6 @@ package maas
 
 import (
 	"context"
-	"strings"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -88,25 +87,16 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
-// NOTE: TenantReconciler only watches (reads) these resources for status reporting and reconciliation logic.
-// The actual resource creation is handled by specialized sub-controllers:
-// - MaaSAuthPolicyReconciler creates authpolicies for per-tenant Authorino authentication setup
-// - MaaSSubscriptionReconciler creates ratelimitpolicies/tokenratelimitpolicies for rate limiting
-// - MaaSSubscriptionReconciler creates telemetrypolicies for observability and metrics collection
-// - Istio controllers create destination rules, envoy filters, telemetries
-// - Other systems create cronjobs, monitoring resources, and perses dashboards
-// TenantReconciler only needs read-only access (get;list;watch) to observe these resources for status.
-// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch
-// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch
-// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch
-// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch
-// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch
-// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch
+// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=kuadrant.io,resources=tokenratelimitpolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=kuadrant.io,resources=ratelimitpolicies;telemetrypolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=extensions.kuadrant.io,resources=telemetrypolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
 // clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
 // ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
@@ -151,26 +141,23 @@ func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Obje
 	}}}
 }
 
+func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj client.Object) []reconcile.Request {
+	aitenant, ok := obj.(*maasv1alpha1.AITenant)
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace),
+	}}}
+}
+
 // crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
 func crdLabeledForMaaSComponent() predicate.Predicate {
 	key := tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		l := o.GetLabels()
 		return l != nil && l[key] == "true"
-	})
-}
-
-// crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups
-// (e.g. perses.dev from COO). CRD names follow the pattern "<plural>.<group>", so a
-// suffix check is sufficient to identify the group without parsing the spec.
-func crdInOptionalAPIGroup() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		for group := range tenantreconcile.OptionalAPIGroups {
-			if strings.HasSuffix(o.GetName(), "."+group) {
-				return true
-			}
-		}
-		return false
 	})
 }
 
@@ -223,16 +210,13 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(configResourceDefault()),
 		).
 		Watches(
-			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(crdLabeledForMaaSComponent()),
+			&maasv1alpha1.AITenant{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
-		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
-		// so that resources previously skipped due to missing CRDs are applied immediately.
 		Watches(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(crdInOptionalAPIGroup()),
+			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).
 		Watches(
 			&corev1.Secret{},

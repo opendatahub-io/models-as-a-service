@@ -11,9 +11,10 @@ These tests validate the Phase 1 multi-tenant contract:
 import pytest
 
 from multitenancy_helpers import (
+    AITENANT_KIND,
+    AITENANT_NAMESPACE,
     DEPLOYMENT_NAMESPACE,
     GATEWAY_NAMESPACE,
-    TENANT_CR_NAME,
     apply_maas_auth_policy,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
@@ -81,8 +82,8 @@ class TestPerTenantMaaSAPI:
             # Verify it targets the tenant Gateway
             assert auth["spec"]["targetRef"]["name"] == case["gateway_name"]
 
-            tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
-            assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]
+            aitenant = wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout=180)
+            assert aitenant["status"]["gatewayRef"]["name"] == case["gateway_name"]
 
     def test_tenant_name_environment_variable_set(self, tenant_cases):
         """2.2: TENANT_NAME env var identifies the tenant served by each maas-api Deployment."""

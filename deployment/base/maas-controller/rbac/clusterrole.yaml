@@ -8,13 +8,14 @@ rules:
   - ""
   resources:
   - configmaps
-  - serviceaccounts
+  - services
   verbs:
   - create
   - delete
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - ""
@@ -47,21 +48,20 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - serviceaccounts/token
-  verbs:
-  - create
-- apiGroups:
-  - ""
-  resources:
-  - services
+  - serviceaccounts
   verbs:
   - create
   - delete
   - get
   - list
   - patch
-  - update
   - watch
+- apiGroups:
+  - ""
+  resources:
+  - serviceaccounts/token
+  verbs:
+  - create
 - apiGroups:
   - apiextensions.k8s.io
   resources:
@@ -105,8 +105,11 @@ rules:
   resources:
   - cronjobs
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - config.openshift.io
@@ -121,8 +124,11 @@ rules:
   resources:
   - telemetrypolicies
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - gateway.networking.k8s.io
@@ -196,8 +202,11 @@ rules:
   - ratelimitpolicies
   - telemetrypolicies
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - maas.opendatahub.io
@@ -252,19 +261,22 @@ rules:
   - podmonitors
   - servicemonitors
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - networking.istio.io
   resources:
   - destinationrules
-  - serviceentries
   verbs:
   - create
   - delete
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
@@ -272,8 +284,22 @@ rules:
   resources:
   - envoyfilters
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
+  - watch
+- apiGroups:
+  - networking.istio.io
+  resources:
+  - serviceentries
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - update
   - watch
 - apiGroups:
   - networking.k8s.io
@@ -300,8 +326,11 @@ rules:
   - persesdashboards
   - persesdatasources
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch
 - apiGroups:
   - rbac.authorization.k8s.io
@@ -341,6 +370,9 @@ rules:
   resources:
   - telemetries
   verbs:
+  - create
+  - delete
   - get
   - list
+  - patch
   - watch

@@ -60,18 +60,24 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	route := &routeList.Items[0]
 	routeName := route.Name
 
-	// Get expected gateway from tenant's configuration
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
-
-	// For multi-tenant deployments, fetch the tenant's gateway
-	tenant, err := fetchTenantForNamespace(ctx, h.r.Client, model.Namespace)
-	if err == nil && tenant.Spec.GatewayRef.Name != "" {
-		expectedGatewayName = tenant.Spec.GatewayRef.Name
-		expectedGatewayNamespace = tenant.Spec.GatewayRef.Namespace
-		log.V(4).Info("Using tenant-specific gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenant", tenant.Name)
-	} else if err != nil {
-		log.V(4).Info("No tenant found for namespace, using default gateway", "namespace", model.Namespace, "error", err)
+	gatewayRef, err := tenantGatewayRefForNamespace(
+		ctx,
+		h.r.Client,
+		model.Namespace,
+		h.r.DefaultTenantNamespace,
+		h.r.gatewayName(),
+		h.r.gatewayNamespace(),
+		h.r.TenantNamespaceDiscoveryEnabled,
+	)
+	if err != nil {
+		return fmt.Errorf("resolve tenant gateway for namespace %s: %w", model.Namespace, err)
+	}
+	if gatewayRef.Name != "" {
+		expectedGatewayName = gatewayRef.Name
+		expectedGatewayNamespace = gatewayRef.Namespace
+		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantNamespace", model.Namespace)
 	}
 
 	gatewayFound := false
@@ -219,8 +225,33 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	if filtering {
 		return ""
 	}
-	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
-		return llmisvc.Status.Addresses[0].URL.String()
+	// Prefer addresses that include the model path (e.g., gateway-internal over gateway-internal-model-routing).
+	// gateway-internal-model-routing typically has just the base URL without the path.
+	// gateway-internal has the full path including namespace/model.
+	var fallbackURL string
+	for _, addr := range llmisvc.Status.Addresses {
+		if addr.URL == nil {
+			continue
+		}
+		// Prefer URLs with non-empty paths beyond just "/"
+		// Base URLs like https://host/ have path="/" (length 1)
+		// Model endpoints like https://host/ns/model have path="/ns/model" (length > 1)
+		if len(addr.URL.Path) > 1 && addr.URL.Path != "/" {
+			return addr.URL.String()
+		}
+		if fallbackURL == "" {
+			fallbackURL = addr.URL.String()
+		}
+	}
+	// Check Status.URL before falling back to base URL from Addresses
+	// Status.URL might have the full path even when Addresses[] only has base URLs
+	if llmisvc.Status.URL != nil {
+		if len(llmisvc.Status.URL.Path) > 1 && llmisvc.Status.URL.Path != "/" {
+			return llmisvc.Status.URL.String()
+		}
+	}
+	if fallbackURL != "" {
+		return fallbackURL
 	}
 	if llmisvc.Status.URL != nil {
 		return llmisvc.Status.URL.String()
