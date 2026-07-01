@@ -155,6 +155,11 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             "subscription-valid must have a 'when' predicate so it only runs for "
             "model inference, not management endpoints"
         )
+        predicate = when_list[0].get("predicate", "")
+        assert 'request.path.split' in predicate and 'x-gateway-model-name' in predicate, (
+            "subscription-valid 'when' predicate must use the model-identity CEL expression "
+            f"(path-based + header-based check), got: {predicate}"
+        )
 
     def test_gateway_default_auth_scoped_if_present(self):
         """If gateway-default-auth exists, it must scope deny-all to model paths only."""
@@ -175,9 +180,15 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
         )
         predicate = when_list[0].get("predicate", "")
         assert predicate, "gateway-default-auth 'when' predicate must not be empty"
-        assert "v1" in predicate, (
-            f"gateway-default-auth predicate should exclude /v1/* paths, got: {predicate}"
+        assert 'request.path.split' in predicate, (
+            "gateway-default-auth predicate must use path-based model identity CEL, "
+            f"got: {predicate}"
         )
-        assert "maas-api" in predicate, (
-            f"gateway-default-auth predicate should exclude /maas-api/* paths, got: {predicate}"
+        assert '"v1"' in predicate and '"maas-api"' in predicate, (
+            "gateway-default-auth predicate must exclude /v1/* and /maas-api/* paths "
+            f"via CEL expression, got: {predicate}"
+        )
+        assert 'x-gateway-model-name' in predicate, (
+            "gateway-default-auth predicate must include header-based model identity check, "
+            f"got: {predicate}"
         )
