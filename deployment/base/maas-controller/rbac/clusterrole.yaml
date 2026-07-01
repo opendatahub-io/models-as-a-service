@@ -21,6 +21,7 @@ rules:
   resources:
   - endpoints
   - pods
+  - secrets
   verbs:
   - get
   - list
