@@ -337,6 +337,40 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant
 	return s.store.InvalidateAll(ctx, username, tenant)
 }
 
+// StartDebounceCleanup starts a background goroutine that periodically evicts
+// stale entries from the lastUsedDebounce map. Without this the map grows
+// indefinitely — one entry per unique key ID that has ever been validated.
+// Entries older than lastUsedDebounceTTL are already logically expired (the
+// next validation would re-add them), so deleting them is safe and has no
+// effect on debounce correctness.
+// The goroutine stops when ctx is cancelled (server shutdown). It is a no-op
+// when debouncing is disabled (TTL == 0).
+func (s *Service) StartDebounceCleanup(ctx context.Context) {
+	if s.lastUsedDebounceTTL == 0 {
+		return
+	}
+	go func() {
+		// Sweep once per hour regardless of TTL — stale entries are cheap to
+		// hold, so high-frequency sweeps are unnecessary.
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cutoff := time.Now().Add(-s.lastUsedDebounceTTL)
+				s.lastUsedDebounce.Range(func(key, value any) bool {
+					if t, ok := value.(time.Time); ok && t.Before(cutoff) {
+						s.lastUsedDebounce.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
+}
+
 // shouldUpdateLastUsed returns true if a last_used_at DB write should be issued
 // for keyID. It records the current time in the debounce map when returning true,
 // so only one caller per TTL window proceeds.
