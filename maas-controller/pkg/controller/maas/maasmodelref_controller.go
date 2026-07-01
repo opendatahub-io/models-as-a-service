@@ -411,13 +411,21 @@ func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
 }
 
 // SetupWithManager sets up the controller with the Manager.
+// crdExists checks if a CRD is registered in the cluster's REST mapper.
+// Used to make watches on optional CRDs (KServe, Kuadrant) conditional so the
+// controller can start when those operators are not installed.
+func crdExists(mapper apimeta.RESTMapper, group, version, kind string) bool {
+	_, err := mapper.RESTMapping(schema.GroupKind{Group: group, Kind: kind}, version)
+	return err == nil
+}
+
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
 		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSModelRef{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
@@ -426,13 +434,19 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSModelRefs,
-		)).
-		// Watch LLMInferenceServices so we re-reconcile when the backing service's Ready status changes
-		// (automatically updates MaaSModelRef status from Pending -> Ready and vice versa).
-		Watches(&kservev1alpha1.LLMInferenceService{},
+		))
+
+	// Watch LLMInferenceServices only if KServe is installed.
+	// Allows the controller to run without KServe (model inference disabled).
+	// Same optional pattern as TokenRateLimitPolicy for Kuadrant.
+	if crdExists(mgr.GetRESTMapper(), "serving.kserve.io", "v1alpha1", "LLMInferenceService") {
+		b = b.Watches(&kservev1alpha1.LLMInferenceService{},
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
-		).
+		)
+	}
+
+	return b.
 		// Watch MaaSSubscriptions so we re-reconcile when governance state changes
 		// (spec, status/phase, or deletion). No predicate filter — the reconciler's
 		// equality.Semantic.DeepEqual check gates unnecessary status writes.
