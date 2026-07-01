@@ -5,17 +5,48 @@ Verifies that each tenant's maas-api instance returns its own configuration
 and does not leak data from other tenants. With system:authenticated authorization,
 any authenticated user can call any tenant's endpoint, but each endpoint must
 return only its own tenant's data.
+
+These tests use kubectl run with curl to access internal Service URLs.
 """
 
 import logging
 import pytest
-import requests
+import subprocess
+import json
 import os
 
 from conftest import TLS_VERIFY
 from test_helper import _get_cluster_token
 
 log = logging.getLogger(__name__)
+
+
+def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub") -> tuple[int, str]:
+    """Execute curl from inside cluster. Returns (status_code, response_body)"""
+    curl_args = ["-sk", "-m", "10"]
+    if headers:
+        for key, value in headers.items():
+            curl_args.extend(["-H", f"{key}: {value}"])
+    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
+
+    cmd = [
+        "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
+        "--rm", "-i", "--restart=Never",
+        "--image=curlimages/curl:latest",
+        "-n", namespace,
+        "--", "curl"
+    ] + curl_args
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        output = result.stdout
+        if "HTTP_CODE:" in output:
+            body, code_line = output.rsplit("HTTP_CODE:", 1)
+            return int(code_line.strip()), body.strip()
+        return 0, output
+    except Exception as e:
+        log.error(f"kubectl curl failed: {e}")
+        return 0, str(e)
 
 
 @pytest.fixture
@@ -90,13 +121,13 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
         log.info(f"[isolation] Testing {tenant['name']} can access own endpoint")
 
-        r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
+        status_code, body = _kubectl_curl(url, headers=headers, namespace=tenant['namespace'])
 
         # Should succeed (200) with system:authenticated authorization
-        assert r.status_code == 200, \
-            f"{tenant['name']} should access endpoint with system:authenticated, got {r.status_code}: {r.text[:400]}"
+        assert status_code == 200, \
+            f"{tenant['name']} should access endpoint with system:authenticated, got {status_code}: {body[:400]}"
 
-        data = r.json()
+        data = json.loads(body)
         assert "tenants" in data and len(data["tenants"]) == 1, "Should return single tenant in array"
         tenant_data = data["tenants"][0]
         assert tenant_data["name"] == tenant["aitenant_name"], \
@@ -127,19 +158,19 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     url_a = f"{tenant_a['service_url']}/v1/tenants"
     headers = {"Authorization": f"Bearer {cluster_token}"}
 
-    r_a = requests.get(url_a, headers=headers, timeout=10, verify=TLS_VERIFY)
+    status_a, body_a = _kubectl_curl(url_a, headers=headers, namespace=tenant_a['namespace'])
 
-    assert r_a.status_code == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {r_a.status_code}"
-    data_a = r_a.json()
+    assert status_a == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {status_a}"
+    data_a = json.loads(body_a)
     tenant_a_data = data_a["tenants"][0]
 
     # Test: Call tenant B's endpoint (same token - should also work)
     url_b = f"{tenant_b['service_url']}/v1/tenants"
 
-    r_b = requests.get(url_b, headers=headers, timeout=10, verify=TLS_VERIFY)
+    status_b, body_b = _kubectl_curl(url_b, headers=headers, namespace=tenant_b['namespace'])
 
-    assert r_b.status_code == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {r_b.status_code}"
-    data_b = r_b.json()
+    assert status_b == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {status_b}"
+    data_b = json.loads(body_b)
     tenant_b_data = data_b["tenants"][0]
 
     # Critical: Verify no data leakage
@@ -176,15 +207,15 @@ def test_tenant_discovery_unauthorized_access(tenant_service_urls):
         url = f"{tenant['service_url']}/v1/tenants"
 
         # Test 1: No auth header
-        r = requests.get(url, timeout=10, verify=TLS_VERIFY)
-        assert r.status_code == 401, \
-            f"{tenant['name']} should reject no-auth request with 401, got {r.status_code}"
+        status_code, _ = _kubectl_curl(url, namespace=tenant['namespace'])
+        assert status_code == 401, \
+            f"{tenant['name']} should reject no-auth request with 401, got {status_code}"
 
         # Test 2: Invalid token
         headers = {"Authorization": "Bearer invalid-token-12345"}
-        r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
-        assert r.status_code == 401, \
-            f"{tenant['name']} should reject invalid token with 401, got {r.status_code}"
+        status_code, _ = _kubectl_curl(url, headers=headers, namespace=tenant['namespace'])
+        assert status_code == 401, \
+            f"{tenant['name']} should reject invalid token with 401, got {status_code}"
 
     print("[isolation] ✓ Both tenants properly reject unauthorized access")
 

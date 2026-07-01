@@ -6,14 +6,62 @@ Tests cover:
 - Authenticated access with valid service account token
 - Response structure validation
 - Gateway metadata accuracy
+
+These tests use kubectl run with curl to access the internal maas-api Service,
+since /v1/tenants is not exposed through the Gateway and CI runs outside the cluster.
 """
 
 import logging
-import requests
+import subprocess
 import json
+import os
+import requests
 from conftest import TLS_VERIFY
 
 log = logging.getLogger(__name__)
+
+
+def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub") -> tuple[int, str]:
+    """
+    Execute curl request from inside the cluster using kubectl run.
+
+    Returns (status_code, response_body)
+    """
+    curl_args = ["-sk", "-m", "10"]
+
+    # Add headers
+    if headers:
+        for key, value in headers.items():
+            curl_args.extend(["-H", f"{key}: {value}"])
+
+    # Write full response (headers + body) to capture status code
+    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
+
+    # Run curl in a pod
+    cmd = [
+        "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
+        "--rm", "-i", "--restart=Never",
+        "--image=curlimages/curl:latest",
+        "-n", namespace,
+        "--",
+        "curl"
+    ] + curl_args
+
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        output = result.stdout
+
+        # Parse status code from footer
+        if "HTTP_CODE:" in output:
+            body, code_line = output.rsplit("HTTP_CODE:", 1)
+            status_code = int(code_line.strip())
+            return status_code, body.strip()
+        else:
+            # Fallback if format is unexpected
+            return 0, output
+    except Exception as e:
+        log.error(f"kubectl curl failed: {e}")
+        return 0, str(e)
 
 
 def test_tenant_discovery_requires_auth(maas_api_internal_url: str):
@@ -22,23 +70,24 @@ def test_tenant_discovery_requires_auth(maas_api_internal_url: str):
     Without a bearer token, the endpoint should return 401 Unauthorized.
 
     Note: This endpoint is internal-only (not exposed through Gateway),
-    so we call the maas-api Service directly.
+    so we use kubectl run with curl to access it from inside the cluster.
     """
-    url = f"{maas_api_internal_url}/v1/tenants"
+    url = maas_api_internal_url.replace("https://", "https://") + "/v1/tenants"
+    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
 
     # Attempt without Authorization header
-    r = requests.get(url, timeout=10, verify=TLS_VERIFY)
+    status_code, body = _kubectl_curl(url, namespace=namespace)
 
-    log.info(f"[tenant] GET {url} (no auth) -> {r.status_code}")
-    print(f"[tenant] GET /v1/tenants without auth: {r.status_code}")
+    log.info(f"[tenant] GET {url} (no auth) -> HTTP {status_code}")
+    print(f"[tenant] GET /v1/tenants without auth: HTTP {status_code}")
 
-    assert r.status_code == 401, f"Expected 401 without auth, got {r.status_code}"
+    assert status_code == 401, f"Expected 401 without auth, got {status_code}"
 
-    # Verify error message structure
+    # Verify error message structure if JSON
     try:
-        error_data = r.json()
-        assert "error" in error_data, "Response should include 'error' field"
-        print(f"[tenant] Error response: {error_data.get('error')}")
+        error_data = json.loads(body)
+        if "error" in error_data:
+            print(f"[tenant] Error response: {error_data.get('error')}")
     except Exception:
         pass  # Error message format not critical for this test
 
@@ -47,16 +96,17 @@ def test_tenant_discovery_with_invalid_token(maas_api_internal_url: str):
     """
     Verify /v1/tenants endpoint rejects invalid tokens.
     """
-    url = f"{maas_api_internal_url}/v1/tenants"
+    url = maas_api_internal_url + "/v1/tenants"
+    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
 
     # Attempt with invalid bearer token
     headers = {"Authorization": "Bearer invalid-token-12345"}
-    r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
+    status_code, body = _kubectl_curl(url, headers=headers, namespace=namespace)
 
-    log.info(f"[tenant] GET {url} (invalid token) -> {r.status_code}")
-    print(f"[tenant] GET /v1/tenants with invalid token: {r.status_code}")
+    log.info(f"[tenant] GET {url} (invalid token) -> HTTP {status_code}")
+    print(f"[tenant] GET /v1/tenants with invalid token: HTTP {status_code}")
 
-    assert r.status_code == 401, f"Expected 401 with invalid token, got {r.status_code}"
+    assert status_code == 401, f"Expected 401 with invalid token, got {status_code}"
 
 
 def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dict):
@@ -66,19 +116,20 @@ def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dic
     This test uses the standard auth headers (service account token) that other E2E tests use.
     The endpoint uses system:authenticated authorization, so any authenticated user can access it.
     """
-    url = f"{maas_api_internal_url}/v1/tenants"
+    url = maas_api_internal_url + "/v1/tenants"
+    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
 
-    r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
+    status_code, body = _kubectl_curl(url, headers=headers, namespace=namespace)
 
-    log.info(f"[tenant] GET {url} (authenticated) -> {r.status_code}")
-    print(f"[tenant] GET /v1/tenants authenticated: {r.status_code}")
+    log.info(f"[tenant] GET {url} (authenticated) -> HTTP {status_code}")
+    print(f"[tenant] GET /v1/tenants authenticated: HTTP {status_code}")
 
     # The endpoint should return 200 with system:authenticated authorization
-    assert r.status_code == 200, \
-        f"Expected 200 with auth, got {r.status_code}: {r.text[:400]}"
+    assert status_code == 200, \
+        f"Expected 200 with auth, got {status_code}: {body[:400]}"
 
     # Validate the response structure
-    data = r.json()
+    data = json.loads(body)
     print(f"[tenant] Response: {json.dumps(data, indent=2)}")
 
     # Validate response structure (array of tenants)
@@ -126,13 +177,14 @@ def test_tenant_discovery_gateway_matches_deployment(maas_api_internal_url: str,
     This is a regression test for the original problem: Dashboard assuming cluster domain
     instead of using the actual gateway hostname.
     """
-    url = f"{maas_api_internal_url}/v1/tenants"
+    url = maas_api_internal_url + "/v1/tenants"
+    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
 
-    r = requests.get(url, headers=headers, timeout=10, verify=TLS_VERIFY)
+    status_code, body = _kubectl_curl(url, headers=headers, namespace=namespace)
 
-    assert r.status_code == 200, f"Expected 200, got {r.status_code}"
+    assert status_code == 200, f"Expected 200, got {status_code}"
 
-    data = r.json()
+    data = json.loads(body)
     tenant = data["tenants"][0]
     gateway = tenant["gateway"]
 
