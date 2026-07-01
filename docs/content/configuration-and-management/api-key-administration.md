@@ -48,12 +48,14 @@ Use the bulk revoke endpoint to revoke all keys for the affected user, then noti
 
 ## Ephemeral Key Cleanup
 
-Expired ephemeral keys are automatically deleted from the database by a **CronJob** (`maas-api-key-cleanup`) that runs every 15 minutes. This prevents unbounded accumulation of expired short-lived credentials.
+Expired ephemeral keys are automatically deleted from the database by a **background cleanup loop** inside the maas-api process. By default it runs every 15 minutes (`CLEANUP_INTERVAL_MINUTES=15`). This prevents unbounded accumulation of expired short-lived credentials.
+
+When upgrading from releases that used the external `maas-api-key-cleanup` CronJob, the Tenant reconciler automatically removes that CronJob and its `maas-api-cleanup-restrict` NetworkPolicy on the next platform reconcile.
 
 ### How It Works
 
-1. The CronJob sends `POST /internal/v1/api-keys/cleanup` to the maas-api Service
-2. The endpoint deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
+1. On startup, maas-api starts a goroutine that periodically invokes the cleanup logic
+2. Cleanup deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
 3. Regular (non-ephemeral) keys are **never** deleted by cleanup — they remain until manually revoked
 
 ### Grace Period
@@ -62,29 +64,26 @@ A 30-minute grace period after expiration ensures that recently-expired keys are
 
 ### Security
 
-The cleanup endpoint is cluster-internal only:
+The cleanup logic runs in-process within maas-api. The `/internal/v1/api-keys/cleanup` HTTP endpoint remains available for manual triggers but is cluster-internal only:
 
 - It is registered under `/internal/v1/` and is **not exposed** on the external Service or Route
-- A `NetworkPolicy` (`maas-api-cleanup-restrict`) restricts cleanup pods to communicate only with `maas-api:8080` and DNS
-- No authentication is required on the endpoint itself — access control is enforced at the network layer
+- No authentication is required on the endpoint itself — access control is enforced at the network layer (cluster-internal only)
 
 ### Troubleshooting Cleanup
 
-**Check CronJob status:**
+**Check cleanup interval configuration:**
 
 ```bash
-oc get cronjob maas-api-key-cleanup -n <namespace>
-oc get jobs -n <namespace> -l app=maas-api-cleanup --sort-by=.metadata.creationTimestamp
+oc get deploy maas-api -n <namespace> -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="CLEANUP_INTERVAL_MINUTES")].value}{"\n"}'
 ```
 
-**View cleanup logs:**
+**View cleanup activity in maas-api logs:**
 
 ```bash
-# Latest CronJob run
-oc logs job/$(oc get jobs -n <namespace> -l app=maas-api-cleanup \
-  --sort-by=.metadata.creationTimestamp -o jsonpath='{.items[-1].metadata.name}') \
-  -n <namespace>
+oc logs deploy/maas-api -n <namespace> | grep -i cleanup
 ```
+
+When keys are deleted (`Ephemeral key cleanup completed` with `deletedCount`) or when a tick fails (`Failed to cleanup expired ephemeral keys`), it should be shown in the logs.
 
 **Manually trigger cleanup** (from an allowed pod or via oc exec):
 

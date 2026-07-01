@@ -87,9 +87,10 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 // and default address assignment.
 func TestValidate(t *testing.T) {
 	tests := []struct {
-		name        string
-		cfg         Config
-		expectError string
+		name                  string
+		cfg                   Config
+		expectError           string
+		expectCleanupInterval int
 	}{
 		{
 			name: "missing DBConnectionURL returns error",
@@ -203,6 +204,58 @@ func TestValidate(t *testing.T) {
 			},
 			expectError: "must be at least 1",
 		},
+		// cleanup API key tests
+		{
+			name: "CleanupIntervalMinutes negative value, disables cleanup",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    -10,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: -10,
+		},
+		{
+			name: "CleanupIntervalMinutes 0, set to default 15mins",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    0,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 15,
+		},
+		{
+			name: "CleanupIntervalMinutes not set, set to default too",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 15,
+		},
+		{
+			name: "CleanupIntervalMinutes positive value, use value",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    20,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 20,
+		},
 		{
 			name: "MetricsPort zero returns error",
 			cfg: Config{
@@ -275,6 +328,10 @@ func TestValidate(t *testing.T) {
 				if tt.cfg.Address != DefaultInsecureAddr {
 					t.Errorf("expected Address %q for insecure config, got %q", DefaultInsecureAddr, tt.cfg.Address)
 				}
+			}
+
+			if tt.expectCleanupInterval != 0 && tt.cfg.CleanupIntervalMinutes != tt.expectCleanupInterval {
+				t.Errorf("expected CleanupIntervalMinutes %d, got %d", tt.expectCleanupInterval, tt.cfg.CleanupIntervalMinutes)
 			}
 		})
 	}

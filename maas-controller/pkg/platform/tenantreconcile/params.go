@@ -28,7 +28,6 @@ type PlatformParams struct {
 
 	MaaSAPIImage           string
 	PayloadProcessingImage string
-	MaaSAPIKeyCleanupImage string
 
 	APIKeyMaxExpirationDays string
 }
@@ -51,7 +50,6 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
-		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
 	}
 
@@ -103,10 +101,6 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		return patchMaaSAPIDeployment(log, r, params)
 	case gvk == GVKDeployment && name == PayloadProcessingName:
 		return patchPayloadProcessingDeployment(log, r, params)
-	case gvk == GVKCronJob && name == baseMaaSAPIKeyCleanupCronJobName:
-		// Rename and patch cleanup CronJob for this tenant
-		r.SetName(MaaSAPIKeyCleanupCronJobName(tenantID))
-		return patchCleanupCronJobImage(log, r, params)
 	case gvk == GVKHTTPRoute && name == baseMaaSAPIRouteName:
 		// Rename and patch HTTPRoute for this tenant
 		r.SetName(MaaSAPIRouteName(tenantID))
@@ -208,51 +202,6 @@ func patchPreProcessingDeployment(r *unstructured.Unstructured, params PlatformP
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
 	}
-	return nil
-}
-
-func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
-	log.V(4).Info("Patching cleanup CronJob image", "image", params.MaaSAPIKeyCleanupImage)
-	if err := setCronJobContainerImage(r, "cleanup", params.MaaSAPIKeyCleanupImage); err != nil {
-		return fmt.Errorf("patch cleanup CronJob image: %w", err)
-	}
-
-	// Patch the cleanup command to use tenant-specific service name
-	containers, found, err := unstructured.NestedSlice(r.Object,
-		"spec", "jobTemplate", "spec", "template", "spec", "containers")
-	if err != nil {
-		return fmt.Errorf("read cleanup CronJob containers: %w", err)
-	}
-	if found && len(containers) > 0 {
-		container, ok := containers[0].(map[string]any)
-		if !ok {
-			return errors.New("cleanup CronJob container is not a map")
-		}
-		command, ok := container["command"].([]any)
-		if ok && len(command) > 0 {
-			tenantServiceName := MaaSAPIServiceName(params.TenantIdentifier)
-			// Look for the curl command with maas-api:8443
-			modified := false
-			for i, cmdInterface := range command {
-				if cmd, ok := cmdInterface.(string); ok && strings.Contains(cmd, "maas-api:8443") {
-					// Replace maas-api with tenant-specific service name
-					newCmd := strings.ReplaceAll(cmd, "maas-api:8443", tenantServiceName+":8443")
-					command[i] = newCmd
-					modified = true
-					log.V(4).Info("Patching cleanup CronJob command URL", "old", "maas-api:8443", "new", tenantServiceName+":8443")
-				}
-			}
-			if modified {
-				container["command"] = command
-				containers[0] = container
-				if err := unstructured.SetNestedSlice(r.Object, containers,
-					"spec", "jobTemplate", "spec", "template", "spec", "containers"); err != nil {
-					return fmt.Errorf("write cleanup CronJob containers: %w", err)
-				}
-			}
-		}
-	}
-
 	return nil
 }
 
@@ -518,21 +467,6 @@ func setOrAddEnvVar(r *unstructured.Unstructured, containerName, envName, envVal
 		cm["env"] = envSlice
 		containers[i] = cm
 		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
-	}
-	return fmt.Errorf("container %q not found", containerName)
-}
-
-func setCronJobContainerImage(r *unstructured.Unstructured, containerName, image string) error {
-	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "jobTemplate", "spec", "template", "spec", "containers")
-	if err != nil || !found {
-		return errors.New("containers not found")
-	}
-	for i, c := range containers {
-		if cm, ok := c.(map[string]any); ok && cm["name"] == containerName {
-			cm["image"] = image
-			containers[i] = cm
-			return unstructured.SetNestedSlice(r.Object, containers, "spec", "jobTemplate", "spec", "template", "spec", "containers")
-		}
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }
