@@ -43,6 +43,8 @@ EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-externa
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
 
+TARGET_MODEL = "gpt-3.5-turbo"
+
 EXTERNAL_MODEL_NAME = "e2e-external-model"
 EXTERNAL_MODEL_RESOURCE_NAME = f"maas-{EXTERNAL_MODEL_NAME}"
 
@@ -117,7 +119,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
         "spec": {
             "provider": "openai",
-            "targetModel": "gpt-3.5-turbo",
+            "targetModel": TARGET_MODEL,
             "endpoint": EXTERNAL_ENDPOINT,
             "credentialRef": {
                 "name": f"{EXTERNAL_MODEL_NAME}-api-key",
@@ -305,7 +307,7 @@ class TestExternalModelCleanup:
             "metadata": {"name": temp_name, "namespace": MODEL_NAMESPACE},
             "spec": {
                 "provider": "openai",
-                "targetModel": "gpt-3.5-turbo",
+                "targetModel": TARGET_MODEL,
                 "endpoint": EXTERNAL_ENDPOINT,
                 "credentialRef": {
                     "name": f"{EXTERNAL_MODEL_NAME}-api-key",
