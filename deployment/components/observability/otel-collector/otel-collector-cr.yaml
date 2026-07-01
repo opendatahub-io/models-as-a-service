@@ -1,0 +1,144 @@
+# OpenTelemetryCollector CR for MaaS usage logs pipeline.
+#
+# Requires: Red Hat build of OpenTelemetry operator (opentelemetry-product)
+#           installed via OperatorHub / OLM.
+#
+# The operator manages the Deployment, Service (named <cr-name>-collector),
+# health probes, and config volume automatically.
+#
+# IMPORTANT: If you rename this CR, the generated service name changes.
+# Service name = <metadata.name>-collector → currently: usage-logs-collector
+# Update envoy-otel-access-log.yaml cluster address to match.
+#
+# Sensitive data:
+#   user_id emission is disabled by default. To enable, uncomment
+#   delete_key in transform/redact and user_id in groupbyattrs.keys.
+apiVersion: opentelemetry.io/v1beta1
+kind: OpenTelemetryCollector
+metadata:
+  name: usage-logs
+  namespace: opendatahub
+  labels:
+    app.kubernetes.io/part-of: maas-observability
+    app.kubernetes.io/managed-by: maas-controller
+spec:
+  mode: deployment
+  replicas: 2
+  serviceAccount: usage-logs-collector
+  image: registry.redhat.io/rhosdt/opentelemetry-collector-rhel9@sha256:f970e31da49e636dcf93d989cae7b4a0c752d0dea05a3f9fcdcf5b2c6ac5f04e
+  env:
+  - name: POD_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: metadata.name
+  volumeMounts:
+  - name: loki-ca
+    mountPath: /etc/loki-ca
+    readOnly: true
+  volumes:
+  - name: loki-ca
+    configMap:
+      name: loki-gateway-ca
+      items:
+      - key: service-ca.crt
+        path: service-ca.crt
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  config:
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+      bearertokenauth:
+        filename: /var/run/secrets/kubernetes.io/serviceaccount/token
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+    processors:
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 80
+        spike_limit_percentage: 25
+      resource:
+        attributes:
+        - key: log_type
+          value: application
+          action: insert
+        - key: service.name
+          value: maas-gateway
+          action: upsert
+        - key: service.namespace
+          value: openshift-ingress
+          action: upsert
+        - key: kubernetes_namespace_name
+          value: openshift-ingress
+          action: upsert
+        - key: service.instance.id
+          value: "${env:POD_NAME}"
+          action: upsert
+      transform:
+        error_mode: ignore
+        log_statements:
+        - context: log
+          statements:
+          - replace_pattern(attributes["user_id"], "^\"(.*)\"$$", "$$1")
+          - replace_pattern(attributes["subscription"], "^\"(.*)\"$$", "$$1")
+          - replace_pattern(attributes["key_id"], "^\"(.*)\"$$", "$$1")
+          - replace_pattern(attributes["groups"], "^\"(.*)\"$$", "$$1")
+          - replace_pattern(attributes["organization_id"], "^\"(.*)\"$$", "$$1")
+      
+      transform/redact:
+        error_mode: ignore
+        log_statements:
+        - context: log
+          statements:
+          # user_id sensitive data — emission disabled by default.
+          # To enable: comment the delete_key line below and
+          # uncomment user_id in groupbyattrs.keys.
+          - delete_key(attributes, "user_id")
+      groupbyattrs:
+        keys:
+        - subscription
+        - model
+        - response_type
+        - method
+        - key_id
+        - organization_id
+        # user_id emission disabled by default (sensitive data).
+        # To enable, uncomment the line below and comment delete_key in transform/redact above.
+        # - user_id
+      batch:
+        timeout: 5s
+        send_batch_size: 100
+        send_batch_max_size: 200
+    exporters:
+      otlphttp/loki:
+        endpoint: "LOKI_OTLP_ENDPOINT_PLACEHOLDER"
+        timeout: 45s
+        retry_on_failure:
+          enabled: true
+          initial_interval: 2s
+          max_interval: 30s
+          max_elapsed_time: 10m
+        sending_queue:
+          enabled: true
+          num_consumers: 4
+          queue_size: 500
+        auth:
+          authenticator: bearertokenauth
+        tls:
+          ca_file: /etc/loki-ca/service-ca.crt
+          insecure_skip_verify: LOKI_TLS_INSECURE_SKIP_VERIFY_PLACEHOLDER
+    service:
+      extensions: [health_check, bearertokenauth]
+      pipelines:
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, resource, transform, transform/redact, groupbyattrs, batch]
+          exporters: [otlphttp/loki]
