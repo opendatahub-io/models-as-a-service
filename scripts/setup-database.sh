@@ -8,8 +8,9 @@
 #
 # Namespace selection:
 #   - Auto-detects upgrades vs fresh installs
-#   - Upgrades: Keeps postgres in opendatahub/redhat-ods-applications, copies secret to redhat-ai-gateway-infra
-#   - Fresh installs: Creates postgres in redhat-ai-gateway-infra
+#   - Upgrades: Keeps postgres in legacy namespace (opendatahub/redhat-ods-applications),
+#               copies maas-db-config secret to infrastructure namespace (controlled by INFRA_NAMESPACE)
+#   - Fresh installs: Creates postgres in infrastructure namespace (controlled by INFRA_NAMESPACE)
 #
 # Environment variables:
 #   POSTGRES_USER      Database user (default: maas)
@@ -31,8 +32,32 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
-# Infrastructure namespace where maas-api and postgres deploy (uses operator namespace)
-INFRA_NAMESPACE="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+# Derive infrastructure namespace from controller namespace (matches Go code logic)
+derive_infra_namespace() {
+  local controller_ns="$1"
+  case "$controller_ns" in
+    redhat-ods-applications)
+      echo "redhat-ai-gateway-infra"
+      ;;
+    opendatahub)
+      echo "odh-ai-gateway-infra"
+      ;;
+    *)
+      echo "$controller_ns"
+      ;;
+  esac
+}
+
+# Infrastructure namespace where maas-api and postgres deploy
+# Defaults to AUTO (namespace separation enabled). Set to empty string to disable for ROSA.
+INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-AUTO}"
+if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
+  # Derive from NAMESPACE (controller namespace) or default to opendatahub
+  CONTROLLER_NS="${NAMESPACE:-opendatahub}"
+  INFRA_NAMESPACE=$(derive_infra_namespace "$CONTROLLER_NS")
+else
+  INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
+fi
 
 # Legacy namespaces to check for existing postgres (upgrade detection)
 LEGACY_NAMESPACES=("opendatahub" "redhat-ods-applications")

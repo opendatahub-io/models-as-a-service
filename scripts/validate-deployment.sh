@@ -9,6 +9,22 @@ set -uo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$SCRIPT_DIR/deployment-helpers.sh"
 
+# Derive infrastructure namespace from controller namespace (matches Go code logic)
+derive_infra_namespace() {
+  local controller_ns="$1"
+  case "$controller_ns" in
+    redhat-ods-applications)
+      echo "redhat-ai-gateway-infra"
+      ;;
+    opendatahub)
+      echo "odh-ai-gateway-infra"
+      ;;
+    *)
+      echo "$controller_ns"
+      ;;
+  esac
+}
+
 # MaaS Platform Deployment Validation Script
 # This script validates that the MaaS platform is correctly deployed and functional
 #
@@ -25,7 +41,24 @@ INFERENCE_ENDPOINT="chat/completions"  # Default to chat completions
 CUSTOM_MODEL_PATH=""  # Custom path for model endpoint (overrides --endpoint)
 RATE_LIMIT_TEST_COUNT=10  # Default number of requests for rate limit testing
 MAX_TOKENS=50  # Default max_tokens for requests
-MAAS_API_NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"  # maas-api deploys to operator namespace
+# Detect platform (RHOAI vs ODH) if NAMESPACE not set
+detect_controller_namespace() {
+  if kubectl get namespace redhat-ods-applications &>/dev/null; then
+    echo "redhat-ods-applications"
+  else
+    echo "opendatahub"
+  fi
+}
+
+# Infrastructure namespace - defaults to AUTO (namespace separation enabled)
+INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-AUTO}"
+if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
+  # Derive from NAMESPACE (controller namespace) or auto-detect platform
+  CONTROLLER_NS="${NAMESPACE:-$(detect_controller_namespace)}"
+  INFRA_NAMESPACE=$(derive_infra_namespace "$CONTROLLER_NS")
+else
+  INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
+fi
 
 # Show help if requested
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
@@ -54,12 +87,12 @@ if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "  --max-tokens N            Maximum number of tokens to generate per request"
     echo "                            Default: 50"
     echo "  -n, --namespace NS        Namespace where MaaS API is deployed"
-    echo "                            Default: opendatahub (or MAAS_API_NAMESPACE env var)"
+    echo "                            Default: AUTO (auto-derived from controller namespace)"
     echo ""
     echo "Environment Variables:"
     echo "  MAAS_GATEWAY_HOST         Override gateway URL when cluster domain is not readable"
     echo "                            e.g. export MAAS_GATEWAY_HOST=https://maas.apps.your-cluster.example.com"
-    echo "  MAAS_API_NAMESPACE        Namespace where MaaS API is deployed (default: opendatahub)"
+    echo "  INFRA_NAMESPACE           Namespace where MaaS API is deployed (default: AUTO)"
     echo "  OIDC_ISSUER_URL           When set, validates maas-api-auth-policy jwt.issuerUrl matches"
     echo "                            (external OIDC; avoids deploy vs test issuer drift / HTTP 401)"
     echo "  OIDC_CLIENT_ID            When set with OIDC_ISSUER_URL, checks oidc-client-bound client id"
@@ -127,7 +160,7 @@ while [ $# -gt 0 ]; do
                 echo "Error: --namespace requires a value (e.g., --namespace maas-api)" >&2
                 exit 1
             fi
-            MAAS_API_NAMESPACE="$2"
+            INFRA_NAMESPACE="$2"
             shift 2
             ;;
         -*)
@@ -282,13 +315,13 @@ print_header "1️⃣ Component Status Checks"
 
 # Check MaaS API pods
 print_check "MaaS API pods"
-MAAS_PODS=$(kubectl get pods -n "$MAAS_API_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || true)
+MAAS_PODS=$(kubectl get pods -n "$INFRA_NAMESPACE" -l app.kubernetes.io/name=maas-api --no-headers 2>/dev/null | grep -c "Running" || true)
 # Ensure MAAS_PODS is a valid integer (fixes edge case with empty/multiline output)
 [[ "$MAAS_PODS" =~ ^[0-9]+$ ]] || MAAS_PODS=0
 if [ "$MAAS_PODS" -gt 0 ]; then
     print_success "MaaS API has $MAAS_PODS running pod(s)"
 else
-    print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
+    print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $INFRA_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
 # Check Kuadrant pods
@@ -373,10 +406,10 @@ else
 fi
 
 print_check "HTTPRoute for maas-api"
-if kubectl get httproute maas-api-route -n "$MAAS_API_NAMESPACE" &>/dev/null; then
+if kubectl get httproute maas-api-route -n "$INFRA_NAMESPACE" &>/dev/null; then
     # Check if any parent has an Accepted condition with status True
     # HTTPRoutes can have multiple parents (Kuadrant policies + gateway controller)
-    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n "$MAAS_API_NAMESPACE" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
+    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n "$INFRA_NAMESPACE" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
     if [ "$HTTPROUTE_ACCEPTED" = "True" ]; then
         print_success "HTTPRoute maas-api-route is configured and accepted"
     else
@@ -384,7 +417,7 @@ if kubectl get httproute maas-api-route -n "$MAAS_API_NAMESPACE" &>/dev/null; th
         print_warning "HTTPRoute maas-api-route exists but acceptance status unclear" "This is usually fine if other checks pass"
     fi
 else
-    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n $MAAS_API_NAMESPACE"
+    print_fail "HTTPRoute maas-api-route not found" "API routing may not be configured" "Check: kubectl get httproute -n $INFRA_NAMESPACE"
 fi
 
 print_check "Gateway hostname"
@@ -639,13 +672,13 @@ else
         elif [ "$HTTP_CODE" = "404" ]; then
             print_fail "Endpoint not found (HTTP 404)" \
                 "Path is incorrect - traffic reaching pods but wrong path" \
-                "Check HTTPRoute: kubectl describe httproute maas-api-route -n $MAAS_API_NAMESPACE"
+                "Check HTTPRoute: kubectl describe httproute maas-api-route -n $INFRA_NAMESPACE"
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         elif [ "$HTTP_CODE" = "502" ] || [ "$HTTP_CODE" = "503" ]; then
             print_fail "Gateway/Service error (HTTP $HTTP_CODE)" \
                 "Gateway cannot reach backend service" \
-                "Check MaaS API pods and service: kubectl get pods,svc -n $MAAS_API_NAMESPACE -l app.kubernetes.io/name=maas-api"
+                "Check MaaS API pods and service: kubectl get pods,svc -n $INFRA_NAMESPACE -l app.kubernetes.io/name=maas-api"
             MODEL_NAME=""
             MODEL_CHAT_ENDPOINT=""
         else

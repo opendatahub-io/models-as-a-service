@@ -48,7 +48,7 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "opendatahub",
+		InfraNamespace:   "opendatahub",
 		GatewayNamespace: "openshift-ingress",
 		GatewayName:      "maas-default-gateway",
 	}

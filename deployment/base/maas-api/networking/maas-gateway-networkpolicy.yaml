@@ -18,22 +18,24 @@ metadata:
     app.kubernetes.io/part-of: maas
     app.kubernetes.io/component: networking
 spec:
-  # Apply only to maas-api pods (label added via Kustomize labels transformer)
+  # Apply only to maas-api pods (labels explicitly added to avoid kustomize transformer issues)
   podSelector:
     matchLabels:
       app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
   policyTypes:
     - Ingress
   ingress:
     # Allow traffic from Gateway pods in openshift-ingress
-    # Restricts to router component pods only for security
+    # NOTE: Do NOT add app.kubernetes.io labels to this podSelector!
+    # Gateway pods have gateway.istio.io/managed labels, not maas-api labels.
+    # Kustomize labels transformer with includeSelectors=true will incorrectly add
+    # maas-api labels here, so we work around it by allowing all pods from the namespace.
     - from:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
-          podSelector:
-            matchLabels:
-              app.kubernetes.io/component: router
       ports:
         - protocol: TCP
           port: 8443

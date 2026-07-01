@@ -491,10 +491,19 @@ func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1
 }
 
 func (r *TenantReconciler) cleanupLegacyMaaSAPIDeployment(ctx context.Context, log logr.Logger) error {
-	// Clean up maas-api resources from legacy namespaces.
-	// Currently no legacy namespaces - maas-api deploys to operator namespace
-	// (opendatahub for ODH, redhat-ods-applications for RHOAI).
+	// Clean up maas-api resources from legacy namespaces during namespace separation migration.
+	// When infrastructure namespace differs from controller namespace (separation is enabled),
+	// automatically clean up old maas-api deployment from the controller namespace.
 	legacyNamespaces := []string{}
+
+	if r.ControllerNamespace != "" && r.AppNamespace != r.ControllerNamespace {
+		// Separation is enabled - clean up old deployment from controller namespace
+		legacyNamespaces = []string{r.ControllerNamespace}
+		log.Info("Infrastructure namespace separation detected, will clean up legacy maas-api",
+			"infraNamespace", r.AppNamespace,
+			"controllerNamespace", r.ControllerNamespace,
+			"legacyNamespaces", legacyNamespaces)
+	}
 
 	for _, ns := range legacyNamespaces {
 		// Check if legacy Deployment exists
