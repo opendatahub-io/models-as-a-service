@@ -135,4 +135,7 @@ require (
 	sigs.k8s.io/structured-merge-diff/v6 v6.4.0 // indirect
 )
 
+// Keep the OpenDataHub KServe fork while maas-controller uses controller-runtime v0.23.x.
+// Upstream KServe v0.19 resolves transitive webhook code that still uses the
+// pre-v0.23 controller-runtime webhook builder API and does not compile here.
 replace github.com/kserve/kserve => github.com/opendatahub-io/kserve v0.0.0-20260112171902-47894470ea49

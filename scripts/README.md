@@ -252,7 +252,6 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 - `--istio`: Install Istio service mesh
 - `--odh`: Install OpenDataHub operator (OpenShift only)
 - `--kserve`: Install KServe model serving platform
-- `--prometheus`: Install Prometheus operator
 - `--ocp`: Use OpenShift-specific handling
 
 ---

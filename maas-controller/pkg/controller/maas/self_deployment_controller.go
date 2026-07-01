@@ -19,10 +19,12 @@ package maas
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -58,6 +60,8 @@ type LifecycleReconciler struct {
 	DeploymentNS                string
 	TenantSubscriptionNamespace string
 	AITenantNamespace           string
+	ObservabilityManifestsPath  string
+	MonitoringNamespace         string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -65,6 +69,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -96,6 +101,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureObservabilityDashboards(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -412,6 +420,57 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 	return nil
 }
 
+// ensureObservabilityDashboards creates the usage dashboard and its dependencies
+// (ConfigMap, PersesDatasource, PersesDashboard) in the monitoring namespace.
+// Uses the existing kustomize infrastructure to render manifests from ObservabilityManifestsPath.
+// If ObservabilityManifestsPath is not set or Perses CRDs are not installed, gracefully skips.
+func (r *LifecycleReconciler) ensureObservabilityDashboards(ctx context.Context, log logr.Logger) error {
+	// Skip if observability manifests path not configured
+	if r.ObservabilityManifestsPath == "" {
+		log.Info("WARNING: Observability manifests path not configured; skipping observability dashboards")
+		return nil
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	// Render kustomization (reuses tenant reconciler's kustomize logic)
+	// TODO: move kustomize logic to a separate package and reuse it here.
+	resources, err := tenantreconcile.RenderKustomize(r.ObservabilityManifestsPath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render observability dashboards: %w", err)
+	}
+
+	// Apply each resource with Config as controller owner
+	for _, resource := range resources {
+		res := resource // avoid loop variable aliasing
+		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
+			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+
+		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
+				// installed by COO which may not be present yet). Skip so the rest of the
+				// platform manifests are applied and Tenant reconcile does not fail.
+				// The CRD watch will re-trigger reconcile once the CRDs appear.
+				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+					"name", res.GetName(), "namespace", res.GetNamespace())
+				continue
+			}
+			return fmt.Errorf("apply %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
+	}
+
+	return nil
+}
+
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -464,5 +523,31 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			}),
 			builder.WithPredicates(defaultAITenant),
 		).
+		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
+		// so that resources previously skipped due to missing CRDs are applied immediately.
+		Watches(
+			&extv1.CustomResourceDefinition{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(crdInOptionalAPIGroup()),
+		).
 		Complete(r)
+}
+
+// crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups
+// (e.g. perses.dev from COO). CRD names follow the pattern "<plural>.<group>", so a
+// suffix check is sufficient to identify the group without parsing the spec.
+func crdInOptionalAPIGroup() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		for group := range OptionalAPIGroups {
+			if strings.HasSuffix(o.GetName(), "."+group) {
+				return true
+			}
+		}
+		return false
+	})
 }

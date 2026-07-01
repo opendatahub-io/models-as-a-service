@@ -225,8 +225,33 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	if filtering {
 		return ""
 	}
-	if len(llmisvc.Status.Addresses) > 0 && llmisvc.Status.Addresses[0].URL != nil {
-		return llmisvc.Status.Addresses[0].URL.String()
+	// Prefer addresses that include the model path (e.g., gateway-internal over gateway-internal-model-routing).
+	// gateway-internal-model-routing typically has just the base URL without the path.
+	// gateway-internal has the full path including namespace/model.
+	var fallbackURL string
+	for _, addr := range llmisvc.Status.Addresses {
+		if addr.URL == nil {
+			continue
+		}
+		// Prefer URLs with non-empty paths beyond just "/"
+		// Base URLs like https://host/ have path="/" (length 1)
+		// Model endpoints like https://host/ns/model have path="/ns/model" (length > 1)
+		if len(addr.URL.Path) > 1 && addr.URL.Path != "/" {
+			return addr.URL.String()
+		}
+		if fallbackURL == "" {
+			fallbackURL = addr.URL.String()
+		}
+	}
+	// Check Status.URL before falling back to base URL from Addresses
+	// Status.URL might have the full path even when Addresses[] only has base URLs
+	if llmisvc.Status.URL != nil {
+		if len(llmisvc.Status.URL.Path) > 1 && llmisvc.Status.URL.Path != "/" {
+			return llmisvc.Status.URL.String()
+		}
+	}
+	if fallbackURL != "" {
+		return fallbackURL
 	}
 	if llmisvc.Status.URL != nil {
 		return llmisvc.Status.URL.String()
