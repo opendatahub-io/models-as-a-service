@@ -3,6 +3,8 @@ package maas
 
 import (
 	"context"
+	"path/filepath"
+	goruntime "runtime"
 	"testing"
 	"time"
 
@@ -159,6 +161,15 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 		},
 	}
 
+	// Build path to observability manifests relative to this test file
+	_, currentFile, _, ok := goruntime.Caller(0)
+	g.Expect(ok).To(BeTrue())
+	observabilityPath := filepath.Clean(filepath.Join(
+		filepath.Dir(currentFile),
+		"..", "..", "..", "..",
+		"deployment", "components", "observability", "observability", "dashboards",
+	))
+
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
@@ -166,6 +177,8 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: tenantNS,
+		ObservabilityManifestsPath:  observabilityPath,
+		MonitoringNamespace:         depNS,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
