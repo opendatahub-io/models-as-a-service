@@ -816,6 +816,8 @@ run_e2e_tests() {
         "$test_dir/tests/test_tenant_subscription_isolation.py" \
         "$test_dir/tests/test_tenant_rate_limit_isolation.py" \
         "$test_dir/tests/test_config_tenant.py" \
+        "$test_dir/tests/test_tenant_discovery.py" \
+        "$test_dir/tests/test_tenant_discovery_isolation.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1
