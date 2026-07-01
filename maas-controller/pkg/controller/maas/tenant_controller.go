@@ -97,7 +97,10 @@ type TenantReconciler struct {
 
 // clusterroles/clusterrolebindings: TenantReconciler reads RBAC state for validation only.
 // Removed create/patch/delete verbs to eliminate RBAC privilege escalation vectors (CWE-269).
-// Removed cluster-wide secrets access to eliminate privilege escalation surface (CWE-272).
+// secrets: namespace-scoped read-only access for the maas-db-config prerequisite check and
+// informer cache. The cache is restricted to maasSubscriptionNamespace in main.go so the
+// controller never lists secrets cluster-wide despite the ClusterRole granting it.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
 
