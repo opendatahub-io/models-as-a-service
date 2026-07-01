@@ -212,6 +212,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
+	apiKeyService.StartDebounceCleanup(ctx)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
