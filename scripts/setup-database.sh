@@ -93,6 +93,10 @@ if [[ -n "$EXISTING_POSTGRES_NS" ]]; then
   # Only append FQDN if the hostname doesn't already contain dots (not already a FQDN)
   FQDN_URL=$(echo "$EXISTING_URL" | sed -E "s|@([^.:/@]+)(:[0-9]+)|@\1.${EXISTING_POSTGRES_NS}.svc.cluster.local\2|")
 
+  # Honour DB_SSLMODE override (the POC postgres has no TLS)
+  : "${DB_SSLMODE:=disable}"
+  FQDN_URL=$(echo "$FQDN_URL" | sed -E "s|sslmode=[a-z-]+|sslmode=${DB_SSLMODE}|")
+
   # Ensure infrastructure namespace exists
   if ! kubectl get namespace "$INFRA_NAMESPACE" >/dev/null 2>&1; then
     echo "📦 Creating infrastructure namespace '$INFRA_NAMESPACE'..."
@@ -253,7 +257,7 @@ EOF
 # than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
 # Uses od (POSIX) instead of xxd which may not be available in all environments.
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
-: "${DB_SSLMODE:=require}"
+: "${DB_SSLMODE:=disable}"
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
 create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
 

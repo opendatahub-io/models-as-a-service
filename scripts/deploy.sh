@@ -465,6 +465,10 @@ validate_configuration() {
     log_debug "Using fixed namespace for operator mode: $NAMESPACE"
   fi
 
+  # Propagate to MAAS_CONTROLLER_NAMESPACE so deploy_postgresql(), setup-database.sh,
+  # and the maas-api wait loop all target the correct namespace.
+  export MAAS_CONTROLLER_NAMESPACE="$NAMESPACE"
+
   log_info "Configuration validated successfully"
 }
 
