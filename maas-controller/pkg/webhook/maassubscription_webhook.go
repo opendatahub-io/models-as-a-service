@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -39,19 +38,16 @@ type MaaSSubscriptionValidator struct {
 
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *MaaSSubscriptionValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&maasv1alpha1.MaaSSubscription{}).
+	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.MaaSSubscription{}).
 		WithValidator(v).
 		Complete()
 }
 
 // ValidateCreate validates MaaSSubscription on creation.
-func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	sub, ok := obj.(*maasv1alpha1.MaaSSubscription)
-	if !ok {
-		return nil, fmt.Errorf("expected MaaSSubscription object, got %T", obj)
+func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
+	if sub == nil {
+		return nil, errors.New("MaaSSubscription object is nil")
 	}
-
 	if v.Validator == nil {
 		return nil, errors.New("webhook validator not configured")
 	}
@@ -66,14 +62,14 @@ func (v *MaaSSubscriptionValidator) ValidateCreate(ctx context.Context, obj runt
 
 // ValidateUpdate validates MaaSSubscription on update.
 // Namespace cannot be changed on update (Kubernetes enforces this), so we don't need to validate.
-func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
+func (v *MaaSSubscriptionValidator) ValidateUpdate(ctx context.Context, oldObj, newObj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
 	// No validation needed - namespace is immutable
 	return nil, nil
 }
 
 // ValidateDelete validates MaaSSubscription on deletion.
 // No validation needed for deletion.
-func (v *MaaSSubscriptionValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *MaaSSubscriptionValidator) ValidateDelete(ctx context.Context, obj *maasv1alpha1.MaaSSubscription) (admission.Warnings, error) {
 	// No validation needed for deletion
 	return nil, nil
 }

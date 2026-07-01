@@ -19,7 +19,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	const testNamespace = "models-as-a-service"
 
 	t.Run("AdminUserAllowed", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			sar, ok := action.(k8stesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
 			require.True(t, ok)
@@ -36,7 +36,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("RegularUserDenied", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			sar, ok := action.(k8stesting.CreateAction).GetObject().(*authv1.SubjectAccessReview)
 			require.True(t, ok)
@@ -53,7 +53,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("NilUserReturnsFalse", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		checker := auth.NewSARAdminChecker(client, testNamespace)
 
 		result, err := checker.IsAdmin(context.Background(), nil)
@@ -62,7 +62,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("EmptyUsernameReturnsFalse", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		checker := auth.NewSARAdminChecker(client, testNamespace)
 		user := &token.UserContext{Username: "", Groups: []string{"admin-group"}}
 
@@ -87,14 +87,14 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("EmptyNamespacePanics", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		assert.Panics(t, func() {
 			auth.NewSARAdminChecker(client, "")
 		})
 	})
 
 	t.Run("APIErrorReturnsError", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			return true, nil, assert.AnError
 		})
@@ -108,7 +108,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("VerifiesSARParameters", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		var capturedSAR *authv1.SubjectAccessReview
 		client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			var ok bool
@@ -134,7 +134,7 @@ func TestSARAdminChecker_IsAdmin(t *testing.T) {
 	})
 
 	t.Run("CustomNamespace", func(t *testing.T) {
-		client := fake.NewSimpleClientset()
+		client := fake.NewClientset()
 		var capturedSAR *authv1.SubjectAccessReview
 		client.PrependReactor("create", "subjectaccessreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
 			var ok bool

@@ -21,7 +21,6 @@ import (
 	"errors"
 	"fmt"
 
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -39,17 +38,15 @@ type AITenantValidator struct {
 
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *AITenantValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&maasv1alpha1.AITenant{}).
+	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.AITenant{}).
 		WithValidator(v).
 		Complete()
 }
 
 // ValidateCreate validates AITenant on creation.
-func (v *AITenantValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	aitenant, ok := obj.(*maasv1alpha1.AITenant)
-	if !ok {
-		return nil, fmt.Errorf("expected AITenant object, got %T", obj)
+func (v *AITenantValidator) ValidateCreate(ctx context.Context, aitenant *maasv1alpha1.AITenant) (admission.Warnings, error) {
+	if aitenant == nil {
+		return nil, errors.New("AITenant object is nil")
 	}
 	if v == nil {
 		return nil, errors.New("webhook validator not configured")
@@ -79,14 +76,12 @@ func (v *AITenantValidator) ValidateCreate(ctx context.Context, obj runtime.Obje
 }
 
 // ValidateUpdate validates AITenant on update.
-func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	oldAITenant, ok := oldObj.(*maasv1alpha1.AITenant)
-	if !ok {
-		return nil, fmt.Errorf("expected AITenant object for old, got %T", oldObj)
+func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldAITenant, newAITenant *maasv1alpha1.AITenant) (admission.Warnings, error) {
+	if oldAITenant == nil {
+		return nil, errors.New("old AITenant object is nil")
 	}
-	newAITenant, ok := newObj.(*maasv1alpha1.AITenant)
-	if !ok {
-		return nil, fmt.Errorf("expected AITenant object for new, got %T", newObj)
+	if newAITenant == nil {
+		return nil, errors.New("new AITenant object is nil")
 	}
 
 	if v == nil {
@@ -115,7 +110,7 @@ func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj r
 
 // ValidateDelete validates AITenant on deletion.
 // No validation needed for deletion.
-func (v *AITenantValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *AITenantValidator) ValidateDelete(ctx context.Context, obj *maasv1alpha1.AITenant) (admission.Warnings, error) {
 	_ = ctx
 	_ = obj
 	return nil, nil

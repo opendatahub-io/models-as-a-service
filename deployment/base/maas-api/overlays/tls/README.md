@@ -19,9 +19,9 @@ Enables HTTPS for the maas-api service using OpenShift serving certificates.
 
 ## Why DestinationRule?
 
-DestinationRule is the standard "pre-BackendTLSPolicy" workaround when using Istio as the Gateway API provider.
+DestinationRule is the current workaround for backend TLS origination in this deployment.
 
-**The problem:** Gateway API's HTTPRoute doesn't tell Istio "use TLS to the backend". Without [BackendTLSPolicy](https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/) (GA in Gateway API v1.4), you need an Istio-native policy object to configure TLS origination.
+**The problem:** Gateway API's HTTPRoute doesn't tell the gateway implementation "use TLS to the backend". [BackendTLSPolicy](https://gateway-api.sigs.k8s.io/api-types/backendtlspolicy/) is the standard Gateway API resource for this, but MaaS currently uses the managed `openshift-default` GatewayClass and keeps an Istio-native policy object to configure TLS origination.
 
 **The solution:** DestinationRule tells the gateway's Envoy proxy how to talk to the backend:
 - TLS origination from gateway → maas-api over HTTPS
@@ -31,7 +31,12 @@ DestinationRule is the standard "pre-BackendTLSPolicy" workaround when using Ist
 Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TLS origination)
 ```
 
-> **Future:** Once Gateway API v1.4+ with BackendTLSPolicy is supported, this DestinationRule can be replaced with a standard Gateway API resource.
+> **Current PR decision:** Keep this DestinationRule for now. BackendTLSPolicy is
+> the preferred future replacement, but it depends on the supported OpenShift
+> baseline and on the managed `openshift-default` gateway provider supporting the
+> service-ca CA reference that MaaS needs. Team discussion indicates
+> BackendTLSPolicy may only be available from OpenShift 4.22, so replacing the
+> DestinationRule unconditionally could break older supported clusters.
 
 ## Usage
 
@@ -53,4 +58,3 @@ OpenShift's service-ca controller automatically:
 1. Creates `maas-api-serving-cert` secret when service is annotated
 2. Rotates certificates before expiration
 3. Updates the secret in-place (pods need restart to pick up new certs)
-

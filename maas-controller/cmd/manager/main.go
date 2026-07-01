@@ -18,6 +18,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	stderrors "errors"
 	"flag"
 	"fmt"
@@ -28,10 +29,13 @@ import (
 	"time"
 
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	confv1 "github.com/openshift/api/config/v1"
+	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -49,6 +53,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -71,9 +76,11 @@ func init() {
 	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(confv1.Install(scheme))
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
+//+kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -500,6 +507,54 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 	}
 }
 
+// fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
+// If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
+// default Intermediate profile immediately with available=false. For transient
+// errors on OpenShift, it retries a few times before returning an error.
+func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
+	const maxRetries = 3
+
+	var lastErr error
+
+	for attempt := range maxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+		profile, err := utiltls.FetchAPIServerTLSProfile(fetchCtx, c)
+		adherencePolicy := confv1.TLSAdherencePolicyNoOpinion
+		if err == nil {
+			adherencePolicy, err = utiltls.FetchAPIServerTLSAdherencePolicy(fetchCtx, c)
+		}
+		fetchCancel()
+
+		if err == nil {
+			return profile, adherencePolicy, true, nil
+		}
+
+		if apimeta.IsNoMatchError(err) || errors.IsNotFound(err) {
+			setupLog.Info("config.openshift.io API not available, using default Intermediate TLS profile " +
+				"(expected on non-OpenShift clusters)")
+			return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+				confv1.TLSAdherencePolicyNoOpinion, false, nil
+		}
+
+		lastErr = err
+		if attempt < maxRetries-1 {
+			setupLog.Info("transient error fetching cluster TLS profile, retrying",
+				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+			select {
+			case <-ctx.Done():
+				return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+					confv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
+			case <-time.After(2 * time.Second):
+			}
+		} else {
+			setupLog.Error(err, "failed to fetch cluster TLS profile after retries")
+		}
+	}
+
+	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+		confv1.TLSAdherencePolicyNoOpinion, false, lastErr
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -613,10 +668,40 @@ func main() {
 			"compatTenantNamespaceLabel", tenantreconcile.LabelManagedByAITenant)
 	}
 
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+
+	// Fetch the cluster TLS security profile from the APIServer resource.
+	// On non-OpenShift clusters the GVK doesn't exist → fall back gracefully.
+	// On OpenShift, transient errors are retried to avoid running with a weaker
+	// default profile when the admin has configured something stricter.
+	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create pre-manager Kubernetes client for TLS profile fetch")
+		os.Exit(1)
+	}
+	tlsProfile, tlsAdherencePolicy, tlsProfileAvailable, err := fetchTLSProfileWithRetry(ctx, k8sClient)
+	if err != nil {
+		setupLog.Error(err, "unable to fetch cluster TLS security profile")
+		os.Exit(1)
+	}
+	if tlsProfileAvailable {
+		setupLog.Info("fetched cluster TLS security profile",
+			"minTLSVersion", tlsProfile.MinTLSVersion, "tlsAdherence", tlsAdherencePolicy)
+	}
+	tlsConfigOpt, unsupportedCiphers := utiltls.NewTLSConfigFromProfile(tlsProfile)
+	if len(unsupportedCiphers) > 0 {
+		setupLog.Info("TLS profile contains ciphers not supported by this Go version; ignoring them",
+			"unsupportedCiphers", unsupportedCiphers)
+	}
+	nextProtosOpt := func(c *tls.Config) {
+		c.NextProtos = []string{"h2", "http/1.1"}
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme:                 scheme,
 		Cache:                  cacheOpts,
 		Metrics:                metricsserver.Options{BindAddress: metricsAddr},
+		WebhookServer:          crwebhook.NewServer(crwebhook.Options{TLSOpts: []func(*tls.Config){tlsConfigOpt, nextProtosOpt}}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "maas-controller.models-as-a-service.opendatahub.io",
@@ -806,6 +891,31 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Only register the TLS profile watcher on OpenShift clusters where the
+	// config.openshift.io/v1 APIServer resource exists. On Kind/vanilla clusters
+	// the GVK is missing and an informer would fail to sync, blocking startup.
+	if tlsProfileAvailable {
+		if err := (&utiltls.SecurityProfileWatcher{
+			Client:                    mgr.GetClient(),
+			InitialTLSProfileSpec:     tlsProfile,
+			InitialTLSAdherencePolicy: tlsAdherencePolicy,
+			OnProfileChange: func(_ context.Context, oldProfile, newProfile confv1.TLSProfileSpec) {
+				setupLog.Info("TLS security profile changed, initiating graceful shutdown to reload",
+					"oldMinTLS", oldProfile.MinTLSVersion, "newMinTLS", newProfile.MinTLSVersion,
+				)
+				cancel()
+			},
+			OnAdherencePolicyChange: func(_ context.Context, oldPolicy, newPolicy confv1.TLSAdherencePolicy) {
+				setupLog.Info("TLS adherence policy changed, initiating graceful shutdown to reload",
+					"oldPolicy", oldPolicy, "newPolicy", newPolicy)
+				cancel()
+			},
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "TLSProfileWatcher")
+			os.Exit(1)
+		}
+	}
+
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
@@ -817,7 +927,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
