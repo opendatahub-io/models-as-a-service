@@ -234,9 +234,21 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	const (
+		defaultOIDCJWKSTTL = 300
+		minOIDCJWKSTTL     = 30
+	)
+
 	ttl := oidc.TTL
-	if ttl == 0 {
-		ttl = 300
+	switch {
+	case ttl == 0:
+		ttl = defaultOIDCJWKSTTL
+	case ttl < minOIDCJWKSTTL:
+		log.Error(nil, "Tenant external OIDC ttl below minimum, rejecting OIDC config",
+			"ttl", ttl,
+			"minimum", minOIDCJWKSTTL,
+			"source", platformContext.Source)
+		return nil
 	}
 
 	log.Info("OIDC configuration loaded from tenant platform context",

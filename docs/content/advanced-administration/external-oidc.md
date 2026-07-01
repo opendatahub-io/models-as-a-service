@@ -61,12 +61,12 @@ See [Tenant CRD reference](../reference/crds/tenant.md) for all fields.
 
 ## Monitoring
 
-Two PrometheusRule alerts monitor OIDC authentication health. They are deployed by `scripts/observability/install-observability.sh` (not by the kustomize base).
+Two PrometheusRule alerts monitor gateway authentication health. They cover all auth methods (OIDC/JWT, API key, TokenReview) because Authorino's `auth_server_authconfig_response_status` does not carry evaluator-level labels. They are deployed by `scripts/observability/install-observability.sh` (not by the kustomize base).
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
-| `MaaSAuthorinoOIDCAuthenticationHighFailureRate` | >10% of auth attempts return `UNAUTHENTICATED` over 5m | warning |
-| `MaaSAuthorinoOIDCAuthenticationHighLatency` | P95 auth latency >2s over 5m | warning |
+| `MaaSAuthorinoAuthenticationHighFailureRate` | >10% of auth attempts return `UNAUTHENTICATED` over 5m | warning |
+| `MaaSAuthorinoAuthenticationHighLatency` | P95 auth latency >2s over 5m | warning |
 
 **Common causes of high failure rate:**
 

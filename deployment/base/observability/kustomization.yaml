@@ -20,8 +20,9 @@ resources:
 # (rh-connectivity-link). The install-observability.sh script deploys it with
 # dynamic namespace substitution.
 #
-# NOTE: authorino-maas-oidc-prometheusrule.yaml is NOT included here for the
-# same reason — deployed by install-observability.sh with namespace substitution.
+# NOTE: authorino-maas-oidc-prometheusrule.yaml (authentication alerts) is NOT
+# included here for the same reason — deployed by install-observability.sh with
+# namespace substitution.
 - gateway-telemetry-policy.yaml
 - istio-gateway-telemetry.yaml
 

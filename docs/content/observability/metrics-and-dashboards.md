@@ -75,14 +75,14 @@ Exposed on `/server-metrics` (port 8080):
 
 **Alert:** `authorino-maas-metadata-evaluator-prometheusrule.yaml` — **`MaaSAuthorinoMetadataEvaluatorHighFailureRate`** (`cancelled`/`total` > 10% over 5m, traffic guard, **`for: 5m`**). **Remediate:** maas-api health; Authorino → maas-api TLS/NetworkPolicy; confirm **`/server-metrics`** is scraped.
 
-**OIDC Alerts:** `authorino-maas-oidc-prometheusrule.yaml` — two alerts for OIDC/JWT authentication health:
+**Authentication Alerts:** `authorino-maas-authentication-alerts` — two alerts for gateway authentication health (covers all auth methods: OIDC/JWT, API key, TokenReview):
 
 | Alert | Condition | Severity |
 |-------|-----------|----------|
-| **`MaaSAuthorinoOIDCAuthenticationHighFailureRate`** | >10% of auth attempts return `UNAUTHENTICATED` over 5m | warning |
-| **`MaaSAuthorinoOIDCAuthenticationHighLatency`** | P95 `auth_server_authconfig_duration_seconds` >2s over 5m | warning |
+| **`MaaSAuthorinoAuthenticationHighFailureRate`** | >10% of auth attempts return `UNAUTHENTICATED` over 5m | warning |
+| **`MaaSAuthorinoAuthenticationHighLatency`** | P95 `auth_server_authconfig_duration_seconds` >2s over 5m | warning |
 
-**Remediate:** IdP (Keycloak/OIDC provider) health; JWKS endpoint reachability; token validity; consider increasing `Tenant.spec.externalOIDC.ttl` if IdP is slow but reliable. See [External OIDC Configuration](../advanced-administration/external-oidc.md).
+**Remediate:** IdP (Keycloak/OIDC provider) health; JWKS endpoint reachability; API key / token validity; consider increasing `Tenant.spec.externalOIDC.ttl` if IdP is slow but reliable. See [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
 ### vLLM Metrics
 

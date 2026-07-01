@@ -231,7 +231,7 @@ fi
 
 # Deploy OIDC authentication PrometheusRule (alerts on OIDC/JWT auth failures and latency)
 OIDC_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-oidc-prometheusrule.yaml"
-if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null 2>&1; then
+if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null; then
     echo "   ⚠️  Authorino deployment not found - skipping OIDC PrometheusRule"
 elif [ -f "$OIDC_RULE_FILE" ]; then
     yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$OIDC_RULE_FILE" | kubectl apply -f -
@@ -257,9 +257,9 @@ echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:k
 echo ""
 
 echo "🚨 Alerting configured (if Authorino found):"
-echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate > 10%"
-echo "   MaaSAuthorinoOIDCAuthenticationHighFailureRate - OIDC authentication failure rate > 10%"
-echo "   MaaSAuthorinoOIDCAuthenticationHighLatency - OIDC authentication P95 latency > 2s"
+echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate above configured threshold"
+echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication failure rate above configured threshold"
+echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"
 echo ""
 
 echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"

@@ -1290,6 +1290,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	oidc := &oidcConfig{
 		IssuerURL: "https://keycloak.example.com/realms/test",
 		ClientID:  "maas-client",
+		TTL:       300,
 	}
 	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
@@ -1503,6 +1504,24 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 				TTL:       0,
 			},
 			wantTTL: 300,
+		},
+		{
+			name: "TTL below minimum returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       10,
+			},
+			wantNil: true,
+		},
+		{
+			name: "negative TTL returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       -1,
+			},
+			wantNil: true,
 		},
 		{
 			name:    "missing issuerUrl returns nil",
