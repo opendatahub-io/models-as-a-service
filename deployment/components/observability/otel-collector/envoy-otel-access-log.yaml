@@ -301,14 +301,9 @@ spec:
                   value:
                     string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
                 # ── Identity ──
-                # user_id: FILTER_STATE first (ODH, survives 429), falls
-                # back to X-MaaS-Username header (RHOAI 200s).
                 - key: user_id
                   value:
-                    string_value: '%CEL("wasm.kuadrant.auth.identity.userid" in filter_state && filter_state["wasm.kuadrant.auth.identity.userid"] != "-" ? filter_state["wasm.kuadrant.auth.identity.userid"] : request.headers["x-maas-username"])%'
-                # subscription and groups use X-MaaS-* headers (Authorino):
-                # works on both ODH and RHOAI for non-rate-limited responses.
-                # Returns "-" on 429 (rate limiter fires before Authorino).
+                    string_value: "%REQ(X-MaaS-Username)%"
                 - key: subscription
                   value:
                     string_value: "%REQ(X-MaaS-Subscription)%"
