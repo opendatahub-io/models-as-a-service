@@ -3,6 +3,7 @@ package maas
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -91,24 +92,24 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-a",
-			Namespace: tenantreconcile.DefaultAITenantNamespace,
+	aitenant := &maasv1alpha1.AITenant{}
+	g.Expect(json.Unmarshal([]byte(`{
+		"metadata": {
+			"name": "team-a",
+			"namespace": "ai-tenants"
 		},
-		Spec: maasv1alpha1.AITenantSpec{
-			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
-				IssuerURL: "https://issuer.example.com/realms/team-a",
-				ClientID:  "team-a-client",
+		"spec": {
+			"oidc": {
+				"issuerUrl": "https://issuer.example.com/realms/team-a",
+				"clientId": "team-a-client"
 			},
-			RBAC: &maasv1alpha1.AITenantRBACConfig{
-				Admins: []maasv1alpha1.AITenantRBACSubject{{
-					Kind: rbacv1.GroupKind,
-					Name: "team-a-admins",
-				}},
-			},
-		},
-	}
+			"rbac": {
+				"admins": [
+					{"kind": "User", "name": "alice@example.com"}
+				]
+			}
+		}
+	}`), aitenant)).To(Succeed())
 	gateway := existingAITenantGateway("team-a")
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
@@ -167,20 +168,16 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	}
 
 	var tenantBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aitenant), Namespace: "ai-tenant-team-a"}, &tenantBinding)).To(Succeed())
-	g.Expect(tenantBinding.Subjects).To(ContainElement(rbacv1.Subject{
-		Kind:     rbacv1.GroupKind,
-		APIGroup: rbacv1.GroupName,
-		Name:     "team-a-admins",
-	}))
+	err := cl.Get(context.Background(), client.ObjectKey{Name: tenantAdminRoleName(aitenant), Namespace: "ai-tenant-team-a"}, &tenantBinding)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 	var aitenantRole rbacv1.Role
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: tenantreconcile.DefaultAITenantNamespace}, &aitenantRole)).To(Succeed())
 	g.Expect(aitenantRole.Rules).NotTo(BeEmpty())
 
 	var aitenantBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: tenantreconcile.DefaultAITenantNamespace}, &aitenantBinding)).To(Succeed())
-	g.Expect(aitenantBinding.RoleRef.Name).To(Equal(aitenantAccessRoleName(aitenant)))
+	err = cl.Get(context.Background(), client.ObjectKey{Name: aitenantAccessRoleName(aitenant), Namespace: tenantreconcile.DefaultAITenantNamespace}, &aitenantBinding)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
@@ -719,7 +716,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	g.Expect(ready.Message).To(ContainSubstring("another AITenant"))
 }
 
-func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayUntouched(t *testing.T) {
+func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesGatewayAndUserRoleBindingsUntouched(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -780,6 +777,16 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayUntouched(t *te
 		},
 		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: tenantAdminRoleName(aitenant)},
 	}
+	userBinding := &rbacv1.RoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-del-manual-admin",
+			Namespace: "ai-tenant-team-del",
+		},
+		RoleRef: rbacv1.RoleRef{APIGroup: rbacv1.GroupName, Kind: "Role", Name: tenantAdminRoleName(aitenant)},
+		Subjects: []rbacv1.Subject{
+			{Kind: "User", APIGroup: rbacv1.GroupName, Name: "alice@example.com"},
+		},
+	}
 	objRole := &rbacv1.Role{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      aitenantAccessRoleName(aitenant),
@@ -808,7 +815,7 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayUntouched(t *te
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, gateway, tenant, role, binding, objRole, objBinding).
+		WithObjects(aitenant, ns, gateway, tenant, role, binding, userBinding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -833,9 +840,12 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayUntouched(t *te
 
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: maasv1alpha1.TenantInstanceName}, &maasv1alpha1.Tenant{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &rbacv1.Role{}))).To(BeTrue())
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
+
+	var survivingUserBinding rbacv1.RoleBinding
+	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: "team-del-manual-admin"}, &survivingUserBinding)).To(Succeed())
 
 	var surviving corev1.Namespace
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-del"}, &surviving)).To(Succeed())
@@ -847,56 +857,6 @@ func TestAITenantReconcile_DeletionCleansChildrenButLeavesGatewayUntouched(t *te
 	g.Expect(surviving.Annotations).NotTo(HaveKey(aitenantCreatedAnnotation))
 
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, &maasv1alpha1.AITenant{}))).To(BeTrue())
-}
-
-func TestAITenantReconcile_RBACServiceAccountRequiresNamespace(t *testing.T) {
-	g := NewWithT(t)
-	s := aitenantTestScheme(t)
-
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-sa",
-			Namespace: tenantreconcile.DefaultAITenantNamespace,
-		},
-		Spec: maasv1alpha1.AITenantSpec{
-			RBAC: &maasv1alpha1.AITenantRBACConfig{
-				Admins: []maasv1alpha1.AITenantRBACSubject{{
-					Kind: rbacv1.ServiceAccountKind,
-					Name: "tenant-admin",
-				}},
-			},
-		},
-	}
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, existingAITenantGateway("team-sa")).
-		Build()
-	r := &AITenantReconciler{
-		Client:           cl,
-		Scheme:           s,
-		APIReader:        cl,
-		AppNamespace:     "opendatahub",
-		TenantNamespace:  "models-as-a-service",
-		GatewayNamespace: "openshift-ingress",
-	}
-
-	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
-	res, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(time.Second))
-
-	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
-
-	var updated maasv1alpha1.AITenant
-	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
-	g.Expect(updated.Status.Phase).To(Equal("Failed"))
-	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
-	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Reason).To(Equal("RBACReconcileFailed"))
-	g.Expect(ready.Message).To(ContainSubstring("namespace is required for ServiceAccount"))
 }
 
 func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {

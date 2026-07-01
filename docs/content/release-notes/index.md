@@ -16,6 +16,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
 - New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `Tenant` CR.
 - `AITenant` created outside the configured `--aitenant-namespace` are now rejected at admission instead of being accepted and later marked `Failed/InvalidPlacement` by the controller.
+- `AITenant.spec.rbac` is deprecated and ignored. Existing manifests that still include it remain schema-valid, but the controller no longer creates RoleBindings from it. The controller still creates tenant-admin Roles, and platform administrators must create standard Kubernetes RoleBindings to grant access. See [Tenant RBAC](../configuration-and-management/tenant-rbac.md).
 - **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
 - **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
 

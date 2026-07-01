@@ -1,6 +1,6 @@
 # AITenant
 
-Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, owns tenant platform context such as Gateway and OIDC configuration, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
+Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, owns tenant platform context such as Gateway and OIDC configuration, creates the temporary `Tenant/default-tenant` MaaS config object, and creates tenant-admin Roles.
 
 `AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
@@ -18,7 +18,9 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 |-------|------|----------|-------------|
 | gateway | AITenantGatewayRef | No | Existing Gateway to reference. If omitted, the Gateway name defaults to the `AITenant` name. |
 | oidc | TenantExternalOIDCConfig | No | OIDC settings for this tenant's AI Gateway platform context. AITenant-managed tenants do not mirror this into `Tenant.spec.externalOIDC`. |
-| rbac | AITenantRBACConfig | No | Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this `AITenant`. |
+| rbac | AITenantRBACConfig | No | Deprecated compatibility field. Accepted but ignored; create standard Kubernetes RoleBindings instead. |
+
+`spec.rbac` remains in the served schema only for upgrade compatibility with existing manifests. New manifests should omit it. The controller does not create, update, or delete user-managed RoleBindings from this field.
 
 ---
 
@@ -42,7 +44,7 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 
 - Gateway context: `spec.gateway` intent and resolved `status.gatewayRef`
 - External OIDC context: `spec.oidc`
-- Tenant namespace metadata and tenant-admin RBAC
+- Tenant namespace metadata and tenant-admin Roles
 
 The temporary `Tenant/default-tenant` object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. For backward compatibility, old `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values may remain on existing objects, but AITenant-managed reconciliation ignores them.
 
@@ -58,19 +60,9 @@ The Gateway namespace is controller configuration, not an `AITenant` spec field.
 
 ---
 
-## AITenantRBACConfig
+## Tenant Administration
 
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| admins | []AITenantRBACSubject | No | Subjects granted tenant-admin RBAC. Max 128 entries. |
-
-### AITenantRBACSubject
-
-| Field | Type | Required | Description |
-|-------|------|----------|-------------|
-| kind | string | Yes | One of `User`, `Group`, or `ServiceAccount`. |
-| name | string | Yes | Subject name. |
-| namespace | string | No | Required only for `ServiceAccount` subjects. |
+The controller creates tenant-admin Roles but does not create RoleBindings from `spec.rbac` or any other `AITenant` field. Platform administrators grant tenant access by creating standard Kubernetes `RoleBinding` resources that reference those Roles. See [Tenant RBAC](../../configuration-and-management/tenant-rbac.md) for Role names, permissions, lifecycle cleanup notes, and examples for users, groups, and ServiceAccounts.
 
 ---
 
@@ -101,10 +93,6 @@ spec:
   oidc:
     issuerUrl: "https://keycloak.example.com/realms/red-team"
     clientId: red-team-maas
-  rbac:
-    admins:
-      - kind: Group
-        name: red-team-admins
 ```
 
 ---
@@ -114,3 +102,4 @@ spec:
 - [Tenant CRD](tenant.md) - Temporary MaaS runtime config object
 - [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
 - [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting
+- [Tenant RBAC](../../configuration-and-management/tenant-rbac.md) - Granting tenant administration access with RoleBindings

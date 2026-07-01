@@ -141,13 +141,6 @@ def _new_aitenant_case():
     }
 
 
-def _admin_subject():
-    whoami = _oc_run(["whoami"])
-    if whoami.returncode == 0 and whoami.stdout.strip():
-        return whoami.stdout.strip()
-    return "system:authenticated"
-
-
 def _apply_gateway_fixture(case):
     _apply(
         {
@@ -183,16 +176,7 @@ def _apply_aitenant(case):
                 "name": case["aitenant_name"],
                 "namespace": AITENANT_NAMESPACE,
             },
-            "spec": {
-                "rbac": {
-                    "admins": [
-                        {
-                            "kind": "User",
-                            "name": _admin_subject(),
-                        }
-                    ]
-                },
-            },
+            "spec": {},
         }
     )
 
@@ -240,9 +224,9 @@ def _assert_aitenant_bootstrap_resources(case):
     assert tenant["spec"]["gatewayRef"]["name"] != case["gateway_name"]
 
     assert _get_json_or_none("role", case["tenant_admin_role"], case["tenant_ns"]) is not None
-    assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is not None
+    assert _get_json_or_none("rolebinding", case["tenant_admin_role"], case["tenant_ns"]) is None
     assert _get_json_or_none("role", case["object_admin_role"], AITENANT_NAMESPACE) is not None
-    assert _get_json_or_none("rolebinding", case["object_admin_role"], AITENANT_NAMESPACE) is not None
+    assert _get_json_or_none("rolebinding", case["object_admin_role"], AITENANT_NAMESPACE) is None
 
 
 def _delete_aitenant(case):
@@ -395,9 +379,7 @@ class TestAITenantLifecycle:
             _delete_aitenant(case)
             _wait_for_not_found("tenant", TENANT_NAME, case["tenant_ns"])
             _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
-            _wait_for_not_found("rolebinding", case["tenant_admin_role"], case["tenant_ns"])
             _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
-            _wait_for_not_found("rolebinding", case["object_admin_role"], AITENANT_NAMESPACE)
 
             namespace = _get_json_or_none("namespace", case["tenant_ns"])
             assert namespace is not None
@@ -430,9 +412,7 @@ class TestAITenantLifecycle:
                     "apiVersion": "maas.opendatahub.io/v1alpha1",
                     "kind": "AITenant",
                     "metadata": {"name": aitenant_name, "namespace": AITENANT_NAMESPACE},
-                    "spec": {
-                        "rbac": {"admins": [{"kind": "User", "name": _admin_subject()}]},
-                    },
+                    "spec": {},
                 }
             )
             aitenant = _wait_for_json(
