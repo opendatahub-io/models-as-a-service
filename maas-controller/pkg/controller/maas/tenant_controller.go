@@ -95,23 +95,23 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
 
-// clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
-// ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
-// ClusterRoles grant — which is why secrets get;list;watch must remain unrestricted (payload-processing-reader
-// grants unrestricted get on secrets; Kubernetes also does not support resourceNames on list/watch).
-// The client-side predicate secretNamedMaaSDB() filters informer events to maas-db-config only.
+// clusterroles/clusterrolebindings: TenantReconciler reads RBAC state for validation only.
+// Removed create/patch/delete verbs to eliminate RBAC privilege escalation vectors (CWE-269).
+// secrets: namespace-scoped read-only access for the maas-db-config prerequisite check and
+// informer cache. The cache is restricted to maasSubscriptionNamespace in main.go so the
+// controller never lists secrets cluster-wide despite the ClusterRole granting it.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
 
 // Escalation-check mirror for maas-api ClusterRole — maas-controller must hold every verb it grants.
 // namespaces create: bootstrap the subscription namespace at startup (ensureSubscriptionNamespaceWithClient).
-// serviceaccounts/token create, tokenreviews, subjectaccessreviews: required by maas-api for bound SA token
-// projection and access checks. maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
+// tokenreviews, subjectaccessreviews: required by maas-api for access checks.
+// maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
+// Removed serviceaccounts/token create to eliminate privilege escalation primitive (CWE-269).
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=create
 // +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch

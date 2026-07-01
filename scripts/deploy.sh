@@ -555,10 +555,10 @@ main() {
 
     log_info "  Ensuring maas-parameters ConfigMap..."
     kubectl create configmap maas-parameters -n "$NAMESPACE" \
-      --from-literal="maas-api-image=${cm_maas_api_image}" \
-      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
-      --from-literal="payload-processing-image=${cm_payload_processing_image}" \
-      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+      --from-literal="MAAS_API_IMAGE=${cm_maas_api_image}" \
+      --from-literal="MAAS_CONTROLLER_IMAGE=${cm_maas_controller_image}" \
+      --from-literal="PAYLOAD_PROCESSING_IMAGE=${cm_payload_processing_image}" \
+      --from-literal="MAAS_API_KEY_CLEANUP_IMAGE=${cm_cleanup_image}" \
       --from-literal="monitoring-namespace=${cm_monitoring_namespace}" \
       --dry-run=client -o yaml | kubectl apply -f - || {
       log_error "Failed to create/update maas-parameters ConfigMap"

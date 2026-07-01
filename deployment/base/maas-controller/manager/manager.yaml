@@ -48,9 +48,7 @@ spec:
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
           - name: MAAS_API_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+            value: "models-as-a-service"
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
@@ -58,19 +56,19 @@ spec:
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: maas-api-image
+                key: MAAS_API_IMAGE
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: payload-processing-image
+                key: PAYLOAD_PROCESSING_IMAGE
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: maas-api-key-cleanup-image
+                key: MAAS_API_KEY_CLEANUP_IMAGE
                 name: maas-parameters
                 optional: true
           - name: MONITORING_NAMESPACE
