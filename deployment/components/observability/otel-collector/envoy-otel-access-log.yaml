@@ -2,8 +2,8 @@
 #
 # Emits structured usage logs for inference requests via OTel Access Log Service.
 #
-# Identity:  FILTER_STATE(wasm.kuadrant.auth.identity.*) — set by Kuadrant Wasm
-#            plugin before rate limiting, so available on both 2xx and 429.
+# Identity:  user_id/subscription/groups from X-MaaS-* request headers;
+#            key_id/key_name/organization_id from auth identity filter.
 # Model:     json_to_metadata extracts "model" from request body (covers 429),
 #            then overwrites from response body on 200 (authoritative).
 # Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
@@ -18,8 +18,6 @@
 #            bodyChunks() without buffering, scans each chunk for usage
 #            fields, and overwrites the "0" metadata with real token counts.
 #            The SSE stream passes through untouched to the client.
-#            Future: sse_to_metadata (Envoy 1.38+, not yet in OSSM) will
-#            replace the Lua companion with a native filter.
 #
 # Safety:    on_error / on_missing rules guarantee fallback "0" for tokens.
 #            Model uses on_present only — if the body has no model field or
@@ -43,8 +41,6 @@ spec:
   configPatches:
 
   # ── Cluster: gRPC endpoint to OTel Collector ──────────────────────────
-  # Address must match the OTel Operator generated service name:
-  #   <cr-name>-collector.<namespace> (see otel-collector-cr.yaml metadata.name)
   - applyTo: CLUSTER
     patch:
       operation: ADD
@@ -64,8 +60,6 @@ spec:
                     port_value: 4317
 
   # ── json_to_metadata: Extract model + tokens from request/response ────
-  #
-  # Replaces both Lua filters with a single native Envoy filter.
   #
   # request_rules  — extracts "model" from the JSON request body.
   # response_rules — extracts token counts and authoritative model from the
@@ -181,8 +175,6 @@ spec:
   # pcall wraps the bodyChunks() loop: if any chunk is malformed, the
   # error is caught and tokens fall back to "0" (never crashes the filter).
   # NO break inside the loop — Envoy requires bodyChunks() to drain fully.
-  #
-  # Future: sse_to_metadata (Envoy 1.38+) will replace this Lua filter.
   - applyTo: HTTP_FILTER
     match:
       context: GATEWAY
@@ -313,6 +305,9 @@ spec:
                 - key: key_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"
+                - key: key_name
+                  value:
+                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyName:PLAIN)%"
                 - key: organization_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.organizationId:PLAIN)%"
