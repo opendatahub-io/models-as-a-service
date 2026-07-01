@@ -55,6 +55,7 @@ type SubscriptionInfo struct {
 type ModelRefInfo struct {
 	Name            string           `json:"name"`
 	Namespace       string           `json:"-"`
+	ModelName       string           `json:"model_name,omitempty"`
 	DisplayName     string           `json:"display_name,omitempty"`
 	Description     string           `json:"description,omitempty"`
 	Source          string           `json:"source,omitempty"`
