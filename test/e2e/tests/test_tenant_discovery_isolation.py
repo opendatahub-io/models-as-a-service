@@ -42,7 +42,14 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub"
         output = result.stdout
         if "HTTP_CODE:" in output:
             body, code_line = output.rsplit("HTTP_CODE:", 1)
-            return int(code_line.strip()), body.strip()
+            # Extract just the numeric status code (kubectl deletion message may be appended)
+            import re
+            match = re.search(r'(\d{3})', code_line)
+            if match:
+                return int(match.group(1)), body.strip()
+            else:
+                log.error(f"Could not parse HTTP code from: {code_line}")
+                return 0, body.strip()
         return 0, output
     except Exception as e:
         log.error(f"kubectl curl failed: {e}")

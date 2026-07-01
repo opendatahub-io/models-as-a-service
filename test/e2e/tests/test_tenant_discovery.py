@@ -54,8 +54,16 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub"
         # Parse status code from footer
         if "HTTP_CODE:" in output:
             body, code_line = output.rsplit("HTTP_CODE:", 1)
-            status_code = int(code_line.strip())
-            return status_code, body.strip()
+            # Extract just the numeric status code (kubectl deletion message may be appended)
+            # Example: "401pod \"test-curl-...\" deleted..." -> extract "401"
+            import re
+            match = re.search(r'(\d{3})', code_line)
+            if match:
+                status_code = int(match.group(1))
+                return status_code, body.strip()
+            else:
+                log.error(f"Could not parse HTTP code from: {code_line}")
+                return 0, body.strip()
         else:
             # Fallback if format is unexpected
             return 0, output
