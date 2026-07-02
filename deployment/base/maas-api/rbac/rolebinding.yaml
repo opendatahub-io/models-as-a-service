@@ -10,4 +10,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: maas-api
-  namespace: maas-api
+  namespace: models-as-a-service
