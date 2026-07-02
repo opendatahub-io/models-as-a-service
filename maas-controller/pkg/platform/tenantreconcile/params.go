@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -33,9 +34,9 @@ type PlatformParams struct {
 	APIKeyMaxExpirationDays string
 }
 
-// BuildPlatformParams resolves all runtime parameters from the Tenant CR,
+// BuildPlatformParams resolves all runtime parameters from the tenant config object,
 // platform context, cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformContext, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
+func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
@@ -46,7 +47,7 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 		GatewayNamespace:        platformContext.GatewayRef.Namespace,
 		GatewayName:             platformContext.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
-		SubscriptionNamespace:   tenant.Namespace,
+		SubscriptionNamespace:   tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
@@ -56,7 +57,7 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 	}
 
 	log.Info("Built platform params",
-		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
 		"subscriptionNamespace", params.SubscriptionNamespace,
 		"gatewayName", params.GatewayName)
@@ -73,11 +74,34 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
-	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		return strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil && cfg.MaxExpirationDays != nil {
+		return strconv.FormatInt(int64(*cfg.MaxExpirationDays), 10)
 	}
 	return DefaultAPIKeyMaxExpirationDays
+}
+
+func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.APIKeys
+	case *maasv1alpha1.Tenant:
+		return t.Spec.APIKeys
+	default:
+		return nil
+	}
+}
+
+func telemetryConfigFor(tenant client.Object) *maasv1alpha1.TenantTelemetryConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.Telemetry
+	case *maasv1alpha1.Tenant:
+		return t.Spec.Telemetry
+	default:
+		return nil
+	}
 }
 
 // applyPlatformParams patches all dynamic values into rendered resources.

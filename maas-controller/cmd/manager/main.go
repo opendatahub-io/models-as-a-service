@@ -344,7 +344,7 @@ func getClusterServiceAccountIssuer(c client.Reader) (string, error) {
 // ensureDefaultAITenantBootstrap creates the default AITenant once per
 // Config/default anchor after the controller Deployment is live. It intentionally
 // creates only the AITenant shell; the AITenant reconciler owns creation/adoption
-// of the namespace-local Tenant/default-tenant bridge object. Once bootstrapped,
+// of the namespace-local MaasTenantConfig/default-tenant object. Once bootstrapped,
 // the Config annotation prevents recreating a default AITenant that an admin
 // deletes intentionally.
 func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenantNamespace, aitenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string) (bool, error) {
@@ -590,8 +590,9 @@ func main() {
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
-			// Tenant CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
+			// MaasTenantConfig CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
 			// TODO: Replace with proper namespace discovery from S1 when merged.
+			&maasv1alpha1.MaasTenantConfig{}: {},
 			&maasv1alpha1.Tenant{}:           {},
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
@@ -602,6 +603,7 @@ func main() {
 		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
 		cacheOpts = cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
+				&maasv1alpha1.MaasTenantConfig{}: {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
@@ -722,8 +724,8 @@ func main() {
 	//   1. Managed namespace ensures run synchronously above, before the manager starts.
 	//   2. LifecycleReconciler creates Config/default when maas-controller is running (see Setup below).
 	//   3. ensureClusterBootstrapRunnable creates the default AITenant once Config/default exists (no owner refs).
-	//   4. AITenant reconciler creates/adopts Tenant/default-tenant.
-	//   5. LifecycleReconciler patches Config→AITenant/Tenant owner refs.
+	//   4. AITenant reconciler creates/adopts MaasTenantConfig/default-tenant.
+	//   5. LifecycleReconciler patches Config→AITenant/MaasTenantConfig owner refs.
 	//   6. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
@@ -747,7 +749,7 @@ func main() {
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
 	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "Tenant")
+		setupLog.Error(err, "unable to create controller", "controller", "MaasTenantConfig")
 		os.Exit(1)
 	}
 

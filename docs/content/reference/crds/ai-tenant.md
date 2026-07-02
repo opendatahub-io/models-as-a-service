@@ -1,12 +1,12 @@
 # AITenant
 
-Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, owns tenant platform context such as Gateway and OIDC configuration, creates the temporary `Tenant/default-tenant` MaaS config object, and grants tenant-admin RBAC.
+Bootstraps a MaaS tenant from an infrastructure namespace. `AITenant` creates or labels the derived tenant namespace, validates an existing tenant Gateway, owns tenant platform context such as Gateway and OIDC configuration, creates the `MaasTenantConfig/default-tenant` MaaS config object, and grants tenant-admin RBAC.
 
 `AITenant` resources must be created in the controller-configured infrastructure namespace, which defaults to `ai-tenants`. The controller creates this namespace if it does not already exist. Set the controller `--aitenant-namespace` flag to use a different infrastructure namespace.
 
 Creates outside the configured infrastructure namespace are rejected by the validating admission webhook before the object is persisted.
 
-The controller automatically creates `AITenant/models-as-a-service` for the default tenant once per `Config/default` lifecycle. That AITenant targets the existing default Gateway and creates or adopts `Tenant/default-tenant` in the MaaS subscription namespace. For migration compatibility, the default tenant keeps legacy resource names such as `maas-api`, `maas-api-route`, and `maas-api-auth-policy`; non-default tenants use suffixed names. If an administrator deletes the default AITenant after bootstrap, the controller does not recreate it until the `Config/default` anchor is recreated.
+The controller automatically creates `AITenant/models-as-a-service` for the default tenant once per `Config/default` lifecycle. That AITenant targets the existing default Gateway and creates or adopts `MaasTenantConfig/default-tenant` in the MaaS subscription namespace. For migration compatibility, the default tenant keeps legacy resource names such as `maas-api`, `maas-api-route`, and `maas-api-auth-policy`; non-default tenants use suffixed names. If an administrator deletes the default AITenant after bootstrap, the controller does not recreate it until the `Config/default` anchor is recreated.
 
 ---
 
@@ -17,7 +17,7 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | gateway | AITenantGatewayRef | No | Existing Gateway to reference. If omitted, the Gateway name defaults to the `AITenant` name. |
-| oidc | TenantExternalOIDCConfig | No | OIDC settings for this tenant's AI Gateway platform context. AITenant-managed tenants do not mirror this into `Tenant.spec.externalOIDC`. |
+| oidc | TenantExternalOIDCConfig | No | OIDC settings for this tenant's AI Gateway platform context. AITenant-managed tenants do not mirror this into `MaasTenantConfig`. |
 | rbac | AITenantRBACConfig | No | Tenant-admin subjects that receive RBAC in the tenant namespace and read access to this `AITenant`. |
 
 ---
@@ -32,7 +32,7 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 
 ## Namespace Discovery
 
-`AITenant` labels tenant namespaces with `ai-gateway.opendatahub.io/tenant=<aitenant-name>` and `maas.opendatahub.io/managed-by-aitenant=true`. When `maas-controller` runs with `--enable-tenant-namespace-discovery=true`, `MaaSAuthPolicy` and `MaaSSubscription` resources in those namespaces are reconciled against the owning `AITenant` platform context (`status.gatewayRef` and `spec.oidc`), not the bridge `Tenant.spec.gatewayRef` or `Tenant.spec.externalOIDC` fields.
+`AITenant` labels tenant namespaces with `ai-gateway.opendatahub.io/tenant=<aitenant-name>` and `maas.opendatahub.io/managed-by-aitenant=true`. When `maas-controller` runs with `--enable-tenant-namespace-discovery=true`, `MaaSAuthPolicy` and `MaaSSubscription` resources in those namespaces are reconciled against the owning `AITenant` platform context (`status.gatewayRef` and `spec.oidc`).
 
 ---
 
@@ -44,7 +44,7 @@ The controller does not delete the tenant namespace when an `AITenant` is delete
 - External OIDC context: `spec.oidc`
 - Tenant namespace metadata and tenant-admin RBAC
 
-The temporary `Tenant/default-tenant` object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. For backward compatibility, old `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values may remain on existing objects, but AITenant-managed reconciliation ignores them.
+The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. For backward compatibility, old `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values may remain on existing legacy objects, but AITenant-managed reconciliation migrates or ignores them.
 
 ---
 
@@ -111,6 +111,6 @@ spec:
 
 ## Related Documentation
 
-- [Tenant CRD](tenant.md) - Temporary MaaS runtime config object
+- [MaasTenantConfig CRD](tenant.md) - MaaS runtime config object
 - [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
 - [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting

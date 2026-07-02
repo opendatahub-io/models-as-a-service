@@ -4,14 +4,14 @@ kind: CustomResourceDefinition
 metadata:
   annotations:
     controller-gen.kubebuilder.io/version: v0.16.4
-  name: tenants.maas.opendatahub.io
+  name: maastenantconfigs.maas.opendatahub.io
 spec:
   group: maas.opendatahub.io
   names:
-    kind: Tenant
-    listKind: TenantList
-    plural: tenants
-    singular: tenant
+    kind: MaasTenantConfig
+    listKind: MaasTenantConfigList
+    plural: maastenantconfigs
+    singular: maastenantconfig
   scope: Namespaced
   versions:
   - additionalPrinterColumns:
@@ -30,10 +30,9 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Tenant is the deprecated namespace-scoped API used before the MaasTenantConfig
-          rename. It remains registered during the migration window so existing clusters
-          can copy MaaS-owned settings into MaasTenantConfig/default-tenant and preserve
-          legacy Gateway/OIDC values for AITenant bootstrap.
+          MaasTenantConfig is the namespace-scoped singleton for MaaS-specific tenant settings.
+          Platform context such as Gateway and OIDC belongs to AITenant; this object only
+          owns MaaS runtime configuration such as API key policy and telemetry settings.
         properties:
           apiVersion:
             description: |-
@@ -53,7 +52,7 @@ spec:
           metadata:
             type: object
           spec:
-            description: TenantSpec defines the desired state of Tenant.
+            description: MaasTenantConfigSpec defines MaaS-owned tenant configuration.
             properties:
               apiKeys:
                 description: APIKeys contains configuration for API key management.
@@ -62,49 +61,6 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
-                type: object
-              externalOIDC:
-                description: |-
-                  ExternalOIDC configures an external OIDC identity provider for legacy/unmanaged
-                  Tenant resources. For AITenant-managed tenants, use AITenant.spec.oidc.
-                properties:
-                  clientId:
-                    description: ClientID is the OAuth2 client ID.
-                    maxLength: 256
-                    minLength: 1
-                    pattern: ^\S+$
-                    type: string
-                  issuerUrl:
-                    description: IssuerURL is the OIDC issuer URL (e.g. https://keycloak.example.com/realms/maas).
-                    maxLength: 2048
-                    minLength: 9
-                    pattern: ^https://\S+$
-                    type: string
-                  ttl:
-                    default: 300
-                    description: TTL is the JWKS cache duration in seconds.
-                    minimum: 30
-                    type: integer
-                required:
-                - clientId
-                - issuerUrl
-                type: object
-              gatewayRef:
-                description: |-
-                  GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints
-                  for legacy/unmanaged Tenant resources. For AITenant-managed tenants, AITenant
-                  owns this platform context and the controller ignores this field.
-                properties:
-                  name:
-                    default: maas-default-gateway
-                    maxLength: 63
-                    pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
-                    type: string
-                  namespace:
-                    default: openshift-ingress
-                    maxLength: 63
-                    pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
-                    type: string
                 type: object
               telemetry:
                 description: Telemetry contains configuration for telemetry and metrics
@@ -136,7 +92,7 @@ spec:
                 type: object
             type: object
           status:
-            description: TenantStatus defines the observed state of Tenant.
+            description: MaasTenantConfigStatus defines the observed state of MaasTenantConfig.
             properties:
               conditions:
                 description: |-
@@ -210,7 +166,7 @@ spec:
             type: object
         type: object
         x-kubernetes-validations:
-        - message: Tenant name must be default-tenant
+        - message: MaasTenantConfig name must be default-tenant
           rule: self.metadata.name == 'default-tenant'
     served: true
     storage: true

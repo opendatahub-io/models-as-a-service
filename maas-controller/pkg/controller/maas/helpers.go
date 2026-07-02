@@ -129,15 +129,23 @@ func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTen
 	return namespaceHasTenantDiscoveryLabel(namespace.Labels), nil
 }
 
-// fetchTenantForNamespace returns the Tenant CR co-located in the given namespace.
-// For multi-tenancy each tenant namespace has its own Tenant/default-tenant.
-func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace string) (*maasv1alpha1.Tenant, error) {
-	tenant := &maasv1alpha1.Tenant{}
-	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: namespace}
-	if err := c.Get(ctx, key, tenant); err != nil {
+// fetchTenantForNamespace returns the namespace-local tenant config object.
+// MaasTenantConfig is preferred; legacy Tenant is returned only for migration compatibility.
+func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace string) (client.Object, error) {
+	config := &maasv1alpha1.MaasTenantConfig{}
+	key := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace}
+	if err := c.Get(ctx, key, config); err == nil {
+		return config, nil
+	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	return tenant, nil
+
+	legacy := &maasv1alpha1.Tenant{}
+	legacyKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: namespace}
+	if err := c.Get(ctx, legacyKey, legacy); err != nil {
+		return nil, err
+	}
+	return legacy, nil
 }
 
 func filterSubscriptionsByTenantNamespace(ctx context.Context, c client.Reader, subscriptions []maasv1alpha1.MaaSSubscription, defaultTenantNamespace string, discoveryEnabled bool) []maasv1alpha1.MaaSSubscription {
@@ -228,7 +236,7 @@ func tenantGatewayRefForNamespace(
 		if !allowed {
 			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
 		}
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("tenant %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("MaasTenantConfig %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.MaasTenantConfigInstanceName)
 	}
 	return maasv1alpha1.TenantGatewayRef{}, err
 }

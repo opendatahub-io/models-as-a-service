@@ -105,7 +105,7 @@ Cardinality does not only affect Prometheus. Each unique label combination creat
 
 Disable per-user and other high-cardinality labels by default. Operators opt in to specific labels based on their scale and monitoring capacity.
 
-The current default already disables `user` (`captureUser: false`). To further reduce cardinality, operators can also disable `organization_id` and `model` via the Tenant CR:
+The current default already disables `user` (`captureUser: false`). To further reduce cardinality, operators can also disable `organization_id` and `model` via the MaasTenantConfig CR:
 
 ```yaml
 spec:

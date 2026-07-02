@@ -611,27 +611,45 @@ func TestMapAITenantToMaaSSubscriptions(t *testing.T) {
 }
 
 func TestFetchTenantForNamespace(t *testing.T) {
-	tenant := &maasv1alpha1.Tenant{
+	config := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "default-tenant",
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 			Namespace: "team-a-maas",
 		},
-		Spec: maasv1alpha1.TenantSpec{
-			GatewayRef: maasv1alpha1.TenantGatewayRef{
-				Name:      "team-a-gateway",
-				Namespace: "openshift-ingress",
-			},
-		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant).Build()
+	legacyTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "legacy-maas",
+		},
+		Spec: maasv1alpha1.TenantSpec{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Name:      "legacy-gateway",
+			Namespace: "openshift-ingress",
+		}},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, legacyTenant).Build()
 
 	got, err := fetchTenantForNamespace(context.Background(), c, "team-a-maas")
 	if err != nil {
 		t.Fatalf("fetchTenantForNamespace: %v", err)
 	}
-	if got.Spec.GatewayRef.Name != "team-a-gateway" {
-		t.Errorf("GatewayRef.Name = %q, want team-a-gateway", got.Spec.GatewayRef.Name)
+	if _, ok := got.(*maasv1alpha1.MaasTenantConfig); !ok {
+		t.Fatalf("fetchTenantForNamespace returned %T, want *MaasTenantConfig", got)
+	}
+
+	got, err = fetchTenantForNamespace(context.Background(), c, "legacy-maas")
+	if err != nil {
+		t.Fatalf("fetchTenantForNamespace legacy fallback: %v", err)
+	}
+	legacy, ok := got.(*maasv1alpha1.Tenant)
+	if !ok {
+		t.Fatalf("fetchTenantForNamespace legacy fallback returned %T, want *Tenant", got)
+	}
+	if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
+		t.Errorf("legacy GatewayRef.Name = %q, want legacy-gateway", legacy.Spec.GatewayRef.Name)
 	}
 
 	_, err = fetchTenantForNamespace(context.Background(), c, "nonexistent")

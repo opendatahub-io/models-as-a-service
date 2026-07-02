@@ -501,22 +501,16 @@ def apply_tenant_cr(
     gateway_namespace: str = GATEWAY_NAMESPACE,
     external_oidc: Optional[dict[str, str]] = None,
 ) -> None:
-    spec: dict[str, Any] = {
-        "gatewayRef": {
-            "name": gateway_name,
-            "namespace": gateway_namespace,
-        }
-    }
-    if external_oidc is None and gateway_name == DEFAULT_GATEWAY_NAME:
-        external_oidc = external_oidc_from_env()
-    if external_oidc:
-        spec["externalOIDC"] = external_oidc
+    # gateway_name/gateway_namespace/external_oidc are kept for older callers.
+    # Gateway and OIDC platform context now belongs to AITenant; MaasTenantConfig
+    # only enables the namespace for MaaS runtime CRs and carries API key/telemetry config.
+    _ = (gateway_name, gateway_namespace, external_oidc)
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "Tenant",
+            "kind": "MaasTenantConfig",
             "metadata": {"name": TENANT_CR_NAME, "namespace": namespace},
-            "spec": spec,
+            "spec": {},
         }
     )
 
@@ -765,7 +759,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json(
-        "tenant",
+        "maastenantconfig",
         TENANT_CR_NAME,
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),

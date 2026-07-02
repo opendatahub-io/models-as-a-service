@@ -14,7 +14,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - The `maas-controller` now creates a single `AuthPolicy/maas-gateway-auth` in the gateway namespace (`openshift-ingress`) instead of one per-model `AuthPolicy` in each model namespace.
 - Per-model `AuthPolicy` objects managed by the controller are deleted on the first reconcile after upgrade.
 - `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
-- New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `Tenant` CR.
+- New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `MaasTenantConfig` CR.
 - `AITenant` created outside the configured `--aitenant-namespace` are now rejected at admission instead of being accepted and later marked `Failed/InvalidPlacement` by the controller.
 - **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
 - **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
@@ -50,11 +50,11 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 
 ### New Features
 
-**Tenant CR**
-- Platform-level configuration centralized in the `Tenant` CR (`maas.opendatahub.io/v1alpha1`)
+**MaasTenantConfig CR**
+- MaaS runtime configuration centralized in the `MaasTenantConfig` CR (`maas.opendatahub.io/v1alpha1`)
 - Auto-bootstrapped as `default-tenant` in `models-as-a-service` namespace
-- Configurable gateway, API key lifetime, telemetry, and external OIDC via `spec` fields
-- See [Tenant CR Configuration](../install/maas-setup.md#tenant-cr)
+- Configurable API key lifetime and telemetry via `spec` fields
+- See [MaasTenantConfig CR Configuration](../install/maas-setup.md#maastenantconfig-cr)
 
 **Observability**
 - Perses dashboards for model usage visualization

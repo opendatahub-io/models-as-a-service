@@ -42,7 +42,7 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 		errContains  string
 	}{
 		{
-			name: "allow subscription in namespace with Tenant CR",
+			name: "allow subscription in namespace with legacy Tenant CR",
 			subscription: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sub",
@@ -58,7 +58,7 @@ func TestMaaSSubscriptionValidator_ValidateCreate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "reject subscription in namespace without Tenant CR",
+			name: "reject subscription in namespace without tenant config CR",
 			subscription: &maasv1alpha1.MaaSSubscription{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-sub",

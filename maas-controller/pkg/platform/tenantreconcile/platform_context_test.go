@@ -101,7 +101,7 @@ func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {
 	assert.Equal(t, maasv1alpha1.TenantGatewayRef{Namespace: "custom-ingress", Name: "custom-gateway"}, got.GatewayRef)
 	require.NotNil(t, got.ExternalOIDC)
 	assert.Equal(t, "default-client", got.ExternalOIDC.ClientID)
-	assert.Equal(t, "tenant-spec", got.Source)
+	assert.Equal(t, "legacy-tenant-spec", got.Source)
 }
 
 func TestResolvePlatformContext_AITenantStatusGatewayRequired(t *testing.T) {

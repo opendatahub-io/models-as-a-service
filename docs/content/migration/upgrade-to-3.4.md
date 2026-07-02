@@ -203,9 +203,9 @@ kubectl get configmap -n maas-api >> migration-backup/pre-upgrade-state.txt 2>/d
 
 Follow the standard RHOAI operator upgrade procedure. The operator upgrade will:
 
-- Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
+- Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): MaasTenantConfig, legacy Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
 - Deploy maas-controller when `modelsAsService: Managed` is set in the DSC
-- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with a namespace-scoped `Tenant` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#phase-35-modelsasservice-to-tenant-cr-transition) for details
+- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with `AITenant` platform context and a namespace-scoped `MaasTenantConfig` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#phase-35-modelsasservice-to-maastenantconfig-transition) for details
 - Create gateway-level default policies: `gateway-default-auth` and `gateway-default-deny`
 
 **Important:** The `modelsAsService` field defaults to `Removed` if not specified in the DSC. The operator will not deploy maas-controller until you explicitly set `modelsAsService: Managed`. This means the upgrade itself is safe -- MaaS is opt-in.
@@ -261,19 +261,19 @@ kubectl get tokenratelimitpolicy -A
 
 Both old and new policies target the same `maas-default-gateway` from different namespaces. This creates conflicting policy behavior in Kuadrant and must be resolved by removing the old policies.
 
-## Phase 3.5: ModelsAsService to Tenant CR Transition
+## Phase 3.5: ModelsAsService to MaasTenantConfig Transition
 
-Starting in 3.4, MaaS platform configuration is owned by `maas-controller` via a `Tenant` CR instead of the operator's `ModelsAsService` CR. This section covers what changes automatically and what manual steps may be required.
+Starting in 3.4, MaaS platform configuration is owned by `maas-controller` via `AITenant` plus `MaasTenantConfig` instead of the operator's `ModelsAsService` CR. This section covers what changes automatically and what manual steps may be required.
 
 ### What Changed
 
 | Aspect | RHOAI 3.3 | RHOAI 3.4 |
 |--------|-----------|-----------|
-| CR kind | `ModelsAsService` | `Tenant` |
+| CR kind | `ModelsAsService` | `AITenant` + `MaasTenantConfig` |
 | API group | `components.platform.opendatahub.io/v1alpha1` | `maas.opendatahub.io/v1alpha1` |
 | Scope | Cluster-scoped | Namespace-scoped (`models-as-a-service`) |
 | Instance name | `default-modelsasservice` | `default-tenant` |
-| Reconciled by | ODH operator (ModelsAsService controller) | maas-controller (TenantReconciler) |
+| Reconciled by | ODH operator (ModelsAsService controller) | maas-controller (AITenantReconciler and TenantReconciler) |
 | DSC field | `kserve.modelsAsService.managementState` | Same (unchanged) |
 
 ### What the Operator Handles Automatically
@@ -282,12 +282,12 @@ The following happen without admin intervention during the upgrade:
 
 1. **Old CR cleanup**: The operator's garbage collection removes the old `ModelsAsService` CR (the operator no longer creates it).
 2. **maas-controller deployment**: The operator deploys `maas-controller` (CRDs, RBAC, Deployment) when `modelsAsService: Managed`.
-3. **Default tenant creation**: `maas-controller` automatically creates `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant`.
-4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the default Tenant CR.
+3. **Default tenant creation**: `maas-controller` automatically creates `AITenant/models-as-a-service`; that AITenant creates or adopts `MaasTenantConfig/default-tenant`.
+4. **Platform reconciliation**: `maas-controller` deploys maas-api, gateway policies, telemetry, and all other platform resources via the default MaasTenantConfig CR and AITenant platform context.
 
 ### Manual Steps: Re-applying Custom Configuration
 
-If you had customized the `ModelsAsService` CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), re-apply those values to the new ownership locations. Gateway and external OIDC are AITenant-owned platform context; API key and telemetry settings are Tenant-owned MaaS config.
+If you had customized the `ModelsAsService` CR spec in 3.3 (e.g., custom gateway, external OIDC, telemetry settings), re-apply those values to the new ownership locations. Gateway and external OIDC are AITenant-owned platform context; API key and telemetry settings are MaasTenantConfig-owned MaaS config.
 
 **If all fields were at defaults, no manual steps are needed.**
 
@@ -299,16 +299,18 @@ The following table maps old `ModelsAsService` spec fields to new fields:
 | `spec.externalOIDC.issuerUrl` | `AITenant/models-as-a-service.spec.oidc.issuerUrl` | (not set) |
 | `spec.externalOIDC.clientId` | `AITenant/models-as-a-service.spec.oidc.clientId` | (not set) |
 | `spec.externalOIDC.ttl` | `AITenant/models-as-a-service.spec.oidc.ttl` | `300` |
-| `spec.telemetry.enabled` | `spec.telemetry.enabled` | `true` |
-| `spec.telemetry.metrics.captureOrganization` | `spec.telemetry.metrics.captureOrganization` | `true` |
-| `spec.telemetry.metrics.captureUser` | `spec.telemetry.metrics.captureUser` | `false` |
-| `spec.telemetry.metrics.captureGroup` | `spec.telemetry.metrics.captureGroup` | `false` |
-| `spec.telemetry.metrics.captureModelUsage` | `spec.telemetry.metrics.captureModelUsage` | `true` |
-| `spec.apiKeys.maxExpirationDays` | `spec.apiKeys.maxExpirationDays` | (not set) |
+| `spec.telemetry.enabled` | `MaasTenantConfig/default-tenant.spec.telemetry.enabled` | `true` |
+| `spec.telemetry.metrics.captureOrganization` | `MaasTenantConfig/default-tenant.spec.telemetry.metrics.captureOrganization` | `true` |
+| `spec.telemetry.metrics.captureUser` | `MaasTenantConfig/default-tenant.spec.telemetry.metrics.captureUser` | `false` |
+| `spec.telemetry.metrics.captureGroup` | `MaasTenantConfig/default-tenant.spec.telemetry.metrics.captureGroup` | `false` |
+| `spec.telemetry.metrics.captureModelUsage` | `MaasTenantConfig/default-tenant.spec.telemetry.metrics.captureModelUsage` | `true` |
+| `spec.apiKeys.maxExpirationDays` | `MaasTenantConfig/default-tenant.spec.apiKeys.maxExpirationDays` | (not set) |
 
-Gateway namespace is controller configuration (`--gateway-namespace`), not an AITenant spec field. If you previously used a non-default Gateway namespace, configure the controller with that namespace.
+Gateway namespace is controller configuration (`--gateway-namespace`), not an AITenant spec field. If a legacy `Tenant/default-tenant.spec.gatewayRef.namespace` is set and differs from the controller's configured gateway namespace, migration fails the owning `AITenant` with `LegacyTenantMigrationFailed` rather than silently pointing at the wrong Gateway. If you previously used a non-default Gateway namespace, configure the controller with that namespace before migration or clear/update the legacy `Tenant` value.
 
-To re-apply custom values, patch the AITenant and Tenant CRs after the upgrade:
+Migration into `MaasTenantConfig/default-tenant` is fill-only. Existing `MaasTenantConfig.spec.apiKeys` and `spec.telemetry` values are kept, and legacy `Tenant` values only fill those fields when they are not already set. After `MaasTenantConfig/default-tenant` exists, update it directly for API key and telemetry settings.
+
+To re-apply custom values, patch the AITenant and MaasTenantConfig CRs after the upgrade:
 
 ```bash
 # Example: Re-apply external OIDC platform context
@@ -323,7 +325,7 @@ kubectl patch aitenant models-as-a-service -n ai-tenants --type merge \
   }'
 
 # Example: Re-apply API key configuration
-kubectl patch tenant default-tenant -n models-as-a-service --type merge \
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type merge \
   -p '{
     "spec": {
       "apiKeys": {
@@ -339,9 +341,9 @@ kubectl patch tenant default-tenant -n models-as-a-service --type merge \
 # If you captured the old CR before upgrading:
 kubectl get modelsasservice default-modelsasservice -o yaml > migration-backup/modelsasservice.yaml
 
-# After upgrade, compare specs (field names are identical):
+# After upgrade, compare MaaS config spec:
 diff <(yq '.spec' migration-backup/modelsasservice.yaml) \
-     <(kubectl get tenant default-tenant -n models-as-a-service -o yaml | yq '.spec')
+     <(kubectl get maastenantconfig default-tenant -n models-as-a-service -o yaml | yq '.spec')
 ```
 
 ### 3.5.1 Verify CR Transition
@@ -352,16 +354,16 @@ echo "Old ModelsAsService CR (should fail):"
 kubectl get modelsasservice default-modelsasservice 2>&1
 # Expected: error (not found or resource type not recognized)
 
-# New Tenant CR should exist and be Active/Ready
+# New MaasTenantConfig CR should exist and be Active/Ready
 echo ""
-echo "New Tenant CR:"
-kubectl get tenant default-tenant -n models-as-a-service
+echo "New MaasTenantConfig CR:"
+kubectl get maastenantconfig default-tenant -n models-as-a-service
 # Expected: Ready=True
 
-# Tenant details
+# MaasTenantConfig details
 echo ""
-echo "Tenant status:"
-kubectl get tenant default-tenant -n models-as-a-service -o jsonpath='{.status.phase}'
+echo "MaasTenantConfig status:"
+kubectl get maastenantconfig default-tenant -n models-as-a-service -o jsonpath='{.status.phase}'
 echo ""
 # Expected: Active
 
@@ -375,7 +377,7 @@ echo ""
 
 ### Migration Tooling
 
-The `migrate-tier-to-subscription.sh` script does **not** need extension for this transition. That script covers the tier ConfigMap to MaaS CRD migration (a separate concern). The ModelsAsService to Tenant CR transition is handled entirely by the operator and maas-controller at the platform level.
+The `migrate-tier-to-subscription.sh` script does **not** need extension for this transition. That script covers the tier ConfigMap to MaaS CRD migration (a separate concern). The ModelsAsService to MaasTenantConfig transition is handled entirely by the operator and maas-controller at the platform level.
 
 ## Phase 4: Manual Cleanup of Old Tier Resources
 

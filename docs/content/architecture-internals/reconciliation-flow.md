@@ -6,35 +6,35 @@ This document describes how the MaaS Controller **reconciles** resources, **owne
 
 ## Tenant reconciler
 
-The **Tenant** reconciler watches the singleton **`Tenant`** CR named **`default-tenant`** (`maas.opendatahub.io/v1alpha1`). It:
+The **Tenant** reconciler watches the singleton **`MaasTenantConfig`** CR named **`default-tenant`** (`maas.opendatahub.io/v1alpha1`). It:
 
-- Validates **gateway** reference (default `openshift-ingress` / `maas-default-gateway` when unset) and **cluster dependencies** (for example AuthConfig / Kuadrant CRDs).
+- Resolves platform context from the owning **`AITenant`** (Gateway and OIDC) and validates **cluster dependencies** (for example AuthConfig / Kuadrant CRDs).
 - Runs **prerequisite checks** in the application namespace before applying manifests.
 - **Renders and applies** embedded **kustomize** manifests with **Server-Side Apply**, then waits until the **maas-api** `Deployment` in the app namespace is available.
 - Manages **finalizers** and teardown for **Removed** / **Unmanaged** management-state annotations.
 
 Cross-namespace and cluster-scoped platform pieces (gateway AuthPolicy, telemetry, cluster RBAC) are tracked with **labels** and cleaned up when needed; in-namespace workloads use **`ownerReference`** where appropriate (see diagram below).
 
-### Tenant status
+### MaasTenantConfig status
 
-`Tenant.status` exposes a high-level **`phase`**: **`Pending`**, **`Active`**, **`Degraded`**, or **`Failed`**, plus **conditions** aligned with platform aggregation (for example **`Ready`**, **`DependenciesAvailable`**, **`MaaSPrerequisitesAvailable`**, **`DeploymentsAvailable`**, **`Degraded`**). Typical outcomes:
+`MaasTenantConfig.status` exposes a high-level **`phase`**: **`Pending`**, **`Active`**, **`Degraded`**, or **`Failed`**, plus **conditions** aligned with platform aggregation (for example **`Ready`**, **`DependenciesAvailable`**, **`MaaSPrerequisitesAvailable`**, **`DeploymentsAvailable`**, **`Degraded`**). Typical outcomes:
 
 - **`Failed`** — blocking prerequisites missing, gateway invalid, or platform apply failed.
 - **`Pending`** — manifests applied but **maas-api** not ready yet.
 - **`Active`** — platform applied and **maas-api** deployment available; may still be **`Degraded`** if non-blocking warnings exist.
 
-For `spec` fields (gateway, API keys, telemetry, external OIDC), see [Tenant CR](../install/maas-setup.md#tenant-cr).
+For `spec` fields (API keys and telemetry), see [MaasTenantConfig CR](../install/maas-setup.md#maastenantconfig-cr). Gateway and OIDC platform context belongs to [AITenant](../reference/crds/ai-tenant.md).
 
 ---
 
 ## Tenant resource layout
 
-The `Tenant` CR is namespace-scoped and lives in the **application namespace** for MaaS platform configuration (default **`models-as-a-service`**; configurable via install). It owns resources across three scopes — same-namespace children use standard **`ownerReference`**, while cluster-scoped and cross-namespace children use **tracking labels**.
+The `MaasTenantConfig` CR is namespace-scoped and lives in the **application namespace** for MaaS platform configuration (default **`models-as-a-service`**; configurable via install). It owns resources across three scopes — same-namespace children use standard **`ownerReference`**, while cluster-scoped and cross-namespace children use **tracking labels**.
 
 ```mermaid
 graph TB
     subgraph "models-as-a-service namespace"
-        Tenant["Tenant CR<br/>default-tenant"]
+        Tenant["MaasTenantConfig CR<br/>default-tenant"]
         API["maas-api Deployment"]
         CM["ConfigMaps"]
         SVC["Services"]

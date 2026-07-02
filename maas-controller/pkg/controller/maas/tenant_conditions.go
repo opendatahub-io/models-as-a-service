@@ -10,7 +10,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-func setTenantCondition(tenant *maasv1alpha1.Tenant, typ string, status metav1.ConditionStatus, reason, message string) {
+func setTenantCondition(tenant *maasv1alpha1.MaasTenantConfig, typ string, status metav1.ConditionStatus, reason, message string) {
 	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
 		Type:               typ,
 		Status:             status,
@@ -21,7 +21,7 @@ func setTenantCondition(tenant *maasv1alpha1.Tenant, typ string, status metav1.C
 	})
 }
 
-func setDependenciesCondition(tenant *maasv1alpha1.Tenant, ok bool, detail string) {
+func setDependenciesCondition(tenant *maasv1alpha1.MaasTenantConfig, ok bool, detail string) {
 	if ok {
 		setTenantCondition(tenant, tenantreconcile.ConditionDependenciesAvailable, metav1.ConditionTrue,
 			"DependenciesMet", "AuthConfig CRD (Kuadrant) is available on the cluster")
@@ -31,7 +31,7 @@ func setDependenciesCondition(tenant *maasv1alpha1.Tenant, ok bool, detail strin
 		"DependencyMissing", detail)
 }
 
-func setPrerequisiteConditionsFromReport(tenant *maasv1alpha1.Tenant, rep tenantreconcile.PrerequisiteReport) {
+func setPrerequisiteConditionsFromReport(tenant *maasv1alpha1.MaasTenantConfig, rep tenantreconcile.PrerequisiteReport) {
 	switch {
 	case len(rep.Blocking) > 0:
 		agg := strings.Join(append(append([]string{}, rep.Blocking...), rep.Warnings...), "; ")
@@ -53,7 +53,7 @@ func setPrerequisiteConditionsFromReport(tenant *maasv1alpha1.Tenant, rep tenant
 	}
 }
 
-func setDeploymentsAvailableCondition(tenant *maasv1alpha1.Tenant, ok bool, reason, message string) {
+func setDeploymentsAvailableCondition(tenant *maasv1alpha1.MaasTenantConfig, ok bool, reason, message string) {
 	st := metav1.ConditionFalse
 	if ok {
 		st = metav1.ConditionTrue
@@ -61,7 +61,7 @@ func setDeploymentsAvailableCondition(tenant *maasv1alpha1.Tenant, ok bool, reas
 	setTenantCondition(tenant, tenantreconcile.ConditionDeploymentsAvailable, st, reason, message)
 }
 
-func prerequisitesUnevaluatedCondition(tenant *maasv1alpha1.Tenant, detail string) {
+func prerequisitesUnevaluatedCondition(tenant *maasv1alpha1.MaasTenantConfig, detail string) {
 	setTenantCondition(tenant, tenantreconcile.ConditionMaaSPrerequisitesAvailable, metav1.ConditionUnknown,
 		"DependenciesNotMet", detail)
 	setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,

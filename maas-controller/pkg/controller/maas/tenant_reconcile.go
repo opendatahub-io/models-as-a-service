@@ -18,7 +18,6 @@ package maas
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -52,10 +51,10 @@ const (
 	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
 )
 
-// tenantUsesCleanupFinalizer reports whether this Tenant should carry tenant-cleanup.
+// tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
 // The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
 // only AITenant-managed tenants need explicit per-tenant resource cleanup on delete.
-func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.Tenant) (bool, error) {
+func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
 		return false, err
@@ -73,7 +72,7 @@ func managementState(ann map[string]string) string {
 func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.LoggerFrom(ctx)
 
-	var tenant maasv1alpha1.Tenant
+	var tenant maasv1alpha1.MaasTenantConfig
 	if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
 		if apierrors.IsNotFound(err) {
 			return ctrl.Result{}, nil
@@ -81,22 +80,22 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// When tenant namespace discovery is disabled, only reconcile the default tenant
-	// in the configured TenantNamespace. When enabled, reconcile all Tenant CRs cluster-wide.
+	// When tenant namespace discovery is disabled, only reconcile the default tenant config
+	// in the configured TenantNamespace. When enabled, reconcile all MaasTenantConfig CRs cluster-wide.
 	if !r.TenantNamespaceDiscoveryEnabled {
 		if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
-			log.V(1).Info("ignoring Tenant outside configured platform tenant namespace",
+			log.V(1).Info("ignoring MaasTenantConfig outside configured platform tenant namespace",
 				"tenantNamespace", tenant.Namespace,
 				"configuredTenantNamespace", r.TenantNamespace)
 			return ctrl.Result{}, nil
 		}
 
-		if tenant.Name != maasv1alpha1.TenantInstanceName {
+		if tenant.Name != maasv1alpha1.MaasTenantConfigInstanceName {
 			return ctrl.Result{}, nil
 		}
 	}
 
-	// Guard against unlabeled Tenant CRs in foreign namespaces when discovery is enabled.
+	// Guard against unlabeled tenant configs in foreign namespaces when discovery is enabled.
 	// Without LabelManagedByAITenant, TenantIdentifierFor returns "" (default tenant),
 	// which would cause the rendered maas-api Deployment to use the base name "maas-api"
 	// and SSA-overwrite the actual default tenant's Deployment with wrong env vars
@@ -104,7 +103,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if r.TenantNamespaceDiscoveryEnabled && r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
 		labels := tenant.GetLabels()
 		if labels == nil || labels[tenantreconcile.LabelManagedByAITenant] != "true" {
-			log.V(1).Info("ignoring unlabeled Tenant in foreign namespace to prevent default-tenant resource collision",
+			log.V(1).Info("ignoring unlabeled MaasTenantConfig in foreign namespace to prevent default-tenant resource collision",
 				"tenantNamespace", tenant.Namespace,
 				"defaultTenantNamespace", r.TenantNamespace,
 				"hint", "set maas.opendatahub.io/managed-by-aitenant=true and maas.opendatahub.io/tenant-name labels")
@@ -143,7 +142,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Validate config and gateway
-	mcfg, platformContext, result, err := r.validateConfigAndGateway(ctx, log, &tenant, req)
+	mcfg, platformContext, result, err := r.validateConfigAndGateway(ctx, log, &tenant)
 	if result != nil {
 		return *result, err
 	}
@@ -172,7 +171,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return r.setFinalStatus(ctx, &tenant)
 }
 
-func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (ctrl.Result, error) {
+func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
 		if err := r.cleanupMaaSAuthPolicies(ctx, log, tenant); err != nil {
 			log.Error(err, "failed to cleanup MaaSAuthPolicies")
@@ -192,7 +191,7 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 	return ctrl.Result{}, nil
 }
 
-func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (*ctrl.Result, error) {
+func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (*ctrl.Result, error) {
 	ms := managementState(tenant.Annotations)
 	if ms == managementStateUnmanaged {
 		res, err := r.handleIdleManagementState(ctx, tenant, ms)
@@ -211,7 +210,7 @@ func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.L
 	return nil, nil
 }
 
-func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, req ctrl.Request) (*maasv1alpha1.Config, tenantreconcile.PlatformContext, *ctrl.Result, error) {
+func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (*maasv1alpha1.Config, tenantreconcile.PlatformContext, *ctrl.Result, error) {
 	mcfg, wait, err := r.readyConfigOrWait(ctx, log, tenant)
 	if err != nil {
 		return nil, tenantreconcile.PlatformContext{}, nil, err
@@ -221,7 +220,7 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 	}
 
 	if managementState(tenant.Annotations) == managementStateRemoved {
-		log.V(1).Info("Tenant in Removed management state with live Config; waiting for anchor teardown")
+		log.V(1).Info("MaasTenantConfig in Removed management state with live Config; waiting for anchor teardown")
 		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForRemovedTeardown",
 			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err
@@ -238,25 +237,6 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		}
 		res := ctrl.Result{RequeueAfter: 30 * time.Second}
 		return nil, tenantreconcile.PlatformContext{}, &res, nil
-	}
-
-	if !tenantreconcile.TenantUsesAITenantPlatformContext(tenant) {
-		orig := tenant.DeepCopy()
-		if err := r.applyGatewayDefaults(tenant); err != nil {
-			if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
-				return nil, tenantreconcile.PlatformContext{}, nil, err2
-			}
-			res := ctrl.Result{RequeueAfter: 30 * time.Second}
-			return nil, tenantreconcile.PlatformContext{}, &res, nil
-		}
-		if orig.Spec.GatewayRef != tenant.Spec.GatewayRef {
-			if err := r.Patch(ctx, tenant, client.MergeFrom(orig)); err != nil {
-				return nil, tenantreconcile.PlatformContext{}, nil, err
-			}
-			if err := r.Get(ctx, req.NamespacedName, tenant); err != nil {
-				return nil, tenantreconcile.PlatformContext{}, nil, err
-			}
-		}
 	}
 
 	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
@@ -280,7 +260,7 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 	return mcfg, platformContext, nil, nil
 }
 
-func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.Tenant) (*ctrl.Result, error) {
+func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (*ctrl.Result, error) {
 	if err := tenantreconcile.CheckDependencies(ctx, r.Client); err != nil {
 		setDependenciesCondition(tenant, false, err.Error())
 		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", err.Error())
@@ -318,7 +298,7 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	return nil, nil
 }
 
-func (r *TenantReconciler) reconcilePlatform(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, platformContext tenantreconcile.PlatformContext, mcfg *maasv1alpha1.Config) (*ctrl.Result, error) {
+func (r *TenantReconciler) reconcilePlatform(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig, platformContext tenantreconcile.PlatformContext, mcfg *maasv1alpha1.Config) (*ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ClusterAudience, mcfg)
 	if err != nil {
@@ -370,7 +350,7 @@ func (r *TenantReconciler) attemptLegacyCleanup(ctx context.Context, log logr.Lo
 	}
 }
 
-func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.Tenant) (ctrl.Result, error) {
+func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
 	tenant.Status.Phase = "Active"
 	if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
 		tenant.Status.Phase = "Degraded"
@@ -392,9 +372,9 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 }
 
 // readyConfigOrWait returns the singleton Config when it exists, is not deleting,
-// and has a UID. Otherwise it updates Tenant status and returns a Result the caller should return
+// and has a UID. Otherwise it updates MaasTenantConfig status and returns a Result the caller should return
 // immediately without running gateway, dependency, prerequisite, or platform work.
-func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (*maasv1alpha1.Config, *ctrl.Result, error) {
+func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (*maasv1alpha1.Config, *ctrl.Result, error) {
 	var ct maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ct); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -430,7 +410,7 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 
 // handleIdleManagementState handles Unmanaged: platform workloads are not driven by this
 // reconciler; record idle status.
-func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.Tenant, ms string) (ctrl.Result, error) {
+func (r *TenantReconciler) handleIdleManagementState(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, ms string) (ctrl.Result, error) {
 	if err := r.patchStatus(ctx, tenant, "", metav1.ConditionFalse, "ManagementStateIdle",
 		fmt.Sprintf("management state is %q; platform workloads are not driven by this reconciler in this state", ms)); err != nil {
 		return ctrl.Result{}, err
@@ -452,19 +432,6 @@ func (r *TenantReconciler) appNamespaceForTenant() string {
 	return r.AppNamespace
 }
 
-func (r *TenantReconciler) applyGatewayDefaults(tenant *maasv1alpha1.Tenant) error {
-	ref := &tenant.Spec.GatewayRef
-	if ref.Namespace == "" && ref.Name == "" {
-		ref.Namespace = r.GatewayNamespace
-		ref.Name = r.GatewayName
-		return nil
-	}
-	if ref.Namespace == "" || ref.Name == "" {
-		return errors.New("invalid gateway specification: when specifying a custom gateway, both namespace and name must be provided")
-	}
-	return nil
-}
-
 func validateGatewayExists(ctx context.Context, c client.Client, namespace, name string) error {
 	gw := &gwapiv1.Gateway{}
 	key := types.NamespacedName{Namespace: namespace, Name: name}
@@ -477,7 +444,7 @@ func validateGatewayExists(ctx context.Context, c client.Client, namespace, name
 	return nil
 }
 
-func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1.Tenant, phase string, status metav1.ConditionStatus, reason, message string) error {
+func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, phase string, status metav1.ConditionStatus, reason, message string) error {
 	tenant.Status.Phase = phase
 	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
 		Type:               tenantreconcile.ReadyConditionType,
@@ -551,7 +518,7 @@ func (r *TenantReconciler) cleanupLegacyMaaSAPIDeployment(ctx context.Context, l
 // cleanupTenantResources deletes per-tenant maas-api resources when the Tenant is being deleted.
 // These resources are owned by Config/default (for lifecycle management), not by the Tenant,
 // so they won't be garbage collected automatically and must be explicitly deleted.
-func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
+func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
 		return err
@@ -610,7 +577,7 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 // cleanupMaaSAuthPolicies deletes all MaaSAuthPolicy CRs in the tenant namespace.
 // MaaSAuthPolicyReconciler's handleDeletion will clean up the gateway AuthPolicy
 // when the last MaaSAuthPolicy is deleted.
-func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
+func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
 		return err

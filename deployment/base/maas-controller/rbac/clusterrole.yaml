@@ -214,7 +214,7 @@ rules:
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
-  - tenants
+  - maastenantconfigs
   verbs:
   - create
   - delete
@@ -240,7 +240,7 @@ rules:
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status
-  - tenants/status
+  - maastenantconfigs/status
   verbs:
   - get
   - patch
@@ -253,6 +253,17 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - tenants
+  verbs:
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - monitoring.coreos.com
