@@ -39,7 +39,7 @@
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: true). deploy.sh runs with
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false). When true, deploy.sh runs with
 #                   --external-oidc and --enable-keycloak; Keycloak test realms (tenant-a) are applied.
 #   OIDC_ISSUER_URL - When EXTERNAL_OIDC=true: defaults to Keycloak tenant-a realm if unset
 #   OIDC_TOKEN_URL - Defaults to .../protocol/openid-connect/token under the issuer realm
@@ -90,7 +90,7 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment 
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
-EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
