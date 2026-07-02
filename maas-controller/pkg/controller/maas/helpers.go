@@ -129,13 +129,44 @@ func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTen
 	return namespaceHasTenantDiscoveryLabel(namespace.Labels), nil
 }
 
-// fetchTenantForNamespace returns the namespace-local tenant config object.
+type tenantForNamespaceResult struct {
+	config *maasv1alpha1.MaasTenantConfig
+	legacy *maasv1alpha1.Tenant
+}
+
+func (t *tenantForNamespaceResult) identifier() (string, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.TenantIdentifierFor(t.config)
+	case t.legacy != nil:
+		return tenantreconcile.TenantIdentifierFor(t.legacy)
+	default:
+		return "", errors.New("tenant config lookup result is empty")
+	}
+}
+
+func (t *tenantForNamespaceResult) platformContext(
+	ctx context.Context,
+	c client.Reader,
+	fallback maasv1alpha1.TenantGatewayRef,
+) (tenantreconcile.PlatformContext, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.ResolvePlatformContext(ctx, c, t.config, fallback)
+	case t.legacy != nil:
+		return tenantreconcile.ResolvePlatformContext(ctx, c, t.legacy, fallback)
+	default:
+		return tenantreconcile.PlatformContext{}, errors.New("tenant config lookup result is empty")
+	}
+}
+
+// fetchTenantForNamespace returns the namespace-local tenant config lookup.
 // MaasTenantConfig is preferred; legacy Tenant is returned only for migration compatibility.
-func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace string) (client.Object, error) {
+func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace string) (*tenantForNamespaceResult, error) {
 	config := &maasv1alpha1.MaasTenantConfig{}
 	key := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace}
 	if err := c.Get(ctx, key, config); err == nil {
-		return config, nil
+		return &tenantForNamespaceResult{config: config}, nil
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
@@ -145,7 +176,7 @@ func fetchTenantForNamespace(ctx context.Context, c client.Reader, namespace str
 	if err := c.Get(ctx, legacyKey, legacy); err != nil {
 		return nil, err
 	}
-	return legacy, nil
+	return &tenantForNamespaceResult{legacy: legacy}, nil
 }
 
 func filterSubscriptionsByTenantNamespace(ctx context.Context, c client.Reader, subscriptions []maasv1alpha1.MaaSSubscription, defaultTenantNamespace string, discoveryEnabled bool) []maasv1alpha1.MaaSSubscription {
@@ -219,7 +250,11 @@ func tenantGatewayRefForNamespace(
 ) (maasv1alpha1.TenantGatewayRef, error) {
 	tenant, err := fetchTenantForNamespace(ctx, c, tenantNamespace)
 	if err == nil {
-		platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, c, tenant, fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace))
+		platformContext, err := tenant.platformContext(
+			ctx,
+			c,
+			fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace),
+		)
 		if err != nil {
 			return maasv1alpha1.TenantGatewayRef{}, err
 		}

@@ -314,7 +314,9 @@ func (r *AITenantReconciler) migrateLegacyTenantPlatformContext(ctx context.Cont
 		aitenant.Spec.OIDC = legacy.Spec.ExternalOIDC.DeepCopy()
 	}
 	if legacy.Spec.GatewayRef.Namespace != "" && legacy.Spec.GatewayRef.Namespace != r.GatewayNamespace {
-		return false, fmt.Errorf("legacy Tenant %s/%s spec.gatewayRef.namespace=%q does not match configured gateway namespace %q; AITenant supports gateway name migration only, so update --gateway-namespace or clear the legacy namespace before migration",
+		return false, fmt.Errorf(
+			"legacy Tenant %s/%s spec.gatewayRef.namespace=%q does not match configured gateway namespace %q; "+
+				"AITenant supports gateway name migration only, so update --gateway-namespace or clear the legacy namespace before migration",
 			legacy.Namespace, legacy.Name, legacy.Spec.GatewayRef.Namespace, r.GatewayNamespace)
 	}
 	if legacy.Spec.GatewayRef.Name != "" && (aitenant.Spec.Gateway == nil || aitenant.Spec.Gateway.Name == "") {

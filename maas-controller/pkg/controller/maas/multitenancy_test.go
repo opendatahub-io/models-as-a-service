@@ -636,17 +636,17 @@ func TestFetchTenantForNamespace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchTenantForNamespace: %v", err)
 	}
-	if _, ok := got.(*maasv1alpha1.MaasTenantConfig); !ok {
-		t.Fatalf("fetchTenantForNamespace returned %T, want *MaasTenantConfig", got)
+	if got.config == nil {
+		t.Fatalf("fetchTenantForNamespace returned legacy=%T, want MaasTenantConfig", got.legacy)
 	}
 
 	got, err = fetchTenantForNamespace(context.Background(), c, "legacy-maas")
 	if err != nil {
 		t.Fatalf("fetchTenantForNamespace legacy fallback: %v", err)
 	}
-	legacy, ok := got.(*maasv1alpha1.Tenant)
-	if !ok {
-		t.Fatalf("fetchTenantForNamespace legacy fallback returned %T, want *Tenant", got)
+	legacy := got.legacy
+	if legacy == nil {
+		t.Fatalf("fetchTenantForNamespace legacy fallback returned config=%T, want Tenant", got.config)
 	}
 	if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
 		t.Errorf("legacy GatewayRef.Name = %q, want legacy-gateway", legacy.Spec.GatewayRef.Name)

@@ -298,7 +298,13 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	return nil, nil
 }
 
-func (r *TenantReconciler) reconcilePlatform(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig, platformContext tenantreconcile.PlatformContext, mcfg *maasv1alpha1.Config) (*ctrl.Result, error) {
+func (r *TenantReconciler) reconcilePlatform(
+	ctx context.Context,
+	log logr.Logger,
+	tenant *maasv1alpha1.MaasTenantConfig,
+	platformContext tenantreconcile.PlatformContext,
+	mcfg *maasv1alpha1.Config,
+) (*ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ClusterAudience, mcfg)
 	if err != nil {

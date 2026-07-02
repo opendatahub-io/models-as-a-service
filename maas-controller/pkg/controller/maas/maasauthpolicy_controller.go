@@ -133,9 +133,9 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, lo
 		return "", err
 	}
 
-	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
+	// Use TenantIdentifierFor semantics for resource naming (maas-api service name construction).
 	// Returns "" for default tenant, tenantID for others.
-	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
+	tenantIdentifier, err := tenant.identifier()
 	if err != nil {
 		log.Error(err, "failed to determine tenant identifier")
 		return "", err
@@ -189,7 +189,11 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Contex
 		return nil, fmt.Errorf("failed to get tenant config CR: %w", err)
 	}
 
-	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace))
+	platformContext, err := tenant.platformContext(
+		ctx,
+		r.Client,
+		fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
+	)
 	if err != nil {
 		return nil, err
 	}
