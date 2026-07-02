@@ -7,5 +7,7 @@ metadata:
 resources:
 - serviceaccount.yaml
 - clusterrolebinding.yaml
+- role.yaml
+- rolebinding.yaml
 - supplemental-clusterrole.yaml
 - supplemental-clusterrolebinding.yaml

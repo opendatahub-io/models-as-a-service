@@ -1,12 +1,13 @@
 apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRoleBinding
+kind: RoleBinding
 metadata:
-  name: maas-api
+  name: maas-api-resources
+  namespace: models-as-a-service
 roleRef:
   apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: maas-api
+  kind: Role
+  name: maas-api-resources
 subjects:
 - kind: ServiceAccount
   name: maas-api
-  namespace: models-as-a-service
+  namespace: maas-api
