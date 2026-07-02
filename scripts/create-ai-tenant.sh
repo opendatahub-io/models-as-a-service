@@ -24,8 +24,8 @@ AITENANT_NAMESPACE="ai-tenants"
 HOSTNAME_AUTO_DETECTED=false
 
 validate_dns1123_subdomain() {
-    local value=$1
-    local field=$2
+    local value="$1"
+    local field="$2"
     local -a labels
     local label
 
