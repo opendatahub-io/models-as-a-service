@@ -9,4 +9,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: maas-api
-  namespace: models-as-a-service
+  namespace: opendatahub
