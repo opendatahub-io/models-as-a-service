@@ -102,6 +102,9 @@ type TenantReconciler struct {
 // secrets: namespace-scoped read-only access for the maas-db-config prerequisite check and
 // informer cache. The cache is restricted to maasSubscriptionNamespace in main.go so the
 // controller never lists secrets cluster-wide despite the ClusterRole granting it.
+// clusterroles/clusterrolebindings: read-only — ai-gateway-operator creates and owns all
+// ClusterRoles and ClusterRoleBindings (both bundled in maascontroller manifests with fixed
+// namespace models-as-a-service). The Tenant reconciler never creates cluster-scoped RBAC.
 // +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch
