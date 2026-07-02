@@ -30,7 +30,7 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SKIP"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "NONE"
               request_trailer_mode: "SEND"
             grpc_service:
@@ -57,7 +57,7 @@ spec:
             processing_mode:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
-              request_body_mode: "FULL_DUPLEX_STREAMED"
+              request_body_mode: "BUFFERED"
               response_body_mode: "FULL_DUPLEX_STREAMED"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
