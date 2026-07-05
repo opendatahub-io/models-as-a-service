@@ -41,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -1464,16 +1465,31 @@ func (r *MaaSAuthPolicyReconciler) deleteGatewayDefaultAuthPolicy(ctx context.Co
 
 // ensureGatewayDefaultAuthPolicy recreates the static deny-all gateway-default-auth policy
 // after the last MaaSAuthPolicy is removed, so unconfigured model routes remain denied.
+// Management endpoints (/v1/*, /maas-api/*) are excluded so they remain accessible even
+// when no MaaSAuthPolicy CRs exist (e.g. fresh cluster with zero subscriptions).
 func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) error {
 	policy := &unstructured.Unstructured{}
 	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	policy.SetName(gatewayDefaultAuthPolicyName)
 	policy.SetNamespace(r.GatewayNamespace)
 
+	spec := r.gatewayDefaultAuthSpec()
+
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(policy.GroupVersionKind())
 	if err := r.Get(ctx, client.ObjectKeyFromObject(policy), existing); err == nil {
-		log.V(1).Info("gateway-default-auth already exists, skipping recreation", "name", gatewayDefaultAuthPolicyName)
+		snapshot := existing.DeepCopy()
+		if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+			return fmt.Errorf("failed to set gateway-default-auth spec for update: %w", err)
+		}
+		if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+			log.V(1).Info("gateway-default-auth unchanged, skipping update", "name", gatewayDefaultAuthPolicyName)
+			return nil
+		}
+		if err := r.Update(ctx, existing); err != nil {
+			return fmt.Errorf("failed to update gateway-default-auth: %w", err)
+		}
+		log.Info("gateway-default-auth updated", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
 		return nil
 	}
 
@@ -1482,13 +1498,32 @@ func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Co
 		"app.kubernetes.io/part-of":    "maas-controller",
 		"app.kubernetes.io/component":  "default-policy",
 	})
-	spec := map[string]any{
+	if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
+		return fmt.Errorf("failed to set gateway-default-auth spec: %w", err)
+	}
+	if err := r.Create(ctx, policy); err != nil {
+		if apierrors.IsAlreadyExists(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to create gateway-default-auth: %w", err)
+	}
+	log.Info("restored gateway-default-auth (no remaining MaaSAuthPolicies)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
+	return nil
+}
+
+func (r *MaaSAuthPolicyReconciler) gatewayDefaultAuthSpec() map[string]any {
+	return map[string]any{
 		"targetRef": map[string]any{
 			"group": "gateway.networking.k8s.io",
 			"kind":  "Gateway",
 			"name":  r.GatewayName,
 		},
 		"defaults": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celModelIdentityAvailable,
+				},
+			},
 			"rules": map[string]any{
 				"authentication": map[string]any{},
 				"authorization": map[string]any{
@@ -1509,17 +1544,6 @@ func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Co
 			},
 		},
 	}
-	if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
-		return fmt.Errorf("failed to set gateway-default-auth spec: %w", err)
-	}
-	if err := r.Create(ctx, policy); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to create gateway-default-auth: %w", err)
-	}
-	log.Info("restored gateway-default-auth (no remaining MaaSAuthPolicies)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
-	return nil
 }
 
 // discoverXAPIKeyNeeded lists ExternalModel CRs from inference.opendatahub.io/v1alpha1
@@ -1782,6 +1806,17 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapNamespaceToMaaSAuthPolicies,
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
+
+	// On startup, ensure any existing gateway-default-auth has the correct
+	// spec (with when predicate). This handles upgrades from older controller
+	// versions that created the policy without management-endpoint exclusions.
+	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		startLog := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("phase", "startup")
+		return r.ensureGatewayDefaultAuthPolicy(ctx, startLog)
+	})); err != nil {
+		return err
+	}
+
 	return b.Complete(r)
 }
 
