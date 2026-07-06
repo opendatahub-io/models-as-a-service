@@ -2,6 +2,23 @@
 
 Release notes summarize user-visible changes, breaking changes, and migration requirements for each MaaS version.
 
+## RHOAI to MaaS Release Mapping
+
+This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corresponding MaaS component version.
+
+| RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
+|---------------|--------------|-----------------|--------|-------|
+| 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
+| 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
+| 3.2           | v0.0.2       | `v3.2`          | Tech Preview | Tier-based access; standalone deploy (`modelsAsService` not in DSC schema) |
+
+**Image registries:**
+
+- **Upstream (ODH):** `quay.io/opendatahub/maas-api:<tag>`, `quay.io/opendatahub/maas-controller:<tag>`
+- **Downstream (RHOAI):** `registry.redhat.io/rhoai/odh-maas-api-rhel9:<tag>`, `registry.redhat.io/rhoai/odh-maas-controller-rhel9:<tag>`
+
+For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Version Compatibility](../install/prerequisites.md#version-compatibility).
+
 ---
 
 ## v0.1.2
@@ -16,6 +33,7 @@ Release notes summarize user-visible changes, breaking changes, and migration re
 - `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
 - New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `Tenant` CR.
 - `AITenant` created outside the configured `--aitenant-namespace` are now rejected at admission instead of being accepted and later marked `Failed/InvalidPlacement` by the controller.
+- `AITenant.spec.rbac` is deprecated and ignored. Existing manifests that still include it remain schema-valid, but the controller no longer creates RoleBindings from it. The controller still creates tenant-admin Roles, and platform administrators must create standard Kubernetes RoleBindings to grant access. See [Tenant RBAC](../configuration-and-management/tenant-rbac.md).
 - **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
 - **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
 
