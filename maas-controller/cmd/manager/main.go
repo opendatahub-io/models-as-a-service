@@ -70,6 +70,12 @@ var (
 
 const defaultAITenantBootstrappedAnnotation = "maas.opendatahub.io/default-aitenant-bootstrapped"
 
+const (
+	tlsProfileFetchMaxRetries = 3
+	tlsProfileFetchTimeout    = 10 * time.Second
+	tlsProfileFetchRetryDelay = 2 * time.Second
+)
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
@@ -512,12 +518,10 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 // default Intermediate profile immediately with available=false. For transient
 // errors on OpenShift, it retries a few times before returning an error.
 func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
-	const maxRetries = 3
-
 	var lastErr error
 
-	for attempt := range maxRetries {
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+	for attempt := range tlsProfileFetchMaxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
 		profile, err := utiltls.FetchAPIServerTLSProfile(fetchCtx, c)
 		adherencePolicy := confv1.TLSAdherencePolicyNoOpinion
 		if err == nil {
@@ -537,14 +541,14 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 		}
 
 		lastErr = err
-		if attempt < maxRetries-1 {
+		if attempt < tlsProfileFetchMaxRetries-1 {
 			setupLog.Info("transient error fetching cluster TLS profile, retrying",
-				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
 			select {
 			case <-ctx.Done():
 				return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
 					confv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
-			case <-time.After(2 * time.Second):
+			case <-time.After(tlsProfileFetchRetryDelay):
 			}
 		} else {
 			setupLog.Error(err, "failed to fetch cluster TLS profile after retries")

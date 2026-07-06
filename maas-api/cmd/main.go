@@ -40,6 +40,12 @@ func main() {
 	}
 }
 
+const (
+	tlsProfileFetchMaxRetries = 3
+	tlsProfileFetchTimeout    = 10 * time.Second
+	tlsProfileFetchRetryDelay = 2 * time.Second
+)
+
 func serve() error {
 	cfg := config.Load()
 	flag.Parse()
@@ -318,15 +324,14 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		cancel()
 	})
 	if watchErr != nil {
-		log.Warn("Could not start TLS profile watcher", "error", watchErr)
-	} else {
-		go func() {
-			if err := watcher.Start(ctx.Done()); err != nil {
-				log.Error("TLS profile watcher failed, initiating graceful shutdown to restart", "error", err)
-				cancel()
-			}
-		}()
+		return 0, nil, fmt.Errorf("starting TLS profile watcher: %w", watchErr)
 	}
+	go func() {
+		if err := watcher.Start(ctx.Done()); err != nil {
+			log.Error("TLS profile watcher failed, initiating graceful shutdown to restart", "error", err)
+			cancel()
+		}
+	}()
 
 	return profileMinVersion, profileCipherSuites, nil
 }
@@ -336,11 +341,9 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 // available=false with nil error. For transient errors on OpenShift, retries a
 // few times and returns a non-nil error if all attempts fail (fail-closed).
 func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool, error) {
-	const maxRetries = 3
-
 	var lastErr error
-	for attempt := range maxRetries {
-		fetchCtx, fetchCancel := context.WithTimeout(ctx, 10*time.Second)
+	for attempt := range tlsProfileFetchMaxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
 		profile, err := tlsprofile.FetchTLSProfile(fetchCtx, restConfig)
 		fetchCancel()
 
@@ -355,13 +358,13 @@ func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfi
 		}
 
 		lastErr = err
-		if attempt < maxRetries-1 {
+		if attempt < tlsProfileFetchMaxRetries-1 {
 			log.Info("Transient error fetching cluster TLS profile, retrying",
-				"error", err, "attempt", attempt+1, "maxRetries", maxRetries)
+				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
 			select {
 			case <-ctx.Done():
 				return tlsprofile.DefaultProfile(), false, ctx.Err()
-			case <-time.After(2 * time.Second):
+			case <-time.After(tlsProfileFetchRetryDelay):
 			}
 		}
 	}
