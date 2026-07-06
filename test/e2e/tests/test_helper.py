@@ -877,6 +877,48 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     )
 
 
+def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for MaaSModelRef to reach Ready phase.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        namespace: Namespace (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The MaaSModelRef CR dict when Ready
+
+    Raises:
+        TimeoutError: If MaaSModelRef doesn't reach Ready within timeout
+    """
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSModelRef {namespace}/{model_ref} to reach phase 'Ready' (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maasmodelref", model_ref, namespace)
+        if cr:
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            endpoint = status.get("endpoint")
+
+            if phase == "Ready" and endpoint:
+                log.info(f"MaaSModelRef {namespace}/{model_ref} is Ready with endpoint: {endpoint}")
+                return cr
+
+            log.debug(f"MaaSModelRef {namespace}/{model_ref}: phase={phase}, endpoint={endpoint or 'none'}")
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maasmodelref", model_ref, namespace)
+    status = cr.get("status", {}) if cr else {}
+    conditions = status.get("conditions", [])
+    raise TimeoutError(
+        f"MaaSModelRef {namespace}/{model_ref} did not reach Ready within {timeout}s "
+        f"(current: phase={status.get('phase')}, endpoint={status.get('endpoint')}, "
+        f"conditions={[c.get('type') + '=' + str(c.get('status')) for c in conditions]})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Controller scaling utilities
 # ---------------------------------------------------------------------------
@@ -1014,3 +1056,111 @@ def _scale_kuadrant_controller_down(namespace="kuadrant-system", timeout=60):
 def _scale_kuadrant_controller_up(namespace="kuadrant-system", timeout=60):
     """Scale kuadrant-operator to 1 replica (convenience wrapper)."""
     _scale_kuadrant_controller(1, namespace, timeout)
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant model helpers
+# ---------------------------------------------------------------------------
+
+def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespace: str = "openshift-ingress"):
+    """Create a simulated LLMInferenceService pointing to a specific gateway.
+
+    Args:
+        name: LLMIS name
+        namespace: Namespace to create LLMIS in
+        gateway_name: Gateway name to route through
+        gateway_namespace: Gateway namespace (default: openshift-ingress)
+    """
+    _apply_cr({
+        "apiVersion": "serving.kserve.io/v1alpha1",
+        "kind": "LLMInferenceService",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "model": {
+                "name": "facebook/opt-125m",
+                # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
+                "uri": "hf://placeholder/no-model",
+            },
+            # Skip storage-initializer; simulator generates responses without model weights.
+            "storageInitializer": {
+                "enabled": False,
+            },
+            "replicas": 1,
+            "router": {
+                "gateway": {
+                    "refs": [
+                        {
+                            "name": gateway_name,
+                            "namespace": gateway_namespace,
+                        }
+                    ]
+                },
+                "route": {},  # Required for KServe to create HTTPRoute
+            },
+            "template": {
+                "containers": [
+                    {
+                        "name": "main",
+                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
+                        "command": ["/app/llm-d-inference-sim"],
+                        "args": [
+                            "--port", "8000",
+                            "--model", "facebook/opt-125m",
+                            "--mode", "random",
+                            "--no-mm-encoder-only",
+                            "--ssl-certfile", "/var/run/kserve/tls/tls.crt",
+                            "--ssl-keyfile", "/var/run/kserve/tls/tls.key",
+                        ],
+                        "ports": [
+                            {
+                                "containerPort": 8000,
+                                "name": "https",
+                                "protocol": "TCP",
+                            }
+                        ],
+                        "livenessProbe": {
+                            "httpGet": {
+                                "path": "/health",
+                                "port": "https",
+                                "scheme": "HTTPS",
+                            }
+                        },
+                        "readinessProbe": {
+                            "httpGet": {
+                                "path": "/ready",
+                                "port": "https",
+                                "scheme": "HTTPS",
+                            }
+                        },
+                    }
+                ]
+            },
+        },
+    })
+
+
+def _create_maas_model_ref(name: str, namespace: str, llmis_name: str):
+    """Create a MaaSModelRef pointing to an LLMInferenceService.
+
+    Args:
+        name: MaaSModelRef name
+        namespace: Namespace to create MaaSModelRef in
+        llmis_name: LLMInferenceService name to reference
+    """
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSModelRef",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "modelRef": {
+                "kind": "LLMInferenceService",
+                "name": llmis_name,
+            }
+        },
+    })

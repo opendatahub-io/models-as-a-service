@@ -1,6 +1,7 @@
 {
   "realm": "tenant-a",
   "enabled": true,
+  "accessTokenLifespan": 60,
   "registrationAllowed": false,
   "resetPasswordAllowed": false,
   "verifyEmail": false,

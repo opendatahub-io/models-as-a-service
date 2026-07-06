@@ -679,14 +679,15 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 	}
 }
 
-// findModel returns the namespace and true if the subscription includes the given model name.
-func (s subscription) findModel(modelID string) (string, bool) {
+// findModelNamespaces returns all namespaces where the given model name appears in the subscription's modelRefs.
+func (s subscription) findModelNamespaces(modelID string) []string {
+	var namespaces []string
 	for _, ref := range s.ModelRefs {
 		if ref.Name == modelID {
-			return ref.Namespace, true
+			namespaces = append(namespaces, ref.Namespace)
 		}
 	}
-	return "", false
+	return namespaces
 }
 
 // sortSubscriptionsByPriority sorts in-place by priority desc, then maxLimit desc, then name asc.
@@ -717,13 +718,22 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 
 	result := []SubscriptionInfo{}
 	for _, sub := range subscriptions {
-		modelNS, hasModel := sub.findModel(modelID)
-		if !userHasAccess(&sub, username, groups) || !hasModel {
+		modelNamespaces := sub.findModelNamespaces(modelID)
+		if !userHasAccess(&sub, username, groups) || len(modelNamespaces) == 0 {
 			continue
 		}
 
-		if authorizedSet != nil && !authorizedSet[authpolicy.ModelKey{Namespace: modelNS, Name: modelID}] {
-			continue
+		if s.accessChecker != nil {
+			authorized := false
+			for _, ns := range modelNamespaces {
+				if authorizedSet[authpolicy.ModelKey{Namespace: ns, Name: modelID}] {
+					authorized = true
+					break
+				}
+			}
+			if !authorized {
+				continue
+			}
 		}
 
 		result = append(result, toSubscriptionInfo(&sub))

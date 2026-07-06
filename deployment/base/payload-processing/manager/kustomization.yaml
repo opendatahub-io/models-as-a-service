@@ -10,4 +10,4 @@ resources:
 images:
   - name: payload-processing
     newName: quay.io/opendatahub/odh-ai-gateway-payload-processing
-    newTag: ed049f48739fc4c52f30080c4337073595fd95b6
+    newTag: odh-stable

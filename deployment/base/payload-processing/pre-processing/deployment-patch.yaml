@@ -13,20 +13,10 @@
 - op: replace
   path: /spec/template/spec/containers/0/args
   value:
-    - "--streaming"
-    - --v
-    - "3"
-    - --plugin
-    - "$(MODEL_TO_HEADER)"
-    - --tracing=false
-- op: replace
-  path: /spec/template/spec/containers/0/env
-  value:
-    - name: MODEL_TO_HEADER
-      valueFrom:
-        configMapKeyRef:
-          name: payload-processing-plugins
-          key: model-to-header-plugin
+  - --config-file
+  - "/config/custom-pre-processing-ipp-config.yaml"
+  - --v=3
+  - --tracing=false
 - op: replace
   path: /spec/template/spec/containers/0/ports
   value:

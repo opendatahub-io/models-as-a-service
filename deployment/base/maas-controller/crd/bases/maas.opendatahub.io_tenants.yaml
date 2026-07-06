@@ -64,8 +64,9 @@ spec:
                     type: integer
                 type: object
               externalOIDC:
-                description: ExternalOIDC configures an external OIDC identity provider
-                  for the maas-api AuthPolicy.
+                description: |-
+                  ExternalOIDC configures an external OIDC identity provider for legacy/unmanaged
+                  Tenant resources. For AITenant-managed tenants, use AITenant.spec.oidc.
                 properties:
                   clientId:
                     description: ClientID is the OAuth2 client ID.
@@ -90,8 +91,9 @@ spec:
                 type: object
               gatewayRef:
                 description: |-
-                  GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints.
-                  If omitted, defaults to openshift-ingress/maas-default-gateway.
+                  GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints
+                  for legacy/unmanaged Tenant resources. For AITenant-managed tenants, AITenant
+                  owns this platform context and the controller ignores this field.
                 properties:
                   name:
                     default: maas-default-gateway

@@ -77,20 +77,26 @@ GATEWAY_PROPAGATION_DELAY = 5  # seconds
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+    """Make an HTTP request, retrying on transient gateway/auth errors.
 
-    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
-    backoff and returns the last response — the caller's assertion will
-    surface the failure clearly if the gateway never becomes ready.
+    Retries on:
+    - Empty 403: Envoy hasn't loaded the AuthPolicy yet.
+    - 500 with AUTH_FAILURE: Authorino race condition during AuthConfig updates
+      (metadata evaluators not yet linked after policy reconciliation).
+
+    Returns the last response — the caller's assertion will surface the
+    failure clearly if the gateway never becomes ready.
     """
     for attempt in range(1, retries + 1):
         r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
-        if r.status_code == 403 and not r.text.strip():
-            if attempt < retries:
-                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
-                         attempt, retries, GATEWAY_PROPAGATION_DELAY)
-                time.sleep(GATEWAY_PROPAGATION_DELAY)
-                continue
+        retryable = (r.status_code == 403 and not r.text.strip()) or (
+            r.status_code == 500 and "AUTH_FAILURE" in r.text
+        )
+        if retryable and attempt < retries:
+            log.info("Gateway returned %d (attempt %d/%d), retrying in %ds...",
+                     r.status_code, attempt, retries, GATEWAY_PROPAGATION_DELAY)
+            time.sleep(GATEWAY_PROPAGATION_DELAY)
+            continue
         return r
     return r  # last attempt's response — assertion will catch the failure
 
@@ -1506,7 +1512,8 @@ class TestAPIKeySubscriptionFilter:
 
             # Create 2 keys bound to sub_a
             for i in range(2):
-                r = requests.post(
+                r = _request_with_gateway_retry(
+                    requests.post,
                     api_keys_base_url,
                     headers=sa_headers,
                     json={"name": f"e2e-filter-a-{i}", "subscription": sub_a},
@@ -1517,7 +1524,8 @@ class TestAPIKeySubscriptionFilter:
                 key_ids_a.append(r.json()["id"])
 
             # Create 1 key bound to sub_b
-            r_b = requests.post(
+            r_b = _request_with_gateway_retry(
+                requests.post,
                 api_keys_base_url,
                 headers=sa_headers,
                 json={"name": "e2e-filter-b-0", "subscription": sub_b},

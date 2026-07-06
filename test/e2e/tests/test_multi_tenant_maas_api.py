@@ -1,23 +1,20 @@
 """
-E2E tests for per-tenant maas-api infrastructure (MT S24 / RHOAIENG-66483).
+E2E tests for per-tenant maas-api infrastructure.
 
-These tests validate the expected Phase 1 contract once the per-tenant maas-api
-implementation is available:
+These tests validate the Phase 1 multi-tenant contract:
   - AITenant creates dedicated maas-api Deployment/Service/HTTPRoute/AuthPolicy
   - TENANT_NAME is set on each maas-api Deployment
   - HTTPRoutes attach to the tenant Gateway and route to the tenant Service
   - Default and multiple tenant maas-api instances coexist
-
-Run with ENABLE_S24_E2E=true. The current mainline-compatible E2E smoke path
-does not enable this module until S24 lands.
 """
 
 import pytest
 
 from multitenancy_helpers import (
+    AITENANT_KIND,
+    AITENANT_NAMESPACE,
     DEPLOYMENT_NAMESPACE,
     GATEWAY_NAMESPACE,
-    TENANT_CR_NAME,
     apply_maas_auth_policy,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
@@ -35,10 +32,7 @@ from multitenancy_helpers import (
 )
 
 
-pytestmark = pytest.mark.skipif(
-    not env_bool("ENABLE_S24_E2E"),
-    reason="S24 per-tenant maas-api E2E is gated; set ENABLE_S24_E2E=true once the backing implementation lands",
-)
+# Multi-tenant maas-api tests are enabled by default (Phase 1 implementation)
 
 
 @pytest.fixture(scope="module")
@@ -88,8 +82,8 @@ class TestPerTenantMaaSAPI:
             # Verify it targets the tenant Gateway
             assert auth["spec"]["targetRef"]["name"] == case["gateway_name"]
 
-            tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
-            assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]
+            aitenant = wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout=180)
+            assert aitenant["status"]["gatewayRef"]["name"] == case["gateway_name"]
 
     def test_tenant_name_environment_variable_set(self, tenant_cases):
         """2.2: TENANT_NAME env var identifies the tenant served by each maas-api Deployment."""

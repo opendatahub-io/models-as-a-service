@@ -34,17 +34,15 @@ func setupRouter(t *testing.T) *gin.Engine {
 	return router
 }
 
-// TestExtractUserInfo_TenantHeader verifies that the ExtractUserInfo middleware
-// correctly extracts the X-MaaS-Tenant header and rejects requests where it is
-// missing or whitespace-only.
-func TestExtractUserInfo_TenantHeader(t *testing.T) {
+// TestExtractUserInfo_TenantFromConfig verifies that the ExtractUserInfo middleware
+// correctly sets the tenant from the handler's configured tenantName (from TENANT_NAME env var).
+func TestExtractUserInfo_TenantFromConfig(t *testing.T) {
 	router := setupRouter(t)
 
-	t.Run("ValidTenantHeader", func(t *testing.T) {
+	t.Run("TenantFromHandler", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/test", nil)
 		req.Header.Set(constant.HeaderUsername, "testuser")
 		req.Header.Set(constant.HeaderGroup, `["group1"]`)
-		req.Header.Set(constant.HeaderTenant, "my-tenant")
 
 		w := httptest.NewRecorder()
 		router.ServeHTTP(w, req)
@@ -55,38 +53,6 @@ func TestExtractUserInfo_TenantHeader(t *testing.T) {
 		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
 		assert.Equal(t, "testuser", body.Username)
 		assert.Equal(t, []string{"group1"}, body.Groups)
-		assert.Equal(t, "my-tenant", body.Tenant)
-	})
-
-	t.Run("MissingTenantHeader", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req.Header.Set(constant.HeaderUsername, "testuser")
-		req.Header.Set(constant.HeaderGroup, `["group1"]`)
-		// No tenant header set
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-
-		var body map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, "004", body["refId"])
-	})
-
-	t.Run("WhitespaceOnlyTenantHeader", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/test", nil)
-		req.Header.Set(constant.HeaderUsername, "testuser")
-		req.Header.Set(constant.HeaderGroup, `["group1"]`)
-		req.Header.Set(constant.HeaderTenant, "   ")
-
-		w := httptest.NewRecorder()
-		router.ServeHTTP(w, req)
-
-		assert.Equal(t, http.StatusInternalServerError, w.Code)
-
-		var body map[string]any
-		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
-		assert.Equal(t, "004", body["refId"])
+		assert.Equal(t, "test", body.Tenant, "tenant should come from handler config")
 	})
 }

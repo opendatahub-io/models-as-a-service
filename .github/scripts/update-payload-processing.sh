@@ -51,7 +51,7 @@ fi
 
 LOCAL_DEPLOY="${PROJECT_ROOT}/test/e2e/scripts/local-deploy.sh"
 if [ -f "$LOCAL_DEPLOY" ]; then
-    sed -i "s#BBR_IMAGE=\"\${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:.*}\"#BBR_IMAGE=\"\${BBR_IMAGE:-${IMAGE}}\"#" "$LOCAL_DEPLOY"
+    sed -i "s#IPP_IMAGE=\"\${IPP_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:.*}\"#IPP_IMAGE=\"\${IPP_IMAGE:-${IMAGE}}\"#" "$LOCAL_DEPLOY"
     echo "  - test/e2e/scripts/local-deploy.sh"
 fi
 

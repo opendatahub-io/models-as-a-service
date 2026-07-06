@@ -7,7 +7,7 @@ set -euo pipefail
 # Supports both vanilla Kubernetes and OpenShift deployments
 
 # Component definitions with installation order
-COMPONENTS=("istio" "odh" "kserve" "prometheus" "kuadrant")
+COMPONENTS=("istio" "odh" "kserve" "kuadrant")
 
 # OpenShift flag
 OCP=false
@@ -31,13 +31,6 @@ get_component_description() {
                 echo "Model serving platform"
             fi
             ;;
-        prometheus) 
-            if [[ "$OCP" == true ]]; then
-                echo "Observability and metrics collection (validates OpenShift monitoring)"
-            else
-                echo "Observability and metrics collection (optional)"
-            fi
-            ;;
         kuadrant) echo "API gateway operators via OLM (Kuadrant, Authorino, Limitador)" ;;
         *) echo "Unknown component" ;;
     esac
@@ -53,7 +46,6 @@ usage() {
     echo "  --istio                  Install Istio service mesh"
     echo "  --odh                    Install OpenDataHub operator (OpenShift only)"
     echo "  --kserve                 Install KServe model serving platform"
-    echo "  --prometheus             Install Prometheus operator"
     echo "  --kuadrant               Install Kuadrant operators via OLM"
     echo "  --ocp                    Use OpenShift-specific handling (validate instead of install)"
     echo "  -h, --help               Show this help message"
@@ -190,7 +182,7 @@ EOF
     
     # Pass --ocp flag to scripts that support it
     local script_args=()
-    if [[ "$OCP" == true ]] && [[ "$component" == "kserve" || "$component" == "prometheus" ]]; then
+    if [[ "$OCP" == true ]] && [[ "$component" == "kserve" ]]; then
         script_args+=("--ocp")
     fi
     
@@ -297,10 +289,6 @@ while [[ $# -gt 0 ]]; do
             ;;
         --kserve)
             install_component "kserve"
-            COMPONENT_SELECTED=true
-            ;;
-        --prometheus)
-            install_component "prometheus"
             COMPONENT_SELECTED=true
             ;;
         --ocp)

@@ -294,6 +294,63 @@ Now install the Gateway API controller for your platform:
         ]'
         ```
 
+    #### High-concurrency authentication timeout
+
+    RHCL configures the Kuadrant WASM plugin with an authentication service timeout of `200ms` by default. Under high concurrent request load, this short timeout can appear as intermittent HTTP `500` or `503` responses from gateway policy evaluation even when the model backend is healthy. If you see timeout-related failures during concurrent inference, increase `AUTH_SERVICE_TIMEOUT` to `2s` (`2000ms`) on the RHCL operator Subscription (`spec.config.env`).
+
+    Set the RHCL Subscription name and namespace for your installation before patching. The manual install example above uses `kuadrant-operator` in `kuadrant-system`; RHOAI-managed clusters commonly use `rhcl-operator` in `rh-connectivity-link`.
+
+    ```shell
+    RHCL_NAMESPACE=kuadrant-system
+    RHCL_SUBSCRIPTION=kuadrant-operator
+
+    # For RHOAI-managed RHCL, use:
+    # RHCL_NAMESPACE=rh-connectivity-link
+    # RHCL_SUBSCRIPTION=rhcl-operator
+    ```
+
+    To configure the timeout before installation, add the environment variable to the Subscription. If you already set other `spec.config.env` entries, add it alongside them:
+
+    ```yaml
+    spec:
+      config:
+        env:
+          - name: AUTH_SERVICE_TIMEOUT
+            value: "2s"
+    ```
+
+    To configure the timeout after installation, choose the patch that matches the current Subscription shape:
+
+    If `spec.config.env` already exists, append the timeout value:
+
+    ```shell
+    kubectl patch subscription "${RHCL_SUBSCRIPTION}" -n "${RHCL_NAMESPACE}" --type='json' -p='[
+      {"op":"add","path":"/spec/config/env/-","value":{"name":"AUTH_SERVICE_TIMEOUT","value":"2s"}}
+    ]'
+    ```
+
+    If `spec.config` exists but `spec.config.env` does not, add the `env` array:
+
+    ```shell
+    kubectl patch subscription "${RHCL_SUBSCRIPTION}" -n "${RHCL_NAMESPACE}" --type='json' -p='[
+      {"op":"add","path":"/spec/config/env","value":[
+        {"name":"AUTH_SERVICE_TIMEOUT","value":"2s"}
+      ]}
+    ]'
+    ```
+
+    If the Subscription does not have a `spec.config` section yet, create it with the timeout value:
+
+    ```shell
+    kubectl patch subscription "${RHCL_SUBSCRIPTION}" -n "${RHCL_NAMESPACE}" --type='json' -p='[
+      {"op":"add","path":"/spec/config","value":{"env":[
+        {"name":"AUTH_SERVICE_TIMEOUT","value":"2s"}
+      ]}}
+    ]'
+    ```
+
+    After changing the operator Subscription, wait for RHCL-managed components to roll out and retest the concurrent workload. Keep the value as low as your workload allows: increasing it gives authentication calls more time under load, but failed auth service calls can also take longer before the gateway returns an error.
+
     Wait for the subscription to install successfully:
 
     ```shell
