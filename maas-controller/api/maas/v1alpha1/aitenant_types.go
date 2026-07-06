@@ -40,7 +40,7 @@ const (
 
 // AITenant bootstraps one tenant slice: a tenant namespace, an existing
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
-// and tenant-admin RBAC.
+// and tenant-admin Roles.
 //
 // The AITenant name is used as a suffix for per-tenant maas-api resources
 // (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -66,7 +66,11 @@ type AITenantSpec struct {
 	// +kubebuilder:validation:Optional
 	OIDC *TenantExternalOIDCConfig `json:"oidc,omitempty"`
 
-	// RBAC configures tenant-admin access to the tenant namespace and this AITenant object.
+	// RBAC is retained only for compatibility with existing AITenant manifests.
+	// The controller ignores this field and does not create RoleBindings from it.
+	//
+	// Deprecated: create standard Kubernetes RoleBindings that reference the
+	// controller-created tenant-admin Roles instead.
 	// +kubebuilder:validation:Optional
 	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
 }
@@ -81,15 +85,21 @@ type AITenantGatewayRef struct {
 	Name string `json:"name,omitempty"`
 }
 
-// AITenantRBACConfig defines tenant-admin subjects.
+// AITenantRBACConfig is the deprecated compatibility schema for tenant-admin subjects.
+//
+// Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
 type AITenantRBACConfig struct {
-	// Admins are bound to tenant-admin roles for this AITenant and tenant namespace.
+	// Admins are ignored by the controller and retained only for schema compatibility.
+	//
+	// Deprecated: create Kubernetes RoleBindings directly.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:MaxItems=128
 	Admins []AITenantRBACSubject `json:"admins,omitempty"`
 }
 
-// AITenantRBACSubject mirrors RBAC Subject for the supported tenant-admin cases.
+// AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+//
+// Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
 type AITenantRBACSubject struct {
 	// Kind is the RBAC subject kind.
 	// +kubebuilder:validation:Enum=User;Group;ServiceAccount

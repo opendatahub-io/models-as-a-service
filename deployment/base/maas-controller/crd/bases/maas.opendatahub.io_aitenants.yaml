@@ -38,7 +38,7 @@ spec:
         description: |-
           AITenant bootstraps one tenant slice: a tenant namespace, an existing
           network-admin-provisioned Gateway reference, the MaaS tenant config object,
-          and tenant-admin RBAC.
+          and tenant-admin Roles.
 
           The AITenant name is used as a suffix for per-tenant maas-api resources
           (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -105,15 +105,23 @@ spec:
                 - issuerUrl
                 type: object
               rbac:
-                description: RBAC configures tenant-admin access to the tenant namespace
-                  and this AITenant object.
+                description: |-
+                  RBAC is retained only for compatibility with existing AITenant manifests.
+                  The controller ignores this field and does not create RoleBindings from it.
+
+                  Deprecated: create standard Kubernetes RoleBindings that reference the
+                  controller-created tenant-admin Roles instead.
                 properties:
                   admins:
-                    description: Admins are bound to tenant-admin roles for this AITenant
-                      and tenant namespace.
+                    description: |-
+                      Admins are ignored by the controller and retained only for schema compatibility.
+
+                      Deprecated: create Kubernetes RoleBindings directly.
                     items:
-                      description: AITenantRBACSubject mirrors RBAC Subject for the
-                        supported tenant-admin cases.
+                      description: |-
+                        AITenantRBACSubject mirrors RBAC Subject for the deprecated spec.rbac schema.
+
+                        Deprecated: this field is ignored; create Kubernetes RoleBindings directly.
                       properties:
                         kind:
                           description: Kind is the RBAC subject kind.
