@@ -80,6 +80,9 @@ spec:
             envoy.filters.http.ext_proc.ipp-pre:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
+            envoy.filters.http.ext_proc.ipp:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
     # Disable ext_proc on non-inference routes (maas-api /maas-api/*).
     - applyTo: HTTP_ROUTE
       match:
@@ -93,5 +96,8 @@ spec:
         value:
           typed_per_filter_config:
             envoy.filters.http.ext_proc.ipp-pre:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+            envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
