@@ -73,7 +73,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		unstructured.RemoveNestedField(u.Object, "status")
 		// ForceOwnership is intentional: maas-controller is the sole manager for
 		// Tenant platform resources, ensuring a clean field-manager handoff.
-		if err := c.Patch(ctx, u, client.Apply, client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
+		if err := c.Apply(ctx, client.ApplyConfigurationFromUnstructured(u), client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
 			return fmt.Errorf("apply %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
 		}
 	}
