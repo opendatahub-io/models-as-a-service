@@ -840,16 +840,21 @@ class TestModelsEndpoint:
             }
             deadline = time.time() + 120
             r = None
-            data = {}
             models = []
+            model_ids = []
             while time.time() < deadline:
                 r = _get_models_with_gateway_retry(headers=request_headers)
                 if r.status_code == 200:
-                    data = r.json()
-                    models = data.get("data") or []
-                    if len(models) == 2:
+                    models = r.json().get("data") or []
+                    assert isinstance(models, list), "Models should be a list"
+                    model_ids = [m["id"] for m in models]
+                    urls = [m.get("url") for m in models if m.get("id") == MODEL_NAME and m.get("url")]
+                    if len(models) == 2 and len(set(urls)) == 2:
                         break
-                    log.info(f"Waiting for both modelRefs in /v1/models; got {len(models)} model(s)")
+                    log.info(
+                        "Models response not fully propagated yet; "
+                        f"got {len(models)} entries: {model_ids}"
+                    )
                 else:
                     log.info(f"Waiting for /v1/models HTTP 200; got {r.status_code}: {r.text[:200]}")
                 time.sleep(5)
@@ -860,7 +865,6 @@ class TestModelsEndpoint:
             assert isinstance(models, list), "Models should be a list"
 
             # Get model IDs from response
-            model_ids = [m["id"] for m in models]
             unique_ids = set(model_ids)
 
             log.info(f"📊 API Response: {len(models)} total model(s), {len(unique_ids)} unique ID(s)")
@@ -880,7 +884,7 @@ class TestModelsEndpoint:
             # INTENDED BEHAVIOR: Should return 2 entries (deduplication by model ID + URL)
             # Different backend services (different URLs) return separate entries even with same model ID
             assert len(models) == 2, \
-                f"Expected 2 entries (different URLs), got {len(models)}: {model_ids}"
+                f"Expected 2 entries (different URLs), got {len(models)}: {json.dumps(models, indent=2)}"
 
             # Validate both entries have different URLs
             urls = [m["url"] for m in models if "url" in m]
