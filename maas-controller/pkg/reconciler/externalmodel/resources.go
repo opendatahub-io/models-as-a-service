@@ -9,7 +9,7 @@ import (
 )
 
 // buildService creates a Kubernetes ExternalName Service that maps an in-cluster
-// DNS name to the external FQDN. Uses the ExternalModel name directly.
+// DNS name to the external FQDN.
 func buildService(endpoint, name, namespace string, port int32, labels map[string]string) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -86,20 +86,20 @@ func buildDestinationRule(endpoint, name, namespace string, labels map[string]st
 // buildHTTPRoute creates the HTTPRoute in the model's namespace.
 // Path prefix is /<namespace>/<name> for namespace isolation.
 // Only a Host header filter is set (required for TLS SNI).
-// BBR ext-proc handles path rewriting and provider-specific headers.
-func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
+// IPP ext-proc handles path rewriting and provider-specific headers.
+func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
 	gwNamespace := gatewayapiv1.Namespace(gatewayNamespace)
 	pathType := gatewayapiv1.PathMatchPathPrefix
-	pathPrefix := "/" + namespace + "/" + name
+	pathPrefix := "/" + namespace + "/" + modelName
 	headerType := gatewayapiv1.HeaderMatchExact
-	gwPort := gatewayapiv1.PortNumber(port)
+	gwPort := port
 	timeout := gatewayapiv1.Duration("300s")
 
 	backendRefs := []gatewayapiv1.HTTPBackendRef{
 		{
 			BackendRef: gatewayapiv1.BackendRef{
 				BackendObjectReference: gatewayapiv1.BackendObjectReference{
-					Name: gatewayapiv1.ObjectName(name),
+					Name: gatewayapiv1.ObjectName(serviceName),
 					Port: &gwPort,
 				},
 			},
@@ -107,7 +107,7 @@ func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, g
 	}
 
 	// Host header is required for TLS SNI — must be set before TLS handshake,
-	// which happens before BBR ext-proc runs.
+	// which happens before IPP ext-proc runs.
 	filters := []gatewayapiv1.HTTPRouteFilter{
 		{
 			Type: gatewayapiv1.HTTPRouteFilterRequestHeaderModifier,
@@ -124,7 +124,7 @@ func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, g
 
 	return &gatewayapiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
+			Name:      routeName,
 			Namespace: namespace,
 			Labels:    labels,
 		},
@@ -152,7 +152,7 @@ func buildHTTPRoute(endpoint, name, targetModel, namespace string, port int32, g
 					Filters:     filters,
 					Timeouts:    &gatewayapiv1.HTTPRouteTimeouts{Request: &timeout},
 				},
-				// Rule 2: Header-based match — BBR ClearRouteCache sets this header
+				// Rule 2: Header-based match — IPP ClearRouteCache sets this header
 				{
 					Matches: []gatewayapiv1.HTTPRouteMatch{
 						{

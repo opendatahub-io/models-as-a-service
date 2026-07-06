@@ -127,7 +127,7 @@ echo ""
 # Default: run MaaS management tests (API keys, models endpoint).
 # Model inference tests (TestAPIKeyModelInference) are excluded because they
 # hit the model URL directly from the Mac host, which isn't routable to the
-# Kind docker network. These tests work when BBR + gateway egress is configured.
+# Kind docker network. These tests work when IPP + gateway egress is configured.
 #
 # To run all tests: ./local-test.sh --run-all
 # To run specific tests: ./local-test.sh -k test_create_api_key
@@ -153,7 +153,7 @@ if [[ "$RUN_ALL" == "false" && ${#PASSTHROUGH_ARGS[@]} -eq 0 ]]; then
   #   TestAPIKeySubscriptionPhases - creates API keys and hits model endpoint
   #   test_models_endpoint.py     - api_key fixture hits model endpoint in setup
   #
-  # These will work once BBR is deployed and gateway egress to llm-katan is configured.
+  # These will work once IPP is deployed and gateway egress to llm-katan is configured.
   PYTEST_ARGS+=(
     -k "not (TestAPIKeyModelInference or TestAPIKeySubscriptionPhases or test_revoke_keys_rejected_at_gateway or test_revoke_then_create_new_key_works)"
     "${E2E_DIR}/tests/test_api_keys.py"

@@ -14,17 +14,17 @@ import (
 )
 
 type Handler struct {
-	name   string
-	logger *logger.Logger
+	tenantName string
+	logger     *logger.Logger
 }
 
-func NewHandler(log *logger.Logger, name string) *Handler {
+func NewHandler(log *logger.Logger, tenantName string) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Handler{
-		name:   name,
-		logger: log,
+		tenantName: tenantName,
+		logger:     log,
 	}
 }
 
@@ -106,10 +106,12 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 			return
 		}
 
-		// Create UserContext from headers
+		// Create UserContext from headers and handler config.
+		// Tenant comes from TENANT_NAME env var set during maas-api deployment.
 		userContext := &UserContext{
 			Username: username,
 			Groups:   groups,
+			Tenant:   h.tenantName,
 		}
 
 		h.logger.Debug("Extracted user info from headers",

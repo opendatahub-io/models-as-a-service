@@ -97,6 +97,8 @@ The validation endpoint (`/internal/v1/api-keys/validate`) is called by Authorin
 2. Returns `valid: true` with `userId`, `groups`, and `subscription` if the key is active and not expired
 3. Returns `valid: false` with a reason if the key is invalid, revoked, or expired
 
+After a successful lookup, maas-api asynchronously updates `last_used_at` in the background. To prevent Postgres row-lock contention when many requests share a single key, these writes are **debounced**: at most one write is issued per key per `LAST_USED_DEBOUNCE_SECS` window (default 60 s). Set `LAST_USED_DEBOUNCE_SECS=0` on the maas-api Deployment to write on every validation.
+
 ---
 
 ## Subscription Binding and Priority

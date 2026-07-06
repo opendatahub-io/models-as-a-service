@@ -6,6 +6,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 func TestBuildService(t *testing.T) {
@@ -64,12 +66,15 @@ func TestBuildDestinationRule(t *testing.T) {
 }
 
 func TestBuildHTTPRoute(t *testing.T) {
-	hr := buildHTTPRoute("api.openai.com", "gpt-4o", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
+	resourceName := modelnaming.ExternalModelResourceName("gpt-4o")
+	hr := buildHTTPRoute("api.openai.com", resourceName, resourceName, "gpt-4o", "gpt-4o", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("gpt-4o"))
 
-	assert.Equal(t, "gpt-4o", hr.Name)
+	assert.Equal(t, "maas-gpt-4o", hr.Name)
 	assert.Equal(t, "llm", hr.Namespace)
 	assert.Len(t, hr.Spec.ParentRefs, 1)
 	assert.Equal(t, "maas-default-gateway", string(hr.Spec.ParentRefs[0].Name))
+	require.NotNil(t, hr.Spec.ParentRefs[0].Namespace)
+	assert.Equal(t, "openshift-ingress", string(*hr.Spec.ParentRefs[0].Namespace))
 
 	// Must have 2 rules: path-based and header-based
 	assert.Len(t, hr.Spec.Rules, 2)
@@ -77,7 +82,7 @@ func TestBuildHTTPRoute(t *testing.T) {
 	// Rule 1: path-based match with namespace prefix
 	rule1 := hr.Spec.Rules[0]
 	assert.Equal(t, "/llm/gpt-4o", *rule1.Matches[0].Path.Value)
-	assert.Equal(t, "gpt-4o", string(rule1.BackendRefs[0].Name))
+	assert.Equal(t, "maas-gpt-4o", string(rule1.BackendRefs[0].Name))
 
 	// Rule 2: header-based match uses targetModel
 	rule2 := hr.Spec.Rules[1]
@@ -94,15 +99,16 @@ func TestBuildHTTPRoute(t *testing.T) {
 }
 
 func TestBuildHTTPRoute_TargetModelDiffersFromName(t *testing.T) {
-	hr := buildHTTPRoute("bedrock-mantle.us-east-2.api.aws", "my-bedrock", "openai.gpt-oss-20b", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("my-bedrock"))
+	resourceName := modelnaming.ExternalModelResourceName("my-bedrock")
+	hr := buildHTTPRoute("bedrock-mantle.us-east-2.api.aws", resourceName, resourceName, "my-bedrock", "openai.gpt-oss-20b", "llm", 443, "maas-default-gateway", "openshift-ingress", commonLabels("my-bedrock"))
 
-	// Name and path use ExternalModel name
-	assert.Equal(t, "my-bedrock", hr.Name)
+	// Resource name is MaaS-owned, while the public path uses ExternalModel name.
+	assert.Equal(t, "maas-my-bedrock", hr.Name)
 	assert.Equal(t, "/llm/my-bedrock", *hr.Spec.Rules[0].Matches[0].Path.Value)
 
 	// Header match uses targetModel (what the user sends in body.model)
 	assert.Equal(t, "openai.gpt-oss-20b", hr.Spec.Rules[1].Matches[0].Headers[0].Value)
 
-	// BackendRef uses ExternalModel name (Service name)
-	assert.Equal(t, "my-bedrock", string(hr.Spec.Rules[0].BackendRefs[0].Name))
+	// BackendRef uses the MaaS-owned Service name.
+	assert.Equal(t, "maas-my-bedrock", string(hr.Spec.Rules[0].BackendRefs[0].Name))
 }
