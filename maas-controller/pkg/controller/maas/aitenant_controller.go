@@ -84,7 +84,8 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -317,27 +318,10 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 }
 
 func (r *AITenantReconciler) ensureTenantAdminRBAC(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	subjects, err := r.rbacSubjects(aitenant)
-	if err != nil {
-		return err
-	}
 	if err := r.ensureTenantNamespaceRole(ctx, aitenant); err != nil {
 		return err
 	}
-	if err := r.ensureAITenantObjectRole(ctx, aitenant); err != nil {
-		return err
-	}
-
-	if len(subjects) == 0 {
-		if err := r.deleteOwnedRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant)); err != nil {
-			return err
-		}
-		return r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant))
-	}
-	if err := r.ensureRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant), subjects); err != nil {
-		return err
-	}
-	return r.ensureRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant), subjects)
+	return r.ensureAITenantObjectRole(ctx, aitenant)
 }
 
 func (r *AITenantReconciler) ensureTenantNamespaceRole(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -407,56 +391,6 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 	})
 }
 
-func (r *AITenantReconciler) ensureRoleBinding(ctx context.Context, aitenant *maasv1alpha1.AITenant, namespace, name string, subjects []rbacv1.Subject) error {
-	tenantNamespace := r.tenantNamespaceName(aitenant)
-	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-	}
-	return r.upsert(ctx, binding, aitenant, func(obj client.Object) error {
-		binding, ok := obj.(*rbacv1.RoleBinding)
-		if !ok {
-			return fmt.Errorf("expected RoleBinding, got %T", obj)
-		}
-		applyAITenantMetadata(binding, aitenant, tenantNamespace)
-		binding.Subjects = subjects
-		binding.RoleRef = rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     name,
-		}
-		return nil
-	})
-}
-
-func (r *AITenantReconciler) rbacSubjects(aitenant *maasv1alpha1.AITenant) ([]rbacv1.Subject, error) {
-	if aitenant.Spec.RBAC == nil || len(aitenant.Spec.RBAC.Admins) == 0 {
-		return nil, nil
-	}
-	subjects := make([]rbacv1.Subject, 0, len(aitenant.Spec.RBAC.Admins))
-	for _, admin := range aitenant.Spec.RBAC.Admins {
-		subject := rbacv1.Subject{
-			Kind: admin.Kind,
-			Name: admin.Name,
-		}
-		switch admin.Kind {
-		case rbacv1.UserKind, rbacv1.GroupKind:
-			subject.APIGroup = rbacv1.GroupName
-		case rbacv1.ServiceAccountKind:
-			if admin.Namespace == "" {
-				return nil, fmt.Errorf("spec.rbac.admins[%s].namespace is required for ServiceAccount subjects", admin.Name)
-			}
-			subject.Namespace = admin.Namespace
-		default:
-			return nil, fmt.Errorf("unsupported RBAC subject kind %q", admin.Kind)
-		}
-		subjects = append(subjects, subject)
-	}
-	return subjects, nil
-}
-
 func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
 		return ctrl.Result{}, nil
@@ -480,13 +414,13 @@ func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenan
 	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.TenantInstanceName}); err != nil {
 		return err
 	}
-	if err := r.deleteOwnedRoleBinding(ctx, aitenant, tenantNamespace, tenantAdminRoleName(aitenant)); err != nil {
-		return err
-	}
-	if err := r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant)); err != nil {
+	if err := r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
+		return err
+	}
+	if err := r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
@@ -514,10 +448,6 @@ func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context,
 		return fmt.Errorf("cleanup tenant namespace %q metadata: %w", key.Name, err)
 	}
 	return nil
-}
-
-func (r *AITenantReconciler) deleteOwnedRoleBinding(ctx context.Context, aitenant *maasv1alpha1.AITenant, namespace, name string) error {
-	return r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: namespace, Name: name})
 }
 
 func (r *AITenantReconciler) deleteOwned(ctx context.Context, aitenant *maasv1alpha1.AITenant, obj client.Object, key client.ObjectKey) error {

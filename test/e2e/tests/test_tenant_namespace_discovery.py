@@ -250,7 +250,7 @@ class TestTenantNamespaceDiscovery:
             cleanup_discovery_case(case_b, delete_gateway=False)
 
     def test_tenant_admin_rbac_is_namespace_scoped(self):
-        """1.6: Tenant-admin RBAC from AITenant bootstrap is scoped to the tenant namespace."""
+        """1.6: Tenant-admin Role from AITenant bootstrap is scoped to the tenant namespace."""
         case = new_discovery_case()
         sa_name = f"e2e-mt-rbac-{case['suffix']}"
         role_name = f"aitenant-{case['tenant_label_name']}-tenant-admin"
@@ -262,7 +262,7 @@ class TestTenantNamespaceDiscovery:
             role = get_json_or_none("role", role_name, case["tenant_ns"])
             binding = get_json_or_none("rolebinding", role_name, case["tenant_ns"])
             assert role is not None, "tenant-admin Role should exist in tenant namespace"
-            assert binding is not None, "tenant-admin RoleBinding should exist in tenant namespace"
+            assert binding is None, "AITenant should not create tenant-admin RoleBindings"
             rules = role.get("rules") or []
             assert any("maassubscriptions" in (rule.get("resources") or []) for rule in rules)
 

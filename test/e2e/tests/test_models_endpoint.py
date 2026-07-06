@@ -810,7 +810,10 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Wait for subscription to reconcile before creating API key
+            # Wait for the auth policy and subscription to reconcile before creating API key.
+            # The central /v1/models handler probes each model endpoint; a partially propagated
+            # auth policy can otherwise produce HTTP 200 with only one accessible backend.
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
             _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
@@ -820,21 +823,35 @@ class TestModelsEndpoint:
 
             # Query /v1/models
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = _get_models_with_gateway_retry(
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": subscription_name,
-                },
-            )
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "x-maas-subscription": subscription_name,
+            }
+            models = []
+            model_ids = []
+            for attempt in range(1, GATEWAY_PROPAGATION_RETRIES + 1):
+                r = _get_models_with_gateway_retry(headers=headers)
 
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
-            models = data.get("data") or []
+                assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+                data = r.json()
+                models = data.get("data") or []
 
-            assert isinstance(models, list), "Models should be a list"
+                assert isinstance(models, list), "Models should be a list"
+
+                model_ids = [m["id"] for m in models]
+                urls = [m.get("url") for m in models if m.get("id") == MODEL_NAME and m.get("url")]
+                if len(models) == 2 and len(set(urls)) == 2:
+                    break
+
+                if attempt < GATEWAY_PROPAGATION_RETRIES:
+                    log.info(
+                        "Models response not fully propagated yet "
+                        f"(attempt {attempt}/{GATEWAY_PROPAGATION_RETRIES}); "
+                        f"got {len(models)} entries: {model_ids}"
+                    )
+                    time.sleep(GATEWAY_PROPAGATION_DELAY)
 
             # Get model IDs from response
-            model_ids = [m["id"] for m in models]
             unique_ids = set(model_ids)
 
             log.info(f"📊 API Response: {len(models)} total model(s), {len(unique_ids)} unique ID(s)")
@@ -854,7 +871,7 @@ class TestModelsEndpoint:
             # INTENDED BEHAVIOR: Should return 2 entries (deduplication by model ID + URL)
             # Different backend services (different URLs) return separate entries even with same model ID
             assert len(models) == 2, \
-                f"Expected 2 entries (different URLs), got {len(models)}: {model_ids}"
+                f"Expected 2 entries (different URLs), got {len(models)}: {json.dumps(models, indent=2)}"
 
             # Validate both entries have different URLs
             urls = [m["url"] for m in models if "url" in m]
