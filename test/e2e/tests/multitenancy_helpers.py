@@ -438,18 +438,6 @@ def remove_gateway_access_label(namespace: str, gateway_name: str) -> None:
         raise RuntimeError(f"failed to remove gateway access label from {namespace}: {result.stderr.strip()}")
 
 
-def admin_subject() -> str:
-    whoami = _oc_run(["whoami"])
-    if whoami.returncode == 0 and whoami.stdout.strip():
-        return whoami.stdout.strip()
-    raise RuntimeError(
-        "oc whoami failed: "
-        f"returncode={whoami.returncode} "
-        f"stdout={whoami.stdout.strip()!r} "
-        f"stderr={whoami.stderr.strip()!r}"
-    )
-
-
 def ensure_namespace(name: str, *, labels: Optional[dict[str, str]] = None) -> None:
     result = _oc_run(["create", "namespace", name])
     if result.returncode != 0 and "AlreadyExists" not in (result.stderr or "") and "already exists" not in (result.stderr or "").lower():
@@ -713,9 +701,6 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
 def apply_aitenant(case: dict[str, str]) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
-        "rbac": {
-            "admins": [{"kind": "User", "name": admin_subject()}],
-        },
     }
     oidc = external_oidc_from_env()
     if oidc:
