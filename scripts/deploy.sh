@@ -613,7 +613,8 @@ EOF
   log_info "  Controller ready."
 
   # Wait for the Tenant reconciler to deploy maas-api.
-  # The controller creates a MaasTenantConfig/default-tenant CR on startup, and the Tenant
+  # The controller creates AITenant/models-as-a-service on startup; the AITenant
+  # reconciler then creates/adopts MaasTenantConfig/default-tenant, and the Tenant
   # reconciler renders and SSA-applies maas-api manifests + gateway policies.
   # All maas-api instances deploy to redhat-ai-gateway-infra infrastructure namespace.
   log_info ""
@@ -749,9 +750,9 @@ deploy_via_kustomize() {
   fi
 
   # maas-api, gateway policies, and AuthPolicy configuration are now handled
-  # by the Tenant reconciler in maas-controller. After the controller starts
-  # it creates MaasTenantConfig/default-tenant, which triggers the reconciler to apply
-  # maas-api manifests and gateway policies via SSA.
+  # by the Tenant reconciler in maas-controller. After the controller starts it creates
+  # AITenant/models-as-a-service, whose reconciler creates/adopts MaasTenantConfig/default-tenant,
+  # which triggers the Tenant reconciler to apply maas-api manifests and gateway policies via SSA.
 
   log_info "Kustomize prerequisite deployment completed"
 }

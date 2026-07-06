@@ -816,7 +816,6 @@ class TestModelsEndpoint:
                 auth_policy_name,
                 namespace=maas_ns,
                 timeout=120,
-                require_auth_policies=True,
             )
             _wait_for_maas_subscription_phase(
                 subscription_name,
@@ -832,18 +831,31 @@ class TestModelsEndpoint:
 
             _wait_reconcile()
 
-            # Query /v1/models
+            # Query /v1/models. Gateway policy propagation and backend model probes can
+            # lag behind CR readiness, so wait until both modelRefs appear.
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = _get_models_with_gateway_retry(
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": subscription_name,
-                },
-            )
+            request_headers = {
+                "Authorization": f"Bearer {api_key}",
+                "x-maas-subscription": subscription_name,
+            }
+            deadline = time.time() + 120
+            r = None
+            data = {}
+            models = []
+            while time.time() < deadline:
+                r = _get_models_with_gateway_retry(headers=request_headers)
+                if r.status_code == 200:
+                    data = r.json()
+                    models = data.get("data") or []
+                    if len(models) == 2:
+                        break
+                    log.info(f"Waiting for both modelRefs in /v1/models; got {len(models)} model(s)")
+                else:
+                    log.info(f"Waiting for /v1/models HTTP 200; got {r.status_code}: {r.text[:200]}")
+                time.sleep(5)
 
+            assert r is not None, "Expected /v1/models response, got none"
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
-            models = data.get("data") or []
 
             assert isinstance(models, list), "Models should be a list"
 

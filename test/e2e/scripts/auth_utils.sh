@@ -324,12 +324,12 @@ run_auth_debug_report() {
   _append ""
 
   _section "MaaS CRs"
-  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaaSSubscription status details" "kubectl get maassubscriptions -n $MAAS_SUBSCRIPTION_NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
+  _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
+  _run "MaaSSubscriptions" "kubectl get maassubscriptions -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
+  _run "MaaSSubscription status details" "kubectl get maassubscriptions -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
   _run "MaaSModelRefs (all namespaces)" "kubectl get maasmodelrefs -A -o wide 2>/dev/null || true"
-  _run "MaasTenantConfigs" "kubectl get maastenantconfigs -n $MAAS_SUBSCRIPTION_NAMESPACE -o wide 2>/dev/null || true"
-  _run "MaasTenantConfig status details" "kubectl get maastenantconfigs -n $MAAS_SUBSCRIPTION_NAMESPACE -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions[?(@.type==\"Ready\")].status} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
+  _run "MaasTenantConfigs" "kubectl get maastenantconfigs -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
+  _run "MaasTenantConfig status details" "kubectl get maastenantconfigs -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions[?(@.type==\"Ready\")].status} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
   _append ""
 
   _section "Test User Information"
