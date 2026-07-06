@@ -55,19 +55,19 @@ spec:
           - name: RELATED_IMAGE_ODH_MAAS_API_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: MAAS_API_IMAGE
+                key: maas-api-image
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: PAYLOAD_PROCESSING_IMAGE
+                key: payload-processing-image
                 name: maas-parameters
                 optional: true
           - name: RELATED_IMAGE_UBI_MINIMAL_IMAGE
             valueFrom:
               configMapKeyRef:
-                key: MAAS_API_KEY_CLEANUP_IMAGE
+                key: maas-api-key-cleanup-image
                 name: maas-parameters
                 optional: true
         image: maas-controller

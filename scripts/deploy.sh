@@ -111,6 +111,8 @@ OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
+# TODO: Remove temporary IPP pin — revert to params.env default (payload-processing-image=...:odh-stable).
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:dc31b949d8c5ea8610b5c10ef53e2a199e00f0e0}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
@@ -551,13 +553,15 @@ main() {
     local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
     local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
+    local cm_monitoring_namespace="${MONITORING_NAMESPACE:-opendatahub}"
 
     log_info "  Ensuring maas-parameters ConfigMap..."
     kubectl create configmap maas-parameters -n "$NAMESPACE" \
-      --from-literal="MAAS_API_IMAGE=${cm_maas_api_image}" \
-      --from-literal="MAAS_CONTROLLER_IMAGE=${cm_maas_controller_image}" \
-      --from-literal="PAYLOAD_PROCESSING_IMAGE=${cm_payload_processing_image}" \
-      --from-literal="MAAS_API_KEY_CLEANUP_IMAGE=${cm_cleanup_image}" \
+      --from-literal="maas-api-image=${cm_maas_api_image}" \
+      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
+      --from-literal="payload-processing-image=${cm_payload_processing_image}" \
+      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+      --from-literal="monitoring-namespace=${cm_monitoring_namespace}" \
       --dry-run=client -o yaml | kubectl apply -f - || {
       log_error "Failed to create/update maas-parameters ConfigMap"
       return 1
