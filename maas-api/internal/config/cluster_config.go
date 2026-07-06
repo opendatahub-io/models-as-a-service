@@ -1,10 +1,13 @@
 package config
 
 import (
+	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/dynamic"
@@ -15,9 +18,15 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
+
+// infoLogger interface for logging (matches logger.Logger methods we need).
+type infoLogger interface {
+	Info(msg string, keysAndValues ...any)
+}
 
 type ClusterConfig struct {
 	ClientSet *kubernetes.Clientset
@@ -28,6 +37,9 @@ type ClusterConfig struct {
 	// MaaSSubscriptionLister lists MaaSSubscription CRs from the informer cache for subscription selection.
 	MaaSSubscriptionLister subscription.Lister
 
+	// MaaSAuthPolicyLister lists MaaSAuthPolicy CRs from the informer cache for model access checks.
+	MaaSAuthPolicyLister authpolicy.Lister
+
 	// AdminChecker uses SubjectAccessReview to check if a user is an admin.
 	// Admin is determined by RBAC: can user create maasauthpolicies in the configured MaaS namespace?
 	// Results are cached with a TTL to reduce Kubernetes API server load.
@@ -35,52 +47,39 @@ type ClusterConfig struct {
 
 	informersSynced []cache.InformerSynced
 	startFuncs      []func(<-chan struct{})
+	log             infoLogger
 }
 
-// maasModelRefLister implements models.MaaSModelRefLister from a cache.GenericLister (informer-backed).
-type maasModelRefLister struct {
+// unstructuredLister wraps a cache.GenericLister and implements the List() method
+// shared by models.MaaSModelRefLister, subscription.Lister, and authpolicy.Lister.
+type unstructuredLister struct {
 	lister cache.GenericLister
+	log    infoLogger
 }
 
-func (m *maasModelRefLister) List() ([]*unstructured.Unstructured, error) {
-	objs, err := m.lister.List(labels.Everything())
+func (u *unstructuredLister) List() ([]*unstructured.Unstructured, error) {
+	objs, err := u.lister.List(labels.Everything())
 	if err != nil {
+		if u.log != nil {
+			u.log.Info("List() error", "error", err)
+		}
 		return nil, err
 	}
 	out := make([]*unstructured.Unstructured, 0, len(objs))
 	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
+		item, ok := o.(*unstructured.Unstructured)
 		if !ok {
 			continue
 		}
-		// Return all MaaSModelRefs from all namespaces (no filtering)
-		out = append(out, u)
+		out = append(out, item)
 	}
 	return out, nil
 }
 
-// subscriptionLister implements subscription.Lister from a cache.GenericLister (informer-backed).
-type subscriptionLister struct {
-	lister cache.GenericLister
-}
-
-func (s *subscriptionLister) List() ([]*unstructured.Unstructured, error) {
-	objs, err := s.lister.List(labels.Everything())
-	if err != nil {
-		return nil, err
-	}
-	out := make([]*unstructured.Unstructured, 0, len(objs))
-	for _, o := range objs {
-		u, ok := o.(*unstructured.Unstructured)
-		if !ok {
-			continue
-		}
-		out = append(out, u)
-	}
-	return out, nil
-}
-
-func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.Duration, sarCacheMaxSize int, metricsRegisterer prometheus.Registerer) (*ClusterConfig, error) {
+func NewClusterConfig(
+	_ string, subscriptionNamespace string, resyncPeriod time.Duration,
+	sarCacheMaxSize int, metricsRegisterer prometheus.Registerer, log infoLogger,
+) (*ClusterConfig, error) {
 	restConfig, err := LoadRestConfig()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create kubernetes config: %w", err)
@@ -100,13 +99,21 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 	maasDynamicFactory := dynamicinformer.NewDynamicSharedInformerFactory(dynamicClient, resyncPeriod)
 	maasGVR := models.GVR()
 	maasInformer := maasDynamicFactory.ForResource(maasGVR)
-	maasModelRefListerVal := &maasModelRefLister{lister: maasInformer.Lister()}
+	maasModelRefListerVal := &unstructuredLister{lister: maasInformer.Lister(), log: log}
+	log.Info("Created MaaSModelRef informer", "watchNamespace", "ALL", "gvr", maasGVR.String())
 
 	// MaaSSubscription informer (cached); watches only the configured namespace for subscription selection.
 	subscriptionDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
 	subscriptionGVR := subscription.GVR()
 	subscriptionInformer := subscriptionDynamicFactory.ForResource(subscriptionGVR)
-	maasSubscriptionListerVal := &subscriptionLister{lister: subscriptionInformer.Lister()}
+	maasSubscriptionListerVal := &unstructuredLister{lister: subscriptionInformer.Lister(), log: log}
+	log.Info("Created MaaSSubscription informer", "watchNamespace", subscriptionNamespace, "gvr", subscriptionGVR.String())
+
+	// MaaSAuthPolicy informer (cached); watches the subscription namespace for model access checks.
+	authPolicyDynamicFactory := dynamicinformer.NewFilteredDynamicSharedInformerFactory(dynamicClient, resyncPeriod, subscriptionNamespace, nil)
+	authPolicyGVR := authpolicy.GVR()
+	authPolicyInformer := authPolicyDynamicFactory.ForResource(authPolicyGVR)
+	authPolicyListerVal := &unstructuredLister{lister: authPolicyInformer.Lister(), log: log}
 
 	// SAR-based admin checker: uses SubjectAccessReview to check RBAC permissions.
 	// Admin is determined by: can user create maasauthpolicies in the MaaS namespace?
@@ -120,16 +127,20 @@ func NewClusterConfig(_ string, subscriptionNamespace string, resyncPeriod time.
 
 		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,
+		MaaSAuthPolicyLister:   authPolicyListerVal,
 		AdminChecker:           adminCheckerVal,
 
 		informersSynced: []cache.InformerSynced{
 			maasInformer.Informer().HasSynced,
 			subscriptionInformer.Informer().HasSynced,
+			authPolicyInformer.Informer().HasSynced,
 		},
 		startFuncs: []func(<-chan struct{}){
 			maasDynamicFactory.Start,
 			subscriptionDynamicFactory.Start,
+			authPolicyDynamicFactory.Start,
 		},
+		log: log,
 	}, nil
 }
 
@@ -138,6 +149,54 @@ func (c *ClusterConfig) StartAndWaitForSync(stopCh <-chan struct{}) bool {
 		start(stopCh)
 	}
 	return cache.WaitForCacheSync(stopCh, c.informersSynced...)
+}
+
+// ResolveGatewayInternalHost finds the cluster-internal DNS name of the gateway's
+// Service by looking up Services labeled with the standard Gateway API label
+// gateway.networking.k8s.io/gateway-name=<gatewayName> in gatewayNamespace.
+// Only Services owned by a Gateway resource (via ownerReferences) and exposing
+// port 443 are considered. Returns "<service-name>.<namespace>.svc.cluster.local".
+func ResolveGatewayInternalHost(ctx context.Context, clientset kubernetes.Interface, gatewayName, gatewayNamespace string) (string, error) {
+	labelSelector := fmt.Sprintf("gateway.networking.k8s.io/gateway-name=%s", gatewayName)
+	svcs, err := clientset.CoreV1().Services(gatewayNamespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+	if err != nil {
+		return "", fmt.Errorf("failed to list services in %s with label %s: %w", gatewayNamespace, labelSelector, err)
+	}
+
+	var candidates []string
+	for _, svc := range svcs.Items {
+		ownedByGateway := false
+		for _, ref := range svc.OwnerReferences {
+			if ref.Kind == "Gateway" && ref.Name == gatewayName &&
+				strings.HasPrefix(ref.APIVersion, "gateway.networking.k8s.io/") {
+				ownedByGateway = true
+				break
+			}
+		}
+		if !ownedByGateway {
+			continue
+		}
+		for _, port := range svc.Spec.Ports {
+			if port.Port == 443 {
+				candidates = append(candidates, svc.Name)
+				break
+			}
+		}
+	}
+
+	switch len(candidates) {
+	case 0:
+		// No gateway service found - this is expected for test gateways or gateways
+		// without proper infrastructure. Return empty string to allow startup.
+		// Model access checks will be disabled.
+		return "", nil
+	case 1:
+		return fmt.Sprintf("%s.%s.svc.cluster.local", candidates[0], gatewayNamespace), nil
+	default:
+		return "", fmt.Errorf("expected 1 gateway service for %s/%s, found %d: %v", gatewayNamespace, gatewayName, len(candidates), candidates)
+	}
 }
 
 // LoadRestConfig creates a *rest.Config using client-go loading rules.

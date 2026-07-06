@@ -38,13 +38,25 @@ type MetadataStore interface {
 	//   - ephemeral: marks the key as short-lived for programmatic use
 	//
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
-	AddKey(ctx context.Context, username string, keyID, keyHash, name, description string, userGroups []string, subscription string, expiresAt *time.Time, ephemeral bool) error
+	AddKey(ctx context.Context,
+		username string,
+		keyID,
+		keyHash,
+		name,
+		description string,
+		userGroups []string,
+		subscription,
+		tenant string,
+		expiresAt *time.Time,
+		ephemeral bool) error
 
 	// Search returns API keys matching the search criteria.
 	// Supports filtering, sorting, and pagination.
+	// Tenant scoping is mandatory — results are always filtered by tenant.
 	Search(
 		ctx context.Context,
 		username string,
+		tenant string,
 		filters *SearchFilters,
 		sort *SortParams,
 		pagination *PaginationParams,
@@ -58,9 +70,9 @@ type MetadataStore interface {
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked or expired.
 	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
 
-	// InvalidateAll marks all active tokens for a user as revoked.
+	// InvalidateAll marks all active tokens for a user within a tenant as revoked.
 	// Returns the count of keys that were revoked.
-	InvalidateAll(ctx context.Context, username string) (int, error)
+	InvalidateAll(ctx context.Context, username string, tenant string) (int, error)
 
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error

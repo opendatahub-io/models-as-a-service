@@ -12,8 +12,6 @@ import (
 	"sigs.k8s.io/kustomize/api/resource"
 	"sigs.k8s.io/kustomize/kyaml/filesys"
 	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
-
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 // overlayDefaultNamespace is the namespace hardcoded in the overlay's
@@ -183,12 +181,4 @@ func DefaultManifestPath() string {
 		return v
 	}
 	return "../maas-api/deploy/overlays/odh"
-}
-
-// EnsureTenantGatewayDefaults applies the same default gateway ref as ODH when unset.
-func EnsureTenantGatewayDefaults(t *maasv1alpha1.Tenant) {
-	if t.Spec.GatewayRef.Namespace == "" && t.Spec.GatewayRef.Name == "" {
-		t.Spec.GatewayRef.Namespace = DefaultGatewayNamespace
-		t.Spec.GatewayRef.Name = DefaultGatewayName
-	}
 }

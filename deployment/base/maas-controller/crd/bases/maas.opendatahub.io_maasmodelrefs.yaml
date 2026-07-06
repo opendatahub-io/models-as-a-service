@@ -89,11 +89,35 @@ spec:
             - modelRef
             type: object
           status:
-            description: MaaSModelStatus defines the observed state of MaaSModelRef
+            description: |-
+              MaaSModelStatus defines the observed state of MaaSModelRef.
+
+              Phase semantics with governance:
+                - Pending: the model is not yet ready — either the backend is initializing
+                  or no active MaaSSubscription + MaaSAuthPolicy pairing has been found.
+                - Ready: the model backend is healthy AND at least one governance pairing
+                  (MaaSSubscription + MaaSAuthPolicy) is active. Authorized inference is possible.
+                - Unhealthy: the model has active governance but the backend (routes, gateways,
+                  or inference service) has a runtime/health failure. GovernanceAttached remains
+                  True while RuntimeReady is False.
+                - Failed: a non-recoverable reconciliation error occurred.
+                - Invalid: the resource spec is missing or structurally invalid.
+
+              Condition types:
+                - Ready: overall readiness (True only when both governance and runtime are healthy).
+                - GovernanceAttached: whether the model is covered by at least one active
+                  MaaSSubscription + MaaSAuthPolicy pairing. No admin CR names, namespaces,
+                  or UIDs appear in any status field.
+                - RuntimeReady: whether the model backend is healthy and serving, independent
+                  of governance state.
             properties:
               conditions:
-                description: Conditions represent the latest available observations
-                  of the model's state
+                description: |-
+                  Conditions represent the latest available observations of the model's state.
+                  Condition types include:
+                    - Ready: overall readiness (governance + runtime).
+                    - GovernanceAttached: active MaaSSubscription + MaaSAuthPolicy pairing exists.
+                    - RuntimeReady: backend is healthy and serving.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
@@ -175,7 +199,13 @@ spec:
                   associated with this model
                 type: string
               phase:
-                description: Phase represents the current phase of the model
+                description: |-
+                  Phase represents the current phase of the model.
+                  Pending = awaiting governance pairing or backend readiness.
+                  Ready = governed and runtime-healthy.
+                  Unhealthy = governed but runtime-failed.
+                  Failed = reconciliation error.
+                  Invalid = bad spec.
                 enum:
                 - Pending
                 - Ready

@@ -21,6 +21,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -30,9 +31,6 @@ const (
 
 	// annotationTLS controls TLS origination (default "true").
 	annotationTLS = "maas.opendatahub.io/tls"
-
-	defaultGatewayName      = tenantreconcile.DefaultGatewayName
-	defaultGatewayNamespace = tenantreconcile.DefaultGatewayNamespace
 )
 
 // Reconciler watches ExternalModel CRs and creates the Istio resources
@@ -50,17 +48,11 @@ type Reconciler struct {
 }
 
 func (r *Reconciler) gatewayName() string {
-	if r.GatewayName != "" {
-		return r.GatewayName
-	}
-	return defaultGatewayName
+	return r.GatewayName
 }
 
 func (r *Reconciler) gatewayNamespace() string {
-	if r.GatewayNamespace != "" {
-		return r.GatewayNamespace
-	}
-	return defaultGatewayNamespace
+	return r.GatewayNamespace
 }
 
 // commonLabels returns labels applied to all managed resources.
@@ -142,12 +134,13 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	ns := extModel.Namespace
 	name := extModel.Name
+	resourceName := modelnaming.ExternalModelResourceName(name)
 	gwName := r.gatewayName()
 	gwNamespace := r.gatewayNamespace()
 	labels := commonLabels(name)
 
 	// 1. ExternalName Service (backend for HTTPRoute)
-	svc := buildService(extModel.Spec.Endpoint, name, ns, port, labels)
+	svc := buildService(extModel.Spec.Endpoint, resourceName, ns, port, labels)
 	if err := controllerutil.SetControllerReference(extModel, svc, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on Service: %w", err)
 	}
@@ -156,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 2. ServiceEntry (registers external host in mesh)
-	se := buildServiceEntry(extModel.Spec.Endpoint, name, ns, port, tls, labels)
+	se := buildServiceEntry(extModel.Spec.Endpoint, resourceName, ns, port, tls, labels)
 	if err := r.setUnstructuredOwner(extModel, se); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on ServiceEntry: %w", err)
 	}
@@ -166,7 +159,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 
 	// 3. DestinationRule (only if TLS; delete stale DR when TLS is disabled)
 	if tls {
-		dr := buildDestinationRule(extModel.Spec.Endpoint, name, ns, labels)
+		dr := buildDestinationRule(extModel.Spec.Endpoint, resourceName, ns, labels)
 		if err := r.setUnstructuredOwner(extModel, dr); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to set owner on DestinationRule: %w", err)
 		}
@@ -174,7 +167,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 			return ctrl.Result{}, fmt.Errorf("failed to create DestinationRule: %w", err)
 		}
 	} else {
-		if err := r.deleteIfExists(ctx, logger, "DestinationRule", name, ns, schema.GroupVersionKind{
+		if err := r.deleteIfExists(ctx, logger, "DestinationRule", resourceName, ns, schema.GroupVersionKind{
 			Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule",
 		}); err != nil {
 			return ctrl.Result{}, fmt.Errorf("failed to delete stale DestinationRule: %w", err)
@@ -182,7 +175,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	}
 
 	// 4. HTTPRoute (routes requests to external provider via gateway)
-	hr := buildHTTPRoute(extModel.Spec.Endpoint, name, extModel.Spec.TargetModel, ns, port, gwName, gwNamespace, labels)
+	hr := buildHTTPRoute(extModel.Spec.Endpoint, resourceName, resourceName, name, extModel.Spec.TargetModel, ns, port, gwName, gwNamespace, labels)
 	if err := controllerutil.SetControllerReference(extModel, hr, r.Scheme); err != nil {
 		return ctrl.Result{}, fmt.Errorf("failed to set owner on HTTPRoute: %w", err)
 	}
@@ -227,11 +220,26 @@ func (r *Reconciler) deleteIfExists(ctx context.Context, log logr.Logger, kind, 
 		}
 		return fmt.Errorf("failed to get %s %s/%s: %w", kind, namespace, name, err)
 	}
+	if !isManaged(obj) {
+		log.Info("Resource opted out of management, skipping deletion", "kind", kind, "name", name, "namespace", namespace)
+		return nil
+	}
 	log.Info("Deleting resource", "kind", kind, "name", name)
 	if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("failed to delete %s %s/%s: %w", kind, namespace, name, err)
 	}
 	return nil
+}
+
+// isManaged reports whether obj has opted into maas/opendatahub controller management.
+// When the annotation is absent or any value other than "false", the resource is managed.
+// Only an explicit opendatahub.io/managed=false opts the resource out.
+func isManaged(obj metav1.Object) bool {
+	val, ok := obj.GetAnnotations()[tenantreconcile.AnnotationManaged]
+	if !ok {
+		return true
+	}
+	return val != "false"
 }
 
 // applyService creates or updates a Service.
@@ -244,6 +252,10 @@ func (r *Reconciler) applyService(ctx context.Context, log logr.Logger, desired 
 	}
 	if err != nil {
 		return err
+	}
+	if !isManaged(existing) {
+		log.Info("Service opted out of management, skipping update", "name", existing.Name, "namespace", existing.Namespace)
+		return nil
 	}
 	specChanged := !equality.Semantic.DeepEqual(existing.Spec, desired.Spec)
 	ownerChanged := !equality.Semantic.DeepEqual(existing.OwnerReferences, desired.OwnerReferences)
@@ -270,6 +282,10 @@ func (r *Reconciler) applyUnstructured(ctx context.Context, log logr.Logger, des
 	if err != nil {
 		return err
 	}
+	if !isManaged(existing) {
+		log.Info("Resource opted out of management, skipping update", "kind", existing.GetKind(), "name", existing.GetName(), "namespace", existing.GetNamespace())
+		return nil
+	}
 	desired.SetResourceVersion(existing.GetResourceVersion())
 	log.Info("Updating resource", "kind", desired.GetKind(), "name", desired.GetName())
 	return r.Update(ctx, desired)
@@ -285,6 +301,10 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	}
 	if err != nil {
 		return err
+	}
+	if !isManaged(existing) {
+		log.Info("HTTPRoute opted out of management, skipping update", "name", existing.Name, "namespace", existing.Namespace)
+		return nil
 	}
 	existing.Spec = desired.Spec
 	existing.Labels = desired.Labels

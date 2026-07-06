@@ -34,6 +34,8 @@ The Inference Payload Processor (IPP) component (ext-proc) handles API key injec
 
 IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.
 
+MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
+
 !!! note
     If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
 
@@ -58,8 +60,9 @@ kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/desti
 kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/envoy-filter.yaml
 
 # Deployment (substitute the image placeholder)
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/overlays/odh/params.env" | cut -d= -f2-)}"
 cat ${PROJECT_DIR}/deployment/base/payload-processing/manager/deployment.yaml | \
-  sed 's|image: payload-processing|image: quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable|' | \
+  sed "s|image: payload-processing|image: ${PAYLOAD_PROCESSING_IMAGE}|" | \
   kubectl apply -f -
 
 # Verify
@@ -83,7 +86,7 @@ Store the external provider's API key in a Kubernetes Secret. The Secret must:
 
 - Be in the same namespace as the ExternalModel
 - Use the data key `api-key`
-- Have the label `inference.networking.k8s.io/bbr-managed=true` so IPP can read it
+- Have the label `inference.llm-d.ai/ipp-managed=true` so IPP can read it
 
 ```bash
 TMP_KEY_FILE="$(mktemp)"
@@ -95,7 +98,7 @@ kubectl create secret generic openai-api-key -n llm \
 
 rm -f "${TMP_KEY_FILE}"
 
-kubectl label secret openai-api-key -n llm inference.networking.k8s.io/bbr-managed=true
+kubectl label secret openai-api-key -n llm inference.llm-d.ai/ipp-managed=true
 ```
 
 ## Step 4: Create the ExternalModel and MaaSModelRef
@@ -138,7 +141,7 @@ Expected output:
 
 ```text
 NAME     PHASE   ENDPOINT                                    HTTPROUTE   GATEWAY
-gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   gpt-4o      maas-default-gateway
+gpt-4o   Ready   https://maas.<cluster-domain>/llm/gpt-4o   maas-gpt-4o maas-default-gateway
 ```
 
 ## Step 5: Configure Access and Rate Limits
@@ -187,7 +190,7 @@ GW_HOST=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
   -o jsonpath='{.spec.listeners[0].hostname}')
 TOKEN=$(oc whoami -t)
 
-KEY=$(curl -sSk -X POST "https://${GW_HOST}/maas-api/v1/api-keys" \
+KEY=$(curl -sS -X POST "https://${GW_HOST}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   -d '{"name":"external-model-key","subscription":"gpt-4o-subscription"}' | jq -r '.key')
@@ -198,7 +201,7 @@ echo "MaaS API key: ${KEY:0:20}..."
 ### Run Inference
 
 ```bash
-curl -sSk "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"say hello"}]}'
@@ -208,13 +211,13 @@ curl -sSk "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
 
 ```bash
 # Bogus key — expect 403
-curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-oai-FAKE-KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 
 # No auth — expect 401
-curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```
@@ -222,11 +225,14 @@ curl -sSk -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/compl
 ### Verify Model Listing
 
 ```bash
-curl -sSk "https://${GW_HOST}/v1/models" \
+curl -sS "https://${GW_HOST}/v1/models" \
   -H "Authorization: Bearer $KEY" | jq '.data[].id'
 ```
 
 The model `gpt-4o` should appear in the list.
+
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](troubleshooting.md#tls-certificate-validation).
 
 ## Supported Providers
 
@@ -284,7 +290,7 @@ Routes to AWS Bedrock's OpenAI-compatible Mantle endpoint. Pass-through — no b
     Use `bedrock-mantle.<region>.api.aws`, **not** `bedrock-runtime.<region>.amazonaws.com`. The IPP translator uses `/v1/chat/completions` which is only available on the Bedrock Mantle endpoint. Using `bedrock-runtime` will result in `404` errors.
 
 - Set `endpoint: bedrock-mantle.<region>.api.aws` (e.g., `bedrock-mantle.us-east-2.api.aws`)
-- Models vary by region. List available models: `curl -sk "https://bedrock-mantle.<region>.api.aws/v1/models" -H "Authorization: Bearer <KEY>"`
+- Models vary by region. List available models: `curl -s "https://bedrock-mantle.<region>.api.aws/v1/models" -H "Authorization: Bearer <KEY>"`
 
 See the [Bedrock provider guide](https://github.com/opendatahub-io/ai-gateway-payload-processing/blob/main/docs/providers/bedrock-openai.md).
 

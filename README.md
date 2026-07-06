@@ -2,9 +2,6 @@
 
 Our goal is to create a comprehensive platform for **Models as a Service** with real-time policy management.
 
-> [!IMPORTANT]
-> This project is a work in progress and is not yet ready for production.
-
 ## 📦 Technology Stack
 
 - **OpenShift**: Kubernetes platform
@@ -101,7 +98,7 @@ For detailed instructions, see the [Installation Guide](docs/content/quickstart.
 |------|-------------|---------|
 | `--operator-catalog` | Custom operator catalog/index image | `quay.io/opendatahub/catalog:pr-456` |
 | `--operator-image` | Custom operator image (patches CSV) | `quay.io/opendatahub/operator:pr-456` |
-| `--channel` | Operator channel override | `fast`, `fast-3` |
+| `--channel` | Operator channel override | `fast-3`, `stable-3.x` |
 
 ### Environment Variables
 
@@ -109,8 +106,6 @@ For detailed instructions, see the [Installation Guide](docs/content/quickstart.
 |----------|-------------|---------|
 | `MAAS_API_IMAGE` | Custom MaaS API container image (passed to the Tenant reconciler via `RELATED_IMAGE_ODH_MAAS_API_IMAGE`) | `quay.io/user/maas-api:pr-123` |
 | `MAAS_CONTROLLER_IMAGE` | Custom MaaS controller container image | `quay.io/user/maas-controller:pr-123` |
-| `METADATA_CACHE_TTL` | TTL in seconds for Authorino metadata HTTP caching | `60` (default), `300` |
-| `AUTHZ_CACHE_TTL` | TTL in seconds for Authorino OPA authorization caching | `60` (default), `30` |
 | `OPERATOR_CATALOG` | Custom operator catalog | `quay.io/opendatahub/catalog:pr-456` |
 | `OPERATOR_IMAGE` | Custom operator image | `quay.io/opendatahub/operator:pr-456` |
 | `OPERATOR_TYPE` | Operator type (rhoai/odh) | `odh` |
@@ -162,6 +157,8 @@ MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \
 - [Authorino Caching Configuration](docs/content/configuration-and-management/authorino-caching.md) - Cache tuning for metadata and authorization
 
 Online Documentation: [https://opendatahub-io.github.io/models-as-a-service/](https://opendatahub-io.github.io/models-as-a-service/)
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/opendatahub-io/models-as-a-service)
 
 ## 🤝 Contributing
 

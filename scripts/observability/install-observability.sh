@@ -212,6 +212,23 @@ else
     echo "   ⚠️  llm namespace not found - skipping LLM metrics"
 fi
 
+# Deploy metadata evaluator PrometheusRule (alerts on maas-api metadata failures)
+# Detect Authorino namespace: rh-connectivity-link (RHOAI) or kuadrant-system (ODH)
+AUTHORINO_NAMESPACE="kuadrant-system"
+if kubectl get ns rh-connectivity-link &>/dev/null && kubectl get deploy -n rh-connectivity-link authorino &>/dev/null 2>&1; then
+    AUTHORINO_NAMESPACE="rh-connectivity-link"
+fi
+
+METADATA_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-metadata-evaluator-prometheusrule.yaml"
+if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null 2>&1; then
+    echo "   ⚠️  Authorino deployment not found in $AUTHORINO_NAMESPACE - skipping metadata evaluator PrometheusRule"
+elif [ -f "$METADATA_RULE_FILE" ]; then
+    yq eval ".metadata.namespace = \"$AUTHORINO_NAMESPACE\"" "$METADATA_RULE_FILE" | kubectl apply -f -
+    echo "   ✅ Metadata evaluator PrometheusRule deployed (namespace: $AUTHORINO_NAMESPACE)"
+else
+    echo "   ⚠️  Metadata evaluator PrometheusRule not found - skipping alert"
+fi
+
 # ==========================================
 # Summary
 # ==========================================
@@ -223,7 +240,7 @@ echo ""
 
 echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
-echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status"
+echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, auth_server_evaluator_* (metadata HTTP)"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""

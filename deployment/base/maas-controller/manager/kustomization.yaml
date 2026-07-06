@@ -7,4 +7,4 @@ resources:
 images:
 - name: maas-controller
   newName: quay.io/opendatahub/maas-controller
-  newTag: latest
+  newTag: odh-stable

@@ -28,26 +28,6 @@ func IsGVKAvailable(c client.Client, gvk schema.GroupVersionKind) (bool, error) 
 	return true, nil
 }
 
-// GetClusterServiceAccountIssuer returns spec.serviceAccountIssuer from OpenShift Authentication/cluster, or "".
-func GetClusterServiceAccountIssuer(ctx context.Context, c client.Reader) (string, error) {
-	u := &unstructured.Unstructured{}
-	u.SetGroupVersionKind(schema.GroupVersionKind{Group: "config.openshift.io", Version: "v1", Kind: "Authentication"})
-	if err := c.Get(ctx, client.ObjectKey{Name: "cluster"}, u); err != nil {
-		if meta.IsNoMatchError(err) || apierrors.IsNotFound(err) {
-			return "", nil
-		}
-		return "", err
-	}
-	issuer, found, err := unstructured.NestedString(u.Object, "spec", "serviceAccountIssuer")
-	if err != nil {
-		return "", fmt.Errorf("reading spec.serviceAccountIssuer: %w", err)
-	}
-	if !found {
-		return "", nil
-	}
-	return issuer, nil
-}
-
 func gvkListKind(gvk schema.GroupVersionKind) schema.GroupVersionKind {
 	out := gvk
 	out.Kind = gvk.Kind + "List"

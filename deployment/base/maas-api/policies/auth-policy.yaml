@@ -40,8 +40,7 @@ spec:
             operator: matches
             value: "^Bearer sk-oai-.*"
         http:
-          # Placeholder URL - gets patched via kustomize replacements (app-namespace param)
-          # All overlays use shared-patches component for consistent replacements
+          # Placeholder URL - patched by the Tenant reconciler PostRender (app-namespace)
           url: https://maas-api.placehold.svc.cluster.local:8443/internal/v1/api-keys/validate
           method: POST
           contentType: application/json

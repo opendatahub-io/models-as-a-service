@@ -4,8 +4,12 @@ metadata:
   name: e2e-trlp-test-simulated
 spec:
   model:
-    uri: hf://sshleifer/tiny-gpt2 # ~2MB test model, simulator ignores it anyway
+    # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
+    uri: hf://placeholder/no-model
     name: test/e2e-trlp-test-model
+  # Skip storage-initializer; simulator generates responses without model weights.
+  storageInitializer:
+    enabled: false
   replicas: 1
   router:
     route: {}

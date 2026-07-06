@@ -46,15 +46,19 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
       - [ ] If **multiple** TokenRateLimitPolicies target the **same** HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
-      - [ ] Verify that the model is rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
-      - [ ] Verify that the model is token rate limited by checking the inference endpoint (see [Validation Guide - Test Rate Limiting](validation.md#6-test-rate-limiting))
+      - [ ] Verify that the model is rate limited for request bursts (request-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
+      - [ ] Verify that the model returns 429 for token-heavy prompts (token-rate limiting) — see [Validation Guide - Test Rate Limiting](validation.md#7-test-rate-limiting)
 6. **Routes not accessible (503 errors)**: Check MaaS Default Gateway status and HTTPRoute configuration
       - [ ] Verify Gateway is in `Programmed` state: `kubectl get gateway -n openshift-ingress maas-default-gateway`
       - [ ] Check HTTPRoute configuration and status
 
-7. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
-      - [ ] Verify User Workload Monitoring is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#user-workload-monitoring)
-      - [ ] Verify Kuadrant observability is enabled — see [Observability Prerequisites](../advanced-administration/observability.md#kuadrant-observability)
+7. **High-concurrency inference returns intermittent `500` or `503` errors**: The RHCL/Kuadrant WASM authentication path may be timing out under burst load.
+      - [ ] Confirm the errors occur during concurrent request scenarios and not for low-volume requests
+      - [ ] Increase `AUTH_SERVICE_TIMEOUT` from the default `200ms` to `2s` through the RHCL operator Subscription configuration. See [High-concurrency authentication timeout](platform-setup.md#high-concurrency-authentication-timeout).
+
+8. **Metrics not appearing in dashboards**: Prometheus is not scraping MaaS components.
+      - [ ] Verify User Workload Monitoring is enabled — see [Observability Setup](../observability/setup.md#user-workload-monitoring)
+      - [ ] Verify Kuadrant observability is enabled — see [Observability Setup](../observability/setup.md#kuadrant-observability)
       - [ ] Check prometheus-user-workload pods are running:
 
       ```bash
@@ -67,7 +71,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get servicemonitor,podmonitor -A | grep -E "(maas|kuadrant|limitador)"
       ```
 
-8. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
+9. **Rate limiting metrics missing (authorized_calls, limited_calls)**: Kuadrant observability is not enabled.
       - [ ] Enable observability on Kuadrant CR:
 
       ```bash
@@ -81,21 +85,175 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get podmonitor -n kuadrant-system
       ```
 
-9. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
+10. **RHOAI Dashboard Observability tab returns `503 Service Unavailable`**: The Dashboard cannot reach the Perses backend.
 
       The error typically appears as `{"statusCode": 503, "code": "FST_REPLY_FROM_SERVICE_UNAVAILABLE", ...}`.
       This is a Fastify/Dashboard-level error (not a gateway 503) indicating the monitoring stack
       is not deployed or Perses is not running. The most common causes are missing operators (COO,
       OpenTelemetry) or DSCI `monitoring.metrics` not being configured.
 
-      See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full prerequisites and verification checklist.
+      See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full prerequisites and verification checklist.
 
-10. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
+11. **GenAI Studio tab not visible in Dashboard**: Requires `llamastackoperator` set to `Managed` in the DSC and the `genAiStudio` feature flag enabled on `OdhDashboardConfig`.
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
+
+12. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+13. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+
+      MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
+
+      - [ ] Check controller pod status:
+
+      ```bash
+      kubectl get pods -n models-as-a-service -l control-plane=maas-controller
+      ```
+
+      - [ ] Check webhook service endpoints:
+
+      ```bash
+      kubectl get endpoints maas-controller-webhook-service -n models-as-a-service
+      ```
+
+      - [ ] Check controller logs for errors:
+
+      ```bash
+      kubectl logs -n models-as-a-service deployment/maas-controller
+      ```
+
+      Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
+
+14. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+
+      - [ ] Check which namespace the controller is configured to accept:
+
+      ```bash
+      kubectl get deployment maas-controller -n opendatahub -o jsonpath='{.spec.template.spec.containers[0].args}'
+      ```
+
+      - [ ] Create the `AITenant` in that namespace instead of the target tenant namespace:
+
+      ```bash
+      kubectl get namespace ai-tenants
+      ```
+
+      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.
+
+## Conflicting AuthPolicy Detection
+
+MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.
+
+### Symptoms
+
+- MaaSAuthPolicy has condition `ConflictingAuthPolicy=True`
+- Warning events on MaaSAuthPolicy resources referencing non-MaaS AuthPolicies
+- Unexpected authentication behavior (wrong policy may win when multiple AuthPolicies target the same HTTPRoute)
+
+### Diagnosis
+
+Check for conflicting AuthPolicy conditions:
+
+```bash
+# Check MaaSAuthPolicy conditions
+kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{"\t"}{.message}{end}{"\n"}{end}'
+
+# List all AuthPolicies targeting a specific model's HTTPRoute
+MODEL_NS="<model-namespace>"
+MODEL_NAME="<model-name>"
+kubectl get authpolicy -n "$MODEL_NS" -o json | \
+  jq -r ".items[] | select(.spec.targetRef.name == \"$MODEL_NAME\" and .spec.targetRef.kind == \"HTTPRoute\") | .metadata.name + \" (managed-by: \" + (.metadata.labels[\"app.kubernetes.io/managed-by\"] // \"unknown\") + \")\""
+
+# Check for warning events
+kubectl get events -n models-as-a-service --field-selector reason=ConflictingAuthPolicy
+```
+
+### Remediation
+
+1. **KServe anonymous auth policies** (`*-kserve-route-authn`): These are typically created when `security.opendatahub.io/enable-auth` is misconfigured on the InferenceService. Set the annotation to `"true"` on MaaS-governed InferenceServices to prevent KServe from creating conflicting anonymous AuthPolicies:
+
+    ```bash
+    kubectl annotate inferenceservice <name> -n <namespace> \
+      security.opendatahub.io/enable-auth="true" --overwrite
+    ```
+
+2. **Custom AuthPolicies**: If another team deployed a custom AuthPolicy targeting the same HTTPRoute, coordinate to determine which controller should own authentication for that route. Either:
+      - Remove the conflicting AuthPolicy if MaaS is the intended auth authority
+      - Or remove the model from the MaaSAuthPolicy if MaaS should not govern that route
+
+3. **Verify resolution**: After applying the fix, the `ConflictingAuthPolicy` condition should transition to `False` on the next reconciliation:
+
+    ```bash
+    kubectl get maasauthpolicy -n models-as-a-service -o jsonpath='{range .items[*]}{.metadata.name}{": "}{range .status.conditions[?(@.type=="ConflictingAuthPolicy")]}{.status}{end}{"\n"}{end}'
+    ```
+
+## TLS Certificate Validation
+
+By default, `curl` validates TLS certificates against your system CA bundle. If you encounter certificate verification errors (e.g., `curl: (60) SSL certificate problem: self-signed certificate`), use one of the approaches below.
+
+### Recommended: Use the Ingress CA/Certificate Chain
+
+For OpenShift clusters with self-signed or internal certificates, use the ingress trust chain (or your platform-provided CA bundle) with `curl --cacert`:
+
+```bash
+# Get ingress certificate chain/trust bundle (platform-specific source)
+oc get secret -n openshift-ingress router-certs-default \
+  -o jsonpath='{.data.tls\.crt}' | base64 -d > /tmp/ingress-cert-chain.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/ingress-cert-chain.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+Alternatively, if your cluster uses the OpenShift service CA:
+
+```bash
+# Extract the service CA bundle
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
+# Use --cacert in curl commands
+curl -sS --cacert /tmp/service-ca.crt \
+  -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Development/Testing Only: Disable Verification
+
+!!! danger "Security Warning"
+    The `-k` flag disables all TLS certificate validation. An attacker on the network path can present a forged certificate and intercept your API key, token, or other credentials. **Never use `-k` in production or when sending credentials over untrusted networks.**
+
+For **isolated development or test environments only**, you can add the `-k` flag:
+
+```bash
+# INSECURE: Only for isolated dev/test environments
+curl -sS -k -H "Authorization: Bearer $API_KEY" \
+  "https://maas.${CLUSTER_DOMAIN}/maas-api/v1/models" | jq .
+```
+
+### Adding the CA to Your System Trust Store
+
+For a permanent solution, add the ingress certificate chain to your system trust store so that all tools (curl, Python, browsers) trust it automatically:
+
+```bash
+# Linux (Fedora/RHEL)
+sudo cp /tmp/ingress-cert-chain.crt /etc/pki/ca-trust/source/anchors/
+sudo update-ca-trust
+
+# Linux (Debian/Ubuntu)
+sudo cp /tmp/ingress-cert-chain.crt /usr/local/share/ca-certificates/ingress-cert-chain.crt
+sudo update-ca-certificates
+
+# macOS
+sudo security add-trusted-cert -d -r trustRoot \
+  -k /Library/Keychains/System.keychain /tmp/ingress-cert-chain.crt
+```
+
+For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
 
 ## Additional Resources
 
 - [Validation Guide](validation.md) — Manual validation steps
-- [Observability Guide](../advanced-administration/observability.md) — Metrics, monitoring, and dashboards
+- [Observability Guide](../observability/index.md) — Metrics, monitoring, and dashboards
 - [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md) — Deployment scripts documentation

@@ -45,7 +45,7 @@ API_KEY=$(kubectl exec -n maas-system deployment/maas-api -- curl -sk \
 
 echo -e "${BOLD}${CYAN}1. What's running${NC}"
 echo ""
-echo -e "  30 pods, 8 namespaces — full MaaS + BBR + Kuadrant + KServe stack"
+echo -e "  30 pods, 8 namespaces — full MaaS + IPP + Kuadrant + KServe stack"
 echo ""
 
 for ns in istio-system kuadrant-system maas-system kserve; do
@@ -87,7 +87,7 @@ pause
 
 echo -e "${BOLD}${CYAN}3. External model inference (llm-katan on AWS, Let's Encrypt TLS)${NC}"
 echo ""
-echo -e "  Request → Gateway → Kuadrant auth → BBR (model resolve + credential inject) → llm-katan"
+echo -e "  Request → Gateway → Kuadrant auth → IPP (model resolve + credential inject) → llm-katan"
 echo ""
 echo -e "  $ curl http://gateway/llm/llm-katan-openai/v1/chat/completions"
 
@@ -130,7 +130,7 @@ echo -e "${BOLD}${CYAN}5. Fast iteration: --rebuild${NC}"
 echo ""
 echo -e "  After a code change in any component:"
 echo ""
-echo -e "  $ ./local-deploy.sh --rebuild bbr             # ~15 seconds"
+echo -e "  $ ./local-deploy.sh --rebuild ipp             # ~15 seconds"
 echo -e "  $ ./local-deploy.sh --rebuild maas-api         # ~15 seconds"
 echo -e "  $ ./local-deploy.sh --rebuild maas-controller  # ~15 seconds"
 echo -e "  $ ./local-deploy.sh --rebuild all              # ~45 seconds"
@@ -146,7 +146,7 @@ echo -e "${BOLD}${CYAN}Summary${NC}"
 echo ""
 echo "  One script deploys the full MaaS platform locally:"
 echo "    - MaaS API + Controller (TLS backend, matching OpenShift)"
-echo "    - BBR (payload-processing, ext-proc body routing)"
+echo "    - IPP (payload-processing, ext-proc body routing)"
 echo "    - Kuadrant (auth + rate limiting)"
 echo "    - KServe (LLMInferenceService for internal models)"
 echo "    - PostgreSQL, Istio, cert-manager, MetalLB"

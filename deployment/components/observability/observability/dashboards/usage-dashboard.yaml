@@ -29,7 +29,7 @@ spec:
             x: 5
             'y': 0
           - content:
-              $ref: '#/spec/panels/totalErrors'
+              $ref: '#/spec/panels/totalRateLimited'
             height: 5
             width: 5
             x: 10
@@ -54,11 +54,17 @@ spec:
           title: Token Consumption
         items:
           - content:
-              $ref: '#/spec/panels/tokenConsumptionByUser'
-            height: 12
+              $ref: '#/spec/panels/tokenConsumptionOverTime'
+            height: 10
             width: 24
             x: 0
             'y': 0
+          - content:
+              $ref: '#/spec/panels/tokenConsumptionByUser'
+            height: 8
+            width: 24
+            x: 0
+            'y': 10
   panels:
     activeUsers:
       kind: Panel
@@ -80,27 +86,27 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     count(
                       count by (user) (
                         (
                           (
                             sum by (user, subscription, limitador_namespace) (
-                              increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                              increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                             )
                             +
                             sum by (user, subscription, limitador_namespace) (
-                              increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                              increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                             )
                           )
                           or
                           sum by (user, subscription, limitador_namespace) (
-                            increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                            increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                           )
                         )
                         * on(user, subscription, limitador_namespace)
-                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                         > 0
                       )
                     ) or vector(0)
@@ -126,16 +132,16 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     (
                       (
                         sum(
                           sum by (user, subscription, limitador_namespace) (
-                            increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                            increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                           )
                           * on(user, subscription, limitador_namespace)
-                          (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                          (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                         )
                       )
                       /
@@ -143,19 +149,19 @@ spec:
                         (
                           sum(
                             sum by (user, subscription, limitador_namespace) (
-                              increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                              increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                             )
                             * on(user, subscription, limitador_namespace)
-                            (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                            (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                           )
                           +
                           (
                             sum(
                               sum by (user, subscription, limitador_namespace) (
-                                increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                                increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                               )
                               * on(user, subscription, limitador_namespace)
-                              (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                              (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                             )
                             or vector(0)
                           )
@@ -163,6 +169,47 @@ spec:
                       )
                     ) or vector(1)
                   seriesNameFormat: Success Rate
+    tokenConsumptionOverTime:
+      kind: Panel
+      spec:
+        display:
+          name: Token consumption
+          description: >-
+            Tokens over time by model or subscription.
+            View by drives chart sum by (${view_by:raw}).
+            Table always shows full model x subscription detail.
+        plugin:
+          kind: TimeSeriesChart
+          spec:
+            legend:
+              position: bottom
+              mode: table
+              values: []
+            visual:
+              display: line
+              lineWidth: 3
+              areaOpacity: 1
+              connectNulls: true
+              stack: all
+              showPoints: always
+              pointRadius: 6
+            yAxis:
+              min: 0
+              format:
+                unit: decimal
+        queries:
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: PrometheusTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: PrometheusDatasource
+                    name: data-science-prometheus-datasource
+                  query: >-
+                    round(sum by (${view_by:raw}) (increase(authorized_hits_total{user!="",
+                    user=~"$user", subscription=~"$subscription",
+                    model=~"$model"}[30m])))
     tokenConsumptionByUser:
       kind: Panel
       spec:
@@ -223,8 +270,8 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
-                  query: 'round(sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])))'
+                    name: data-science-prometheus-datasource
+                  query: 'round(sum by (user, subscription, model) (increase(authorized_hits_total{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])))'
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -232,24 +279,24 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     round(
                       sum by (user, subscription, model) (
                         (
                           (
-                            sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                            sum by (user, subscription, limitador_namespace) (increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
                             +
-                            sum by (user, subscription, limitador_namespace) (increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                            sum by (user, subscription, limitador_namespace) (increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
                           )
                           or
-                          sum by (user, subscription, limitador_namespace) (increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                          sum by (user, subscription, limitador_namespace) (increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
                         )
                         * on(user, subscription, limitador_namespace) group_left(model)
-                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                       )
                       or
-                      0 * sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range]))
+                      0 * sum by (user, subscription, model) (increase(authorized_hits_total{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range]))
                     )
           - kind: TimeSeriesQuery
             spec:
@@ -258,23 +305,23 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     round(
                       sum by (user, subscription, model) (
-                        sum by (user, subscription, limitador_namespace) (increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
+                        sum by (user, subscription, limitador_namespace) (increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range]))
                         * on(user, subscription, limitador_namespace) group_left(model)
-                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        (0 * max by (user, subscription, limitador_namespace, model) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                       )
                       or
-                      0 * sum by (user, subscription, model) (increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range]))
+                      0 * sum by (user, subscription, model) (increase(authorized_hits_total{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range]))
                     )
-    totalErrors:
+    totalRateLimited:
       kind: Panel
       spec:
         display:
           description: Total rate-limited requests over the selected time window.
-          name: Total Errors
+          name: Total Rate Limited
         plugin:
           kind: StatChart
           spec:
@@ -291,14 +338,14 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     sum(
                       sum by (user, subscription, limitador_namespace) (
-                        increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                        increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                       )
                       * on(user, subscription, limitador_namespace)
-                      (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                      (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                     )
                     or vector(0)
                   seriesNameFormat: Errors
@@ -324,15 +371,15 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
+                    name: data-science-prometheus-datasource
                   query: |-
                     (
                       sum(
                         sum by (user, subscription, limitador_namespace) (
-                          increase(authorized_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                          increase(authorized_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                         )
                         * on(user, subscription, limitador_namespace)
-                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                       )
                       or vector(0)
                     )
@@ -340,10 +387,10 @@ spec:
                     (
                       sum(
                         sum by (user, subscription, limitador_namespace) (
-                          increase(limited_calls{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
+                          increase(limited_calls_total{user!="", user=~"$user", subscription=~"$subscription"}[$__range])
                         )
                         * on(user, subscription, limitador_namespace)
-                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits{model=~"$model"}[$__range])) + 1)
+                        (0 * max by (user, subscription, limitador_namespace) (max_over_time(authorized_hits_total{model=~"$model"}[$__range])) + 1)
                       )
                       or vector(0)
                     )
@@ -370,8 +417,8 @@ spec:
                 spec:
                   datasource:
                     kind: PrometheusDatasource
-                    name: kuadrant-prometheus-datasource
-                  query: 'sum(increase(authorized_hits{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])) or vector(0)'
+                    name: data-science-prometheus-datasource
+                  query: 'sum(increase(authorized_hits_total{user!="", user=~"$user", subscription=~"$subscription", model=~"$model"}[$__range])) or vector(0)'
                   seriesNameFormat: Tokens
   variables:
     - kind: ListVariable
@@ -387,10 +434,10 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: kuadrant-prometheus-datasource
+              name: data-science-prometheus-datasource
             labelName: user
             matchers:
-              - 'authorized_hits{user!=""}'
+              - 'authorized_hits_total{user!=""}'
     - kind: ListVariable
       spec:
         allowAllValue: true
@@ -404,10 +451,10 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: kuadrant-prometheus-datasource
+              name: data-science-prometheus-datasource
             labelName: subscription
             matchers:
-              - 'authorized_hits{subscription!=""}'
+              - 'authorized_hits_total{subscription!=""}'
     - kind: ListVariable
       spec:
         allowAllValue: true
@@ -421,7 +468,23 @@ spec:
           spec:
             datasource:
               kind: PrometheusDatasource
-              name: kuadrant-prometheus-datasource
+              name: data-science-prometheus-datasource
             labelName: model
             matchers:
-              - 'authorized_hits{model!=""}'
+              - 'authorized_hits_total{model!=""}'
+    - kind: ListVariable
+      spec:
+        allowAllValue: false
+        allowMultiple: false
+        defaultValue: model
+        display:
+          name: View by
+        name: view_by
+        plugin:
+          kind: StaticListVariable
+          spec:
+            values:
+              - value: model
+                label: By model
+              - value: subscription
+                label: By subscription

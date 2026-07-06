@@ -59,10 +59,9 @@ EOF
         sed -i "s#REPLACE_IMAGE:latest#${ODH_OPERATOR_IMAGE}#g" config/manager/manager.yaml
     fi
     if grep -q "REPLACE_IMAGE" config/manager/manager.yaml; then
-        echo "   Failed to update manager image in config/manager/manager.yaml"
-        exit 1
+        echo "   Warning: REPLACE_IMAGE placeholder still present — repo may use inline image, continuing"
     fi
-    kustomize build config/default | kubectl apply --namespace $ODH_OPERATOR_NS -f -
+    kustomize build config/default | kubectl apply -f -
     popd
     popd
 

@@ -179,7 +179,7 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
 !!! warning "Using the `users` field"
-    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause cardinality issues in rate limiting and policy enforcement. Prefer `groups` for human users.
+    The `subjects.users` (MaaSAuthPolicy) and `owner.users` (MaaSSubscription) fields should be used only for **Service Accounts** and similar programmatic identities, not for many individual human users. Having too many distinct users can cause cardinality issues in rate limiting and policy enforcement. Prefer `groups` for human users. For detailed guidance on cardinality limits, monitoring, and when to use groups vs users, see [Subscription Cardinality](../advanced-administration/subscription-cardinality.md).
 
 **Premium example** with higher limits:
 
@@ -238,22 +238,6 @@ Create an API key as a user in `free-users` and another as a user in `premium-us
 1. Get the gateway endpoint and create an API key for each user
 2. List models and run inference with each API key
 3. Test with both groups to confirm access and different rate limits — free-users (100 tokens/min) vs premium-users (100,000 tokens/24h)
-
-## Adding Groups
-
-To grant a user access to a subscription, add them to the appropriate Kubernetes group:
-
-```bash
-# Create groups if they do not exist
-oc adm groups new free-users 2>/dev/null || true
-oc adm groups new premium-users 2>/dev/null || true
-
-# Add users (method depends on your IdP; OpenShift example)
-oc adm groups add-users free-users alice@example.com
-oc adm groups add-users premium-users bob@example.com
-```
-
-Users will get subscription access on their next request (after group membership propagates).
 
 ## Multiple Subscriptions per User
 

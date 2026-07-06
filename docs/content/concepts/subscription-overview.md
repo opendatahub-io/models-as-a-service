@@ -65,5 +65,4 @@ For configuration details, see:
 
 Additional references:
 
-- [Subscription Architecture](https://github.com/opendatahub-io/models-as-a-service/blob/main/archdiagrams/SubscriptionArch.md) — Design document for the subscription model
 - [MaaS Controller old-vs-new flow](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/docs/old-vs-new-flow.md) — Comparison of subscription-based flows

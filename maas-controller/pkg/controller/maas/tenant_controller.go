@@ -18,7 +18,7 @@ package maas
 
 import (
 	"context"
-	"strings"
+	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -29,7 +29,6 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -48,25 +47,43 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace, default opendatahub).
+	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace,
+	// default opendatahub for ODH, redhat-ods-applications for RHOAI).
+	// Used by appNamespaceForTenant() and isProtectedNamespace().
 	AppNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
+	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
+	GatewayName string
+	// GatewayNamespace is the namespace of the Gateway resource resolved from cmd/manager flags.
+	GatewayNamespace string
+	// cleanupOnce ensures legacy maas-api cleanup runs at most once per controller lifetime
+	cleanupOnce sync.Once
+	// cleanupMu protects cleanupCompleted
+	cleanupMu sync.Mutex
+	// cleanupCompleted tracks whether legacy cleanup succeeded
+	cleanupCompleted bool
+	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
+	ClusterAudience string
+	// TenantNamespaceDiscoveryEnabled allows reconciling Tenant CRs across all namespaces
+	// instead of only TenantNamespace (enables AITenant multi-tenancy).
+	TenantNamespaceDiscoveryEnabled bool
+	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
+	// Applies to apiKeyValidation and subscription-info metadata evaluators.
+	MetadataCacheTTL int64
 }
 
+// Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/status,verbs=get;update;patch
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=operator.authorino.kuadrant.io,resources=authorinos,verbs=get;list;watch
@@ -76,11 +93,21 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=telemetry.istio.io,resources=telemetries,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=batch,resources=cronjobs,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=monitoring.coreos.com,resources=podmonitors;servicemonitors,verbs=get;list;watch;create;patch;delete
 
-// maas-controller creates the maas-api ClusterRole via SSA.
-// The rules below mirror the maas-api ClusterRole so the controller can pass the API-server escalation check.
-//
+// clusterroles/clusterrolebindings: TenantReconciler SSA-applies the maas-api and payload-processing-reader
+// ClusterRoles. The API-server escalation check requires the applying SA to already hold every permission those
+// ClusterRoles grant — which is why secrets get;list;watch must remain unrestricted (payload-processing-reader
+// grants unrestricted get on secrets; Kubernetes also does not support resourceNames on list/watch).
+// The client-side predicate secretNamedMaaSDB() filters informer events to maas-db-config only.
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
+
+// Escalation-check mirror for maas-api ClusterRole — maas-controller must hold every verb it grants.
+// namespaces create: bootstrap the subscription namespace at startup (ensureSubscriptionNamespaceWithClient).
+// serviceaccounts/token create, tokenreviews, subjectaccessreviews: required by maas-api for bound SA token
+// projection and access checks. maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch
@@ -89,6 +116,12 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
+
+// Escalation-check mirror for payload-processing-reader ClusterRole — maas-controller must hold every verb it grants.
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels;externalproviders,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/status;externalproviders/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/finalizers;externalproviders/finalizers,verbs=update
+// +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
 // Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).
@@ -105,26 +138,23 @@ func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Obje
 	}}}
 }
 
+func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj client.Object) []reconcile.Request {
+	aitenant, ok := obj.(*maasv1alpha1.AITenant)
+	if !ok {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace),
+	}}}
+}
+
 // crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
 func crdLabeledForMaaSComponent() predicate.Predicate {
 	key := tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		l := o.GetLabels()
 		return l != nil && l[key] == "true"
-	})
-}
-
-// crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups
-// (e.g. perses.dev from COO). CRD names follow the pattern "<plural>.<group>", so a
-// suffix check is sufficient to identify the group without parsing the spec.
-func crdInOptionalAPIGroup() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		for group := range tenantreconcile.OptionalAPIGroups {
-			if strings.HasSuffix(o.GetName(), "."+group) {
-				return true
-			}
-		}
-		return false
 	})
 }
 
@@ -139,7 +169,7 @@ func secretNamedMaaSDB() predicate.Predicate {
 func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		ns := o.GetNamespace()
-		return ns == r.AppNamespace || ns == r.operatorNamespace()
+		return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.operatorNamespace()
 	})
 }
 
@@ -149,22 +179,10 @@ func authenticationClusterSingleton() predicate.Predicate {
 	})
 }
 
-// deletedConfigMapOnly mirrors ODH: unmanaged ConfigMaps are recreated when deleted.
-func deletedConfigMapOnly() predicate.Predicate {
-	return predicate.Funcs{
-		CreateFunc: func(event.CreateEvent) bool {
-			return false
-		},
-		UpdateFunc: func(event.UpdateEvent) bool {
-			return false
-		},
-		DeleteFunc: func(event.DeleteEvent) bool {
-			return true
-		},
-		GenericFunc: func(event.GenericEvent) bool {
-			return false
-		},
-	}
+func configResourceDefault() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetName() == maasv1alpha1.ConfigInstanceName
+	})
 }
 
 // SetupWithManager registers the Tenant controller.
@@ -179,21 +197,23 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.Tenant{}).
 		Watches(
+			&maasv1alpha1.Config{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.TenantNamespace,
+					Name:      maasv1alpha1.TenantInstanceName,
+				}}}
+			}),
+			builder.WithPredicates(configResourceDefault()),
+		).
+		Watches(
+			&maasv1alpha1.AITenant{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
+		).
+		Watches(
 			&extv1.CustomResourceDefinition{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
-		).
-		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
-		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(crdInOptionalAPIGroup()),
-		).
-		Watches(
-			&corev1.ConfigMap{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(deletedConfigMapOnly(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&corev1.Secret{},

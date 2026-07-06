@@ -49,8 +49,9 @@ type Tenant struct {
 
 // TenantSpec defines the desired state of Tenant.
 type TenantSpec struct {
-	// GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints.
-	// If omitted, defaults to openshift-ingress/maas-default-gateway.
+	// GatewayRef specifies which Gateway (Gateway API) to use for exposing model endpoints
+	// for legacy/unmanaged Tenant resources. For AITenant-managed tenants, AITenant
+	// owns this platform context and the controller ignores this field.
 	// +kubebuilder:validation:Optional
 	GatewayRef TenantGatewayRef `json:"gatewayRef,omitempty"`
 
@@ -58,7 +59,8 @@ type TenantSpec struct {
 	// +kubebuilder:validation:Optional
 	APIKeys *TenantAPIKeysConfig `json:"apiKeys,omitempty"`
 
-	// ExternalOIDC configures an external OIDC identity provider for the maas-api AuthPolicy.
+	// ExternalOIDC configures an external OIDC identity provider for legacy/unmanaged
+	// Tenant resources. For AITenant-managed tenants, use AITenant.spec.oidc.
 	// +kubebuilder:validation:Optional
 	ExternalOIDC *TenantExternalOIDCConfig `json:"externalOIDC,omitempty"`
 

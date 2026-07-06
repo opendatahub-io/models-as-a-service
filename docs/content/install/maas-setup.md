@@ -12,7 +12,9 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 ## Database Setup
 
-A PostgreSQL database is required. Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
+`maas-api` uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before `maas-api` starts; the pod will crash-loop until the connection succeeds and the schema migration completes.
+
+Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
 
 ```bash
 kubectl create secret generic maas-db-config \
@@ -62,78 +64,47 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
 ## Create Gateway
 
-The Gateway must exist before enabling modelsAsService in your DataScienceCluster. Create the MaaS Gateway:
+Create `maas-default-gateway` in `openshift-ingress` **before** enabling `modelsAsService` in your DataScienceCluster.
 
-!!! warning "Example Gateway Configuration"
-    The Gateway configuration below is an example. You may need TLS certificates, specific listener settings, or custom infrastructure labels depending on your cluster. For TLS setup, see [TLS Configuration](../configuration-and-management/tls-configuration.md). To quickly apply Authorino TLS for maas-api communication, run:
+`scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
 
-    ```bash
-    ./scripts/setup-authorino-tls.sh
-    ```
+| Environment | Command |
+|-------------|---------|
+| ROSA, OSD, cloud (default) | `./scripts/setup-gateway.sh` |
+| On-prem, bare-metal, disconnected | `INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
+| Air-gapped (no GitHub fetch) | `DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
 
-    **Setting the namespace:** The script defaults to `kuadrant-system` (ODH with Kuadrant). Set `AUTHORINO_NAMESPACE` for RHOAI, which uses RHCL:
+Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (route mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
 
-    ```bash
-    AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
-    ```
+**Verify:**
+
+```bash
+kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=120s
+```
+
+Expected output:
+```
+gateway.gateway.networking.k8s.io/maas-default-gateway condition met
+```
+
+For ClusterIP mode, also verify the Route:
+```bash
+kubectl get route maas-gateway-route -n openshift-ingress
+```
+
+Expected output:
+```
+NAME                  HOST/PORT                           PATH   SERVICES                           PORT   TERMINATION   WILDCARD
+maas-gateway-route    maas.apps.example.cluster.com              maas-default-gateway-openshift-default   443    reencrypt     None
+```
+
+For ClusterIP architecture and troubleshooting, see [Gateway patterns — ClusterIP + Route](../configuration-and-management/gateway-patterns.md#clusterip-gateway-with-openshift-route-re-encrypt).
 
 !!! note "Required annotations"
-    The Gateway **must** include these annotations to trust Authorino's certificates:
+    The script applies `opendatahub.io/managed: "false"` and `security.opendatahub.io/authorino-tls-bootstrap: "true"` on the Gateway. See [TLS Configuration](../configuration-and-management/tls-configuration.md) for custom certificates and Authorino integration. The `authorino-tls-bootstrap` annotation is interim until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528).
 
-    | Annotation | Purpose |
-    |------------|---------|
-    | `opendatahub.io/managed: "false"` | Read by **maas-controller**: allows it to manage AuthPolicies and related resources; prevents the ODH Model Controller from overwriting them. |
-    | `security.opendatahub.io/authorino-tls-bootstrap: "true"` | Used by the ODH platform (not maas-controller) to create the EnvoyFilter for Gateway → Authorino TLS when Authorino uses a TLS listener. Required when Authorino TLS is enabled. |
-
-    The `authorino-tls-bootstrap` annotation is an interim solution until [CONNLINK-528](https://issues.redhat.com/browse/CONNLINK-528) ships native support for configuring TLS between the Gateway and Authorino without mesh sidecars. It decouples TLS configuration from AuthPolicy management, allowing TLS even when `opendatahub.io/managed` is `"false"`.
-
-```yaml
-CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
-# Use default ingress cert for HTTPS, or set CERT_NAME to your TLS secret name
-CERT_NAME=${CERT_NAME:-$(kubectl get ingresscontroller default -n openshift-ingress-operator -o jsonpath='{.spec.defaultCertificate.name}' 2>/dev/null)}
-[[ -z "$CERT_NAME" ]] && CERT_NAME="router-certs-default"
-
-kubectl apply -f - <<EOF
-apiVersion: gateway.networking.k8s.io/v1
-kind: Gateway
-metadata:
-  name: maas-default-gateway
-  namespace: openshift-ingress
-  annotations:
-    opendatahub.io/managed: "false"
-    security.opendatahub.io/authorino-tls-bootstrap: "true"
-spec:
-  gatewayClassName: openshift-default
-  listeners:
-   - name: http
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 80
-     protocol: HTTP
-     allowedRoutes:
-       namespaces:
-         from: All
-   - name: https
-     hostname: maas.${CLUSTER_DOMAIN}
-     port: 443
-     protocol: HTTPS
-     allowedRoutes:
-       namespaces:
-         from: All
-     tls:
-       certificateRefs:
-       - group: ""
-         kind: Secret
-         name: ${CERT_NAME}
-       mode: Terminate
-EOF
-```
-
-!!! note "TLS certificate"
-    The HTTPS listener uses a Secret in `openshift-ingress`. The script auto-detects the default ingress cert; if that fails, it uses `router-certs-default`. If the Gateway fails to program, ensure the Secret exists: `kubectl get secret -n openshift-ingress`. See [TLS Configuration](../configuration-and-management/tls-configuration.md) for custom certs.
-
-```shell
-kubectl wait --for=condition=Programmed gateway/maas-default-gateway -n openshift-ingress --timeout=60s
-```
+!!! tip "Authorino TLS"
+    After the Gateway exists, run `./scripts/setup-authorino-tls.sh`. For RHOAI/RHCL, set `AUTHORINO_NAMESPACE=rh-connectivity-link`.
 
 ## Configure DataScienceCluster
 
@@ -141,7 +112,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Managed (Recommended)"
 
-    The operator deploys `maas-controller`, which self-bootstraps a `default-tenant` CR and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
+    The operator deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant` and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsService` in Managed state:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -189,7 +160,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     kubectl rollout status deployment/maas-api -n opendatahub --timeout=120s
     ```
 
-    The `maas-controller` (deployed by the operator) will automatically create a `default-tenant` CR and reconcile:
+    The `maas-controller` (deployed by the operator) will automatically create `AITenant/models-as-a-service`, which creates or adopts `Tenant/default-tenant` and reconciles:
 
     - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
@@ -201,17 +172,17 @@ After creating the database Secret and Gateways, create or update your DataScien
 
     ### Tenant CR
 
-    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps a **namespace-scoped** `Tenant` object on startup. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
+    With `modelsAsService` **Managed**, the [Open Data Hub operator](https://github.com/opendatahub-io/opendatahub-operator) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `Tenant` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
 
-    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below.
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`. Going forward, set OIDC on `AITenant/models-as-a-service.spec.oidc`. For AITenant-managed tenants, Gateway and OIDC platform context comes from `AITenant`; existing `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values are preserved for compatibility but ignored.
 
     | Field | What to set |
     | ----- | ----------- |
-    | `spec.gatewayRef.namespace` | Namespace of your Gateway API `Gateway` (default `openshift-ingress`). |
-    | `spec.gatewayRef.name` | Name of that `Gateway` (default `maas-default-gateway`). Set these if your MaaS hostname is exposed through a different Gateway than the default. |
+    | `spec.gatewayRef.namespace` | Legacy/unmanaged Tenant Gateway namespace. Ignored for AITenant-managed tenants. |
+    | `spec.gatewayRef.name` | Legacy/unmanaged Tenant Gateway name. For AITenant-managed tenants, use `AITenant.spec.gateway.name`. |
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
-    | `spec.externalOIDC.issuerUrl` | OIDC issuer URL for external identity provider (optional; enables OIDC on the maas-api AuthPolicy). |
-    | `spec.externalOIDC.clientId` | OIDC client ID (required when `issuerUrl` is set). |
+    | `spec.externalOIDC.issuerUrl` | Legacy/unmanaged Tenant OIDC issuer URL. For AITenant-managed tenants, use `AITenant.spec.oidc.issuerUrl`. |
+    | `spec.externalOIDC.clientId` | Legacy/unmanaged Tenant OIDC client ID. For AITenant-managed tenants, use `AITenant.spec.oidc.clientId`. |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
@@ -227,9 +198,6 @@ After creating the database Secret and Gateways, create or update your DataScien
       name: default-tenant
       namespace: models-as-a-service
     spec:
-      gatewayRef:
-        namespace: openshift-ingress
-        name: maas-default-gateway
       apiKeys:
         maxExpirationDays: 90
       telemetry:
@@ -249,7 +217,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     !!! note "Development and early testing"
         Kustomize deployment can be used for **development and early testing purposes**. For production, use the Managed tab above.
 
-    Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS via the ODH overlay:
+    Set `modelsAsService` to **Removed** so the operator does not deploy the MaaS API, then deploy MaaS directly from the canonical build root:
 
     ```yaml
     kubectl apply -f - <<EOF
@@ -269,11 +237,13 @@ After creating the database Secret and Gateways, create or update your DataScien
     EOF
     ```
 
-    Apply the ODH overlay to deploy the MaaS API and controller (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
+    Deploy the MaaS controller (run from the project root; ensure the `maas-db-config` Secret exists per [Database Setup](#database-setup)):
 
     ```bash
-    kustomize build deployment/overlays/odh | kubectl apply -f -
+    kubectl apply -k deployment/base/maas-controller/default
     ```
+
+    On a fresh cluster, use **`./scripts/deploy.sh`** (or run `install_maas_controller_crds_and_wait` from `scripts/deployment-helpers.sh` before applying) so CRDs are **Established** before `Config` and other CRs in the same bundle.
 
 !!! tip "Troubleshooting"
     If components do not become ready, run `kubectl describe datasciencecluster default-dsc` to inspect conditions and events.
@@ -306,6 +276,59 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
     These flags are defined in the odh-dashboard source. The `OdhDashboardConfig` CRD is of
     API version `opendatahub.io/v1alpha`. The operator re-creates this resource with factory
     defaults if it is deleted, but does not overwrite user changes to existing fields.
+
+## Creating Additional Tenants (Optional)
+
+The default installation creates a single tenant in the `models-as-a-service` namespace. To create additional isolated tenants:
+
+### 1. Create a Gateway
+
+Each tenant requires its own Gateway. Follow the [Gateway Patterns](../configuration-and-management/gateway-patterns.md) guide to create a gateway using the same pattern as `maas-default-gateway`.
+
+!!! warning "Avoid hostname filters"
+    Do not add `hostname` fields to Gateway listeners. Hostname-based routing can cause TLS/SNI issues. Use the default pattern with no hostname filter.
+
+### 2. Create AITenant CR
+
+Create an `AITenant` resource in the `ai-tenants` namespace:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: team-red
+  namespace: ai-tenants
+spec:
+  gateway:
+    name: team-red-gateway  # Must already exist in openshift-ingress
+```
+
+Apply the manifest:
+
+```bash
+kubectl apply -f aitenant.yaml
+```
+
+The controller will automatically create:
+- Tenant namespace: `ai-tenant-team-red`
+- Tenant CR: `default-tenant` in the tenant namespace
+- maas-api deployment: `maas-api-team-red`
+- HTTPRoute and AuthPolicy for the tenant
+
+### 3. Verify
+
+```bash
+# Check AITenant status
+kubectl get aitenant team-red -n ai-tenants -o yaml
+
+# Check tenant namespace was created
+kubectl get namespace ai-tenant-team-red
+
+# Check Tenant CR
+kubectl get tenant default-tenant -n ai-tenant-team-red
+```
+
+For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
 
 ## Next steps
 

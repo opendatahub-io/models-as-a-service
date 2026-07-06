@@ -49,13 +49,13 @@ If you plan to use MaaS dashboards, showback, or usage metrics, additional platf
 - **User Workload Monitoring** — Required for Prometheus to scrape metrics from MaaS components
 - **Kuadrant Observability** — Required for rate-limiting and usage metrics (e.g., `authorized_calls`, `limited_calls`)
 
-See [Observability Prerequisites](../advanced-administration/observability.md#prerequisites) for detailed configuration steps.
+See [Observability Setup](../observability/setup.md) for detailed configuration steps.
 
 ### RHOAI Dashboard Observability Tab
 
 To enable the **Observability** tab in the RHOAI Dashboard (Perses-based dashboards), you need the
 Cluster Observability Operator, OpenTelemetry Operator, DSCI monitoring configuration, and a
-Dashboard feature flag. See [RHOAI Dashboard Observability Tab](../advanced-administration/observability.md#rhoai-dashboard-observability-tab) for the full setup and verification steps.
+Dashboard feature flag. See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full setup and verification steps.
 
 ### GenAI Studio
 

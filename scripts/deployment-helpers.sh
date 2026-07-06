@@ -503,7 +503,7 @@ should_install_operator() {
 #   operator_name - Name of the operator (e.g., "rhods-operator")
 #   namespace - Target namespace for the operator
 #   catalog_source - CatalogSource name (e.g., "redhat-operators")
-#   channel - Subscription channel (e.g., "fast-3")
+#   channel - Subscription channel (e.g., "stable-3.x")
 #   starting_csv - Starting CSV (optional, can be empty)
 #   operatorgroup_target - Target namespace for OperatorGroup (optional, uses namespace if empty)
 #   source_namespace - Catalog source namespace (optional, defaults to openshift-marketplace)
@@ -870,80 +870,6 @@ find_project_root() {
   fi
 }
 
-# _patch_params_env key value project_root
-#   Patches a key=value line in params.env. Creates a backup on first call.
-_patch_params_env() {
-  local key="$1" value="$2" project_root="$3"
-  export _MAAS_PARAMS_ENV="$project_root/deployment/overlays/odh/params.env"
-  [ -f "$_MAAS_PARAMS_ENV" ] || return 0
-  export _MAAS_PARAMS_ENV_BACKUP="${_MAAS_PARAMS_ENV}.backup"
-  if [ ! -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
-    cp "$_MAAS_PARAMS_ENV" "$_MAAS_PARAMS_ENV_BACKUP"
-  fi
-  local sed_cmd="sed"
-  [[ "$(uname -s)" == "Darwin" ]] && sed_cmd="gsed"
-  $sed_cmd -i "s|^${key}=.*|${key}=${value}|" "$_MAAS_PARAMS_ENV"
-}
-
-# _cleanup_params_env
-#   Restores params.env from backup. Safe to call multiple times.
-_cleanup_params_env() {
-  if [ -n "${_MAAS_PARAMS_ENV_BACKUP:-}" ] && [ -f "$_MAAS_PARAMS_ENV_BACKUP" ]; then
-    mv -f "$_MAAS_PARAMS_ENV_BACKUP" "$_MAAS_PARAMS_ENV" 2>/dev/null || true
-  fi
-}
-
-# set_maas_api_image
-#   Sets the MaaS API container image in base kustomization using MAAS_API_IMAGE env var.
-#   If MAAS_API_IMAGE is not set, does nothing.
-#   Creates a backup that must be restored by calling cleanup_maas_api_image.
-#
-# Environment:
-#   MAAS_API_IMAGE - Container image to use (e.g., quay.io/opendatahub/maas-api:pr-123)
-set_maas_api_image() {
-  if [ -z "${MAAS_API_IMAGE:-}" ]; then
-    return 0
-  fi
-  if [ -n "${_MAAS_API_IMAGE_SET:-}" ]; then
-    return 0
-  fi
-
-  local project_root
-  project_root="$(find_project_root)" || {
-    echo "Error: failed to find project root" >&2
-    return 1
-  }
-
-  export _MAAS_API_KUSTOMIZATION="$project_root/deployment/base/maas-api/core/kustomization.yaml"
-  export _MAAS_API_BACKUP="${_MAAS_API_KUSTOMIZATION}.backup"
-  export _MAAS_API_IMAGE_SET=1
-
-  echo "   Setting MaaS API image: ${MAAS_API_IMAGE}"
-  cp "$_MAAS_API_KUSTOMIZATION" "$_MAAS_API_BACKUP" || {
-    echo "Error: failed to create backup of kustomization.yaml" >&2
-    return 1
-  }
-  (cd "$(dirname "$_MAAS_API_KUSTOMIZATION")" && kustomize edit set image "maas-api=${MAAS_API_IMAGE}") || {
-    echo "Error: failed to set image in kustomization.yaml" >&2
-    mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
-    return 1
-  }
-
-  # Patch params.env — kustomize replacements in shared-patches read from this
-  # file and override the base images: transformer set above.
-  _patch_params_env "maas-api-image" "$MAAS_API_IMAGE" "$project_root"
-}
-
-# cleanup_maas_api_image
-#   Restores the original kustomization.yaml and params.env from backup.
-#   Safe to call even if set_maas_api_image was not called or MAAS_API_IMAGE was not set.
-cleanup_maas_api_image() {
-  if [ -n "${_MAAS_API_BACKUP:-}" ] && [ -f "$_MAAS_API_BACKUP" ]; then
-    mv -f "$_MAAS_API_BACKUP" "$_MAAS_API_KUSTOMIZATION" 2>/dev/null || true
-  fi
-  _cleanup_params_env
-}
-
 # set_overlay_namespace overlay_dir namespace
 #   Sets the namespace in the overlay's kustomization.yaml before build.
 #   Creates a backup that must be restored by calling cleanup_overlay_namespace.
@@ -1068,6 +994,35 @@ wait_for_crd() {
 
   echo "❌ Timed out after ${timeout}s waiting for CRD $crd to appear." >&2
   return 1
+}
+
+# Apply MaaS maas.opendatahub.io CRDs from deployment/base/maas-controller/crd and wait until
+# each is Established. Ensures the API server accepts CR writes before maas-controller starts
+# (the manager creates Config/default from code once the Deployment is running).
+install_maas_controller_crds_and_wait() {
+  local crd_bundle_dir="$1"
+  if [[ ! -d "$crd_bundle_dir" ]]; then
+    echo "ERROR: MaaS CRD bundle directory not found: $crd_bundle_dir" >&2
+    return 1
+  fi
+  local bases_dir="${crd_bundle_dir}/bases"
+  if [[ ! -d "$bases_dir" ]]; then
+    echo "ERROR: MaaS CRD bases directory not found: $bases_dir" >&2
+    return 1
+  fi
+  echo "⏳ Applying MaaS Controller CRDs from ${crd_bundle_dir}..."
+  kubectl apply -k "$crd_bundle_dir" || return 1
+  local f crd_name
+  for f in "${bases_dir}"/*.yaml; do
+    [[ -e "$f" ]] || continue
+    crd_name=$(awk '/^kind: CustomResourceDefinition$/ {crd=1} crd && /^  name: / {print $2; exit}' "$f" || true)
+    [[ -n "${crd_name:-}" ]] || continue
+    if ! wait_for_crd "$crd_name" "${CRD_TIMEOUT:-180}"; then
+      return 1
+    fi
+  done
+  echo "✅ MaaS Controller CRDs are Established"
+  return 0
 }
 
 # Helper function to extract version from CSV name (e.g., "operator.v1.2.3" -> "1.2.3")
@@ -1570,6 +1525,52 @@ wait_authorino_ready() {
   done
 
   echo "  WARNING: Auth request verification timed out, continuing anyway"
+  return 0
+}
+
+# ==========================================
+# External OIDC / AuthPolicy alignment
+# ==========================================
+
+# verify_gateway_oidc_authpolicy <gateway_namespace>
+# When OIDC_ISSUER_URL is set, verify the gateway-level maas-gateway-auth AuthPolicy
+# contains oidc-identities authentication with the correct issuer URL.
+# This is the consolidated gateway AuthPolicy that replaces the per-route
+# maas-api-auth-policy for OIDC configuration.
+# Returns 0 if skipped (no OIDC_ISSUER_URL) or match; 1 on failure.
+verify_gateway_oidc_authpolicy() {
+  local ns="${1:-openshift-ingress}"
+  if [[ -z "${OIDC_ISSUER_URL:-}" ]]; then
+    return 0
+  fi
+  if ! command -v jq &>/dev/null; then
+    echo "verify_gateway_oidc_authpolicy: jq not found; skipping OIDC issuer check" >&2
+    return 0
+  fi
+  local json
+  if ! json=$(kubectl get authpolicy maas-gateway-auth -n "$ns" -o json 2>/dev/null); then
+    echo "verify_gateway_oidc_authpolicy: could not read authpolicy/maas-gateway-auth in namespace $ns" >&2
+    return 1
+  fi
+  local policy_issuer
+  # Try v1 structure first (.spec.rules), then fall back to v1beta2 (.spec.defaults.rules)
+  # TenantReconciler uses v1 structure; MaaSAuthPolicyReconciler still uses v1beta2 structure
+  policy_issuer=$(echo "$json" | jq -r '.spec.rules.authentication["oidc-identities"].jwt.issuerUrl // .spec.defaults.rules.authentication["oidc-identities"].jwt.issuerUrl // empty')
+  if [[ -z "$policy_issuer" ]]; then
+    echo "verify_gateway_oidc_authpolicy: maas-gateway-auth has no oidc-identities authentication rule" >&2
+    echo "  Ensure Tenant CR has spec.externalOIDC configured and MaaSAuthPolicy controller has reconciled." >&2
+    return 1
+  fi
+  local exp got
+  exp="${OIDC_ISSUER_URL%/}"
+  got="${policy_issuer%/}"
+  if [[ "$exp" != "$got" ]]; then
+    echo "verify_gateway_oidc_authpolicy: OIDC issuer mismatch." >&2
+    echo "  Expected (OIDC_ISSUER_URL):          $exp" >&2
+    echo "  Live maas-gateway-auth issuerUrl:   $got" >&2
+    echo "  Fix: ensure Tenant CR spec.externalOIDC.issuerUrl matches OIDC_ISSUER_URL." >&2
+    return 1
+  fi
   return 0
 }
 

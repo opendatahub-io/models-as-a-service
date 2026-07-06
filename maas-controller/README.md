@@ -11,7 +11,7 @@ For a comparison of the old tier-based flow vs the new subscription flow, see [d
 
 ### Tenant reconciler
 
-The Tenant reconciler watches `Tenant` CRs and deploys `maas-api` into the target namespace. On startup the controller creates a `default-tenant` CR if one does not exist. The reconciler:
+The Tenant reconciler watches `Tenant` CRs and deploys `maas-api` into the target namespace. On startup the controller creates the default `AITenant/models-as-a-service`; the AITenant reconciler then creates or adopts `Tenant/default-tenant` in the MaaS subscription namespace. The reconciler:
 
 - Renders the embedded kustomize overlay (`maas-api/deploy/overlays/odh`) with runtime parameters (namespace, image, TLS settings)
 - Applies the rendered manifests via SSA with `ForceOwnership`, so the controller is the sole owner
@@ -24,9 +24,13 @@ The `RELATED_IMAGE_ODH_MAAS_API_IMAGE` environment variable controls which `maas
 
 **Namespace-scoped CR.** The `Tenant` CR is namespace-scoped (`models-as-a-service`), not cluster-scoped like other ODH component CRDs. CRD `spec.scope` is immutable — changing it after deployment requires deleting all CR instances and the CRD itself (brief MaaS outage, permanent operator migration code). Shipping namespace-scoped from `v1alpha1` avoids that cost entirely and enables future multi-tenancy (one `default-tenant` per namespace).
 
-**Self-bootstrap singleton.** The controller creates `default-tenant` on startup if it does not exist. A CEL validation rule (`self.metadata.name == 'default-tenant'`) enforces exactly one Tenant per namespace. This is consistent with the ODH component lifecycle (DSC enables → operator deploys controller → controller creates CR) while keeping the platform workload lifecycle inside `maas-controller`.
+**Self-bootstrap singleton.** The controller creates `AITenant/models-as-a-service` on startup if it does not exist. The AITenant reconciler creates or adopts `default-tenant`; a CEL validation rule (`self.metadata.name == 'default-tenant'`) enforces exactly one Tenant per namespace. This is consistent with the ODH component lifecycle (DSC enables → operator deploys controller → controller creates CR) while keeping the platform workload lifecycle inside `maas-controller`.
 
-**Cross-namespace ownership.** The Tenant CR lives in the app namespace but five resources are created in the gateway namespace (`openshift-ingress`): `AuthPolicy`, `TokenRateLimitPolicy`, `DestinationRule`, `TelemetryPolicy`, and `Istio Telemetry`. Kubernetes rejects cross-namespace `ownerReference`, so these use tracking labels instead:
+**Config anchor.** The cluster-scoped `Config` named `default` is the Kubernetes controller owner for platform operands (maas-api workloads, gateway policies, cluster RBAC, and so on). Namespaced children in any namespace may reference this cluster-scoped owner. The namespace-scoped `Tenant` (`default-tenant`) is also owned by `Config` so garbage collection removes it when the anchor is deleted. **`Config/default` is created by `LifecycleReconciler`** once the `maas-controller` Deployment is running (and recreated if accidentally deleted while the Deployment remains); the ODH operator may still create it via component reconcile. The manager bootstrap runnable creates **`AITenant/models-as-a-service`** once `Config` exists (shell CR only); **`LifecycleReconciler`** applies non-controller **`Config`→`AITenant`** and **`Config`→`Tenant`** owner references the same way it links **`Config`→`Deployment`**. When the `Tenant` is set to `managementState: Removed`, teardown is driven by the **operator removing the `Config` anchor** (Models-as-a-Service component GC); the Tenant reconciler does not delete `Config`. The bootstrap runnable skips AITenant create while the **`maas-controller` Deployment is terminating**, matching the signal `LifecycleReconciler` uses so bootstrap does not fight teardown.
+
+**RBAC (ODH reconciler).** `ClusterRole/maas-controller-role` is owned by the `ModelsAsService` component CR and the operator resets its rules to its embedded manifest, which may omit `configs` until the operator ships that API. A separate `ClusterRole` + `ClusterRoleBinding` (`maas-controller-cluster-config-role` → the same `maas-controller` ServiceAccount) grants only `configs` verbs and is not operator-owned, so it persists and merges at authorization time with the primary binding.
+
+**Cross-namespace ownership.** The `Tenant` CR lives in the subscription namespace (default `models-as-a-service`), while `maas-api` runs in the application namespace (e.g. `opendatahub`). Kubernetes rejects a namespaced owner in a different namespace, so platform resources do **not** use `Tenant` as the controller owner. Instead they use `Config` as controller owner and carry tracking labels (`maas.opendatahub.io/tenant-name`, `maas.opendatahub.io/tenant-namespace`) for human inspection and for any non-owner-driven automation. Example labels:
 
 ```yaml
 labels:
@@ -34,7 +38,7 @@ labels:
   maas.opendatahub.io/tenant-namespace: models-as-a-service
 ```
 
-Same-namespace children use standard `ownerReference` (automatic GC). Cluster-scoped and cross-namespace children use tracking labels and are cleaned up by the Tenant finalizer via label queries.
+The `maas-controller` Deployment in the application namespace is never given a controller owner reference to itself; it only receives the tracking labels above when present in the rendered manifests.
 
 ### Subscription model
 
@@ -140,7 +144,7 @@ MaaSModelRef's `spec.modelRef.kind` selects how the controller discovers and exp
 | Kind (CRD value) | Behaviour |
 | ---------------- | --------- |
 | **LLMInferenceService** | Validates that an HTTPRoute exists for the referenced LLMInferenceService (created by KServe). Reads endpoint and readiness from the LLMInferenceService/HTTPRoute. |
-| **ExternalModel** | References an [ExternalModel](../docs/content/reference/crds/external-model.md) CR that defines an external AI/ML provider (e.g., OpenAI, Anthropic). The ExternalModel controller creates an HTTPRoute named `<model-name>` in the same namespace. MaaSModelRef validates the HTTPRoute exists and references the configured gateway, then derives the endpoint from the gateway's hostname. Model is ready once the HTTPRoute is accepted by the gateway. See `providers_external.go` for implementation. |
+| **ExternalModel** | References an [ExternalModel](../docs/content/reference/crds/external-model.md) CR that defines an external AI/ML provider (e.g., OpenAI, Anthropic). The ExternalModel controller creates MaaS-prefixed networking resources (for example, HTTPRoute `maas-<model-name>`) in the same namespace while preserving the public path `/<namespace>/<model-name>`. MaaSModelRef validates the HTTPRoute exists and references the configured gateway, then derives the endpoint from the gateway's hostname. Model is ready once the HTTPRoute is accepted by the gateway. See `providers_external.go` for implementation. |
 
 The CRD enum for `kind` is `LLMInferenceService` and `ExternalModel` (see `api/maas/v1alpha1/maasmodelref_types.go`). The registry accepts **LLMInferenceService**, **ExternalModel**, and the alias **llmisvc** (for backwards compatibility).
 
@@ -216,11 +220,11 @@ Create API keys with `POST /v1/api-keys` on the maas-api (authenticate with your
 
 ```bash
 MAAS_API="https://<gateway-host>/maas-api"
-API_KEY=$(curl -sSk -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
+API_KEY=$(curl -sS -H "Authorization: Bearer $(oc whoami -t)" -H "Content-Type: application/json" \
   -X POST -d '{"name":"demo","subscription":"<maas-subscription-name>"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
+curl -sS "https://<gateway-host>/llm/<model-name>/v1/chat/completions" \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model":"<model>","messages":[{"role":"user","content":"Hello"}],"max_tokens":10}'
@@ -253,17 +257,21 @@ Deploy the entire MaaS stack in one command. The script installs prerequisites (
 
 ### Option B: Add controller to an existing deployment
 
-If MaaS infrastructure is already deployed, install just the controller:
+If MaaS infrastructure is already deployed, install just the controller (same kustomize root the ODH operator uses):
 
 ```bash
 kubectl apply -k deployment/base/maas-controller/default
 ```
+
+On a **fresh** cluster, applying the full bundle in one shot can apply workloads before MaaS CRDs are **Established**. **`./scripts/deploy.sh`** applies `deployment/base/maas-controller/crd` first and waits until every MaaS CRD is **Established**, then applies the rest of `deployment/base/maas-controller/default` (RBAC, Deployment, and so on). After the controller pod starts, **`LifecycleReconciler` creates `Config/default`** and links **`Config`→`Deployment`**, **`Config`→`AITenant/models-as-a-service`**, and **`Config`→`default-tenant`**; the bootstrap runnable may create the default **`AITenant`** shell before those owner refs converge.
 
 To install into another namespace:
 
 ```bash
 kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: my-namespace/g" | kubectl apply -f -
 ```
+
+For a cold cluster with a custom namespace, run `install_maas_controller_crds_and_wait` from `scripts/deployment-helpers.sh` before the `kustomize build … | kubectl apply` line (same order as `deploy.sh`).
 
 ### Verify
 
@@ -276,7 +284,8 @@ kubectl get crd | grep maas.opendatahub.io
 
 | Component | Path | Description |
 | --------- | ---- | ----------- |
-| CRDs | `deployment/base/maas-controller/crd/` | MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, Tenant |
+| CRDs (also in default kustomize) | `deployment/base/maas-controller/crd/bases/` | Config, Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel |
+| Default bundle (operator) | `deployment/base/maas-controller/default/` | Includes `../crd` + RBAC + Deployment + monitoring + `Config/default` |
 | RBAC | `deployment/base/maas-controller/rbac/` | ClusterRole, ServiceAccount, bindings |
 | Controller | `deployment/base/maas-controller/manager/` | Deployment (`quay.io/opendatahub/maas-controller:latest`) |
 | Default auth policy | `deployment/base/maas-controller/policies/` | Gateway-level AuthPolicy (deny unauthenticated, 401/403) |
@@ -325,24 +334,24 @@ MAAS_API="https://${GATEWAY_HOST}/maas-api"
 TOKEN=$(oc whoami -t)
 
 # Regular tier: log in as a user in free-user, then mint a key for simulator-subscription
-FREE_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+FREE_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-free","subscription":"simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/facebook-opt-125m-simulated/v1/chat/completions" \
   -H "Authorization: Bearer $FREE_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 
 # Premium tier: log in as a user in premium-user, mint a key for premium-simulator-subscription, then call the premium route
-PREMIUM_API_KEY=$(curl -sSk -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+PREMIUM_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
   -X POST -d '{"name":"readme-premium","subscription":"premium-simulator-subscription"}' \
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
-curl -sSk -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
+curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $PREMIUM_API_KEY" \
   -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
@@ -468,7 +477,7 @@ Check that the WasmPlugin exists: `kubectl get wasmplugins -n openshift-ingress`
 
 ### CLI Flags
 
-The controller accepts the following command-line flags (configured via `deployment/overlays/odh/params.env` when using kustomize):
+The controller accepts the following command-line flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
@@ -476,56 +485,21 @@ The controller accepts the following command-line flags (configured via `deploym
 | `--health-probe-bind-address` | `:8081` | The address the probe endpoint binds to. |
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
-| `--gateway-namespace` | `openshift-ingress` | The namespace of the Gateway resource. |
+| `--gateway-namespace` | `openshift-ingress` | The namespace of the default Gateway resource and existing Gateways referenced by AITenant resources. |
 | `--maas-api-namespace` | `opendatahub` | The namespace where maas-api service is deployed. |
-| `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy and MaaSSubscription CRs. |
-| `--cluster-audience` | `https://kubernetes.default.svc` | **The OIDC audience of the cluster for TokenReview.** HyperShift/ROSA clusters use a custom OIDC provider URL and must override this value. |
+| `--maas-subscription-namespace` | `models-as-a-service` | The namespace to watch for MaaSAuthPolicy, MaaSSubscription and Tenant CRs. |
+| `--aitenant-namespace` | `ai-tenants` | The infrastructure namespace where AITenant CRs are accepted. |
 | `--metadata-cache-ttl` | `60` | TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info). |
 | `--authz-cache-ttl` | `60` | TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership). |
-
-### Configuring for HyperShift/ROSA Clusters
-
-HyperShift and ROSA clusters use custom OIDC provider URLs. You **must** configure `cluster-audience` to match your cluster's OIDC audience.
-
-**Find your cluster's OIDC issuer:**
-
-```bash
-kubectl get --raw /.well-known/openid-configuration | jq -r .issuer
-```
-
-Use this issuer URL as the `cluster-audience` value.
-
-**Configure via params.env (kustomize deployment):**
-
-Edit `deployment/overlays/odh/params.env` and update the `cluster-audience` line:
-
-```env
-cluster-audience=https://your-cluster-oidc-issuer
-```
-
-Then redeploy:
-
-```bash
-kustomize build deployment/overlays/odh | kubectl apply -f -
-```
-
-**Configure via kubectl patch (running deployment):**
-
-```bash
-# Replace 'opendatahub' with your controller namespace if different
-CONTROLLER_NS=opendatahub
-
-kubectl patch configmap maas-parameters -n $CONTROLLER_NS \
-  --type merge \
-  -p '{"data":{"cluster-audience":"https://your-cluster-oidc-issuer"}}'
-
-# Restart controller to pick up new config
-kubectl rollout restart deployment/maas-controller -n $CONTROLLER_NS
-```
+| `--subscription-namespace-maintain-interval` | `30s` | How often to re-check controller-managed namespaces while the manager is running. |
+| `--enable-tenant-namespace-discovery` | `false` | When enabled, watch MaaS CRs in all namespaces and reconcile the configured `--maas-subscription-namespace` plus tenant namespaces labeled `ai-gateway.opendatahub.io/tenant` or `maas.opendatahub.io/managed-by-aitenant=true`. |
 
 ### Other Configuration
 
 - **Controller namespace**: Default is `opendatahub`. Override via `kustomize build deployment/base/maas-controller/default | sed "s/namespace: opendatahub/namespace: <ns>/g" | kubectl apply -f -`.
-- **MaaS subscription namespace**: Default is `models-as-a-service`. Override `maas-subscription-namespace` in `params.env`.
-- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override `maas-controller-image` in `params.env`.
-- **Gateway name/namespace**: Override `gateway-name` and `gateway-namespace` in `params.env`.
+- **MaaS subscription namespace**: Default is `models-as-a-service`. Override via the `--maas-subscription-namespace` flag.
+- **AITenant infrastructure namespace**: Default is `ai-tenants`. The controller creates it if missing. Override via the `--aitenant-namespace` flag.
+- **AITenant tenant namespace**: For non-default tenants, the controller derives the tenant namespace as `ai-tenant-<aitenant-name>`. The default tenant keeps the configured MaaS subscription namespace, usually `models-as-a-service`.
+- **Image**: Default is `quay.io/opendatahub/maas-controller:latest`. Override the live `maas-controller` Deployment image directly.
+- **Gateway name/namespace**: Legacy/unmanaged Tenant routing uses `spec.gatewayRef` with controller defaults. AITenant-managed tenants use the owning `AITenant` as the platform context source: `spec.gateway.name` is intent, `status.gatewayRef` is the resolved Gateway, and the bridge `Tenant.spec.gatewayRef` is ignored.
+- **External OIDC**: For AITenant-managed tenants, configure OIDC on `AITenant.spec.oidc`. Existing `Tenant.spec.externalOIDC` values are preserved for compatibility but ignored once the Tenant is AITenant-managed.

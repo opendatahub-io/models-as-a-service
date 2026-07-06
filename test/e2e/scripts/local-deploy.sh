@@ -15,6 +15,8 @@
 #   KUADRANT_VERSION     - Kuadrant Helm chart version (default: 1.3.1)
 #   MAAS_NAMESPACE       - MaaS deployment namespace (default: maas-system)
 #   GATEWAY_NAMESPACE    - Gateway namespace (default: istio-system)
+#   IPP_IMAGE            - Payload-processing image (default: see params.env pin)
+#   PAYLOAD_PROCESSING_COMMIT - Upstream repo commit for local IPP builds (default: IPP_IMAGE tag)
 
 set -euo pipefail
 
@@ -34,15 +36,17 @@ SUBSCRIPTION_NAMESPACE="models-as-a-service"
 
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
-BBR_IMAGE="${BBR_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable}"
 
-# Path to BBR repo (for arm64 image builds)
-BBR_REPO="${BBR_REPO:-$(cd "$PROJECT_ROOT/../ai-gateway-payload-processing" 2>/dev/null && pwd || echo "")}"
+_default_ipp_image=$(awk -F= '/^payload-processing-image=/ {print $2; exit}' "$PROJECT_ROOT/deployment/overlays/odh/params.env" 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")
+IPP_IMAGE="${IPP_IMAGE:-$_default_ipp_image}"
+PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${IPP_IMAGE##*:}}"
+
+# Path to IPP repo (for arm64 image builds)
+IPP_REPO="${IPP_REPO:-$(cd "$PROJECT_ROOT/../ai-gateway-payload-processing" 2>/dev/null && pwd || echo "")}"
 
 # KServe (for LLMInferenceService / internal models)
 KSERVE_VERSION="${KSERVE_VERSION:-v0.15.2}"
 KSERVE_COMMIT="47894470ea49"  # opendatahub fork commit pinned in maas-controller go.mod
-KSERVE_ODH_IMAGE="quay.io/opendatahub/kserve-controller:latest"
 LLMISVC_IMAGE="quay.io/opendatahub/odh-kserve-llmisvc-controller:odh-stable"
 
 ARCH="$(uname -m)"
@@ -74,6 +78,24 @@ ok()   { echo -e "  ${GREEN}✓${NC} $1"; }
 warn() { echo -e "  ${YELLOW}!${NC} $1"; }
 fail() { echo -e "  ${RED}✗${NC} $1" >&2; }
 
+ensure_ipp_repo() {
+  if [[ -z "${IPP_REPO:-}" || ! -d "$IPP_REPO" ]]; then
+    IPP_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
+  fi
+  if [[ ! -d "$IPP_REPO/.git" ]]; then
+    echo "  Cloning ai-gateway-payload-processing..."
+    gh repo clone opendatahub-io/ai-gateway-payload-processing "$IPP_REPO"
+  fi
+  local current
+  current="$(git -C "$IPP_REPO" rev-parse HEAD 2>/dev/null || echo "")"
+  if [[ "$current" != "$PAYLOAD_PROCESSING_COMMIT" ]]; then
+    echo "  Checking out payload-processing commit ${PAYLOAD_PROCESSING_COMMIT:0:12}..."
+    git -C "$IPP_REPO" fetch origin "$PAYLOAD_PROCESSING_COMMIT" --depth 1 2>/dev/null \
+      || git -C "$IPP_REPO" fetch origin
+    git -C "$IPP_REPO" checkout "$PAYLOAD_PROCESSING_COMMIT"
+  fi
+}
+
 # ─── Argument parsing ───────────────────────────────────────────────────────
 
 ACTION="deploy"
@@ -87,7 +109,7 @@ while [[ $# -gt 0 ]]; do
       ACTION="rebuild"
       REBUILD_COMPONENT="${2:-}"
       if [[ -z "$REBUILD_COMPONENT" ]] || [[ "$REBUILD_COMPONENT" == --* ]]; then
-        echo "Usage: $0 --rebuild <bbr|maas-api|maas-controller>"
+        echo "Usage: $0 --rebuild <ipp|maas-api|maas-controller>"
         exit 1
       fi
       shift
@@ -102,7 +124,7 @@ while [[ $# -gt 0 ]]; do
       echo "  --status                Show component status"
       echo "  --validate              Run inference tests to verify the deployment works"
       echo "  --rebuild <component>   Rebuild and redeploy a component after code changes"
-      echo "                          Components: bbr, maas-api, maas-controller, all"
+      echo "                          Components: ipp, maas-api, maas-controller, all"
       echo "  --help                  Show this help message"
       echo ""
       echo "Environment variables:"
@@ -186,7 +208,7 @@ if [[ "$ACTION" == "validate" ]]; then
   _check "All pods running" '[[ $(kubectl get pods -A --no-headers | grep -v Running | grep -v Completed | wc -l) -eq 0 ]]'
   _check "maas-api ready" 'kubectl get deployment maas-api -n $MAAS_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "maas-controller ready" 'kubectl get deployment maas-controller -n $MAAS_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
-  _check "payload-processing (BBR) ready" 'kubectl get deployment payload-processing -n $GATEWAY_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
+  _check "payload-processing (IPP) ready" 'kubectl get deployment payload-processing -n $GATEWAY_NAMESPACE -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "Authorino ready" 'kubectl get deployment authorino -n kuadrant-system -o jsonpath="{.status.readyReplicas}" | grep -q 1'
   _check "Gateway programmed" 'kubectl get gateway maas-default-gateway -n $GATEWAY_NAMESPACE -o jsonpath="{.status.conditions[?(@.type==\"Programmed\")].status}" | grep -q True'
 
@@ -300,25 +322,18 @@ if [[ "$ACTION" == "rebuild" ]]; then
   fi
   kubectl config use-context "kind-${KIND_CLUSTER_NAME}" &>/dev/null
 
-  # Ensure BBR repo is available
-  if [[ -z "$BBR_REPO" || ! -d "$BBR_REPO" ]]; then
-    BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
-    if [[ ! -d "$BBR_REPO" ]]; then
-      echo "  Cloning ai-gateway-payload-processing..."
-      gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO" -- --depth 1 2>&1 | tail -1
-    fi
-  fi
+  ensure_ipp_repo
 
   case "$REBUILD_COMPONENT" in
-    bbr|payload-processing)
-      echo -e "${BOLD}Rebuilding BBR (payload-processing)${NC}"
-      (cd "$BBR_REPO" && \
+    ipp|payload-processing)
+      echo -e "${BOLD}Rebuilding IPP (payload-processing)${NC}"
+      (cd "$IPP_REPO" && \
         docker buildx build --platform "$DOCKER_PLATFORM" --load \
-          -t "$BBR_IMAGE" . 2>&1 | tail -3)
-      kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+          -t "$IPP_IMAGE" . 2>&1 | tail -3)
+      kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
       kubectl rollout restart deployment/payload-processing -n "$GATEWAY_NAMESPACE"
       kubectl rollout status deployment/payload-processing -n "$GATEWAY_NAMESPACE" --timeout=60s
-      ok "BBR rebuilt and redeployed"
+      ok "IPP rebuilt and redeployed"
       ;;
     maas-api|api)
       echo -e "${BOLD}Rebuilding maas-api${NC}"
@@ -357,11 +372,11 @@ if [[ "$ACTION" == "rebuild" ]]; then
           -t "$MAAS_CONTROLLER_IMAGE" . 2>&1 | tail -3)
       kind load docker-image "$MAAS_CONTROLLER_IMAGE" --name "$KIND_CLUSTER_NAME"
 
-      echo "  Building BBR..."
-      (cd "$BBR_REPO" && \
+      echo "  Building IPP..."
+      (cd "$IPP_REPO" && \
         docker buildx build --platform "$DOCKER_PLATFORM" --load \
-          -t "$BBR_IMAGE" . 2>&1 | tail -3)
-      kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+          -t "$IPP_IMAGE" . 2>&1 | tail -3)
+      kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
 
       kubectl rollout restart deployment/maas-api -n "$MAAS_NAMESPACE"
       kubectl rollout restart deployment/maas-controller -n "$MAAS_NAMESPACE"
@@ -373,7 +388,7 @@ if [[ "$ACTION" == "rebuild" ]]; then
       ;;
     *)
       fail "Unknown component: $REBUILD_COMPONENT"
-      echo "  Valid components: bbr, maas-api, maas-controller, all"
+      echo "  Valid components: ipp, maas-api, maas-controller, all"
       exit 1
       ;;
   esac
@@ -879,7 +894,8 @@ if kubectl get crd externalmodels.maas.opendatahub.io &>/dev/null; then
   ok "MaaS CRDs already installed"
 else
   kubectl apply -f "$PROJECT_ROOT/deployment/base/maas-controller/crd/bases/"
-  for crd in externalmodels.maas.opendatahub.io maasmodelrefs.maas.opendatahub.io \
+  for crd in configs.maas.opendatahub.io tenants.maas.opendatahub.io \
+             externalmodels.maas.opendatahub.io maasmodelrefs.maas.opendatahub.io \
              maassubscriptions.maas.opendatahub.io maasauthpolicies.maas.opendatahub.io; do
     kubectl wait --for=condition=Established "crd/$crd" --timeout=60s
   done
@@ -1029,9 +1045,9 @@ EOF
   ok "Istio networking configured"
 fi
 
-# ─── Step 9: MaaS controller + API ─────────────────────────────────────────
+# ─── Step 9: MaaS controller reconciles platform ───────────────────────────
 
-step "Deploying MaaS controller + API"
+step "Deploying MaaS controller"
 
 # Handle arm64: check if images need local build
 if [[ "$ARCH" == "arm64" ]]; then
@@ -1059,20 +1075,13 @@ if [[ "$ARCH" == "arm64" ]]; then
         -t "$MAAS_CONTROLLER_IMAGE" . 2>&1 | tail -3)
     kind load docker-image "$MAAS_CONTROLLER_IMAGE" --name "$KIND_CLUSTER_NAME"
 
-    # Auto-clone BBR repo if not present
-    if [[ -z "$BBR_REPO" || ! -d "$BBR_REPO" ]]; then
-      BBR_REPO="$PROJECT_ROOT/../ai-gateway-payload-processing"
-      if [[ ! -d "$BBR_REPO" ]]; then
-        echo "  Cloning ai-gateway-payload-processing..."
-        gh repo clone opendatahub-io/ai-gateway-payload-processing "$BBR_REPO" -- --depth 1 2>&1 | tail -1
-      fi
-    fi
+    ensure_ipp_repo
 
-    echo "  Building payload-processing (BBR)..."
-    (cd "$BBR_REPO" && \
+    echo "  Building payload-processing (IPP)..."
+    (cd "$IPP_REPO" && \
       docker buildx build --platform "$DOCKER_PLATFORM" --load \
-        -t "$BBR_IMAGE" . 2>&1 | tail -3)
-    kind load docker-image "$BBR_IMAGE" --name "$KIND_CLUSTER_NAME"
+        -t "$IPP_IMAGE" . 2>&1 | tail -3)
+    kind load docker-image "$IPP_IMAGE" --name "$KIND_CLUSTER_NAME"
 
     ok "arm64 images built and loaded into Kind"
   else
@@ -1083,32 +1092,24 @@ fi
 # Create subscription namespace
 kubectl create namespace "$SUBSCRIPTION_NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
 
-# Build kustomize manifests with TLS backend (matching OpenShift's TLS deployment).
-# We create a temp overlay directory with symlinks to the real deployment dirs,
-# because kustomize does not allow absolute paths in resources/components.
+# Build a small local kustomize wrapper for maas-controller only.
+# The controller then reconciles maas-api and payload-processing via Tenant.
 TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
-# Symlink deployment dirs so kustomize can reference them with relative paths
+# Symlink deployment dir so kustomize can reference it with relative paths.
 ln -s "$PROJECT_ROOT/deployment" "$TEMP_DIR/deployment"
 
 # Create Kind-specific params.env
 cat > "$TEMP_DIR/params.env" <<EOF
 maas-api-image=${MAAS_API_IMAGE}
 maas-controller-image=${MAAS_CONTROLLER_IMAGE}
-payload-processing-image=quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable
+payload-processing-image=${IPP_IMAGE}
 maas-api-key-cleanup-image=docker.io/curlimages/curl:latest
-payload-processing-replicas=1
-gateway-namespace=${GATEWAY_NAMESPACE}
-gateway-name=maas-default-gateway
-app-namespace=${MAAS_NAMESPACE}
-api-key-max-expiration-days=90
-metadata-cache-ttl=60
-authz-cache-ttl=60
-cluster-audience=https://kubernetes.default.svc
 EOF
 
-# Create wrapping kustomization that uses TLS backend with Kind-specific params
+# Create a live maas-parameters ConfigMap with image values consumed by
+# RELATED_IMAGE_* env vars on the controller Deployment.
 cat > "$TEMP_DIR/kustomization.yaml" <<EOF
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -1123,142 +1124,26 @@ generatorOptions:
   disableNameSuffixHash: true
 
 resources:
-  - deployment/base/maas-api/overlays/tls
   - deployment/base/maas-controller/default
-  - deployment/base/payload-processing/default
-
-components:
-  - deployment/components/shared-patches
 
 patches:
   - target:
-      kind: NetworkPolicy
-      name: maas-authorino-allow
+      kind: Deployment
+      name: maas-controller
     patch: |
-      - op: replace
-        path: /spec/ingress/0/from/0/podSelector/matchLabels
-        value:
-          authorino-resource: authorino
-  # Fix EnvoyFilter subFilter name for Kind (istio-system instead of openshift-ingress)
-  - target:
-      kind: EnvoyFilter
-      name: payload-processing
-    patch: |
-      - op: replace
-        path: /spec/configPatches/0/match/listener/filterChain/filter/subFilter/name
-        value: "extensions.istio.io/wasmplugin/${GATEWAY_NAMESPACE}.kuadrant-maas-default-gateway"
-
-# Payload-processing resources must be in the gateway namespace (same as ODH overlay)
-replacements:
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.payload-processing-image
-  targets:
-  - select:
+      apiVersion: apps/v1
       kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - spec.template.spec.containers.[name=payload-processing].image
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.payload-processing-replicas
-  targets:
-  - select:
-      kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - spec.replicas
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: Deployment
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: Service
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ServiceAccount
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: DestinationRule
-      name: payload-processing
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ConfigMap
-      name: payload-processing-plugins
-    fieldPaths:
-    - metadata.namespace
-  - select:
-      kind: ClusterRoleBinding
-      name: payload-processing-reader
-    fieldPaths:
-    - subjects.0.namespace
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-name
-  targets:
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - spec.targetRefs.0.name
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: DestinationRule
-      name: payload-processing
-    fieldPaths:
-    - spec.host
-    options:
-      delimiter: "."
-      index: 1
-  - select:
-      kind: EnvoyFilter
-      name: payload-processing
-    fieldPaths:
-    - spec.configPatches.0.patch.value.typed_config.grpc_service.envoy_grpc.cluster_name
-    options:
-      delimiter: "."
-      index: 1
-# Replace gateway namespace in maas-api-backend-tls DestinationRule
-# (host replacement is handled by shared-patches component)
-- source:
-    kind: ConfigMap
-    version: v1
-    name: maas-parameters
-    fieldPath: data.gateway-namespace
-  targets:
-  - select:
-      kind: DestinationRule
-      name: maas-api-backend-tls
-    fieldPaths:
-    - metadata.namespace
+      metadata:
+        name: maas-controller
+      spec:
+        template:
+          spec:
+            containers:
+            - name: manager
+              image: ${MAAS_CONTROLLER_IMAGE}
+              env:
+              - name: GATEWAY_NAMESPACE
+                value: ${GATEWAY_NAMESPACE}
 EOF
 
 echo "  Building kustomize manifests..."
@@ -1283,35 +1168,48 @@ print('\n---\n'.join(filtered))
 " > "$TEMP_DIR/filtered.yaml"
 
 if ! kubectl apply --server-side=true --force-conflicts -f "$TEMP_DIR/filtered.yaml" 2>&1 | tail -15; then
-  fail "Failed to apply MaaS manifests"
+  fail "Failed to apply MaaS controller manifests"
   exit 1
-fi
-
-echo "  Waiting for MaaS API..."
-kubectl rollout status deployment/maas-api -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
-  warn "maas-api not ready yet"
-
-# Disable sidecar injection on payload-processing (BBR uses self-signed TLS for ext-proc)
-kubectl patch deployment payload-processing -n "$GATEWAY_NAMESPACE" --type=merge \
-  -p='{"spec":{"template":{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}}}' 2>/dev/null || true
-
-# Fix controller's GATEWAY_NAMESPACE — base manifest hardcodes openshift-ingress
-CURRENT_GW_NS=$(kubectl get deployment maas-controller -n "$MAAS_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="GATEWAY_NAMESPACE")].value}' 2>/dev/null)
-if [[ "$CURRENT_GW_NS" != "$GATEWAY_NAMESPACE" ]]; then
-  kubectl set env deployment/maas-controller -n "$MAAS_NAMESPACE" GATEWAY_NAMESPACE="$GATEWAY_NAMESPACE"
 fi
 
 echo "  Waiting for MaaS controller..."
 kubectl rollout status deployment/maas-controller -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
   warn "maas-controller not ready yet"
 
-ok "MaaS controller + API deployed"
+echo "  Waiting for controller to reconcile maas-api..."
+for _i in $(seq 1 36); do
+  kubectl get deployment maas-api -n "$MAAS_NAMESPACE" &>/dev/null && break
+  sleep 5
+done
+if kubectl get deployment maas-api -n "$MAAS_NAMESPACE" &>/dev/null; then
+  kubectl rollout status deployment/maas-api -n "$MAAS_NAMESPACE" --timeout=180s 2>/dev/null || \
+    warn "maas-api not ready yet"
+else
+  warn "maas-api deployment was not created by maas-controller"
+fi
+
+echo "  Waiting for controller to reconcile payload-processing..."
+for _i in $(seq 1 36); do
+  kubectl get deployment payload-processing -n "$GATEWAY_NAMESPACE" &>/dev/null && break
+  sleep 5
+done
+if kubectl get deployment payload-processing -n "$GATEWAY_NAMESPACE" &>/dev/null; then
+  # Disable sidecar injection on payload-processing (IPP uses self-signed TLS for ext-proc).
+  kubectl patch deployment payload-processing -n "$GATEWAY_NAMESPACE" --type=merge \
+    -p='{"spec":{"template":{"metadata":{"annotations":{"sidecar.istio.io/inject":"false"}}}}}' 2>/dev/null || true
+  kubectl rollout status deployment/payload-processing -n "$GATEWAY_NAMESPACE" --timeout=180s 2>/dev/null || \
+    warn "payload-processing not ready yet"
+else
+  warn "payload-processing deployment was not created by maas-controller"
+fi
+
+ok "MaaS controller deployed and reconciled platform resources"
 
 # ─── Step 10b: Test fixtures ────────────────────────────────────────────────
 
 step "Deploying test fixtures"
 
-LLM_KATAN_FQDN="${LLM_KATAN_FQDN:-3-13-21-181.sslip.io}"
+LLM_KATAN_FQDN="${LLM_KATAN_FQDN:-3-147-232-199.sslip.io}"
 MODEL_NAMESPACE="llm"
 INTERNAL_MODEL_NAMESPACE="llm-internal"
 
@@ -1330,7 +1228,7 @@ metadata:
   name: llm-katan-creds
   namespace: ${MODEL_NAMESPACE}
   labels:
-    inference.networking.k8s.io/bbr-managed: "true"
+    inference.llm-d.ai/ipp-managed: "true"
 stringData:
   api-key: "llm-katan-openai-key"
 ---
@@ -1372,8 +1270,10 @@ metadata:
   namespace: ${INTERNAL_MODEL_NAMESPACE}
 spec:
   model:
-    uri: hf://sshleifer/tiny-gpt2
+    uri: hf://placeholder/no-model
     name: facebook/opt-125m
+  storageInitializer:
+    enabled: false
   replicas: 1
   router:
     route: {}

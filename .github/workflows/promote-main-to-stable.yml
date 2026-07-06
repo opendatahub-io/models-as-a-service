@@ -5,8 +5,8 @@
 #
 # This workflow:
 #   1. Checks if stable is behind main
-#   2. Creates a PR from main -> stable if there are new changes
-#   3. Reuses an existing open PR if one already exists
+#   2. Verifies there are no merge conflicts (strict — fails on any conflict)
+#   3. Creates/updates a PR from main → stable only if merge is clean
 
 name: Promote Main to Stable
 
@@ -25,7 +25,7 @@ env:
 
 jobs:
   promote:
-    name: Create Promotion PR
+    name: Promote main to stable
     runs-on: ubuntu-latest
 
     steps:
@@ -40,9 +40,8 @@ jobs:
           git config user.name "${{ env.GH_USER_NAME }}"
           git config user.email "${{ env.GH_USER_EMAIL }}"
 
-      - name: Promote main to stable
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Check for new commits
+        id: check
         run: |
           git fetch origin main stable
 
@@ -50,30 +49,86 @@ jobs:
           if [ "$DIFF_COUNT" -eq 0 ]; then
             echo "stable is already up to date with main. Nothing to promote."
             echo "## Promote Main to Stable" >> "$GITHUB_STEP_SUMMARY"
-            echo "stable is already up to date with main. No PR needed." >> "$GITHUB_STEP_SUMMARY"
+            echo "stable is already up to date with main. No changes to merge." >> "$GITHUB_STEP_SUMMARY"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
           echo "Found $DIFF_COUNT commit(s) to promote from main to stable."
+          echo "skip=false" >> "$GITHUB_OUTPUT"
+          echo "diff_count=$DIFF_COUNT" >> "$GITHUB_OUTPUT"
 
-          COMMIT_LOG=$(git log --oneline origin/stable..origin/main --no-merges | head -30)
-          BODY="Automated promotion of **${DIFF_COUNT} commit(s)** from \`main\` to \`stable\`."
-          BODY="${BODY}"$'\n\n'"\`\`\`"$'\n'"${COMMIT_LOG}"$'\n'"\`\`\`"
+      - name: Check for merge conflicts
+        if: steps.check.outputs.skip != 'true'
+        run: |
+          git checkout origin/stable
 
-          EXISTING_PR=$(gh pr list --base stable --head main --state open --json number --jq '.[0].number // empty')
+          if ! git merge --no-commit --no-ff origin/main; then
+            echo "::error::Merge conflicts detected between main and stable."
+            echo "## Promote Main to Stable — FAILED" >> "$GITHUB_STEP_SUMMARY"
+            echo "### Merge conflicts detected" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "The following files have conflicts:" >> "$GITHUB_STEP_SUMMARY"
+            echo '````' >> "$GITHUB_STEP_SUMMARY"
+            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
+            echo '````' >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
+            echo "Please resolve conflicts manually before re-running this workflow." >> "$GITHUB_STEP_SUMMARY"
+            git merge --abort
+            exit 1
+          fi
+
+          git merge --abort || true
+
+      - name: Create or update promotion PR
+        if: steps.check.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DIFF_COUNT: ${{ steps.check.outputs.diff_count }}
+        run: |
+          set -euo pipefail
+
+          COMMIT_LOG=$(git log --oneline origin/stable..origin/main --no-merges | head -50)
+
+          BODY="## Promotion: main → stable"
+          BODY="${BODY}"$'\n\n'"Automated promotion of **${DIFF_COUNT} commit(s)** from \`main\` to \`stable\`."
+          BODY="${BODY}"$'\n\n'"| Detail | Value |"
+          BODY="${BODY}"$'\n'"| --- | --- |"
+          BODY="${BODY}"$'\n'"| Promotion | \`main\` → \`stable\` |"
+          BODY="${BODY}"$'\n'"| Commits to merge | **${DIFF_COUNT}** |"
+          BODY="${BODY}"$'\n'"| Conflict check | ✅ Passed |"
+          BODY="${BODY}"$'\n\n'"### Commits included"
+          BODY="${BODY}"$'\n\n'"\`\`\`\`"$'\n'"${COMMIT_LOG}"$'\n'"\`\`\`\`"
+          BODY="${BODY}"$'\n\n'"---"
+          BODY="${BODY}"$'\n'"⚠️ **Merge this PR with a merge commit** (do not squash or rebase)."
+
+          EXISTING_PR=$(gh pr list --base stable --head main --state open --json number,url --jq '.[0] // empty')
 
           if [ -n "$EXISTING_PR" ]; then
-            if ! echo "$BODY" | gh pr edit "$EXISTING_PR" --body-file -; then
-              echo "::error::Failed to update existing promotion PR #${EXISTING_PR}"
-              exit 1
-            fi
-            echo "Updated existing promotion PR #${EXISTING_PR}"
+            PR_NUMBER=$(echo "$EXISTING_PR" | jq -r '.number')
+            PR_URL=$(echo "$EXISTING_PR" | jq -r '.url')
+            echo "$BODY" | gh pr edit "$PR_NUMBER" --body-file -
+            echo "Updated existing promotion PR #${PR_NUMBER}"
           else
-            if ! echo "$BODY" | gh pr create --base stable --head main \
+            PR_URL=$(echo "$BODY" | gh pr create --base stable --head main \
               --title "chore: promote main to stable" \
-              --body-file -; then
-              echo "::error::Failed to create promotion PR"
-              exit 1
-            fi
-            echo "Created new promotion PR"
+              --body-file - | tail -n1)
+            PR_NUMBER="${PR_URL##*/}"
+            [[ "$PR_NUMBER" =~ ^[0-9]+$ ]] || { echo "::error::Failed to parse PR number from: $PR_URL"; exit 1; }
+            echo "Created new promotion PR #${PR_NUMBER}"
           fi
+
+          echo "## Promote Main to Stable — PR Created" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "**PR:** [#${PR_NUMBER}](${PR_URL})" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Detail | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Promotion | \`main\` → \`stable\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Commits to merge | **${DIFF_COUNT}** |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Conflict check | ✅ Passed |" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Commits included" >> "$GITHUB_STEP_SUMMARY"
+          echo '````' >> "$GITHUB_STEP_SUMMARY"
+          echo "$COMMIT_LOG" >> "$GITHUB_STEP_SUMMARY"
+          echo '````' >> "$GITHUB_STEP_SUMMARY"

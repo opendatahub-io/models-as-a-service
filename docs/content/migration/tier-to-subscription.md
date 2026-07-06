@@ -108,7 +108,7 @@ Replace old system with new system in one maintenance window.
 If maas-controller is not already installed:
 
 ```bash
-# Deploy maas-controller
+# Deploy maas-controller (same kustomize as the operator)
 kubectl apply -k deployment/base/maas-controller/default
 
 # Verify controller is running

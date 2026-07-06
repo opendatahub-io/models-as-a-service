@@ -27,7 +27,7 @@ echo "Gateway endpoint: $HOST"
 !!! note "Optional"
     List MaaSSubscriptions you can access (authenticate with your OpenShift token; requires `HOST` from above):
     ```bash
-    curl -sSk -H "Authorization: Bearer $(oc whoami -t)" \
+    curl -sS -H "Authorization: Bearer $(oc whoami -t)" \
       "${HOST}/maas-api/v1/subscriptions" | jq .
     ```
 
@@ -36,7 +36,7 @@ echo "Gateway endpoint: $HOST"
 For OpenShift, create an API key (authenticate with your OpenShift token):
 
 ```bash
-API_KEY_RESPONSE=$(curl -sSk \
+API_KEY_RESPONSE=$(curl -sS \
   -H "Authorization: Bearer $(oc whoami -t)" \
   -H "Content-Type: application/json" \
   -X POST \
@@ -49,7 +49,7 @@ echo "API key obtained: ${API_KEY:0:20}..."
 !!! note "Optional"
     List your API keys (metadata only; plaintext secrets are never returned):
     ```bash
-    curl -sSk \
+    curl -sS \
       -H "Authorization: Bearer $(oc whoami -t)" \
       -H "Content-Type: application/json" \
       -X POST \
@@ -68,7 +68,7 @@ echo "API key obtained: ${API_KEY:0:20}..."
 Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models` with an API key does not require `X-MaaS-Subscription`—the list is scoped to that subscription. (With an OpenShift user token instead of an API key, you can optionally send `X-MaaS-Subscription` to filter when you have access to multiple subscriptions.)
 
 ```bash
-MODELS=$(curl -sSk ${HOST}/maas-api/v1/models \
+MODELS=$(curl -sS ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer $API_KEY" | jq -r .) && \
 echo $MODELS | jq . && \
@@ -82,7 +82,7 @@ echo "Model URL: $MODEL_URL"
 Send a request to the model’s OpenAI-compatible **chat completions** API (expect **200 OK**). This example uses **`POST /v1/chat/completions`** with a `messages` array. If your backend only implements **`/v1/completions`** (prompt-based) or another route, adjust the path and JSON body accordingly.
 
 ```bash
-curl -sSk -H "Authorization: Bearer $API_KEY" \
+curl -sS -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/chat/completions" | jq
@@ -93,7 +93,7 @@ curl -sSk -H "Authorization: Bearer $API_KEY" \
 Send a request to the model endpoint without a token (should get a 401 Unauthorized response):
 
 ```bash
-curl -sSk -H "Content-Type: application/json" \
+curl -sS -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
   "${MODEL_URL}/v1/chat/completions" -v
 ```
@@ -104,7 +104,7 @@ Send multiple requests to trigger rate limit (should get 200 OK followed by 429 
 
 ```bash
 for i in {1..16}; do
-  curl -sSk -o /dev/null -w "%{http_code}\n" \
+  curl -sS -o /dev/null -w "%{http_code}\n" \
     -H "Authorization: Bearer $API_KEY" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
@@ -147,8 +147,17 @@ kubectl get secret maas-api-serving-cert -n <application-namespace> \
 # commands below)
 kubectl port-forward -n <application-namespace> svc/maas-api 8443:8443
 
+# Extract the service CA for TLS verification
+oc get configmap -n openshift-config-managed service-ca-bundle \
+  -o jsonpath='{.data.service-ca\.crt}' > /tmp/service-ca.crt
+
 # Test health endpoint
-curl -vk https://localhost:8443/health
+# --resolve maps the service hostname to 127.0.0.1 so TLS hostname
+# verification succeeds over port-forward
+SVC_HOST="maas-api.<application-namespace>.svc"
+curl -v --cacert /tmp/service-ca.crt \
+  --resolve "${SVC_HOST}:8443:127.0.0.1" \
+  "https://${SVC_HOST}:8443/health"
 
 # Check certificate chain
 openssl s_client -connect localhost:8443 \

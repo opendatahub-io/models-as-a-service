@@ -23,7 +23,7 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-controller:odh-stable
+    value: quay.io/opendatahub/maas-controller:latest
   - name: dockerfile
     value: maas-controller/Dockerfile
   - name: path-context

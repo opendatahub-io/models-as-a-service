@@ -37,7 +37,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--operator-type <odh|rhoai>` - Which operator to install (default: odh)
 - `--deployment-mode <operator|kustomize>` - Deployment method (default: operator)
 - `--namespace <namespace>` - Target namespace for deployment
-- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.externalOIDC` on the `Tenant` CR)
+- `--external-oidc` - Enable external OIDC on the `maas-api` AuthPolicy (kustomize mode only; in operator mode, configure `spec.oidc` on the default `AITenant`)
 - `--enable-keycloak` - Deploy a Keycloak instance for external OIDC testing
 - `--enable-tls-backend` - Enable TLS backend (default)
 - `--disable-tls-backend` - Disable TLS backend
@@ -45,7 +45,7 @@ Automated deployment script for OpenShift clusters supporting both operator-base
 - `--dry-run` - Show what would be done without applying changes
 - `--operator-catalog <image>` - Custom operator catalog image for PR testing
 - `--operator-image <image>` - Custom operator image for PR testing
-- `--channel <channel>` - Operator channel override (default: fast-3 for ODH, fast-3.x for RHOAI)
+- `--channel <channel>` - Operator channel override (default: fast-3 for ODH, stable-3.x for RHOAI)
 
 **Requirements:**
 - OpenShift cluster (4.19.9+)
@@ -155,8 +155,9 @@ Results:
 
 External OIDC can be enabled in two ways:
 
-**Operator mode:** Edit the `Tenant` CR to add `spec.externalOIDC` with
-`issuerUrl` and `clientId`. The Tenant reconciler patches the AuthPolicy automatically.
+**Operator mode:** Edit `AITenant/models-as-a-service` in the configured AITenant namespace
+(default `ai-tenants`) to add `spec.oidc` with `issuerUrl` and `clientId`. The controller
+uses that AITenant platform context when reconciling the AuthPolicy.
 
 **Kustomize mode:** Use `--external-oidc` with env vars:
 ```bash
@@ -196,6 +197,43 @@ AUTHORINO_NAMESPACE=rh-connectivity-link ./scripts/setup-authorino-tls.sh
 
 ---
 
+### `setup-gateway.sh`
+Creates `maas-default-gateway` Gateway API resource for MaaS.
+
+**Usage:**
+```bash
+# Route mode (ROSA, OSD, cloud clusters - default)
+./scripts/setup-gateway.sh
+
+# ClusterIP mode (on-prem, disconnected, bare-metal)
+INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Disconnected environment (no GitHub fallback)
+DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+
+# Preview changes without applying
+DRY_RUN=true ./scripts/setup-gateway.sh
+```
+
+**What it does:**
+- Creates GatewayClass (`openshift-default`)
+- **Route mode:** Creates Gateway with LoadBalancer Service and auto-detected TLS certificate
+- **ClusterIP mode:** Creates ConfigMap/gw-options, Gateway with ClusterIP Service, OpenShift Route with reencrypt termination
+- Auto-detects cluster domain and TLS certificate (four-level fallback in route mode)
+- Waits for Gateway to be Programmed
+
+**Environment Variables:**
+- `INGRESS_MODE` - Deployment mode: `route` (default) or `clusterip`
+- `CLUSTER_DOMAIN` - Override cluster domain auto-detection
+- `CERT_NAME` - Override TLS certificate secret name (route mode only)
+- `DISCONNECTED` - Disable GitHub manifest fallback (`true`/`false`, default: false)
+- `DRY_RUN` - Preview changes without applying (`true`/`false`, default: false)
+- `MAAS_MANIFEST_REF` - Git tag or commit SHA for remote kustomize fallback (defaults to current repo `HEAD` when run from a clone; required when fetching without a local tree)
+
+**Note:** Route mode auto-detects cluster TLS certificates. Override with `CERT_NAME` if needed.
+
+---
+
 ### `install-dependencies.sh`
 Installs individual dependencies (Kuadrant, ODH, etc.).
 
@@ -214,7 +252,6 @@ Installs individual dependencies (Kuadrant, ODH, etc.).
 - `--istio`: Install Istio service mesh
 - `--odh`: Install OpenDataHub operator (OpenShift only)
 - `--kserve`: Install KServe model serving platform
-- `--prometheus`: Install Prometheus operator
 - `--ocp`: Use OpenShift-specific handling
 
 ---
@@ -372,4 +409,3 @@ For issues or questions:
 2. Check the main project [README](../README.md)
 3. Review [deployment documentation](../docs/content/quickstart.md)
 4. Check sample model configurations in [docs/samples/models/](../docs/samples/models/)
-

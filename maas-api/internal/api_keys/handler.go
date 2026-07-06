@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -22,6 +25,8 @@ const (
 	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
 )
 
+var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
+
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
 // to check if the user can create maasauthpolicies (RBAC-based admin detection).
@@ -33,6 +38,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+}
+
+func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	c.JSON(http.StatusOK, gin.H{
+		"max_expiration_days":      h.service.GetMaxExpirationDays(),
+		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
+	})
 }
 
 func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
@@ -78,8 +90,12 @@ func (h *Handler) isAdmin(ctx context.Context, user *token.UserContext) (bool, e
 }
 
 // isAuthorizedForKey checks if the user is authorized to access the API key.
-// User is authorized if they own the key or are an admin.
-func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContext, keyOwner string) (bool, error) {
+// Tenant isolation is enforced unconditionally (even admins cannot cross tenants).
+// Within the same tenant, user is authorized if they own the key or are an admin.
+func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContext, keyOwner string, keyTenant string) (bool, error) {
+	if user.Tenant != keyTenant {
+		return false, nil
+	}
 	if user.Username == keyOwner {
 		return true, nil
 	}
@@ -113,8 +129,8 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Check authorization - user must own the key or be admin
-	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, tok.Username)
+	// Check authorization - user must be in same tenant and own the key or be admin
+	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, tok.Username, tok.Tenant)
 	if authErr != nil {
 		h.logger.Error("Failed to check admin status", "error", authErr)
 		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
@@ -173,6 +189,20 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	name := req.Name
 	if req.Ephemeral && name == "" {
 		name = fmt.Sprintf("ephemeral-%d", time.Now().UnixNano())
+	} else {
+		name = strings.TrimSpace(name)
+		if len(name) == 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot be whitespace only"})
+			return
+		}
+		if utf8.RuneCountInString(name) > 128 {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name cannot exceed 128 characters"})
+			return
+		}
+		if invalidKeyNameCharsPattern.MatchString(name) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "key name contains invalid control characters"})
+			return
+		}
 	}
 
 	// Parse expiration duration if provided
@@ -186,8 +216,17 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		expiresIn = &d
 	}
 
-	// Create key for the authenticated user with their groups
-	result, err := h.service.CreateAPIKey(c.Request.Context(), user.Username, user.Groups, name, req.Description, expiresIn, req.Ephemeral, strings.TrimSpace(req.Subscription))
+	// Create key for the authenticated user with their groups and tenant
+	result, err := h.service.CreateAPIKey(
+		c.Request.Context(),
+		user.Username,
+		user.Groups,
+		name,
+		req.Description,
+		expiresIn,
+		req.Ephemeral,
+		strings.TrimSpace(req.Subscription),
+		user.Tenant)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
@@ -197,8 +236,11 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		var notFound *subscription.SubscriptionNotFoundError
 		var accessDenied *subscription.AccessDeniedError
 		var noSub *subscription.NoSubscriptionError
+		var multipleSubs *subscription.MultipleSubscriptionsError
+		var modelNotInSub *subscription.ModelNotInSubscriptionError
 		var modelUnhealthy *subscription.ModelUnhealthyError
-		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) {
+		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) ||
+			errors.As(err, &multipleSubs) || errors.As(err, &modelNotInSub) {
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
@@ -294,8 +336,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	// Check authorization - user must own the key or be admin
-	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, keyMetadata.Username)
+	// Check authorization - user must be in same tenant and own the key or be admin
+	authorized, authErr := h.isAuthorizedForKey(c.Request.Context(), user, keyMetadata.Username, keyMetadata.Tenant)
 	if authErr != nil {
 		h.logger.Error("Failed to check admin status", "error", authErr)
 		c.JSON(http.StatusNotFound, gin.H{"error": "API key not found"})
@@ -438,10 +480,11 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		return
 	}
 
-	// Call service layer
+	// Call service layer (tenant scoping is mandatory)
 	result, err := h.service.Search(
 		c.Request.Context(),
 		targetUsername,
+		user.Tenant,
 		req.Filters,
 		req.Sort,
 		req.Pagination,
@@ -516,8 +559,8 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		}
 	}
 
-	// Perform bulk revocation
-	count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username)
+	// Perform bulk revocation (scoped to caller's tenant)
+	count, err := h.service.BulkRevokeAPIKeys(c.Request.Context(), req.Username, user.Tenant)
 	if err != nil {
 		h.logger.Error("Failed to bulk revoke API keys",
 			"error", err,

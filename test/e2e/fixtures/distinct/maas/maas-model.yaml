@@ -7,6 +7,9 @@ kind: MaaSModelRef
 metadata:
   name: e2e-distinct-simulated
   namespace: llm
+  annotations:
+    openshift.io/display-name: "E2E Distinct Simulated Model"
+    openshift.io/description: "Simulated model used for e2e distinct-tier testing"
 spec:
   modelRef:
     kind: LLMInferenceService

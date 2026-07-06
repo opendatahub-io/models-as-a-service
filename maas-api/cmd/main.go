@@ -18,11 +18,13 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/handlers"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -55,7 +57,7 @@ func serve() error {
 
 	metricsRegistry := prometheus.NewRegistry()
 
-	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry)
+	cluster, err := config.NewClusterConfig(cfg.Namespace, cfg.MaaSSubscriptionNamespace, constant.DefaultResyncPeriod, cfg.SARCacheMaxSize, metricsRegistry, log)
 	if err != nil {
 		return fmt.Errorf("failed to create cluster config: %w", err)
 	}
@@ -75,14 +77,22 @@ func serve() error {
 		gin.SetMode(gin.DebugMode)
 	}
 
-	router := gin.Default()
+	// Use gin.New() instead of gin.Default() to control middleware order
+	router := gin.New()
 
+	// Recovery must be first to catch panics from subsequent middleware
+	router.Use(gin.Recovery())
+	router.Use(middleware.RequestID())
+	router.Use(middleware.AccessLogger())
+
+	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics recorder: %w", err)
 	}
 	router.Use(metrics.NewMiddleware(metricsRecorder))
 
+	// Start metrics server
 	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics server: %w", err)
@@ -160,31 +170,49 @@ func serve() error {
 // initStore creates the PostgreSQL store for API key management.
 // DBConnectionURL is validated in cfg.Validate() before this is called.
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
-	log.Info("Connecting to PostgreSQL database...")
-	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL)
+	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
+	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
 
 func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
+	log.Info("Starting informers and waiting for cache sync...")
 	if !cluster.StartAndWaitForSync(ctx.Done()) {
 		return errors.New("failed to sync informer caches")
 	}
+	log.Info("Informer caches synced successfully")
 
 	v1Routes := router.Group("/v1")
 
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister)
+	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
+	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds)
+	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
+	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
+	resolveCancel()
+	if err != nil {
+		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+	}
+	if gatewayInternalHost == "" {
+		log.Warn("No gateway service found - model access checks will be disabled",
+			"gateway", cfg.GatewayName,
+			"namespace", cfg.GatewayNamespace)
+	} else {
+		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+	}
+
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
 
-	tokenHandler := token.NewHandler(log, cfg.Name)
+	tokenHandler := token.NewHandler(log, cfg.TenantName)
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
+	apiKeyService.StartDebounceCleanup(ctx)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
@@ -195,6 +223,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
+	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
 	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys

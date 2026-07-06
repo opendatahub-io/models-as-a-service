@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../../default
   - destinationrule.yaml
+  - service-ca-configmap.yaml
 
 patches:
   - path: deployment-patch.yaml

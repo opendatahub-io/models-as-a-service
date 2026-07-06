@@ -25,7 +25,7 @@ MODEL_URL=$(echo $MODELS | jq -r '.data[0].url')
 MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id')
 
 # Make an inference request
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -74,7 +74,7 @@ curl -sSk \
 Add `"stream": true` and use `--no-buffer` for real-time responses:
 
 ```bash
-curl -sSk --no-buffer \
+curl -sS --no-buffer \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -134,7 +134,7 @@ Common parameters for chat completions:
 Include previous messages for context:
 
 ```bash
-curl -sSk \
+curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{
@@ -188,6 +188,9 @@ Common HTTP error codes:
 | 404 | Model not found | Verify the model ID exists in your subscription via `/maas-api/v1/models` |
 | 500 | Internal server error | Check model backend status, contact your administrator if persistent |
 
+!!! tip "TLS certificate errors"
+    If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation).
+
 ### Handling Rate Limits
 
 When you receive a `429 Too Many Requests` response:
@@ -204,7 +207,7 @@ max_retries=3
 backoff=2
 
 while [ $retry_count -lt $max_retries ]; do
-  response=$(curl -sSk -w "\n%{http_code}" \
+  response=$(curl -sS -w "\n%{http_code}" \
     -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}" \

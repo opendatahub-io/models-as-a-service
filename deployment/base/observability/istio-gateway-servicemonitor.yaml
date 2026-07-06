@@ -7,6 +7,9 @@ metadata:
   labels:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/managed-by: maas-observability
+    monitoring.opendatahub.io/scrape: 'true'
+    monitoring.openshift.io/collection-profile: minimal
+    openshift.io/user-monitoring: 'false'
 spec:
   selector:
     matchLabels:
