@@ -207,11 +207,12 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 		log.Fatal("Failed to create model manager", "error", err)
 	}
 
-	tokenHandler := token.NewHandler(log, cfg.Name)
+	tokenHandler := token.NewHandler(log, cfg.TenantName)
 	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
+	apiKeyService.StartDebounceCleanup(ctx)
 	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
 
 	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)

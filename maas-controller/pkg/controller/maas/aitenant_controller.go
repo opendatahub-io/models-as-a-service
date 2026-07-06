@@ -50,12 +50,9 @@ const (
 	aitenantManagedLabel = "maas.opendatahub.io/managed-by-aitenant"
 	aiGatewayTenantLabel = "ai-gateway.opendatahub.io/tenant"
 
-	aitenantNameAnnotation      = "maas.opendatahub.io/aitenant-name"
-	aitenantNamespaceAnnotation = "maas.opendatahub.io/aitenant-namespace"
+	aitenantNameAnnotation      = tenantreconcile.AnnotationAITenantName
+	aitenantNamespaceAnnotation = tenantreconcile.AnnotationAITenantNamespace
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
-
-	defaultAITenantName   = "models-as-a-service"
-	tenantNamespacePrefix = "ai-tenant-"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
@@ -86,7 +83,9 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
-// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles;rolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -105,7 +104,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
@@ -127,6 +126,18 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	statusSnapshot = aitenant.Status.DeepCopy()
+
+	if err := r.ensureGatewayClaim(ctx, &aitenant, gatewayRef); err != nil {
+		setAITenantPhase(&aitenant, "Failed", "GatewayClaimFailed", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 
 	if err := r.ensureTenantNamespace(ctx, &aitenant); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "TenantNamespaceFailed", err.Error())
@@ -136,7 +147,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	if err := r.ensureTenantConfig(ctx, &aitenant, gatewayRef); err != nil {
+	if err := r.ensureTenantConfig(ctx, &aitenant); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "TenantConfigReconcileFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
@@ -203,28 +214,7 @@ func (r *AITenantReconciler) aitenantNamespace() string {
 }
 
 func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant) string {
-	if r.isDefaultAITenant(aitenant) {
-		return r.defaultTenantNamespace()
-	}
-	return derivedTenantNamespaceName(aitenant.Name)
-}
-
-func (r *AITenantReconciler) isDefaultAITenant(aitenant *maasv1alpha1.AITenant) bool {
-	if aitenant.Name == defaultAITenantName {
-		return true
-	}
-	return r.TenantNamespace != "" && aitenant.Name == r.TenantNamespace
-}
-
-func (r *AITenantReconciler) defaultTenantNamespace() string {
-	if r.TenantNamespace != "" {
-		return r.TenantNamespace
-	}
-	return defaultAITenantName
-}
-
-func derivedTenantNamespaceName(aitenantName string) string {
-	return tenantNamespacePrefix + aitenantName
+	return tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace)
 }
 
 func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -305,7 +295,7 @@ func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maas
 	return ref
 }
 
-func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	tenant := &maasv1alpha1.Tenant{
 		TypeMeta: metav1.TypeMeta{
@@ -323,37 +313,15 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 			return fmt.Errorf("expected Tenant, got %T", obj)
 		}
 		applyAITenantMetadata(t, aitenant, tenantNamespace)
-		// TODO: Move these mirrored platform values out of Tenant spec in a
-		// follow-up Jira once the MaaS config/status API is settled. The current
-		// post-render path still reads Tenant.spec.gatewayRef and externalOIDC.
-		t.Spec.GatewayRef = gatewayRef
-		t.Spec.ExternalOIDC = aitenant.Spec.OIDC
 		return nil
 	})
 }
 
 func (r *AITenantReconciler) ensureTenantAdminRBAC(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	subjects, err := r.rbacSubjects(aitenant)
-	if err != nil {
-		return err
-	}
 	if err := r.ensureTenantNamespaceRole(ctx, aitenant); err != nil {
 		return err
 	}
-	if err := r.ensureAITenantObjectRole(ctx, aitenant); err != nil {
-		return err
-	}
-
-	if len(subjects) == 0 {
-		if err := r.deleteOwnedRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant)); err != nil {
-			return err
-		}
-		return r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant))
-	}
-	if err := r.ensureRoleBinding(ctx, aitenant, r.tenantNamespaceName(aitenant), tenantAdminRoleName(aitenant), subjects); err != nil {
-		return err
-	}
-	return r.ensureRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant), subjects)
+	return r.ensureAITenantObjectRole(ctx, aitenant)
 }
 
 func (r *AITenantReconciler) ensureTenantNamespaceRole(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -423,56 +391,6 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 	})
 }
 
-func (r *AITenantReconciler) ensureRoleBinding(ctx context.Context, aitenant *maasv1alpha1.AITenant, namespace, name string, subjects []rbacv1.Subject) error {
-	tenantNamespace := r.tenantNamespaceName(aitenant)
-	binding := &rbacv1.RoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-		},
-	}
-	return r.upsert(ctx, binding, aitenant, func(obj client.Object) error {
-		binding, ok := obj.(*rbacv1.RoleBinding)
-		if !ok {
-			return fmt.Errorf("expected RoleBinding, got %T", obj)
-		}
-		applyAITenantMetadata(binding, aitenant, tenantNamespace)
-		binding.Subjects = subjects
-		binding.RoleRef = rbacv1.RoleRef{
-			APIGroup: rbacv1.GroupName,
-			Kind:     "Role",
-			Name:     name,
-		}
-		return nil
-	})
-}
-
-func (r *AITenantReconciler) rbacSubjects(aitenant *maasv1alpha1.AITenant) ([]rbacv1.Subject, error) {
-	if aitenant.Spec.RBAC == nil || len(aitenant.Spec.RBAC.Admins) == 0 {
-		return nil, nil
-	}
-	subjects := make([]rbacv1.Subject, 0, len(aitenant.Spec.RBAC.Admins))
-	for _, admin := range aitenant.Spec.RBAC.Admins {
-		subject := rbacv1.Subject{
-			Kind: admin.Kind,
-			Name: admin.Name,
-		}
-		switch admin.Kind {
-		case rbacv1.UserKind, rbacv1.GroupKind:
-			subject.APIGroup = rbacv1.GroupName
-		case rbacv1.ServiceAccountKind:
-			if admin.Namespace == "" {
-				return nil, fmt.Errorf("spec.rbac.admins[%s].namespace is required for ServiceAccount subjects", admin.Name)
-			}
-			subject.Namespace = admin.Namespace
-		default:
-			return nil, fmt.Errorf("unsupported RBAC subject kind %q", admin.Kind)
-		}
-		subjects = append(subjects, subject)
-	}
-	return subjects, nil
-}
-
 func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
 		return ctrl.Result{}, nil
@@ -490,16 +408,19 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 
 func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
+	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
+		return err
+	}
 	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.TenantInstanceName}); err != nil {
 		return err
 	}
-	if err := r.deleteOwnedRoleBinding(ctx, aitenant, tenantNamespace, tenantAdminRoleName(aitenant)); err != nil {
-		return err
-	}
-	if err := r.deleteOwnedRoleBinding(ctx, aitenant, aitenant.Namespace, aitenantAccessRoleName(aitenant)); err != nil {
+	if err := r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
+		return err
+	}
+	if err := r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
@@ -527,10 +448,6 @@ func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context,
 		return fmt.Errorf("cleanup tenant namespace %q metadata: %w", key.Name, err)
 	}
 	return nil
-}
-
-func (r *AITenantReconciler) deleteOwnedRoleBinding(ctx context.Context, aitenant *maasv1alpha1.AITenant, namespace, name string) error {
-	return r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: namespace, Name: name})
 }
 
 func (r *AITenantReconciler) deleteOwned(ctx context.Context, aitenant *maasv1alpha1.AITenant, obj client.Object, key client.ObjectKey) error {
@@ -602,6 +519,192 @@ func (r *AITenantReconciler) upsertWithCreate(ctx context.Context, obj client.Ob
 	}
 	if err := r.Patch(ctx, current, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("patch %s %s/%s: %w", objectKind(obj), key.Namespace, key.Name, err)
+	}
+	return nil
+}
+
+// gatewayClaimName returns a deterministic ConfigMap name for a gateway claim.
+// The name is derived from the gateway namespace and name to ensure uniqueness.
+// Uses 32 hex chars (128 bits) from SHA256 to provide strong collision resistance
+// while staying within the 63-character ConfigMap name limit (14 + 32 = 46 chars).
+// Collision probability with 128 bits: ~1 in 2^64 for birthday attack, which is
+// 18 quintillion operations - effectively zero for realistic cluster sizes.
+func gatewayClaimName(gatewayRef maasv1alpha1.TenantGatewayRef) string {
+	raw := gatewayRef.Namespace + "/" + gatewayRef.Name
+	sum := sha256.Sum256([]byte(raw))
+	hash := hex.EncodeToString(sum[:])[:32]
+	return "gateway-claim-" + hash
+}
+
+// isClaimOwnedByAITenant verifies gateway claim ConfigMap ownership using
+// OwnerReferences when present (UID-based, tamper-resistant) with a fallback to
+// annotation-based checks for legacy claims created before OwnerReferences were
+// added. This mitigates the TOCTOU window between the Create-AlreadyExists
+// check and the subsequent Get: if a controller OwnerReference exists but points
+// to a different owner, the claim is rejected even if annotations were spoofed.
+func isClaimOwnedByAITenant(claim *corev1.ConfigMap, aitenant *maasv1alpha1.AITenant) bool {
+	for _, ref := range claim.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller {
+			// Reject if Kind or Name don't match - this claim belongs to someone else.
+			if ref.Kind != "AITenant" || ref.Name != aitenant.Name {
+				return false
+			}
+			// If both UIDs are present, perform strict UID validation for tamper-resistance.
+			if aitenant.UID != "" && ref.UID != "" {
+				return ref.UID == aitenant.UID
+			}
+			// If either UID is missing (legacy claims or test environments), we cannot
+			// perform UID-based validation. Fall through to annotation-based check for
+			// backward compatibility, but ONLY if the Kind and Name already matched above.
+			// Note: this means we trust Kind+Name match when UIDs aren't available.
+			break
+		}
+	}
+	return ownedByAITenant(claim, aitenant)
+}
+
+// ensureGatewayClaim atomically claims a gateway for an AITenant by creating a
+// ConfigMap with create-once semantics. If the ConfigMap already exists and belongs
+// to a different AITenant, the claim fails. This prevents the race condition where
+// two concurrent admission requests could both pass the webhook list-then-compare
+// check before either AITenant is persisted.
+func (r *AITenantReconciler) ensureGatewayClaim(ctx context.Context, aitenant *maasv1alpha1.AITenant, gatewayRef maasv1alpha1.TenantGatewayRef) error {
+	if gatewayRef.Namespace == "" || gatewayRef.Name == "" {
+		return fmt.Errorf("gateway reference must have both namespace and name set (got namespace=%q, name=%q)", gatewayRef.Namespace, gatewayRef.Name)
+	}
+	claimName := gatewayClaimName(gatewayRef)
+	claimNamespace := r.aitenantNamespace()
+
+	claim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      claimName,
+			Namespace: claimNamespace,
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":      "maas-controller",
+				"maas.opendatahub.io/gateway-claim": "true",
+				aitenantManagedLabel:                "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+		Data: map[string]string{
+			"gatewayNamespace": gatewayRef.Namespace,
+			"gatewayName":      gatewayRef.Name,
+		},
+	}
+
+	// Set controller owner reference so K8s garbage collection removes the
+	// claim if the finalizer is skipped. This works because the AITenant and
+	// the claim ConfigMap live in the same namespace (AITenantNamespace).
+	if err := controllerutil.SetControllerReference(aitenant, claim, r.Scheme); err != nil {
+		return fmt.Errorf("set owner reference on gateway claim %s/%s: %w", claimNamespace, claimName, err)
+	}
+
+	if err := r.Create(ctx, claim); err != nil {
+		if !isAlreadyExistsError(err) {
+			return fmt.Errorf("create gateway claim %s/%s: %w", claimNamespace, claimName, err)
+		}
+		// ConfigMap already exists -- check if it belongs to this AITenant.
+		var existing corev1.ConfigMap
+		if err := r.get(ctx, client.ObjectKey{Namespace: claimNamespace, Name: claimName}, &existing); err != nil {
+			return fmt.Errorf("get existing gateway claim %s/%s: %w", claimNamespace, claimName, err)
+		}
+		if isClaimOwnedByAITenant(&existing, aitenant) {
+			// Validate that the existing claim's Data matches the current gateway reference.
+			// This prevents silent drift if a hash collision occurs or the tenant retargets
+			// to a different gateway that happens to produce the same claim name.
+			if existing.Data["gatewayNamespace"] != gatewayRef.Namespace ||
+				existing.Data["gatewayName"] != gatewayRef.Name {
+				return fmt.Errorf(
+					"claim %s/%s already exists for gateway %s/%s but tenant %s/%s needs %s/%s; "+
+						"this indicates a hash collision or stale claim",
+					claimNamespace, claimName,
+					existing.Data["gatewayNamespace"], existing.Data["gatewayName"],
+					aitenant.Namespace, aitenant.Name,
+					gatewayRef.Namespace, gatewayRef.Name,
+				)
+			}
+			prevRefs := make([]metav1.OwnerReference, len(existing.OwnerReferences))
+			copy(prevRefs, existing.OwnerReferences)
+			if err := controllerutil.SetControllerReference(aitenant, &existing, r.Scheme); err != nil {
+				return fmt.Errorf("set owner reference on existing gateway claim %s/%s: %w", claimNamespace, claimName, err)
+			}
+			if !equality.Semantic.DeepEqual(prevRefs, existing.OwnerReferences) {
+				if err := r.Update(ctx, &existing); err != nil {
+					return fmt.Errorf("update owner reference on gateway claim %s/%s: %w", claimNamespace, claimName, err)
+				}
+			}
+			return r.cleanupStaleClaims(ctx, aitenant, gatewayRef)
+		}
+		ownerName := existing.Annotations[aitenantNameAnnotation]
+		ownerNamespace := existing.Annotations[aitenantNamespaceAnnotation]
+		for _, ref := range existing.GetOwnerReferences() {
+			if ref.Controller != nil && *ref.Controller && ref.Kind == "AITenant" {
+				ownerName = ref.Name
+				break
+			}
+		}
+		return fmt.Errorf(
+			"gateway %s/%s is already claimed by AITenant %s/%s; "+
+				"each AITenant requires a dedicated Gateway for isolation",
+			gatewayRef.Namespace, gatewayRef.Name,
+			ownerNamespace, ownerName,
+		)
+	}
+
+	// Clean up stale claims from a previous gateway reference.
+	return r.cleanupStaleClaims(ctx, aitenant, gatewayRef)
+}
+
+// deleteGatewayClaim removes all gateway claim ConfigMaps owned by the given AITenant.
+// It deletes both the current claim and any stale claims left from prior gateway references.
+func (r *AITenantReconciler) deleteGatewayClaim(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	claimNamespace := r.aitenantNamespace()
+	var claimList corev1.ConfigMapList
+	if err := r.List(ctx, &claimList,
+		client.InNamespace(claimNamespace),
+		client.MatchingLabels{"maas.opendatahub.io/gateway-claim": "true"},
+	); err != nil {
+		return fmt.Errorf("list gateway claims in %s: %w", claimNamespace, err)
+	}
+	for i := range claimList.Items {
+		cm := &claimList.Items[i]
+		if !isClaimOwnedByAITenant(cm, aitenant) {
+			continue
+		}
+		if err := r.Delete(ctx, cm); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete gateway claim %s/%s: %w", claimNamespace, cm.Name, err)
+		}
+	}
+	return nil
+}
+
+// cleanupStaleClaims removes gateway claim ConfigMaps left over from a previous
+// gateway reference. When an AITenant retargets to a different gateway, the old
+// claim must be removed so the gateway becomes available for other tenants.
+func (r *AITenantReconciler) cleanupStaleClaims(ctx context.Context, aitenant *maasv1alpha1.AITenant, currentRef maasv1alpha1.TenantGatewayRef) error {
+	claimNamespace := r.aitenantNamespace()
+	var claimList corev1.ConfigMapList
+	if err := r.List(ctx, &claimList,
+		client.InNamespace(claimNamespace),
+		client.MatchingLabels{"maas.opendatahub.io/gateway-claim": "true"},
+	); err != nil {
+		return fmt.Errorf("list gateway claims in %s: %w", claimNamespace, err)
+	}
+	currentClaimName := gatewayClaimName(currentRef)
+	for i := range claimList.Items {
+		cm := &claimList.Items[i]
+		if cm.Name == currentClaimName {
+			continue // Skip the current (valid) claim.
+		}
+		if !isClaimOwnedByAITenant(cm, aitenant) {
+			continue // Belongs to a different AITenant.
+		}
+		if err := r.Delete(ctx, cm); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete stale gateway claim %s/%s: %w", claimNamespace, cm.Name, err)
+		}
 	}
 	return nil
 }

@@ -21,11 +21,18 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func TestAITenantValidator_ValidateCreate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := maasv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add scheme: %v", err)
+	}
+
 	tests := []struct {
 		name        string
 		validator   *AITenantValidator
@@ -36,7 +43,9 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 		{
 			name: "allow aitenant in configured namespace",
 			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
 				AITenantNamespace: "ai-tenants",
+				GatewayNamespace:  "openshift-ingress",
 			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -49,7 +58,9 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 		{
 			name: "reject aitenant outside configured namespace",
 			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
 				AITenantNamespace: "ai-tenants",
+				GatewayNamespace:  "openshift-ingress",
 			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -63,7 +74,9 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 		{
 			name: "allow aitenant in custom configured namespace",
 			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
 				AITenantNamespace: "custom-infra",
+				GatewayNamespace:  "openshift-ingress",
 			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
@@ -86,8 +99,11 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 			errContains: "webhook validator not configured",
 		},
 		{
-			name:      "reject when configured namespace is empty",
-			validator: &AITenantValidator{},
+			name: "reject when configured namespace is empty",
+			validator: &AITenantValidator{
+				Client:           fake.NewClientBuilder().WithScheme(scheme).Build(),
+				GatewayNamespace: "openshift-ingress",
+			},
 			aitenant: &maasv1alpha1.AITenant{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "team-a",
@@ -115,8 +131,15 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 }
 
 func TestAITenantValidator_ValidateUpdate(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := maasv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("failed to add scheme: %v", err)
+	}
+
 	validator := &AITenantValidator{
+		Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
 		AITenantNamespace: "ai-tenants",
+		GatewayNamespace:  "openshift-ingress",
 	}
 
 	oldAITenant := &maasv1alpha1.AITenant{

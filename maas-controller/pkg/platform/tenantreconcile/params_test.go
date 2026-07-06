@@ -30,7 +30,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
@@ -61,7 +65,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			},
 		}
 
-		got, err := BuildPlatformParams(tenant, "tenant-ns", "cluster-audience", logr.Discard())
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "gateway-ns",
+			Name:      "gateway-name",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "cluster-audience", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
@@ -204,10 +212,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
-		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.bbr-pre", "disabled")
-		require.NoError(t, err, "configPatches[%d] bbr-pre disabled field", i)
-		require.True(t, found, "configPatches[%d] bbr-pre disabled field should exist", i)
-		assert.True(t, disabled, "configPatches[%d] bbr-pre should be disabled", i)
+		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
+		require.NoError(t, err, "configPatches[%d] ipp-pre disabled field", i)
+		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
+		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
 	}
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.

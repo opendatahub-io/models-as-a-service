@@ -15,11 +15,16 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
+    ANNOTATION_AITENANT_NAME,
+    ANNOTATION_AITENANT_NAMESPACE,
     AITENANT_KIND,
     AITENANT_NAMESPACE,
     DEFAULT_GATEWAY_NAME,
     FINALIZER_AUTHPOLICY,
     FINALIZER_SUBSCRIPTION,
+    LABEL_MANAGED_BY_AITENANT,
+    LABEL_TENANT_NAME,
+    LABEL_TENANT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
     TENANT_CR_NAME,
@@ -36,6 +41,7 @@ from multitenancy_helpers import (
     get_json_or_none,
     legacy_default_namespace,
     new_discovery_case,
+    provision_tenant_model,
     remove_discovery_labels,
     require_aitenant_crd,
     require_tenant_namespace_discovery,
@@ -60,23 +66,44 @@ class TestMultiTenantIntegration:
 
     def test_full_tenant_lifecycle_create_to_delete(self):
         """7.1: Full tenant lifecycle from create through policy/subscription reconcile to delete."""
-        case = new_discovery_case(use_default_gateway=True)
+        case = new_discovery_case()
         role_name = f"aitenant-{case['tenant_label_name']}-tenant-admin"
         try:
-            bootstrap_aitenant_tenant(case, use_default_gateway=True)
+            bootstrap_aitenant_tenant(case)
 
             tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
-            assert tenant["spec"]["gatewayRef"]["name"] == case["gateway_name"]
+            tenant_labels = tenant["metadata"].get("labels") or {}
+            tenant_annotations = tenant["metadata"].get("annotations") or {}
+            assert tenant_labels[LABEL_MANAGED_BY_AITENANT] == "true"
+            assert tenant_labels[LABEL_TENANT_NAME] == case["tenant_label_name"]
+            assert tenant_labels[LABEL_TENANT_NAMESPACE] == case["tenant_ns"]
+            assert tenant_annotations[ANNOTATION_AITENANT_NAME] == case["tenant_label_name"]
+            assert tenant_annotations[ANNOTATION_AITENANT_NAMESPACE] == AITENANT_NAMESPACE
+            aitenant = wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout=180)
+            assert aitenant["status"]["gatewayRef"]["name"] == case["gateway_name"]
             assert get_json_or_none("role", role_name, case["tenant_ns"]) is not None
 
-            apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
-            apply_maas_subscription(case["subscription_name"], case["tenant_ns"])
+            model_name = f"e2e-lifecycle-model-{case['suffix']}"
+            provision_tenant_model(model_name, case["tenant_ns"], case["gateway_name"])
+
+            apply_maas_auth_policy(
+                case["policy_name"],
+                case["tenant_ns"],
+                model_ref=model_name,
+                model_namespace=case["tenant_ns"],
+            )
+            apply_maas_subscription(
+                case["subscription_name"],
+                case["tenant_ns"],
+                model_ref=model_name,
+                model_namespace=case["tenant_ns"],
+            )
             wait_for_status_phase("maasauthpolicy", case["policy_name"], case["tenant_ns"], expected_phase="Active")
             wait_for_status_phase(
                 "maassubscription",
                 case["subscription_name"],
                 case["tenant_ns"],
-                expected_phase=("Active", "Degraded"),
+                expected_phase="Active",
             )
 
             delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
@@ -119,7 +146,7 @@ class TestMultiTenantIntegration:
         try:
             for case in (case_a, case_b):
                 apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+                apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
                 apply_maas_auth_policy(shared_policy, case["tenant_ns"])
                 apply_maas_subscription(shared_sub, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
@@ -145,7 +172,7 @@ class TestMultiTenantIntegration:
         second_policy = f"e2e-label-return-{case['suffix']}"
         try:
             ensure_namespace(case["tenant_ns"])
-            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME, tenant_label_name=case["tenant_label_name"])
+            apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(first_policy, case["tenant_ns"])
             _wait_reconcile(10)
             first = get_json_or_none("maasauthpolicy", first_policy, case["tenant_ns"])
