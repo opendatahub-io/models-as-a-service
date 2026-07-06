@@ -27,7 +27,8 @@ const (
 // NewPostgresStoreFromURL creates a PostgreSQL store from a connection URL.
 // It automatically applies database schema migrations on startup using golang-migrate.
 // URL format: postgresql://user:password@host:port/database
-func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseURL string) (*PostgresStore, error) {
+// tenantName is used to filter all database queries to enforce tenant isolation.
+func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseURL string, tenantName string) (*PostgresStore, error) {
 	databaseURL = strings.TrimSpace(databaseURL)
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
@@ -54,8 +55,8 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 		return nil, fmt.Errorf("failed to apply schema migrations: %w", err)
 	}
 
-	log.Info("Connected to PostgreSQL database (schema applied)")
-	return &PostgresStore{db: db, logger: log}, nil
+	log.Info("Connected to PostgreSQL database (schema applied)", "tenant", tenantName)
+	return &PostgresStore{db: db, logger: log, tenantName: tenantName}, nil
 }
 
 // runMigrations applies database schema migrations using golang-migrate.

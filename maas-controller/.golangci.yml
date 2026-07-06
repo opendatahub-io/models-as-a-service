@@ -125,6 +125,9 @@ linters:
         path: pkg/controller/maas/tenant_controller\.go
       - linters:
           - ireturn
+        path: pkg/controller/maas/self_deployment_controller\.go
+      - linters:
+          - ireturn
         path: pkg/reconciler/externalmodel/reconciler\.go
       - linters:
           - modernize

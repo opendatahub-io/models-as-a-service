@@ -8,7 +8,7 @@ This document provides a technical deep-dive into the MaaS Controller architectu
 
 The **MaaS Controller** is a Kubernetes controller with two main responsibilities:
 
-1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps a `default-tenant` CR in the `models-as-a-service` namespace if one does not exist. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
+1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps `AITenant/models-as-a-service` in the `ai-tenants` namespace; the AITenant reconciler creates or adopts `Tenant/default-tenant` in the `models-as-a-service` namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
 
 2. **Subscription reconcilers** — let platform operators define:
     - **Which models** are exposed through MaaS (via **MaaSModelRef**).
@@ -24,6 +24,7 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 ```mermaid
 flowchart TB
     subgraph Platform["Platform lifecycle"]
+        AITenant["AITenant CR\n(models-as-a-service)"]
         Tenant["Tenant CR\n(default-tenant)"]
     end
 
@@ -56,6 +57,7 @@ flowchart TB
         LLMIS["LLMInferenceService\n(KServe)"]
     end
 
+    AITenant --> Tenant
     Tenant --> TenantReconciler
     TenantReconciler --> MaaSAPI
     TenantReconciler --> GatewayPolicies

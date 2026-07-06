@@ -46,6 +46,7 @@ from test_helper import (
     MODEL_REF,
     SIMULATOR_SUBSCRIPTION,
     TIMEOUT,
+    _apply_cr,
     _create_api_key,
     _create_api_key_raw,
     _create_sa_token,
@@ -76,20 +77,26 @@ GATEWAY_PROPAGATION_DELAY = 5  # seconds
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+    """Make an HTTP request, retrying on transient gateway/auth errors.
 
-    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
-    backoff and returns the last response — the caller's assertion will
-    surface the failure clearly if the gateway never becomes ready.
+    Retries on:
+    - Empty 403: Envoy hasn't loaded the AuthPolicy yet.
+    - 500 with AUTH_FAILURE: Authorino race condition during AuthConfig updates
+      (metadata evaluators not yet linked after policy reconciliation).
+
+    Returns the last response — the caller's assertion will surface the
+    failure clearly if the gateway never becomes ready.
     """
     for attempt in range(1, retries + 1):
         r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
-        if r.status_code == 403 and not r.text.strip():
-            if attempt < retries:
-                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
-                         attempt, retries, GATEWAY_PROPAGATION_DELAY)
-                time.sleep(GATEWAY_PROPAGATION_DELAY)
-                continue
+        retryable = (r.status_code == 403 and not r.text.strip()) or (
+            r.status_code == 500 and "AUTH_FAILURE" in r.text
+        )
+        if retryable and attempt < retries:
+            log.info("Gateway returned %d (attempt %d/%d), retrying in %ds...",
+                     r.status_code, attempt, retries, GATEWAY_PROPAGATION_DELAY)
+            time.sleep(GATEWAY_PROPAGATION_DELAY)
+            continue
         return r
     return r  # last attempt's response — assertion will catch the failure
 
@@ -902,7 +909,13 @@ class TestEphemeralKeyCleanup:
 
     @pytest.fixture
     def deployment_namespace(self) -> str:
-        return os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+        """Return the namespace where maas-api is deployed.
+
+        Controlled by E2E_MAAS_API_DEPLOYMENT_NAMESPACE env var,
+        defaults to DEPLOYMENT_NAMESPACE/opendatahub.
+        """
+        from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+        return MAAS_API_DEPLOYMENT_NAMESPACE
 
     def test_cronjob_exists_and_configured(self, deployment_namespace: str):
         """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
@@ -1343,25 +1356,47 @@ class TestAPIKeySubscriptionPhases:
         """
         API key creation is rejected for unreconciled subscription (empty phase).
 
-        This test scales down the controller to ensure deterministic behavior.
+        Note: Temporarily sets webhook failurePolicy to Ignore to allow creating
+        resources while controller is down, then restores to Fail.
         """
         ns = _ns()
         subscription_name = "e2e-apikey-unreconciled-sub"
         auth_name = "e2e-apikey-unreconciled-auth"
         sa_name = "e2e-apikey-unreconciled-sa"
+        webhook_name = "maas-validating-webhook-configuration"
 
         try:
-            # Scale down controller to prevent reconciliation
-            _scale_controller_down()
-
+            # Create service account and get token
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
+            # Temporarily set webhook failurePolicy to Ignore
+            # This allows creates to succeed when controller/webhook is unavailable
+            # Find webhook indices dynamically by name to avoid brittleness
+            result = subprocess.run(
+                ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                capture_output=True, text=True, check=True
+            )
+            webhook_config = json.loads(result.stdout)
+            patch_ops = []
+            for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                    patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Ignore"})
+
+            subprocess.run(
+                ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                 "--type=json", "-p", json.dumps(patch_ops)],
+                capture_output=True, text=True, check=True
+            )
+
+            # Scale down controller to prevent reconciliation
+            _scale_controller_down()
+
+            # Create resources (webhook unavailable but Ignore policy allows creates)
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            # Create subscription (won't reconcile with controller scaled down)
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
 
-            # Verify subscription is unreconciled
+            # Verify subscription is unreconciled (empty phase)
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase", "")
             assert phase == "", f"Expected empty phase, got: {phase}"
@@ -1390,12 +1425,57 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key creation rejected for unreconciled subscription")
 
         finally:
-            # Scale controller back up
+            # Restore webhook failurePolicy to Fail
+            # Wrap in try/except to guarantee controller scale-up and cleanup happen
+            webhook_restore_error = None
+            try:
+                result = subprocess.run(
+                    ["oc", "get", "validatingwebhookconfiguration", webhook_name, "-o", "json"],
+                    capture_output=True, text=True
+                )
+                if result.returncode != 0:
+                    raise RuntimeError(
+                        f"Failed to get webhook configuration {webhook_name} for restoration: {result.stderr}"
+                    )
+
+                webhook_config = json.loads(result.stdout)
+                patch_ops = []
+                for idx, webhook in enumerate(webhook_config.get("webhooks", [])):
+                    if webhook.get("name") in ["vmaassubscription.kb.io", "vmaasauthpolicy.kb.io"]:
+                        patch_ops.append({"op": "replace", "path": f"/webhooks/{idx}/failurePolicy", "value": "Fail"})
+
+                if not patch_ops:
+                    raise RuntimeError(
+                        f"No matching webhooks found to restore in {webhook_name}. "
+                        f"Expected vmaassubscription.kb.io and vmaasauthpolicy.kb.io. "
+                        f"Found: {[w.get('name') for w in webhook_config.get('webhooks', [])]}"
+                    )
+
+                restore_result = subprocess.run(
+                    ["oc", "patch", "validatingwebhookconfiguration", webhook_name,
+                     "--type=json", "-p", json.dumps(patch_ops)],
+                    capture_output=True, text=True
+                )
+                if restore_result.returncode != 0:
+                    raise RuntimeError(
+                        f"Webhook left in Ignore state! Failed to restore webhook {webhook_name} "
+                        f"with patch_ops {patch_ops}: {restore_result.stderr}"
+                    )
+            except Exception as e:
+                webhook_restore_error = e
+                log.error(f"Exception during webhook restoration: {e}")
+
+            # Always scale controller back up and cleanup, even if webhook restore failed
             _scale_controller_up()
+
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
+
+            # Only raise webhook restore error after cleanup is complete
+            if webhook_restore_error:
+                raise webhook_restore_error
 
 
 class TestAPIKeySubscriptionFilter:
@@ -1432,7 +1512,8 @@ class TestAPIKeySubscriptionFilter:
 
             # Create 2 keys bound to sub_a
             for i in range(2):
-                r = requests.post(
+                r = _request_with_gateway_retry(
+                    requests.post,
                     api_keys_base_url,
                     headers=sa_headers,
                     json={"name": f"e2e-filter-a-{i}", "subscription": sub_a},
@@ -1443,7 +1524,8 @@ class TestAPIKeySubscriptionFilter:
                 key_ids_a.append(r.json()["id"])
 
             # Create 1 key bound to sub_b
-            r_b = requests.post(
+            r_b = _request_with_gateway_retry(
+                requests.post,
                 api_keys_base_url,
                 headers=sa_headers,
                 json={"name": "e2e-filter-b-0", "subscription": sub_b},

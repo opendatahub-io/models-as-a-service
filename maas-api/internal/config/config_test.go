@@ -123,6 +123,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -134,6 +135,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -145,6 +147,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -155,6 +158,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -165,6 +169,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -175,6 +180,7 @@ func TestValidate(t *testing.T) {
 				AccessCheckTimeoutSeconds: 15,
 				MetricsPort:               9090,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 		},
 		{
@@ -183,6 +189,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   0,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "must be at least 1",
 		},
@@ -192,6 +199,7 @@ func TestValidate(t *testing.T) {
 				DBConnectionURL:           "postgresql://localhost/test",
 				APIKeyMaxExpirationDays:   -1,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "must be at least 1",
 		},
@@ -204,6 +212,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               0,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},
@@ -216,6 +225,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               -1,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},
@@ -228,6 +238,7 @@ func TestValidate(t *testing.T) {
 				SARCacheMaxSize:           8192,
 				MetricsPort:               65536,
 				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
 		},

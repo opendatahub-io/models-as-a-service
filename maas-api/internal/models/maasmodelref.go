@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"net/url"
 
 	"github.com/openai/openai-go/v2"
@@ -81,7 +82,13 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 			GenAIUseCase:  annotations[constant.AnnotationGenAIUseCase],
 			ContextWindow: annotations[constant.AnnotationContextWindow],
 		}
-		if d.DisplayName != "" || d.Description != "" || d.GenAIUseCase != "" || d.ContextWindow != "" {
+		if raw := annotations[constant.AnnotationModelCapabilities]; raw != "" {
+			var caps []string
+			if err := json.Unmarshal([]byte(raw), &caps); err == nil {
+				d.ModelCapabilities = caps
+			}
+		}
+		if d.DisplayName != "" || d.Description != "" || d.GenAIUseCase != "" || d.ContextWindow != "" || len(d.ModelCapabilities) > 0 {
 			details = &d
 		}
 	}

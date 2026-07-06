@@ -1,0 +1,145 @@
+name: Operator Chaos
+
+on:
+  pull_request:
+    paths:
+      - "maas-controller/api/**"
+      - "maas-controller/pkg/controller/**"
+      - "maas-controller/pkg/reconciler/**"
+      - "deployment/base/maas-controller/**"
+      - "maas-api/deploy/**"
+      - "deployment/base/maas-api/**"
+      - "deployment/components/**"
+      - "chaos/knowledge/**"
+      - "maas-controller/go.mod"
+      - "maas-controller/go.sum"
+      - ".github/workflows/operator-chaos.yml"
+
+permissions:
+  contents: read
+
+env:
+  OPERATOR_CHAOS_VERSION: "ec5cd239b770735cab3028d3594385950b51e327"
+
+jobs:
+  operator-chaos:
+    name: Operator Chaos
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: maas-controller/go.mod
+
+      - name: Install operator-chaos
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "${RUNNER_TEMP}/bin"
+          GOBIN="${RUNNER_TEMP}/bin" go install "github.com/opendatahub-io/operator-chaos/cmd/operator-chaos@${OPERATOR_CHAOS_VERSION}"
+          echo "${RUNNER_TEMP}/bin" >> "${GITHUB_PATH}"
+
+      - name: Checkout base branch assets
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base-branch
+          persist-credentials: false
+          sparse-checkout: |
+            chaos/knowledge
+            deployment/base/maas-controller/crd/bases
+          sparse-checkout-cone-mode: false
+
+      - name: Validate knowledge model
+        shell: bash
+        run: |
+          set -euo pipefail
+          operator-chaos validate --knowledge "chaos/knowledge/maas.yaml"
+
+      - name: Run local preflight
+        shell: bash
+        run: |
+          set -euo pipefail
+          operator-chaos preflight --knowledge "chaos/knowledge/maas.yaml" --local
+
+      - name: Diff knowledge model
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_knowledge_file="base-branch/chaos/knowledge/maas.yaml"
+          if [[ ! -f "${base_knowledge_file}" ]]; then
+            echo "No base knowledge model found; skipping knowledge diff for bootstrap PR."
+            exit 0
+          fi
+
+          output_dir="${RUNNER_TEMP}/operator-chaos"
+          mkdir -p "${output_dir}"
+          knowledge_diff_json="${output_dir}/knowledge-diff.json"
+
+          operator-chaos diff \
+            --source "base-branch/chaos/knowledge" \
+            --target "chaos/knowledge" \
+            --breaking \
+            --format json > "${knowledge_diff_json}"
+          operator-chaos diff \
+            --source "base-branch/chaos/knowledge" \
+            --target "chaos/knowledge" \
+            --breaking
+
+          knowledge_breaking=$(jq -r '.summary.breakingChanges // 0' "${knowledge_diff_json}")
+          if (( knowledge_breaking > 0 )); then
+            echo "operator-chaos detected ${knowledge_breaking} breaking knowledge change(s)."
+            exit 1
+          fi
+
+      - name: Diff CRD schemas
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_crd_dir="base-branch/deployment/base/maas-controller/crd/bases"
+          target_crd_dir="deployment/base/maas-controller/crd/bases"
+          if [[ ! -d "${source_crd_dir}" || ! -d "${target_crd_dir}" ]]; then
+            echo "Base or current CRD directory not found; skipping CRD diff for bootstrap PR."
+            exit 0
+          fi
+
+          output_dir="${RUNNER_TEMP}/operator-chaos"
+          mkdir -p "${output_dir}"
+          crd_diff_json="${output_dir}/crd-diff.json"
+
+          operator-chaos diff-crds \
+            --source-crds "${source_crd_dir}" \
+            --target-crds "${target_crd_dir}" \
+            --format json > "${crd_diff_json}"
+          operator-chaos diff-crds \
+            --source-crds "${source_crd_dir}" \
+            --target-crds "${target_crd_dir}"
+
+          crd_breaking=$(jq -r '
+            reduce ((.crds // [])[]?.apiVersions[]?.schemaChanges[]?) as $change
+              (0; if ($change.severity | ascii_downcase) == "breaking" then . + 1 else . end)
+          ' "${crd_diff_json}")
+          if (( crd_breaking > 0 )); then
+            echo "operator-chaos detected ${crd_breaking} breaking CRD schema change(s)."
+            exit 1
+          fi
+
+      - name: Preview upgrade simulation
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_knowledge_file="base-branch/chaos/knowledge/maas.yaml"
+          if [[ ! -f "${base_knowledge_file}" ]]; then
+            echo "No base knowledge model found; skipping simulate-upgrade for bootstrap PR."
+            exit 0
+          fi
+
+          operator-chaos simulate-upgrade \
+            --source "base-branch/chaos/knowledge" \
+            --target "chaos/knowledge" \
+            --dry-run

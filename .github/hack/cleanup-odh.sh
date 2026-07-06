@@ -12,6 +12,7 @@
 # - Cluster-scoped MaaS anchor CR (Config/default; legacy ClusterTenant/default if present)
 # - MaaS subscription namespace (models-as-a-service)
 # - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
+# - MaaS validating webhook configuration
 # - Keycloak identity provider (if deployed)
 # - ODH CRDs (optional)
 #
@@ -273,8 +274,9 @@ kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete gatewayclass openshift-default --ignore-not-found 2>/dev/null || true
 
-# 16. Delete MaaS RBAC (ClusterRoles, ClusterRoleBindings - can conflict with other managers)
-echo "16. Deleting MaaS RBAC..."
+# 16. Delete MaaS cluster-scoped resources (webhook configuration, ClusterRoles, ClusterRoleBindings)
+echo "16. Deleting MaaS cluster-scoped resources..."
+kubectl delete validatingwebhookconfiguration maas-validating-webhook-configuration --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 # Extra operator-safe binding for Config API (and legacy ClusterTenant binding/role if present)

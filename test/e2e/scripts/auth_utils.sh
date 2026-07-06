@@ -451,11 +451,18 @@ EOF
     _append "  Inspecting: $policy_ns/$policy_name"
 
     local actual_url
-    actual_url=$(echo "$sample_policy_json" | jq -r '.spec.rules.metadata."subscription-info".http.url // "N/A"' 2>/dev/null)
+    # Gateway-level policies use spec.defaults.rules; route-level use spec.rules — try both.
+    actual_url=$(echo "$sample_policy_json" | jq -r '
+      .spec.defaults.rules.metadata."subscription-info".http.url //
+      .spec.rules.metadata."subscription-info".http.url //
+      "N/A"' 2>/dev/null)
     _append "  Actual URL in AuthPolicy: $actual_url"
 
     local request_body
-    request_body=$(echo "$sample_policy_json" | jq -r '.spec.rules.metadata."subscription-info".http.body.expression // "N/A"' 2>/dev/null)
+    request_body=$(echo "$sample_policy_json" | jq -r '
+      .spec.defaults.rules.metadata."subscription-info".http.body.expression //
+      .spec.rules.metadata."subscription-info".http.body.expression //
+      "N/A"' 2>/dev/null)
     if echo "$request_body" | grep -q "requestedModel"; then
       _append "  ✅ Request body includes requestedModel field"
       # Extract the model reference from the body

@@ -28,7 +28,7 @@ When the [MaaS controller](https://github.com/opendatahub-io/models-as-a-service
     !!! note "ExternalModel bypass"
         ExternalModel kinds are included if `status.phase == "Ready"` without probe validation.
 
-4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window). See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the full list.
+4. For each model, the API reads **annotations** from the MaaSModelRef to populate `modelDetails` in the response (display name, description, use case, context window, model capabilities). See [MaaSModelRef annotations](../reference/crds/maas-model-ref.md#annotations) for the full list.
 
 5. The filtered list is returned to the client.
 

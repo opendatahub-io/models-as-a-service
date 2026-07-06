@@ -14,6 +14,7 @@ Environment variables (all optional unless noted):
   - GATEWAY_HOST: Gateway hostname (required)
   - MAAS_API_BASE_URL: MaaS API URL (auto-derived from GATEWAY_HOST if not set)
   - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
+  - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api workloads run (default: DEPLOYMENT_NAMESPACE/opendatahub)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
@@ -61,6 +62,9 @@ MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated"
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
+# Infrastructure namespace where maas-api workloads run (uses operator namespace)
+# Defaults to DEPLOYMENT_NAMESPACE (controller namespace) since maas-api now deploys there
+MAAS_API_DEPLOYMENT_NAMESPACE = os.environ.get("E2E_MAAS_API_DEPLOYMENT_NAMESPACE", os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub"))
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
@@ -811,7 +815,7 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
 
 
 def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
-                                require_auth_policies=True, require_enforced=True):
+                                require_auth_policies=False, require_enforced=True):
     """Wait for MaaSAuthPolicy to reach a specific phase.
 
     Args:
@@ -819,8 +823,8 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
         expected_phase: Phase to wait for (default: "Active")
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
-        require_auth_policies: If True, requires authPolicies to be populated (default: True).
-                               Set to False for Failed phase with missing models.
+        require_auth_policies: If True, requires authPolicies to be populated (default: False).
+                               Keep False for gateway-only AuthPolicy reconciliation.
         require_enforced: If True, requires all authPolicies to have ready=True
                           (default: True). Only applies when require_auth_policies is True.
 
@@ -870,6 +874,48 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     raise TimeoutError(
         f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
         f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
+    )
+
+
+def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for MaaSModelRef to reach Ready phase.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        namespace: Namespace (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The MaaSModelRef CR dict when Ready
+
+    Raises:
+        TimeoutError: If MaaSModelRef doesn't reach Ready within timeout
+    """
+    deadline = time.time() + timeout
+    log.info(f"Waiting for MaaSModelRef {namespace}/{model_ref} to reach phase 'Ready' (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("maasmodelref", model_ref, namespace)
+        if cr:
+            status = cr.get("status", {})
+            phase = status.get("phase")
+            endpoint = status.get("endpoint")
+
+            if phase == "Ready" and endpoint:
+                log.info(f"MaaSModelRef {namespace}/{model_ref} is Ready with endpoint: {endpoint}")
+                return cr
+
+            log.debug(f"MaaSModelRef {namespace}/{model_ref}: phase={phase}, endpoint={endpoint or 'none'}")
+        time.sleep(2)
+
+    # Timeout - return current state for debugging
+    cr = _get_cr("maasmodelref", model_ref, namespace)
+    status = cr.get("status", {}) if cr else {}
+    conditions = status.get("conditions", [])
+    raise TimeoutError(
+        f"MaaSModelRef {namespace}/{model_ref} did not reach Ready within {timeout}s "
+        f"(current: phase={status.get('phase')}, endpoint={status.get('endpoint')}, "
+        f"conditions={[c.get('type') + '=' + str(c.get('status')) for c in conditions]})"
     )
 
 
@@ -1010,3 +1056,111 @@ def _scale_kuadrant_controller_down(namespace="kuadrant-system", timeout=60):
 def _scale_kuadrant_controller_up(namespace="kuadrant-system", timeout=60):
     """Scale kuadrant-operator to 1 replica (convenience wrapper)."""
     _scale_kuadrant_controller(1, namespace, timeout)
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenant model helpers
+# ---------------------------------------------------------------------------
+
+def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespace: str = "openshift-ingress"):
+    """Create a simulated LLMInferenceService pointing to a specific gateway.
+
+    Args:
+        name: LLMIS name
+        namespace: Namespace to create LLMIS in
+        gateway_name: Gateway name to route through
+        gateway_namespace: Gateway namespace (default: openshift-ingress)
+    """
+    _apply_cr({
+        "apiVersion": "serving.kserve.io/v1alpha1",
+        "kind": "LLMInferenceService",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "model": {
+                "name": "facebook/opt-125m",
+                # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
+                "uri": "hf://placeholder/no-model",
+            },
+            # Skip storage-initializer; simulator generates responses without model weights.
+            "storageInitializer": {
+                "enabled": False,
+            },
+            "replicas": 1,
+            "router": {
+                "gateway": {
+                    "refs": [
+                        {
+                            "name": gateway_name,
+                            "namespace": gateway_namespace,
+                        }
+                    ]
+                },
+                "route": {},  # Required for KServe to create HTTPRoute
+            },
+            "template": {
+                "containers": [
+                    {
+                        "name": "main",
+                        "image": "ghcr.io/llm-d/llm-d-inference-sim@sha256:c3ba435081a4d032676b218ea34eb3a1c54507da0fade2f6297f9c37894fe0d1",
+                        "command": ["/app/llm-d-inference-sim"],
+                        "args": [
+                            "--port", "8000",
+                            "--model", "facebook/opt-125m",
+                            "--mode", "random",
+                            "--no-mm-encoder-only",
+                            "--ssl-certfile", "/var/run/kserve/tls/tls.crt",
+                            "--ssl-keyfile", "/var/run/kserve/tls/tls.key",
+                        ],
+                        "ports": [
+                            {
+                                "containerPort": 8000,
+                                "name": "https",
+                                "protocol": "TCP",
+                            }
+                        ],
+                        "livenessProbe": {
+                            "httpGet": {
+                                "path": "/health",
+                                "port": "https",
+                                "scheme": "HTTPS",
+                            }
+                        },
+                        "readinessProbe": {
+                            "httpGet": {
+                                "path": "/ready",
+                                "port": "https",
+                                "scheme": "HTTPS",
+                            }
+                        },
+                    }
+                ]
+            },
+        },
+    })
+
+
+def _create_maas_model_ref(name: str, namespace: str, llmis_name: str):
+    """Create a MaaSModelRef pointing to an LLMInferenceService.
+
+    Args:
+        name: MaaSModelRef name
+        namespace: Namespace to create MaaSModelRef in
+        llmis_name: LLMInferenceService name to reference
+    """
+    _apply_cr({
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSModelRef",
+        "metadata": {
+            "name": name,
+            "namespace": namespace,
+        },
+        "spec": {
+            "modelRef": {
+                "kind": "LLMInferenceService",
+                "name": llmis_name,
+            }
+        },
+    })

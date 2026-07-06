@@ -56,7 +56,7 @@ type ExternalModelSpec struct {
 
 	// Endpoint is the FQDN of the external provider (no scheme or path).
 	// e.g. "api.openai.com".
-	// This field is metadata for downstream consumers (e.g. BBR provider-resolver plugin)
+	// This field is metadata for downstream consumers (e.g. IPP provider-resolver plugin)
 	// and is not used by the controller for endpoint derivation.
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:MinLength=1

@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,6 +16,12 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 )
+
+// validGroupNamePattern matches Kubernetes/OpenShift group names.
+// Allows alphanumerics, colons (for system: prefixes), dots, underscores, and hyphens.
+// Rejects control characters, quotes, backslashes, and other unsafe characters
+// that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
+var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._-]+$`)
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
@@ -26,6 +34,19 @@ type Service struct {
 	logger      *logger.Logger
 	config      *config.Config
 	subSelector SubscriptionSelector
+
+	// lastUsedDebounce throttles last_used_at writes per key.
+	// Maps key ID (string) → time.Time of last successful DB write.
+	// Prevents Postgres row-lock storms when many requests share one key.
+	lastUsedDebounce    sync.Map
+	lastUsedDebounceTTL time.Duration
+}
+
+func (s *Service) GetMaxExpirationDays() int {
+	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
+		return s.config.APIKeyMaxExpirationDays
+	}
+	return constant.DefaultAPIKeyMaxExpirationDays
 }
 
 func NewService(store MetadataStore, cfg *config.Config, sub SubscriptionSelector) *Service {
@@ -37,11 +58,18 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 	if log == nil {
 		log = logger.Production()
 	}
+
+	debounceTTL := 60 * time.Second
+	if cfg != nil && cfg.LastUsedDebounceSecs >= 0 {
+		debounceTTL = time.Duration(cfg.LastUsedDebounceSecs) * time.Second
+	}
+
 	return &Service{
-		store:       store,
-		logger:      log,
-		config:      cfg,
-		subSelector: sub,
+		store:               store,
+		logger:              log,
+		config:              cfg,
+		subSelector:         sub,
+		lastUsedDebounceTTL: debounceTTL,
 	}
 }
 
@@ -68,20 +96,25 @@ type CreateAPIKeyResponse struct {
 // Admins can create keys for other users by specifying a different username.
 func (s *Service) CreateAPIKey(
 	ctx context.Context, username string, userGroups []string, name, description string,
-	expiresIn *time.Duration, ephemeral bool, requestedSubscription string,
+	expiresIn *time.Duration, ephemeral bool, requestedSubscription string, tenant string,
 ) (*CreateAPIKeyResponse, error) {
-	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
-	maxDays := constant.DefaultAPIKeyMaxExpirationDays
-	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
-		maxDays = s.config.APIKeyMaxExpirationDays
+	// Validate group names against allowlist pattern (CWE-116/CWE-74 mitigation).
+	// AuthPolicy uses CEL to build JSON arrays from groups, and CEL lacks JSON escaping
+	// functions, so we reject any characters outside the safe allowlist on write.
+	for _, group := range userGroups {
+		if !validGroupNamePattern.MatchString(group) {
+			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, and hyphens are allowed)", group)
+		}
 	}
+
+	// Compute max expiration days once from config-or-default (CWE-613 mitigation).
+	maxDays := s.GetMaxExpirationDays()
 	maxRegularDuration := time.Duration(maxDays) * 24 * time.Hour
 
 	// Default expiration if not provided
 	if expiresIn == nil {
 		if ephemeral {
-			// Ephemeral keys default to 1 hour
-			d := 1 * time.Hour
+			d := constant.DefaultEphemeralKeyMaxExpiration
 			expiresIn = &d
 		} else {
 			// Regular keys default to max expiration days
@@ -95,10 +128,8 @@ func (s *Service) CreateAPIKey(
 
 	// Validate against maximum expiration limit (always enforced)
 	if ephemeral {
-		// Ephemeral keys have a strict 1-hour maximum to prevent abuse
-		maxEphemeralDuration := 1 * time.Hour
-		if *expiresIn > maxEphemeralDuration {
-			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed 1 hour: %w", *expiresIn, ErrExpirationExceedsMax)
+		if *expiresIn > constant.DefaultEphemeralKeyMaxExpiration {
+			return nil, fmt.Errorf("ephemeral key expiration (%v) cannot exceed %v: %w", *expiresIn, constant.DefaultEphemeralKeyMaxExpiration, ErrExpirationExceedsMax)
 		}
 	} else if *expiresIn > maxRegularDuration {
 		// Regular keys always enforce max expiration (config or default)
@@ -143,7 +174,7 @@ func (s *Service) CreateAPIKey(
 	// Note: prefix is NOT stored (security - reduces brute-force attack surface)
 	// userGroups stored as PostgreSQL TEXT[] array (no JSON marshaling needed)
 	// Hash is SHA-256(key_id + secret) where key_id is embedded in the API key as per-key salt
-	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, &expiresAt, ephemeral); err != nil {
+	if err := s.store.AddKey(ctx, username, keyID, hash, name, description, userGroups, subscriptionName, tenant, &expiresAt, ephemeral); err != nil {
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
@@ -212,25 +243,35 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		return nil, fmt.Errorf("validation lookup failed: %w", err)
 	}
 
-	// Update last_used_at asynchronously (don't block validation response)
+	// Update last_used_at asynchronously (don't block validation response).
+	// Debounce: skip the DB write if we already wrote within lastUsedDebounceTTL for
+	// this key. Under high concurrency with a shared key (e.g. load tests) this
+	// prevents hundreds of goroutines from racing to UPDATE the same row in Postgres,
+	// which causes row-lock contention and "context deadline exceeded" errors.
 	//nolint:contextcheck // Intentionally using background context - original may be cancelled.
-	go func() {
-		// Recover from panics to prevent crashing the entire process
-		defer func() {
-			if r := recover(); r != nil {
-				s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+	if proceed, slot := s.shouldUpdateLastUsed(metadata.ID); proceed {
+		go func() {
+			// Recover from panics to prevent crashing the entire process
+			defer func() {
+				if r := recover(); r != nil {
+					s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+				}
+			}()
+
+			// Use background context with timeout since original may be cancelled
+			updateCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			if err := s.store.UpdateLastUsed(updateCtx, metadata.ID); err != nil {
+				// Clear only the slot this goroutine reserved (CWE-362/CWE-667 mitigation).
+				// A bare Delete would remove any newer slot written by a CAS refresh
+				// if this goroutine was delayed by the scheduler after its context expired.
+				s.clearDebounceSlot(metadata.ID, slot)
+				// Log warning but don't fail validation - this is best-effort tracking
+				s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 			}
 		}()
-
-		// Use background context with timeout since original may be cancelled
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-
-		if err := s.store.UpdateLastUsed(ctx, metadata.ID); err != nil {
-			// Log warning but don't fail validation - this is best-effort tracking
-			s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
-		}
-	}()
+	}
 
 	// Return the user's groups (stored at key creation time)
 	// These groups are used directly by subscription-based authorization
@@ -265,8 +306,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		UserID:       metadata.ID, // Database-assigned UUID (immutable, collision-resistant)
 		Username:     metadata.Username,
 		KeyID:        metadata.ID,
+		KeyName:      metadata.Name,
 		Groups:       groups, // Original user groups for subscription-based authorization
 		Subscription: metadata.Subscription,
+		Tenant:       metadata.Tenant,
 	}, nil
 }
 
@@ -279,20 +322,97 @@ func (s *Service) RevokeAPIKey(ctx context.Context, keyID string) error {
 func (s *Service) Search(
 	ctx context.Context,
 	username string,
+	tenant string,
 	filters *SearchFilters,
 	sort *SortParams,
 	pagination *PaginationParams,
 ) (*PaginatedResult, error) {
-	return s.store.Search(ctx, username, filters, sort, pagination)
+	return s.store.Search(ctx, username, tenant, filters, sort, pagination)
 }
 
 // BulkRevokeAPIKeys revokes all active keys for a user
 // Returns count of revoked keys.
-func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string) (int, error) {
+func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant string) (int, error) {
 	if username == "" {
 		return 0, errors.New("username is required")
 	}
-	return s.store.InvalidateAll(ctx, username)
+	return s.store.InvalidateAll(ctx, username, tenant)
+}
+
+// StartDebounceCleanup starts a background goroutine that periodically evicts
+// stale entries from the lastUsedDebounce map. Without this the map grows
+// indefinitely — one entry per unique key ID that has ever been validated.
+// Entries older than lastUsedDebounceTTL are already logically expired (the
+// next validation would re-add them), so deleting them is safe and has no
+// effect on debounce correctness.
+// The goroutine stops when ctx is cancelled (server shutdown). It is a no-op
+// when debouncing is disabled (TTL == 0).
+func (s *Service) StartDebounceCleanup(ctx context.Context) {
+	if s.lastUsedDebounceTTL == 0 {
+		return
+	}
+	go func() {
+		// Sweep once per hour regardless of TTL — stale entries are cheap to
+		// hold, so high-frequency sweeps are unnecessary.
+		ticker := time.NewTicker(time.Hour)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cutoff := time.Now().Add(-s.lastUsedDebounceTTL)
+				s.lastUsedDebounce.Range(func(key, value any) bool {
+					if t, ok := value.(time.Time); ok && t.Before(cutoff) {
+						s.lastUsedDebounce.Delete(key)
+					}
+					return true
+				})
+			}
+		}
+	}()
+}
+
+// shouldUpdateLastUsed returns (proceed, slot) where proceed is true when a
+// last_used_at DB write should be issued for keyID. slot is the timestamp value
+// written into the debounce map for this reservation; callers must pass it to
+// clearDebounceSlot on write failure so only the reserving goroutine can evict
+// its own slot (CWE-362/CWE-667 mitigation).
+// When debouncing is disabled (TTL == 0) it always returns (true, zero time).
+func (s *Service) shouldUpdateLastUsed(keyID string) (bool, time.Time) {
+	if s.lastUsedDebounceTTL == 0 {
+		return true, time.Time{}
+	}
+	now := time.Now()
+	// LoadOrStore is atomic: the first caller stores `now` and gets loaded=false,
+	// all concurrent callers within the same window get loaded=true and skip.
+	actual, loaded := s.lastUsedDebounce.LoadOrStore(keyID, now)
+	if !loaded {
+		return true, now // we were the first — proceed with the write
+	}
+	lastTime, ok := actual.(time.Time)
+	if ok && now.Sub(lastTime) >= s.lastUsedDebounceTTL {
+		// TTL expired. Use CompareAndSwap so only one concurrent caller wins
+		// the refresh slot — prevents a TOCTOU storm at every debounce boundary
+		// where many goroutines could all observe the same stale timestamp and
+		// all return true simultaneously (CWE-362).
+		if s.lastUsedDebounce.CompareAndSwap(keyID, actual, now) {
+			return true, now
+		}
+	}
+	return false, time.Time{}
+}
+
+// clearDebounceSlot removes the debounce entry for keyID only if it still holds
+// slotTime — the value this goroutine stored via shouldUpdateLastUsed. Using
+// CompareAndDelete instead of bare Delete prevents a delayed goroutine from
+// evicting a newer slot written by a concurrent CAS refresh after TTL expiry
+// (CWE-362/CWE-667 mitigation). No-op when debouncing is disabled.
+func (s *Service) clearDebounceSlot(keyID string, slotTime time.Time) {
+	if s.lastUsedDebounceTTL == 0 {
+		return
+	}
+	s.lastUsedDebounce.CompareAndDelete(keyID, slotTime)
 }
 
 // CleanupExpiredEphemeral deletes expired ephemeral keys from storage.

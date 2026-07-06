@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,6 +34,14 @@ func tenantTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func tenantTestNamespace(name string) client.Object {
+	return &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
 }
 
 func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
@@ -112,7 +121,7 @@ func TestTenantReconcile_NonSingletonNameIsNoOp(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty(), "non-singleton should not get a finalizer")
 }
 
-func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
+func TestTenantReconcile_DefaultTenantDoesNotAddCleanupFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -127,7 +136,7 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -146,7 +155,86 @@ func TestTenantReconcile_ManagedReconcileDoesNotAddFinalizer(t *testing.T) {
 
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(BeEmpty(), "default-tenant teardown is Config-driven; no tenant-cleanup finalizer")
+}
+
+func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       maasv1alpha1.TenantInstanceName,
+			Namespace:  testNS,
+			Finalizers: []string{"maas.opendatahub.io/tenant-cleanup"},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Finalizers).To(BeEmpty())
+}
+
+func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "ai-tenant-redteam"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: testNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "redteam",
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:                          cl,
+		Scheme:                          s,
+		AppNamespace:                    "opendatahub",
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     testTenantGatewayName,
+		GatewayNamespace:                testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
 }
 
 func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing.T) {
@@ -173,7 +261,7 @@ func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -229,7 +317,7 @@ func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -271,7 +359,7 @@ func TestTenantReconcile_ManagementStateUnmanagedSetsIdle(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -313,7 +401,7 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -353,7 +441,7 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -398,7 +486,7 @@ func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -446,7 +534,7 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Tenant{}).
-		WithObjects(tenant, ct).
+		WithObjects(tenant, ct, tenantTestNamespace(testNS)).
 		Build()
 
 	r := &TenantReconciler{
@@ -468,6 +556,18 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
+}
+
+func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespace(t *testing.T) {
+	g := NewWithT(t)
+	r := &TenantReconciler{AppNamespace: "opendatahub"}
+	g.Expect(r.appNamespaceForTenant()).To(Equal("opendatahub"))
+}
+
+func TestTenantReconcile_AppNamespaceReturnsRHOAINamespace(t *testing.T) {
+	g := NewWithT(t)
+	r := &TenantReconciler{AppNamespace: "redhat-ods-applications"}
+	g.Expect(r.appNamespaceForTenant()).To(Equal("redhat-ods-applications"))
 }
 
 func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {

@@ -36,6 +36,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -101,9 +102,10 @@ func TestManagedAnnotation_Service(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
+			resourceName := modelnaming.ExternalModelResourceName(name)
 			existingSvc := &corev1.Service{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:        name,
+					Name:        resourceName,
 					Namespace:   ns,
 					Annotations: tc.annotations,
 				},
@@ -121,7 +123,7 @@ func TestManagedAnnotation_Service(t *testing.T) {
 			require.NoError(t, err)
 
 			got := &corev1.Service{}
-			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, got))
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, got))
 
 			if tc.wantSpecChanged {
 				assert.Equal(t, endpoint, got.Spec.ExternalName, "expected Service ExternalName to be updated to endpoint")
@@ -161,9 +163,10 @@ func TestManagedAnnotation_ServiceEntry(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
+			resourceName := modelnaming.ExternalModelResourceName(name)
 			existingSE := &unstructured.Unstructured{}
 			existingSE.SetGroupVersionKind(schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "ServiceEntry"})
-			existingSE.SetName(name)
+			existingSE.SetName(resourceName)
 			existingSE.SetNamespace(ns)
 			existingSE.SetAnnotations(tc.annotations)
 			_ = unstructured.SetNestedStringSlice(existingSE.Object, []string{sentinelEndpoint}, "spec", "hosts")
@@ -177,7 +180,7 @@ func TestManagedAnnotation_ServiceEntry(t *testing.T) {
 
 			got := &unstructured.Unstructured{}
 			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "ServiceEntry"})
-			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, got))
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, got))
 
 			hosts, _, _ := unstructured.NestedStringSlice(got.Object, "spec", "hosts")
 			if tc.wantSpecChanged {
@@ -220,9 +223,10 @@ func TestManagedAnnotation_HTTPRoute(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
+			resourceName := modelnaming.ExternalModelResourceName(name)
 			existingHR := &gatewayapiv1.HTTPRoute{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:        name,
+					Name:        resourceName,
 					Namespace:   ns,
 					Annotations: tc.annotations,
 				},
@@ -243,7 +247,7 @@ func TestManagedAnnotation_HTTPRoute(t *testing.T) {
 			require.NoError(t, err)
 
 			got := &gatewayapiv1.HTTPRoute{}
-			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, got))
+			require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, got))
 
 			if tc.wantSpecChanged {
 				require.Len(t, got.Spec.ParentRefs, 1)
@@ -292,10 +296,11 @@ func TestManagedAnnotation_DestinationRule_DeletePath(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.testName, func(t *testing.T) {
+			resourceName := modelnaming.ExternalModelResourceName(name)
 			// Pre-populate a stale DestinationRule (left over from when TLS was enabled).
 			existingDR := &unstructured.Unstructured{}
 			existingDR.SetGroupVersionKind(schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"})
-			existingDR.SetName(name)
+			existingDR.SetName(resourceName)
 			existingDR.SetNamespace(ns)
 			existingDR.SetAnnotations(tc.annotations)
 
@@ -309,7 +314,7 @@ func TestManagedAnnotation_DestinationRule_DeletePath(t *testing.T) {
 
 			got := &unstructured.Unstructured{}
 			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"})
-			getErr := c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, got)
+			getErr := c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, got)
 
 			if tc.wantDeleted {
 				assert.True(t, apierrors.IsNotFound(getErr),
