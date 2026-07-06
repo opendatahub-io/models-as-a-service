@@ -16,6 +16,7 @@ Red Hat OpenShift AI (RHOAI). MaaS is installed by enabling it in the DataScienc
 !!! note "Other Kubernetes flavors"
     Other Kubernetes flavors (e.g., upstream Kubernetes, other distributions) are currently being validated.
 
+For the mapping between RHOAI product versions and MaaS releases, see [RHOAI to MaaS Release Mapping](../release-notes/index.md#rhoai-to-maas-release-mapping).
 
 
 ## Required Tools

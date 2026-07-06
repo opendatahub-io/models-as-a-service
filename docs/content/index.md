@@ -32,6 +32,7 @@ Use this platform to streamline the deployment of your models, monitor usage, an
 ### 📋 Release Notes
 
 - **[Release notes](release-notes/index.md)** - Version highlights and known limitations by release
+- **[RHOAI to MaaS Release Mapping](release-notes/index.md#rhoai-to-maas-release-mapping)** - Which RHOAI version ships which MaaS release
 
 ### 📖 Installation Guide
 

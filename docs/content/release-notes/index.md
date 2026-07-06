@@ -2,6 +2,23 @@
 
 Release notes summarize user-visible changes, breaking changes, and migration requirements for each MaaS version.
 
+## RHOAI to MaaS Release Mapping
+
+This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corresponding MaaS component version.
+
+| RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
+|---------------|--------------|-----------------|--------|-------|
+| 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
+| 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
+| 3.2           | v0.0.2       | `v3.2`          | Tech Preview | Tier-based access; standalone deploy (`modelsAsService` not in DSC schema) |
+
+**Image registries:**
+
+- **Upstream (ODH):** `quay.io/opendatahub/maas-api:<tag>`, `quay.io/opendatahub/maas-controller:<tag>`
+- **Downstream (RHOAI):** `registry.redhat.io/rhoai/odh-maas-api-rhel9:<tag>`, `registry.redhat.io/rhoai/odh-maas-controller-rhel9:<tag>`
+
+For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Version Compatibility](../install/prerequisites.md#version-compatibility).
+
 ---
 
 ## v0.1.2
