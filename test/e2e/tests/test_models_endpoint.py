@@ -810,8 +810,22 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Wait for subscription to reconcile before creating API key
-            _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
+            # Wait for auth and subscription reconciliation before creating API key.
+            # Both modelRefs must be governed before /v1/models probes each backend.
+            _wait_for_maas_auth_policy_phase(
+                auth_policy_name,
+                namespace=maas_ns,
+                timeout=120,
+                require_auth_policies=True,
+            )
+            _wait_for_maas_subscription_phase(
+                subscription_name,
+                namespace=maas_ns,
+                timeout=120,
+                require_model_statuses=True,
+            )
+            _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(PREMIUM_MODEL_REF, namespace=MODEL_NAMESPACE)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-diff-refs-test-key", subscription=subscription_name)

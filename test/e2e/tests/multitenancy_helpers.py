@@ -27,6 +27,7 @@ from test_helper import (
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
+TENANT_CONFIG_KIND = "maastenantconfig"
 TENANT_CR_NAME = "default-tenant"
 
 LABEL_AI_GATEWAY_TENANT = "ai-gateway.opendatahub.io/tenant"
