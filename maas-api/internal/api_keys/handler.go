@@ -14,6 +14,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
@@ -38,6 +39,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+	metrics      MetricsRecorder
+}
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordKeyValidation(tenant, result string)
+	RecordTokenMint(tenant, result string)
 }
 
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
@@ -47,7 +55,7 @@ func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
 	})
 }
 
-func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
+func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker, metrics MetricsRecorder) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -58,6 +66,7 @@ func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker)
 		service:      service,
 		logger:       log,
 		adminChecker: adminChecker,
+		metrics:      metrics,
 	}
 }
 
@@ -77,6 +86,15 @@ func (h *Handler) getUserContext(c *gin.Context) *token.UserContext {
 	}
 
 	return user
+}
+
+// reqLogger returns the per-request logger enriched with tenant context,
+// falling back to the handler's base logger for internal routes.
+func (h *Handler) reqLogger(c *gin.Context) *logger.Logger {
+	if l := middleware.GetLogger(c); l != nil {
+		return l
+	}
+	return h.logger
 }
 
 // isAdmin checks if the user has admin privileges via SubjectAccessReview.
@@ -100,6 +118,12 @@ func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContex
 		return true, nil
 	}
 	return h.isAdmin(ctx, user)
+}
+
+func (h *Handler) recordTokenMint(tenant, result string) {
+	if h.metrics != nil {
+		h.metrics.RecordTokenMint(tenant, result)
+	}
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
@@ -230,6 +254,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -241,6 +266,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		var modelUnhealthy *subscription.ModelUnhealthyError
 		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) ||
 			errors.As(err, &multipleSubs) || errors.As(err, &modelNotInSub) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
@@ -248,8 +274,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			return
 		}
 		if errors.As(err, &modelUnhealthy) {
-			// Unreconciled (empty phase): 400 - temporary state, retry later
-			// Failed phase: 403 - authorization denied, subscription broken
+			h.recordTokenMint(user.Tenant, "rejected")
 			statusCode := http.StatusBadRequest
 			if modelUnhealthy.Phase == "Failed" {
 				statusCode = http.StatusForbidden
@@ -260,15 +285,17 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			})
 			return
 		}
+		h.recordTokenMint(user.Tenant, "failure")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
 		return
 	}
 
-	h.logger.Info("Created API key",
+	h.recordTokenMint(user.Tenant, "success")
+
+	h.reqLogger(c).Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
 		"username", user.Username,
-		"groups", user.Groups,
 		"ephemeral", req.Ephemeral,
 	)
 
@@ -293,9 +320,20 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 
 	result, err := h.service.ValidateAPIKey(c.Request.Context(), req.Key)
 	if err != nil {
+		if h.metrics != nil {
+			h.metrics.RecordKeyValidation(h.service.GetTenantName(), "error")
+		}
 		h.logger.Error("API key validation failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "validation failed"})
 		return
+	}
+
+	if h.metrics != nil {
+		validResult := "invalid"
+		if result.Valid {
+			validResult = "valid"
+		}
+		h.metrics.RecordKeyValidation(result.Tenant, validResult)
 	}
 
 	if !result.Valid {
@@ -365,7 +403,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
+	h.reqLogger(c).Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
 
 	// Return the revoked key metadata (per OpenAPI spec)
 	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
@@ -571,7 +609,7 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Bulk revoked API keys",
+	h.reqLogger(c).Info("Bulk revoked API keys",
 		"count", count,
 		"targetUser", req.Username,
 		"revokedBy", user.Username,

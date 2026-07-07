@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -70,6 +71,17 @@ type Config struct {
 
 	MetricsPort int
 
+	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
+	// Tracing is disabled when empty.
+	OTELEndpoint string
+
+	// OTELInsecure disables TLS for the OTLP exporter connection.
+	OTELInsecure bool
+
+	// OTELSampleRate controls the fraction of traces sampled (0.0 to 1.0).
+	// Default: 1.0 (sample everything). Set lower in production for high-volume APIs.
+	OTELSampleRate float64
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -84,6 +96,13 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
+	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
+	otelSampleRate := 1.0
+	if rateStr := env.GetString("OTEL_TRACES_SAMPLE_RATE", ""); rateStr != "" {
+		if parsed, err := strconv.ParseFloat(rateStr, 64); err == nil && parsed >= 0 && parsed <= 1 {
+			otelSampleRate = parsed
+		}
+	}
 
 	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
 	if tenantName == "" {
@@ -107,6 +126,9 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:              otelInsecure,
+		OTELSampleRate:            otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}

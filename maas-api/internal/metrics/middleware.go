@@ -7,7 +7,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func NewMiddleware(recorder MetricsRecorder) gin.HandlerFunc {
+func NewMiddleware(recorder MetricsRecorder, defaultTenant string) gin.HandlerFunc {
 	if recorder == nil {
 		panic("metrics.NewMiddleware: nil MetricsRecorder")
 	}
@@ -26,6 +26,6 @@ func NewMiddleware(recorder MetricsRecorder) gin.HandlerFunc {
 		}
 
 		status := strconv.Itoa(c.Writer.Status())
-		recorder.RecordRequestDuration(method, route, status, duration)
+		recorder.RecordRequestDuration(method, route, status, defaultTenant, duration)
 	}
 }
