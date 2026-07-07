@@ -20,12 +20,12 @@ type mockRecorder struct {
 }
 
 type recordedDuration struct {
-	method, route, status string
-	duration              time.Duration
+	method, route, status, tenant string
+	duration                      time.Duration
 }
 
-func (m *mockRecorder) RecordRequestDuration(method, route, status string, d time.Duration) {
-	m.durations = append(m.durations, recordedDuration{method, route, status, d})
+func (m *mockRecorder) RecordRequestDuration(method, route, status, tenant string, d time.Duration) {
+	m.durations = append(m.durations, recordedDuration{method, route, status, tenant, d})
 }
 
 func (m *mockRecorder) IncrementInFlight(method string) {
@@ -36,10 +36,16 @@ func (m *mockRecorder) DecrementInFlight(method string) {
 	m.inFlightDec = append(m.inFlightDec, method)
 }
 
+func (m *mockRecorder) RecordKeyValidation(tenant, result string) {
+}
+
+func (m *mockRecorder) RecordTokenMint(tenant, result string) {
+}
+
 func setupTestRouter(rec metrics.MetricsRecorder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	r := gin.New()
-	r.Use(metrics.NewMiddleware(rec))
+	r.Use(metrics.NewMiddleware(rec, "test-tenant"))
 	r.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 	r.POST("/v1/api-keys", func(c *gin.Context) { c.String(http.StatusCreated, "created") })
 	r.GET("/v1/api-keys/:id", func(c *gin.Context) { c.String(http.StatusOK, "ok") })

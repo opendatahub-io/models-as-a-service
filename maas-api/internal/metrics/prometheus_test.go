@@ -58,12 +58,40 @@ func gatherMetricValue(t *testing.T, reg *prometheus.Registry, name string, labe
 func TestRecordRequestDuration(t *testing.T) {
 	r, reg := newTestRecorder(t)
 
-	r.RecordRequestDuration("GET", "/v1/models", "200", 150*time.Millisecond)
-	r.RecordRequestDuration("GET", "/v1/models", "200", 250*time.Millisecond)
-	r.RecordRequestDuration("POST", "/v1/api-keys", "201", 50*time.Millisecond)
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-a", 150*time.Millisecond)
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-a", 250*time.Millisecond)
+	r.RecordRequestDuration("POST", "/v1/api-keys", "201", "tenant-b", 50*time.Millisecond)
 
-	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_api_http_requests_total", map[string]string{"method": "GET", "route": "/v1/models", "status": "200"}), 0)
-	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_http_requests_total", map[string]string{"method": "POST", "route": "/v1/api-keys", "status": "201"}), 0)
+	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_api_http_requests_total",
+		map[string]string{"method": "GET", "route": "/v1/models", "status": "200", "tenant_name": "tenant-a"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_http_requests_total",
+		map[string]string{"method": "POST", "route": "/v1/api-keys", "status": "201", "tenant_name": "tenant-b"}), 0)
+}
+
+// TestRecordRequestDuration_TenantLabel verifies that the same route with different
+// tenants produces distinct metric series.
+func TestRecordRequestDuration_TenantLabel(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-a", 100*time.Millisecond)
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-b", 100*time.Millisecond)
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-b", 100*time.Millisecond)
+
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_http_requests_total",
+		map[string]string{"tenant_name": "tenant-a"}), 0)
+	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_api_http_requests_total",
+		map[string]string{"tenant_name": "tenant-b"}), 0)
+}
+
+// TestRecordRequestDuration_EmptyTenant verifies that requests without tenant context
+// (internal routes, health checks) produce metrics with an empty tenant label.
+func TestRecordRequestDuration_EmptyTenant(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRequestDuration("POST", "/internal/v1/api-keys/validate", "200", "", 10*time.Millisecond)
+
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_http_requests_total",
+		map[string]string{"tenant_name": "", "route": "/internal/v1/api-keys/validate"}), 0)
 }
 
 func TestInFlightGauge(t *testing.T) {
@@ -95,10 +123,43 @@ func TestNewPrometheusRecorderDuplicateRegistration(t *testing.T) {
 	assert.Error(t, err)
 }
 
+// TestRecordKeyValidation verifies that the key validation counter increments
+// correctly with tenant and result labels.
+func TestRecordKeyValidation(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordKeyValidation("redteam", "valid")
+	r.RecordKeyValidation("redteam", "valid")
+	r.RecordKeyValidation("redteam", "invalid")
+	r.RecordKeyValidation("blueteam", "valid")
+
+	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_api_key_validation_total",
+		map[string]string{"tenant_name": "redteam", "result": "valid"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_key_validation_total",
+		map[string]string{"tenant_name": "redteam", "result": "invalid"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_key_validation_total",
+		map[string]string{"tenant_name": "blueteam", "result": "valid"}), 0)
+}
+
+// TestRecordTokenMint verifies that the token mint counter increments
+// correctly with tenant and result labels.
+func TestRecordTokenMint(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordTokenMint("redteam", "success")
+	r.RecordTokenMint("redteam", "success")
+	r.RecordTokenMint("redteam", "failure")
+
+	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_api_token_mint_total",
+		map[string]string{"tenant_name": "redteam", "result": "success"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_api_token_mint_total",
+		map[string]string{"tenant_name": "redteam", "result": "failure"}), 0)
+}
+
 func TestDurationHistogramObserved(t *testing.T) {
 	r, reg := newTestRecorder(t)
 
-	r.RecordRequestDuration("GET", "/v1/models", "200", 150*time.Millisecond)
+	r.RecordRequestDuration("GET", "/v1/models", "200", "tenant-a", 150*time.Millisecond)
 
 	families, err := reg.Gather()
 	require.NoError(t, err)
