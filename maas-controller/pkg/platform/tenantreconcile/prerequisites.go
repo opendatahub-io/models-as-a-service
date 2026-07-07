@@ -13,7 +13,6 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
-	"sigs.k8s.io/yaml"
 )
 
 // IsGVKAvailable uses the REST mapper (same spirit as ODH dependency checks).
@@ -53,9 +52,9 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 		rep.Blocking = append(rep.Blocking, msg)
 		log.Error(nil, "MaaS prerequisite error", "check", "database-secret", "message", msg)
 	}
-	if msg := checkUserWorkloadMonitoring(ctx, c); msg != "" {
+	if msg := checkDSCIMonitoring(ctx, c); msg != "" {
 		rep.Warnings = append(rep.Warnings, msg)
-		log.V(1).Info("MaaS prerequisite warning", "check", "user-workload-monitoring", "message", msg)
+		log.V(1).Info("MaaS prerequisite warning", "check", "dsci-monitoring", "message", msg)
 	}
 
 	return rep
@@ -145,42 +144,135 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 	return ""
 }
 
-func checkUserWorkloadMonitoring(ctx context.Context, c client.Client) string {
-	cm := &corev1.ConfigMap{}
-	err := c.Get(ctx, types.NamespacedName{
-		Namespace: MonitoringNamespace,
-		Name:      ClusterMonitoringConfigName,
-	}, cm)
+func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
+	// Look for DSCInitialization resources
+	dsciList := &unstructured.UnstructuredList{}
+	dsciList.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "dscinitialization.opendatahub.io",
+		Version: "v1",
+		Kind:    "DSCInitializationList",
+	})
 
-	if err != nil {
-		if apierrors.IsNotFound(err) {
-			return "User Workload Monitoring not configured: ConfigMap 'cluster-monitoring-config' not found in 'openshift-monitoring'. " +
-				"Showback/FinOps usage views will not work without User Workload Monitoring enabled"
+	if err := c.List(ctx, dsciList); err != nil {
+		if meta.IsNoMatchError(err) {
+			return "DSCI monitoring not configured: DSCInitialization CRD not found. " +
+				"Showback/FinOps usage views will not work without monitoring stack enabled"
 		}
-		log.FromContext(ctx).Error(err, "unable to verify User Workload Monitoring status")
-		return "unable to verify User Workload Monitoring status due to a cluster API error. " +
-			"Ensure User Workload Monitoring is enabled for showback functionality"
+		log.FromContext(ctx).Error(err, "unable to verify DSCI monitoring status")
+		return "unable to verify DSCI monitoring status due to a cluster API error. " +
+			"Ensure monitoring is enabled in DSCInitialization for showback functionality"
 	}
 
-	configData, ok := cm.Data["config.yaml"]
-	if !ok {
-		return "User Workload Monitoring is not enabled. " +
-			"Set enableUserWorkload: true in 'cluster-monitoring-config' ConfigMap in 'openshift-monitoring' namespace. " +
-			"Showback/FinOps usage views will not work without it"
+	if len(dsciList.Items) == 0 {
+		return "DSCI monitoring not configured: no DSCInitialization found. " +
+			"Showback/FinOps usage views will not work without monitoring stack enabled"
 	}
 
-	var cfg struct {
-		EnableUserWorkload bool `yaml:"enableUserWorkload"`
-	}
-	if err := yaml.Unmarshal([]byte(configData), &cfg); err != nil {
-		return "User Workload Monitoring config is invalid in 'cluster-monitoring-config'. " +
-			"Ensure config.yaml is valid YAML and sets enableUserWorkload: true"
+	// DSCInitialization is a singleton resource; prefer the well-known
+	// "default-dsci" instance if present, otherwise fall back to the first item.
+	dsci := &dsciList.Items[0]
+	for i := range dsciList.Items {
+		if dsciList.Items[i].GetName() == "default-dsci" {
+			dsci = &dsciList.Items[i]
+			break
+		}
 	}
 
-	if !cfg.EnableUserWorkload {
-		return "User Workload Monitoring is not enabled. " +
-			"Set enableUserWorkload: true in 'cluster-monitoring-config' ConfigMap in 'openshift-monitoring' namespace. " +
-			"Showback/FinOps usage views will not work without it"
+	// Check MonitoringStackAvailable, MonitoringReady, and PersesAvailable conditions
+	conditionsSlice, found, err := unstructured.NestedSlice(dsci.Object, "status", "conditions")
+	if err != nil {
+		log.FromContext(ctx).Error(err, "unable to read DSCI conditions")
+		return "unable to verify DSCI monitoring conditions due to a status read error. " +
+			"Ensure monitoring stack is deployed in DSCInitialization"
+	}
+	if !found || len(conditionsSlice) == 0 {
+		return "DSCI monitoring status not available: no conditions found. " +
+			"Monitoring stack may still be deploying. " +
+			"Showback/FinOps usage views will not work until monitoring is ready"
+	}
+
+	type conditionStatus struct {
+		status  string
+		reason  string
+		message string
+	}
+
+	conditions := map[string]conditionStatus{
+		"MonitoringStackAvailable": {},
+		"MonitoringReady":          {},
+		"PersesAvailable":          {},
+	}
+
+	for _, cond := range conditionsSlice {
+		condMap, ok := cond.(map[string]any)
+		if !ok {
+			continue
+		}
+		condType, _ := condMap["type"].(string)
+		if _, tracked := conditions[condType]; !tracked {
+			continue
+		}
+
+		status, _ := condMap["status"].(string)
+		reason, _ := condMap["reason"].(string)
+		message, _ := condMap["message"].(string)
+
+		conditions[condType] = conditionStatus{
+			status:  status,
+			reason:  reason,
+			message: message,
+		}
+	}
+
+	if conditions["MonitoringReady"].status != "True" {
+		cond := conditions["MonitoringReady"]
+		if cond.status == "" {
+			return "DSCI monitoring is not ready: MonitoringReady condition not found in DSCInitialization status. " +
+				"Showback/FinOps usage views will not work until monitoring is ready"
+		}
+		msg := fmt.Sprintf("DSCI monitoring is not ready (MonitoringReady=%s", cond.status)
+		if cond.reason != "" {
+			msg += fmt.Sprintf(": %s", cond.reason)
+		}
+		if cond.message != "" {
+			msg += fmt.Sprintf(": %s", cond.message)
+		}
+		msg += "). Showback/FinOps usage views will not work until monitoring is ready"
+		return msg
+	}
+
+	if conditions["MonitoringStackAvailable"].status != "True" {
+		cond := conditions["MonitoringStackAvailable"]
+		if cond.status == "" {
+			return "DSCI monitoring stack is not available: MonitoringStackAvailable condition not found in DSCInitialization status. " +
+				"Showback/FinOps usage views will not work until monitoring stack is available"
+		}
+		msg := fmt.Sprintf("DSCI monitoring stack is not available (MonitoringStackAvailable=%s", cond.status)
+		if cond.reason != "" {
+			msg += fmt.Sprintf(": %s", cond.reason)
+		}
+		if cond.message != "" {
+			msg += fmt.Sprintf(": %s", cond.message)
+		}
+		msg += "). Showback/FinOps usage views will not work until monitoring stack is available"
+		return msg
+	}
+
+	if conditions["PersesAvailable"].status != "True" {
+		cond := conditions["PersesAvailable"]
+		if cond.status == "" {
+			return "DSCI Perses is not available: PersesAvailable condition not found in DSCInitialization status. " +
+				"Showback/FinOps usage views will not work until Perses is available"
+		}
+		msg := fmt.Sprintf("DSCI Perses is not available (PersesAvailable=%s", cond.status)
+		if cond.reason != "" {
+			msg += fmt.Sprintf(": %s", cond.reason)
+		}
+		if cond.message != "" {
+			msg += fmt.Sprintf(": %s", cond.message)
+		}
+		msg += "). Showback/FinOps usage views will not work until Perses is available"
+		return msg
 	}
 
 	return ""

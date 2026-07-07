@@ -120,6 +120,14 @@ rules:
   - list
   - watch
 - apiGroups:
+  - dscinitialization.opendatahub.io
+  resources:
+  - dscinitializations
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - extensions.kuadrant.io
   resources:
   - telemetrypolicies
