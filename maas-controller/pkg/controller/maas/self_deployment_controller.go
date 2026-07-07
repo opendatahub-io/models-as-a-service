@@ -100,10 +100,7 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else if res != nil {
 			return *res, nil
 		}
-		if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
-			return ctrl.Result{}, err
-		}
-		if err := r.ensureObservabilityDashboards(ctx, log); err != nil {
+		if err := r.ensureObservability(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -359,9 +356,18 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 	return false
 }
 
+func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
+		return err
+	}
+	if err := r.ensureUsageDashboard(ctx, log); err != nil {
+		return err
+	}
+	return nil
+}
+
 // ensureLimitadorServiceMonitor creates or updates the Limitador ServiceMonitor in the operator namespace.
 // This ServiceMonitor ensures metrics are scraped from the Limitador pod and get to the DSC's monitoring stack.
-// TODO: move the ServiceMonitor to the monitoring namespace (opendatahub/redahat-ods-monitoring).
 // If the ServiceMonitor CRD is not available, this is a no-op (allows running without the monitoring stack).
 // TODO: need to set the overall status of MaaS to Degraded if COO is missing.
 func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context) error {
@@ -379,7 +385,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 			"kind":       "ServiceMonitor",
 			"metadata": map[string]any{
 				"name":      "limitador-metrics",
-				"namespace": r.DeploymentNS,
+				"namespace": r.MonitoringNamespace,
 				"labels": map[string]any{
 					"app":                              "limitador",
 					"monitoring.opendatahub.io/scrape": "true",
@@ -420,11 +426,10 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 	return nil
 }
 
-// ensureObservabilityDashboards creates the usage dashboard and its dependencies
-// (ConfigMap, PersesDatasource, PersesDashboard) in the monitoring namespace.
+// ensureUsageDashboard creates the usage dashboard in the monitoring namespace.
 // Uses the existing kustomize infrastructure to render manifests from ObservabilityManifestsPath.
 // If ObservabilityManifestsPath is not set or Perses CRDs are not installed, gracefully skips.
-func (r *LifecycleReconciler) ensureObservabilityDashboards(ctx context.Context, log logr.Logger) error {
+func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr.Logger) error {
 	// Skip if observability manifests path not configured
 	if r.ObservabilityManifestsPath == "" {
 		log.Info("WARNING: Observability manifests path not configured; skipping observability dashboards")
