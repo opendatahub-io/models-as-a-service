@@ -39,6 +39,13 @@ type Handler struct {
 	service      *Service
 	logger       *logger.Logger
 	adminChecker AdminChecker
+	metrics      MetricsRecorder
+}
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordKeyValidation(tenant, result string)
+	RecordTokenMint(tenant, result string)
 }
 
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
@@ -48,7 +55,7 @@ func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
 	})
 }
 
-func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker) *Handler {
+func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker, metrics MetricsRecorder) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
@@ -59,6 +66,7 @@ func NewHandler(log *logger.Logger, service *Service, adminChecker AdminChecker)
 		service:      service,
 		logger:       log,
 		adminChecker: adminChecker,
+		metrics:      metrics,
 	}
 }
 
@@ -110,6 +118,12 @@ func (h *Handler) isAuthorizedForKey(ctx context.Context, user *token.UserContex
 		return true, nil
 	}
 	return h.isAdmin(ctx, user)
+}
+
+func (h *Handler) recordTokenMint(tenant, result string) {
+	if h.metrics != nil {
+		h.metrics.RecordTokenMint(tenant, result)
+	}
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
@@ -240,6 +254,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
@@ -251,6 +266,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		var modelUnhealthy *subscription.ModelUnhealthyError
 		if errors.As(err, &notFound) || errors.As(err, &accessDenied) || errors.As(err, &noSub) ||
 			errors.As(err, &multipleSubs) || errors.As(err, &modelNotInSub) {
+			h.recordTokenMint(user.Tenant, "rejected")
 			c.JSON(http.StatusBadRequest, gin.H{
 				"error": apiKeySubscriptionResolutionErrMsg,
 				"code":  apiKeySubscriptionResolutionErrCode,
@@ -258,8 +274,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			return
 		}
 		if errors.As(err, &modelUnhealthy) {
-			// Unreconciled (empty phase): 400 - temporary state, retry later
-			// Failed phase: 403 - authorization denied, subscription broken
+			h.recordTokenMint(user.Tenant, "rejected")
 			statusCode := http.StatusBadRequest
 			if modelUnhealthy.Phase == "Failed" {
 				statusCode = http.StatusForbidden
@@ -270,9 +285,12 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 			})
 			return
 		}
+		h.recordTokenMint(user.Tenant, "failure")
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create API key"})
 		return
 	}
+
+	h.recordTokenMint(user.Tenant, "success")
 
 	h.reqLogger(c).Info("Created API key",
 		"keyId", result.ID,
@@ -302,9 +320,20 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 
 	result, err := h.service.ValidateAPIKey(c.Request.Context(), req.Key)
 	if err != nil {
+		if h.metrics != nil {
+			h.metrics.RecordKeyValidation(h.service.GetTenantName(), "error")
+		}
 		h.logger.Error("API key validation failed", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "validation failed"})
 		return
+	}
+
+	if h.metrics != nil {
+		validResult := "invalid"
+		if result.Valid {
+			validResult = "valid"
+		}
+		h.metrics.RecordKeyValidation(result.Tenant, validResult)
 	}
 
 	if !result.Valid {

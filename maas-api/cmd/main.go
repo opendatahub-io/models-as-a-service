@@ -111,7 +111,7 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("failed to create metrics recorder: %w", err)
 	}
-	router.Use(metrics.NewMiddleware(metricsRecorder))
+	router.Use(metrics.NewMiddleware(metricsRecorder, cfg.TenantName))
 
 	// Start metrics server
 	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
@@ -141,7 +141,7 @@ func serve() error {
 		}
 	}()
 
-	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
+	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
@@ -195,7 +195,15 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
+func registerHandlers(
+	ctx context.Context,
+	log *logger.Logger,
+	router *gin.Engine,
+	cfg *config.Config,
+	cluster *config.ClusterConfig,
+	store api_keys.MetadataStore,
+	metricsRecorder *metrics.PrometheusRecorder,
+) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	log.Info("Starting informers and waiting for cache sync...")
@@ -234,7 +242,7 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyService.StartDebounceCleanup(ctx)
-	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
+	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker, metricsRecorder)
 
 	tenantLogCfg := middleware.TenantLoggerConfig{
 		DefaultTenant:   cfg.TenantName,

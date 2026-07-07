@@ -53,7 +53,7 @@ func TestMetricsServerIntegration(t *testing.T) {
 
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
-	router.Use(metrics.NewMiddleware(recorder))
+	router.Use(metrics.NewMiddleware(recorder, "test-tenant"))
 	router.GET("/v1/models", func(c *gin.Context) { c.String(http.StatusOK, "ok") })
 
 	w := httptest.NewRecorder()
@@ -70,6 +70,6 @@ func TestMetricsServerIntegration(t *testing.T) {
 	require.NoError(t, err)
 	bodyStr := string(body)
 
-	assert.Contains(t, bodyStr, `maas_api_http_requests_total{method="GET",route="/v1/models",status="200"} 1`)
+	assert.Contains(t, bodyStr, `maas_api_http_requests_total{method="GET",route="/v1/models",status="200",tenant_name="test-tenant"} 1`)
 	assert.Contains(t, bodyStr, "maas_api_http_request_duration_seconds")
 }
