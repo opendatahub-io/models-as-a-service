@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"strconv"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -34,6 +35,14 @@ type Config struct {
 	// Set to "models-as-a-service" for default tenant, or AITenant name (e.g., "redteam") for other tenants.
 	// Used to filter database queries to enforce tenant isolation.
 	TenantName string
+
+	// AITenantName is the AITenant CR name for this tenant (used for SubjectAccessReview authorization).
+	// Defaults to TenantName.
+	AITenantName string
+
+	// AITenantNamespace is the namespace where AITenant CRs are created.
+	// Default: "ai-tenants"
+	AITenantNamespace string
 
 	// Server configuration
 	Address string // Listen address for HTTPS (host:port)
@@ -70,6 +79,17 @@ type Config struct {
 
 	MetricsPort int
 
+	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
+	// Tracing is disabled when empty.
+	OTELEndpoint string
+
+	// OTELInsecure disables TLS for the OTLP exporter connection.
+	OTELInsecure bool
+
+	// OTELSampleRate controls the fraction of traces sampled (0.0 to 1.0).
+	// Default: 1.0 (sample everything). Set lower in production for high-volume APIs.
+	OTELSampleRate float64
+
 	// Deprecated flag (backward compatibility with pre-TLS version)
 	deprecatedHTTPPort string
 }
@@ -84,11 +104,21 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
+	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
+	otelSampleRate := 1.0
+	if rateStr := env.GetString("OTEL_TRACES_SAMPLE_RATE", ""); rateStr != "" {
+		if parsed, err := strconv.ParseFloat(rateStr, 64); err == nil && parsed >= 0 && parsed <= 1 {
+			otelSampleRate = parsed
+		}
+	}
 
 	tenantName := strings.TrimSpace(env.GetString("TENANT_NAME", "models-as-a-service"))
 	if tenantName == "" {
 		panic("TENANT_NAME environment variable must be non-empty (tenant isolation required)")
 	}
+
+	aitenantName := env.GetString("AITENANT_NAME", tenantName)
+	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
 
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
@@ -97,6 +127,8 @@ func Load() *Config {
 		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
 		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
 		TenantName:                tenantName,
+		AITenantName:              aitenantName,
+		AITenantNamespace:         aitenantNamespace,
 		Address:                   env.GetString("ADDRESS", ""),
 		Secure:                    secure,
 		TLS:                       loadTLSConfig(),
@@ -107,6 +139,9 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:              otelInsecure,
+		OTELSampleRate:            otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}

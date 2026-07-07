@@ -620,6 +620,62 @@ paths:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
+    /v1/tenants:
+        get:
+            tags:
+                - tenants
+            summary: Get tenant information and gateway metadata
+            description: |
+                Returns tenant name and gateway connection metadata for this MaaS API instance.
+
+                This endpoint is intended for UI/dashboard consumption to discover:
+                - The tenant name this API instance serves
+                - Gateway hostname, protocol, and port for connecting to models
+
+                **Authorization**: Uses system:authenticated - any authenticated user can access.
+
+                **Important**: This endpoint is NOT exposed through the Gateway (HTTPRoute excludes it).
+                It is only accessible via internal Service URL for security.
+
+                **Configuration Requirements**:
+                - Gateway must have external hostname configured in spec.listeners[].hostname
+                - LoadBalancer service type required (ClusterIP + OpenShift Route is not supported)
+                - Returns 500 error if Gateway has no external hostname configured
+            operationId: tenants#get
+            responses:
+                "200":
+                    description: OK response.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/TenantsResponse'
+                            example:
+                                tenants:
+                                  - name: default-tenant
+                                    gateway:
+                                      name: maas-default-gateway
+                                      namespace: openshift-ingress
+                                      protocol: https
+                                      externalUrl: https://maas.apps.example.com
+                                      port: 443
+                "401":
+                    description: Unauthorized. Missing or invalid authentication token.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "404":
+                    description: Gateway resource not found.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
+                "500":
+                    description: Internal Server Error. Failed to resolve gateway metadata or gateway not configured with external hostname.
+                    content:
+                        application/json:
+                            schema:
+                                $ref: '#/components/schemas/ErrorResponse'
 components:
   securitySchemes:
     bearerAuth:
@@ -998,6 +1054,65 @@ components:
                 - object
                 - data
                 - has_more
+
+        # Tenant Discovery Response
+        TenantsResponse:
+            type: object
+            properties:
+                tenants:
+                    type: array
+                    items:
+                        $ref: '#/components/schemas/TenantInfo'
+                    description: Array of tenant info objects (currently single element)
+            required:
+                - tenants
+
+        # Tenant Information
+        TenantInfo:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: Tenant name
+                    example: default-tenant
+                gateway:
+                    $ref: '#/components/schemas/GatewayMetadata'
+            required:
+                - name
+                - gateway
+
+        # Gateway Connection Metadata
+        GatewayMetadata:
+            type: object
+            properties:
+                name:
+                    type: string
+                    description: Gateway resource name
+                    example: maas-default-gateway
+                namespace:
+                    type: string
+                    description: Gateway namespace
+                    example: openshift-ingress
+                protocol:
+                    type: string
+                    description: Protocol (http or https)
+                    example: https
+                    enum: [http, https]
+                externalUrl:
+                    type: string
+                    description: Full external URL to access the gateway
+                    example: https://maas.apps.example.com
+                port:
+                    type: integer
+                    description: Gateway port
+                    example: 443
+                    format: int64
+            required:
+                - name
+                - namespace
+                - protocol
+                - externalUrl
+                - port
 tags:
     - name: api-keys
       description: "\U0001F5DD️ Named API Key Management service. Long-lived, trackable tokens for applications."
@@ -1009,3 +1124,5 @@ tags:
       description: "\U0001F916 Model management service"
     - name: subscriptions
       description: Subscription listing service
+    - name: tenants
+      description: "\U0001F3E2 Tenant discovery service. Returns tenant name and gateway connection metadata."

@@ -47,9 +47,16 @@ spec:
           metadata:
             type: object
           spec:
-            description: |-
-              ConfigSpec defines the desired state of Config.
-              Reserved for future cluster-wide configuration; v1alpha1 uses an empty spec.
+            description: ConfigSpec defines the desired state of Config.
+            properties:
+              limitadorScrapeInterval:
+                default: 30s
+                description: |-
+                  LimitadorScrapeInterval defines the scrape interval for Limitador metrics in the ServiceMonitor.
+                  Defaults to "30s" if not specified.
+                maxLength: 16
+                pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
+                type: string
             type: object
           status:
             description: ConfigStatus defines the observed state of Config.

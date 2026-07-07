@@ -29,7 +29,8 @@ type infoLogger interface {
 }
 
 type ClusterConfig struct {
-	ClientSet *kubernetes.Clientset
+	ClientSet     *kubernetes.Clientset
+	DynamicClient dynamic.Interface
 
 	// MaaSModelRefLister lists MaaSModelRef CRs from the informer cache for GET /v1/models.
 	MaaSModelRefLister models.MaaSModelRefLister
@@ -123,7 +124,8 @@ func NewClusterConfig(
 	adminCheckerVal := auth.NewCachedAdminChecker(sarChecker, 30*time.Second, 2*time.Second, sarCacheMaxSize, metricsRegisterer, nil)
 
 	return &ClusterConfig{
-		ClientSet: clientset,
+		ClientSet:     clientset,
+		DynamicClient: dynamicClient,
 
 		MaaSModelRefLister:     maasModelRefListerVal,
 		MaaSSubscriptionLister: maasSubscriptionListerVal,

@@ -379,6 +379,11 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 		return err
 	}
 
+	scrapeInterval := cfg.Spec.LimitadorScrapeInterval
+	if scrapeInterval == "" {
+		scrapeInterval = "30s"
+	}
+
 	sm := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "monitoring.coreos.com/v1",
@@ -394,7 +399,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 			"spec": map[string]any{
 				"endpoints": []any{
 					map[string]any{
-						"interval": "30s",
+						"interval": scrapeInterval,
 						"path":     "/metrics",
 						"port":     "http",
 					},

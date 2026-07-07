@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -27,7 +28,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tenant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tracing"
 )
 
 func main() {
@@ -77,20 +80,40 @@ func serve() error {
 		gin.SetMode(gin.DebugMode)
 	}
 
+	// Initialize OTEL tracing (noop if endpoint not configured)
+	tracingShutdown, err := tracing.InitTracer(
+		ctx, cfg.OTELEndpoint, cfg.OTELInsecure, cfg.OTELSampleRate,
+		"maas-api", cfg.Namespace,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize tracing: %w", err)
+	}
+	defer tracingShutdown(ctx)
+	if cfg.OTELEndpoint != "" {
+		log.Info("OTEL tracing enabled", "endpoint", cfg.OTELEndpoint)
+	}
+
 	// Use gin.New() instead of gin.Default() to control middleware order
 	router := gin.New()
 
 	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	accessLogCfg := middleware.TenantLoggerConfig{
+		DefaultTenant:   cfg.TenantName,
+		TenantNamespace: cfg.MaaSSubscriptionNamespace,
+		GatewayName:     cfg.GatewayName,
+	}
+
 	router.Use(middleware.RequestID())
-	router.Use(middleware.AccessLogger())
+	router.Use(middleware.AccessLogger(log, accessLogCfg))
+	router.Use(tracing.NewMiddleware(cfg.TenantName, cfg.MaaSSubscriptionNamespace, cfg.GatewayName, cfg.GatewayNamespace))
 
 	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics recorder: %w", err)
 	}
-	router.Use(metrics.NewMiddleware(metricsRecorder))
+	router.Use(metrics.NewMiddleware(metricsRecorder, cfg.TenantName))
 
 	// Start metrics server
 	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
@@ -120,7 +143,7 @@ func serve() error {
 		}
 	}()
 
-	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
+	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
@@ -174,7 +197,15 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
+func registerHandlers(
+	ctx context.Context,
+	log *logger.Logger,
+	router *gin.Engine,
+	cfg *config.Config,
+	cluster *config.ClusterConfig,
+	store api_keys.MetadataStore,
+	metricsRecorder *metrics.PrometheusRecorder,
+) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	log.Info("Starting informers and waiting for cache sync...")
@@ -213,22 +244,35 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyService.StartDebounceCleanup(ctx)
-	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
+	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker, metricsRecorder)
 
-	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	tenantLogCfg := middleware.TenantLoggerConfig{
+		DefaultTenant:   cfg.TenantName,
+		TenantNamespace: cfg.MaaSSubscriptionNamespace,
+		GatewayName:     cfg.GatewayName,
+	}
+	authMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+
+	v1Routes.GET("/models", append(authMiddleware, modelsHandler.ListLLMs)...)
 
 	// Subscription listing routes
-	v1Routes.GET("/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptions)
-	v1Routes.GET("/model/:model-id/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptionsForModel)
+	v1Routes.GET("/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptions)...)
+	v1Routes.GET("/model/:model-id/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
 	// API Key routes - Complete CRUD for hash-based key architecture
-	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
+	apiKeyRoutes := v1Routes.Group("/api-keys", authMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
 	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
+
+	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
+	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
+	v1Routes.GET("/tenants",
+		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tenantHandler.GetTenantInfo)
 
 	// Internal routes (no auth required - called by Authorino / CronJob)
 	internalRoutes := router.Group("/internal/v1")

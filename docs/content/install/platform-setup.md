@@ -15,6 +15,7 @@ You need a Red Hat OpenShift cluster version 4.19.9 or later. Older OpenShift ve
 
 This section walks through the installation of the required Operators:
 
+* cert-manager
 * LeaderWorkerSet
 * Kuadrant (or RHCL)
 * Platform operator (ODH or RHOAI)
@@ -24,6 +25,78 @@ This section walks through the installation of the required Operators:
 
     - **ODH**: Refer to [Kuadrant documentation](https://docs.kuadrant.io)
     - **RHOAI**: Refer to [Red Hat documentation](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed)
+
+## Install cert-manager
+
+cert-manager is required for TLS certificate management. It must be installed before
+LeaderWorkerSet.
+
+=== "Open Data Hub"
+
+    Install cert-manager using the upstream kubectl method:
+
+    ```shell
+    kubectl apply -f https://github.com/cert-manager/cert-manager/releases/latest/download/cert-manager.yaml
+    ```
+
+=== "Red Hat OpenShift AI"
+
+    Install the cert-manager Operator from OpenShift's built-in OperatorHub:
+
+    ```yaml
+    kubectl apply -f - <<EOF
+    apiVersion: v1
+    kind: Namespace
+    metadata:
+      name: cert-manager-operator
+    ---
+    apiVersion: operators.coreos.com/v1
+    kind: OperatorGroup
+    metadata:
+      name: cert-manager-operator
+      namespace: cert-manager-operator
+    ---
+    apiVersion: operators.coreos.com/v1alpha1
+    kind: Subscription
+    metadata:
+      name: openshift-cert-manager-operator
+      namespace: cert-manager-operator
+    spec:
+      channel: stable-v1
+      installPlanApproval: Automatic
+      name: openshift-cert-manager-operator
+      source: redhat-operators
+      sourceNamespace: openshift-marketplace
+    EOF
+    ```
+
+    Wait for the subscription to install successfully:
+
+    ```shell
+    kubectl wait --for=jsonpath='{.status.state}'=AtLatestKnown subscription/openshift-cert-manager-operator -n cert-manager-operator --timeout=300s
+    ```
+
+### Verification
+
+Verify that the cert-manager CRDs are available:
+
+```shell
+kubectl get crd certificates.cert-manager.io clusterissuers.cert-manager.io issuers.cert-manager.io
+```
+
+Check that the cert-manager pods are running:
+
+=== "Open Data Hub"
+
+    ```shell
+    kubectl get pods -n cert-manager
+    ```
+
+=== "Red Hat OpenShift AI"
+
+    ```shell
+    kubectl get pods -n cert-manager-operator
+    ```
 
 ## Install LeaderWorkerSet API
 

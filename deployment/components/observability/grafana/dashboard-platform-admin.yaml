@@ -691,6 +691,67 @@ spec:
           "targets": [{"expr": "sum by (subscription) (increase(authorized_hits{subscription!=\"\"}[5m]))", "legendFormat": "{{subscription}}", "refId": "A"}],
           "title": "📊 Token Volume by Subscription",
           "type": "timeseries"
+        },
+        {"collapsed": false, "gridPos": {"h": 1, "w": 24, "x": 0, "y": 160}, "id": 300, "panels": [], "title": "🏢 Per-Tenant Metrics", "type": "row"},
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "HTTP request rate per tenant over time. Use the Tenant dropdown to filter.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "req/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 0, "y": 161},
+          "id": 301,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "sum by (tenant_name) (rate(maas_api_http_requests_total{tenant_name=~\"$tenant\",tenant_name!=\"\"}[5m]))", "legendFormat": "{{tenant_name}}", "refId": "A"}],
+          "title": "🏢 Requests per Tenant",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "Server error rate (5xx) per tenant. Spikes indicate tenant-specific issues.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "errors/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 6, "y": 161},
+          "id": 302,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "sum by (tenant_name) (rate(maas_api_http_requests_total{tenant_name=~\"$tenant\",tenant_name!=\"\",status=~\"5..\"}[5m]))", "legendFormat": "{{tenant_name}}", "refId": "A"}],
+          "title": "⚠️ Error Rate by Tenant",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "API key validation rate per tenant, split by result (valid/invalid). Helps detect brute-force or misconfiguration.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "validations/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 12, "y": 161},
+          "id": 303,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "sum by (tenant_name, result) (rate(maas_api_key_validation_total{tenant_name=~\"$tenant\",tenant_name!=\"\"}[5m]))", "legendFormat": "{{tenant_name}} ({{result}})", "refId": "A"}],
+          "title": "🔑 API Key Validations by Tenant",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "P95 request latency per tenant. Helps identify tenants experiencing slow responses.",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "latency", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "s"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 6, "x": 18, "y": 161},
+          "id": 304,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "histogram_quantile(0.95, sum by (le, tenant_name) (rate(maas_api_http_request_duration_seconds_bucket{tenant_name=~\"$tenant\",tenant_name!=\"\"}[5m])))", "legendFormat": "{{tenant_name}}", "refId": "A"}],
+          "title": "⏱️ P95 Latency by Tenant",
+          "type": "timeseries"
+        },
+        {
+          "datasource": {"type": "prometheus", "uid": "${datasource}"},
+          "description": "API key mint rate per tenant, split by result (success/failure).",
+          "fieldConfig": {"defaults": {"color": {"mode": "palette-classic"}, "custom": {"axisBorderShow": false, "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "mints/s", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 20, "gradientMode": "hue", "hideFrom": {"legend": false, "tooltip": false, "viz": false}, "insertNulls": false, "lineInterpolation": "smooth", "lineWidth": 2, "pointSize": 5, "scaleDistribution": {"type": "linear"}, "showPoints": "never", "spanNulls": false, "stacking": {"group": "A", "mode": "none"}, "thresholdsStyle": {"mode": "off"}}, "mappings": [], "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}]}, "unit": "reqps"}, "overrides": []},
+          "gridPos": {"h": 8, "w": 8, "x": 0, "y": 169},
+          "id": 305,
+          "options": {"legend": {"calcs": ["mean", "max"], "displayMode": "table", "placement": "bottom", "showLegend": true}, "tooltip": {"mode": "multi", "sort": "desc"}},
+          "pluginVersion": "11.3.0",
+          "targets": [{"expr": "sum by (tenant_name, result) (rate(maas_api_token_mint_total{tenant_name=~\"$tenant\",tenant_name!=\"\"}[5m]))", "legendFormat": "{{tenant_name}} ({{result}})", "refId": "A"}],
+          "title": "🔑 Token Mints by Tenant",
+          "type": "timeseries"
         }
       ],
       "refresh": "30s",
@@ -703,7 +764,8 @@ spec:
           {"current": {"selected": false, "text": "kuadrant-system", "value": "kuadrant-system"}, "description": "Namespace where Kuadrant (Authorino, Limitador) is deployed", "hide": 0, "label": "Kuadrant Namespace", "name": "kuadrant_namespace", "options": [{"selected": true, "text": "kuadrant-system", "value": "kuadrant-system"}], "query": "kuadrant-system", "skipUrlSync": false, "type": "textbox"},
           {"current": {"selected": false, "text": "openshift-ingress", "value": "openshift-ingress"}, "description": "Namespace where the Istio/Gateway pods run", "hide": 0, "label": "Gateway Namespace", "name": "gateway_namespace", "options": [{"selected": true, "text": "openshift-ingress", "value": "openshift-ingress"}], "query": "openshift-ingress", "skipUrlSync": false, "type": "textbox"},
           {"current": {"selected": false, "text": "llm", "value": "llm"}, "description": "Namespace where LLM model pods are deployed", "hide": 0, "label": "LLM Namespace", "name": "llm_namespace", "options": [{"selected": true, "text": "llm", "value": "llm"}], "query": "llm", "skipUrlSync": false, "type": "textbox"},
-          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, model_name)", "description": "Filter by model", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Model", "multi": true, "name": "model", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
+          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(vllm:num_requests_running, model_name)", "description": "Filter by model", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Model", "multi": true, "name": "model", "options": [], "query": {"qryType": 1, "query": "label_values(vllm:num_requests_running, model_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"},
+          {"current": {"selected": true, "text": "All", "value": "$__all"}, "datasource": {"type": "prometheus", "uid": "${datasource}"}, "definition": "label_values(maas_api_http_requests_total, tenant_name)", "description": "Filter by tenant", "hide": 0, "includeAll": true, "allValue": ".*", "label": "Tenant", "multi": true, "name": "tenant", "options": [], "query": {"qryType": 1, "query": "label_values(maas_api_http_requests_total, tenant_name)", "refId": "PrometheusVariableQueryEditor-VariableQuery"}, "refresh": 2, "regex": "", "skipUrlSync": false, "sort": 1, "type": "query"}
         ]
       },
       "time": {"from": "now-1h", "to": "now"},

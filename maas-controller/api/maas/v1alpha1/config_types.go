@@ -46,8 +46,15 @@ type Config struct {
 }
 
 // ConfigSpec defines the desired state of Config.
-// Reserved for future cluster-wide configuration; v1alpha1 uses an empty spec.
-type ConfigSpec struct{}
+type ConfigSpec struct {
+	// LimitadorScrapeInterval defines the scrape interval for Limitador metrics in the ServiceMonitor.
+	// Defaults to "30s" if not specified.
+	// +optional
+	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
+	// +kubebuilder:validation:MaxLength=16
+	LimitadorScrapeInterval string `json:"limitadorScrapeInterval,omitempty"`
+}
 
 // ConfigStatus defines the observed state of Config.
 type ConfigStatus struct{}

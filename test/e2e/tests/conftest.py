@@ -105,10 +105,34 @@ def maas_api_base_url(gateway_host: str, is_https: bool) -> str:
     url = os.environ.get("MAAS_API_BASE_URL", "")
     if url:
         return url.rstrip("/")
-    
+
     # Otherwise derive from gateway_host
     scheme = "https" if is_https else "http"
     return f"{scheme}://{gateway_host}/maas-api"
+
+
+@pytest.fixture(scope="session")
+def maas_api_internal_url() -> str:
+    """
+    MaaS API internal service URL (for internal-only endpoints like /v1/tenant).
+
+    These endpoints are NOT exposed through the Gateway and must be called
+    via the Kubernetes Service directly.
+
+    Can be overridden with MAAS_API_INTERNAL_URL env var for custom deployments.
+    """
+    # Allow override
+    url = os.environ.get("MAAS_API_INTERNAL_URL", "")
+    if url:
+        return url.rstrip("/")
+
+    # Default: cluster-internal service URL
+    # maas-api uses TLS on port 8443 (self-signed cert, use -k/verify=False)
+    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    service_name = os.environ.get("MAAS_API_SERVICE_NAME", "maas-api")
+    port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
+
+    return f"https://{service_name}.{namespace}.svc.cluster.local:{port}"
 
 @pytest.fixture(scope="session")
 def token() -> str:
@@ -272,6 +296,7 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
         bootstrap_aitenant_tenant,
         cleanup_discovery_case,
         wait_for_route_admitted,
+        wait_for_deployment_available,
     )
 
     require_aitenant_crd()
@@ -296,6 +321,12 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
                     f"Route structure: {route}"
                 ) from e
             case["base_url"] = f"{scheme}://{host}/maas-api"
+
+            # Wait for maas-api deployment to be ready before tests run
+            # AITenant deployments are in MAAS_API_DEPLOYMENT_NAMESPACE, not tenant-specific namespace
+            deployment_name = f"maas-api-{case['tenant_label_name']}"
+            from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+            wait_for_deployment_available(deployment_name, namespace=MAAS_API_DEPLOYMENT_NAMESPACE, timeout=180)
 
         # Add aliases to match test expectations while keeping cleanup helper keys intact.
         for case in (case_a, case_b):

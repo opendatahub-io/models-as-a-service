@@ -15,6 +15,7 @@ from multitenancy_helpers import (
     AITENANT_NAMESPACE,
     DEPLOYMENT_NAMESPACE,
     GATEWAY_NAMESPACE,
+    INFRA_NAMESPACE,
     apply_maas_auth_policy,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
@@ -66,13 +67,13 @@ class TestPerTenantMaaSAPI:
         """2.1: AITenant creates dedicated maas-api Deployment, Service, HTTPRoute, and gateway AuthPolicy."""
         for case in tenant_cases:
             names = _tenant_api_names(case)
-            deployment = wait_for_deployment_available(names["deployment"], DEPLOYMENT_NAMESPACE, timeout=240)
+            deployment = wait_for_deployment_available(names["deployment"], INFRA_NAMESPACE, timeout=240)
             assert deployment["metadata"]["name"] == names["deployment"]
 
-            service = wait_for_json("service", names["service"], DEPLOYMENT_NAMESPACE, timeout=180)
+            service = wait_for_json("service", names["service"], INFRA_NAMESPACE, timeout=180)
             assert service["metadata"]["name"] == names["service"]
 
-            route = wait_for_json("httproute", names["httproute"], DEPLOYMENT_NAMESPACE, timeout=180)
+            route = wait_for_json("httproute", names["httproute"], INFRA_NAMESPACE, timeout=180)
             assert route["metadata"]["name"] == names["httproute"]
 
             # Gateway-level AuthPolicy is in the gateway namespace, named {gateway-name}-maas-auth
@@ -89,7 +90,7 @@ class TestPerTenantMaaSAPI:
         """2.2: TENANT_NAME env var identifies the tenant served by each maas-api Deployment."""
         for case in tenant_cases:
             names = _tenant_api_names(case)
-            env = deployment_env(names["deployment"], DEPLOYMENT_NAMESPACE)
+            env = deployment_env(names["deployment"], INFRA_NAMESPACE)
             assert env.get("TENANT_NAME") == _tenant_name(case), (
                 f"{names['deployment']} should set TENANT_NAME={_tenant_name(case)!r}, got {redact_mapping(env)!r}"
             )
@@ -99,11 +100,11 @@ class TestPerTenantMaaSAPI:
         service_names = set()
         for case in tenant_cases:
             names = _tenant_api_names(case)
-            service = get_json_or_none("service", names["service"], DEPLOYMENT_NAMESPACE)
+            service = get_json_or_none("service", names["service"], INFRA_NAMESPACE)
             assert service is not None
             service_names.add(service["metadata"]["name"])
 
-            backend_refs = http_route_backend_refs(names["httproute"], DEPLOYMENT_NAMESPACE)
+            backend_refs = http_route_backend_refs(names["httproute"], INFRA_NAMESPACE)
             backend_names = {ref.get("name") for ref in backend_refs}
             assert names["service"] in backend_names, (
                 f"{names['httproute']} should route to {names['service']}, got {backend_refs!r}"
@@ -115,7 +116,7 @@ class TestPerTenantMaaSAPI:
         """2.4: Tenant maas-api HTTPRoute attaches to the tenant Gateway."""
         for case in tenant_cases:
             names = _tenant_api_names(case)
-            parent_refs = http_route_parent_refs(names["httproute"], DEPLOYMENT_NAMESPACE)
+            parent_refs = http_route_parent_refs(names["httproute"], INFRA_NAMESPACE)
             assert any(
                 ref.get("name") == case["gateway_name"]
                 and (ref.get("namespace") or GATEWAY_NAMESPACE) == GATEWAY_NAMESPACE
@@ -124,12 +125,12 @@ class TestPerTenantMaaSAPI:
 
     def test_default_and_multiple_tenants_coexist(self, tenant_cases):
         """2.5: Default maas-api remains while multiple tenant maas-api instances exist."""
-        assert get_json_or_none("deployment", "maas-api", DEPLOYMENT_NAMESPACE) is not None
-        assert get_json_or_none("service", "maas-api", DEPLOYMENT_NAMESPACE) is not None
-        assert get_json_or_none("httproute", "maas-api-route", DEPLOYMENT_NAMESPACE) is not None
+        assert get_json_or_none("deployment", "maas-api", INFRA_NAMESPACE) is not None
+        assert get_json_or_none("service", "maas-api", INFRA_NAMESPACE) is not None
+        assert get_json_or_none("httproute", "maas-api-route", INFRA_NAMESPACE) is not None
 
         tenant_deployments = [
-            get_json_or_none("deployment", _tenant_api_names(case)["deployment"], DEPLOYMENT_NAMESPACE)
+            get_json_or_none("deployment", _tenant_api_names(case)["deployment"], INFRA_NAMESPACE)
             for case in tenant_cases
         ]
         assert all(deployment is not None for deployment in tenant_deployments)

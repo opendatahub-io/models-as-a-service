@@ -27,3 +27,9 @@ rules:
 - apiGroups: ["maas.opendatahub.io"]
   resources: ["maasmodelrefs", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
+
+# Gateway API resources for /v1/tenants endpoint (gateway discovery)
+# Only 'get' needed - code uses .Get(gatewayName) not .List()
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways"]
+  verbs: ["get"]
