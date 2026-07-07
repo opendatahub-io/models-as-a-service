@@ -42,6 +42,13 @@ type Service struct {
 	lastUsedDebounceTTL time.Duration
 }
 
+func (s *Service) GetTenantName() string {
+	if s.config != nil {
+		return s.config.TenantName
+	}
+	return ""
+}
+
 func (s *Service) GetMaxExpirationDays() int {
 	if s.config != nil && s.config.APIKeyMaxExpirationDays > 0 {
 		return s.config.APIKeyMaxExpirationDays
