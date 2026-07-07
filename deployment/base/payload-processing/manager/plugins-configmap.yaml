@@ -22,6 +22,7 @@ data:
     apiVersion: llm-d.ai/v1alpha1
     kind: PayloadProcessorConfig
     plugins:
+    - type: stream-usage-enforcer
     - type: model-provider-resolver
     - type: api-translation
     - type: apikey-injection
@@ -29,6 +30,7 @@ data:
     - name: default
       plugins:
         request:
+        - pluginRef: stream-usage-enforcer
         - pluginRef: model-provider-resolver
         - pluginRef: api-translation
         - pluginRef: apikey-injection

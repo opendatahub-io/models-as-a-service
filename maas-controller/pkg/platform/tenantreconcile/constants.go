@@ -79,9 +79,6 @@ const (
 	MaaSDBSecretName             = "maas-db-config" //nolint:gosec // secret name reference, not a credential
 	MaaSDBSecretKey              = "DB_CONNECTION_URL"
 
-	MonitoringNamespace         = "openshift-monitoring"
-	ClusterMonitoringConfigName = "cluster-monitoring-config"
-
 	// Condition types aligned with ODH internal/controller/status for DSC aggregation parity.
 	ConditionDependenciesAvailable      = "DependenciesAvailable"
 	ConditionMaaSPrerequisitesAvailable = "MaaSPrerequisitesAvailable"
