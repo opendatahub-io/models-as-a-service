@@ -480,7 +480,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 
 		_, err := svc.RevokeTenantAPIKeys(ctx, "tenant-b")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrTenantMismatch)
+		require.ErrorIs(t, err, api_keys.ErrTenantMismatch)
 		assert.Contains(t, err.Error(), "tenant mismatch")
 	})
 
@@ -489,7 +489,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 
 		_, err := svc.RevokeTenantAPIKeys(ctx, " ")
 		require.Error(t, err)
-		assert.ErrorIs(t, err, api_keys.ErrTenantRequired)
+		require.ErrorIs(t, err, api_keys.ErrTenantRequired)
 		assert.Contains(t, err.Error(), "tenant is required")
 	})
 }

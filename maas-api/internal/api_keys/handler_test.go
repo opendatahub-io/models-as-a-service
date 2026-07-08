@@ -3,6 +3,7 @@ package api_keys //nolint:testpackage // Testing private helper methods requires
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +61,7 @@ func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscripti
 
 type failingInvalidateTenantStore struct {
 	*MockStore
+
 	err error
 }
 
@@ -1735,6 +1737,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
 		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
 
+		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
 		handler.RevokeTenantAPIKeys(c)
 
 		assert.Equal(t, http.StatusOK, w.Code)
@@ -1775,7 +1778,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 	t.Run("StoreFailureReturnsInternalServerError", func(t *testing.T) {
 		store := failingInvalidateTenantStore{
 			MockStore: NewMockStore(),
-			err:       fmt.Errorf("database unavailable: internal dsn details"),
+			err:       errors.New("database unavailable: internal dsn details"),
 		}
 		cfg := &config.Config{TenantName: "test-tenant"}
 		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
