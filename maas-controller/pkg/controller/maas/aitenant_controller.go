@@ -63,6 +63,8 @@ const (
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked"
 )
 
+var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
+
 // AITenantReconciler reconciles AITenant tenant bootstrap resources.
 type AITenantReconciler struct {
 	client.Client
@@ -417,7 +419,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		if errors.Is(err, errTenantAPIKeyRevocationJobFailed) {
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		}
+		return ctrl.Result{}, err
 	}
 	if !apiKeysRevoked {
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
@@ -442,7 +447,7 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+		return ctrl.Result{}, err
 	}
 	if !namespaceDeleted {
 		statusSnapshot = aitenant.Status.DeepCopy()
@@ -587,7 +592,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
 			return false, fmt.Errorf("delete failed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
 		}
-		return false, fmt.Errorf("API key revocation Job %s/%s failed", existing.Namespace, existing.Name)
+		return false, fmt.Errorf("%w: %s/%s", errTenantAPIKeyRevocationJobFailed, existing.Namespace, existing.Name)
 	}
 	return false, nil
 }

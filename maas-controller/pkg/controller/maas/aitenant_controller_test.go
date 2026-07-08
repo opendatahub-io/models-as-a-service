@@ -1588,7 +1588,7 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *tes
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
-func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlocked(t *testing.T) {
+func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeues(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -1649,8 +1649,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlocked(t *testi
 	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
-	g.Expect(err).To(HaveOccurred())
-	g.Expect(err.Error()).To(ContainSubstring("API key revocation Job"))
+	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
 
 	var updated maasv1alpha1.AITenant
