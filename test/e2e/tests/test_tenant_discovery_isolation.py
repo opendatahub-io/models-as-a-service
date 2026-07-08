@@ -21,8 +21,9 @@ from test_helper import _get_cluster_token, MAAS_API_DEPLOYMENT_NAMESPACE
 log = logging.getLogger(__name__)
 
 
-def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub") -> tuple[int, str]:
+def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
     """Execute curl from inside cluster. Returns (status_code, response_body)"""
+    namespace = namespace or MAAS_API_DEPLOYMENT_NAMESPACE
     curl_args = ["-sk", "-m", "10"]
     if headers:
         for key, value in headers.items():
@@ -72,7 +73,7 @@ def tenant_service_urls(shared_test_tenants):
 
     # Construct internal service URLs
     # Format: https://{service-name}.{namespace}.svc.cluster.local:{port}
-    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE (opendatahub),
+    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE,
     # NOT in the tenant-specific namespace (ai-tenant-xxx)
     def service_url(tenant):
         # Service name follows pattern: maas-api-{tenant-name}

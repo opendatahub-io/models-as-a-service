@@ -18,16 +18,22 @@ import os
 import pytest
 import requests
 from conftest import TLS_VERIFY
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
 
 log = logging.getLogger(__name__)
 
 
-def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub") -> tuple[int, str]:
+def _maas_api_namespace() -> str:
+    return os.environ.get("MAAS_NAMESPACE", MAAS_API_DEPLOYMENT_NAMESPACE)
+
+
+def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
     """
     Execute curl request from inside the cluster using kubectl run.
 
     Returns (status_code, response_body)
     """
+    namespace = namespace or _maas_api_namespace()
     curl_args = ["-sk", "-m", "10"]
 
     # Add headers
@@ -82,7 +88,7 @@ def test_tenant_discovery_requires_auth(maas_api_internal_url: str):
     so we use kubectl run with curl to access it from inside the cluster.
     """
     url = maas_api_internal_url + "/v1/tenants"
-    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    namespace = _maas_api_namespace()
 
     # Attempt without Authorization header
     status_code, body = _kubectl_curl(url, namespace=namespace)
@@ -106,7 +112,7 @@ def test_tenant_discovery_with_invalid_token(maas_api_internal_url: str):
     Verify /v1/tenants endpoint rejects invalid tokens.
     """
     url = maas_api_internal_url + "/v1/tenants"
-    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    namespace = _maas_api_namespace()
 
     # Attempt with invalid bearer token
     headers = {"Authorization": "Bearer invalid-token-12345"}
@@ -136,7 +142,7 @@ def test_tenant_discovery_authenticated(maas_api_internal_url: str, headers: dic
         )
 
     url = maas_api_internal_url + "/v1/tenants"
-    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    namespace = _maas_api_namespace()
 
     status_code, body = _kubectl_curl(url, headers=headers, namespace=namespace)
 
@@ -213,7 +219,7 @@ def test_tenant_discovery_gateway_matches_deployment(maas_api_internal_url: str,
         )
 
     url = maas_api_internal_url + "/v1/tenants"
-    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    namespace = _maas_api_namespace()
 
     status_code, body = _kubectl_curl(url, headers=headers, namespace=namespace)
 

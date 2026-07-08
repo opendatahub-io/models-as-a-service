@@ -5,6 +5,8 @@ from urllib.parse import urlparse
 import pytest
 import requests
 
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
+
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 
@@ -128,7 +130,7 @@ def maas_api_internal_url() -> str:
 
     # Default: cluster-internal service URL
     # maas-api uses TLS on port 8443 (self-signed cert, use -k/verify=False)
-    namespace = os.environ.get("MAAS_NAMESPACE", "opendatahub")
+    namespace = os.environ.get("MAAS_NAMESPACE", MAAS_API_DEPLOYMENT_NAMESPACE)
     service_name = os.environ.get("MAAS_API_SERVICE_NAME", "maas-api")
     port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
 

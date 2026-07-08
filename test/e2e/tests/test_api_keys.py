@@ -904,7 +904,7 @@ class TestEphemeralKeyCleanup:
     oc exec into the maas-api pod.
 
     Environment Variables:
-    - DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: opendatahub)
+    - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: derived INFRA_NAMESPACE)
     """
 
     @pytest.fixture
@@ -912,7 +912,7 @@ class TestEphemeralKeyCleanup:
         """Return the namespace where maas-api is deployed.
 
         Controlled by E2E_MAAS_API_DEPLOYMENT_NAMESPACE env var,
-        defaults to DEPLOYMENT_NAMESPACE/opendatahub.
+        defaults to the derived INFRA_NAMESPACE.
         """
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE
