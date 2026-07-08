@@ -14,6 +14,7 @@ import os
 import uuid
 
 import pytest
+import requests
 
 from multitenancy_helpers import (
     create_api_key_at,
@@ -30,6 +31,56 @@ from multitenancy_helpers import (
     validate_api_key_at,
 )
 from test_helper import _get_cluster_token, _delete_cr
+
+
+def _mint_oidc_token_for_tenant(tenant: str) -> str:
+    """Return a fresh OIDC access token for the given tenant ('a' or 'b').
+
+    Resolution order:
+    1. OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B — pre-minted static tokens
+       (backward-compat; note these expire in ~60s so may be stale by test time).
+    2. OIDC_TOKEN_URL (tenant a) / OIDC_TOKEN_URL_TENANT_B — mint a fresh token
+       via the Resource Owner Password Grant.
+
+    Returns an empty string if no token source is available so the caller can
+    skip the test gracefully.
+    """
+    static_key = f"OIDC_TOKEN_TENANT_{tenant.upper()}"
+    static = os.environ.get(static_key, "")
+    if static:
+        return static
+
+    if tenant == "a":
+        token_url = os.environ.get("OIDC_TOKEN_URL", "")
+        username = os.environ.get("OIDC_USERNAME", "alice_lead")
+        password = os.environ.get("OIDC_PASSWORD", "letmein")
+        client_id = os.environ.get("OIDC_CLIENT_ID", "test-client")
+    else:
+        token_url = os.environ.get("OIDC_TOKEN_URL_TENANT_B", "")
+        username = os.environ.get("OIDC_USERNAME_TENANT_B", "charlie_sec_lead")
+        password = os.environ.get("OIDC_PASSWORD_TENANT_B", "letmein")
+        client_id = os.environ.get("OIDC_CLIENT_ID_TENANT_B", "test-client")
+
+    if not token_url:
+        return ""
+
+    verify = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
+    try:
+        resp = requests.post(
+            token_url,
+            data={
+                "grant_type": "password",
+                "client_id": client_id,
+                "username": username,
+                "password": password,
+            },
+            timeout=30,
+            verify=verify,
+        )
+        resp.raise_for_status()
+        return resp.json().get("access_token", "")
+    except Exception:
+        return ""
 
 
 # Tenant auth isolation tests are enabled by default (Phase 1 implementation)
@@ -152,10 +203,13 @@ class TestTenantAuthIsolation:
 
     def test_oidc_token_validation_per_tenant(self, tenant_env):
         """3.4: Tenant OIDC tokens are accepted only by their configured tenant endpoint."""
-        token_a = os.environ.get("OIDC_TOKEN_TENANT_A", "")
-        token_b = os.environ.get("OIDC_TOKEN_TENANT_B", "")
+        token_a = _mint_oidc_token_for_tenant("a")
+        token_b = _mint_oidc_token_for_tenant("b")
         if not token_a or not token_b:
-            pytest.skip("OIDC_TOKEN_TENANT_A and OIDC_TOKEN_TENANT_B are required for per-tenant OIDC validation")
+            pytest.skip(
+                "Per-tenant OIDC tokens unavailable — set OIDC_TOKEN_URL (tenant-a) and "
+                "OIDC_TOKEN_URL_TENANT_B (tenant-b), or OIDC_TOKEN_TENANT_A / OIDC_TOKEN_TENANT_B"
+            )
 
         tenant_a, tenant_b = tenant_env
         response_a = search_api_keys_at(tenant_a["base_url"], token_a)

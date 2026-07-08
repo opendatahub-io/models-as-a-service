@@ -1404,6 +1404,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	oidc := &oidcConfig{
 		IssuerURL: "https://keycloak.example.com/realms/test",
 		ClientID:  "maas-client",
+		TTL:       300,
 	}
 	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
@@ -1533,6 +1534,156 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	osPred, _ := osWhen[0].(map[string]any)["predicate"].(string)
 	if !contains(osPred, "x-api-key") {
 		t.Errorf("openshift-identities when should exclude x-api-key requests, got: %s", osPred)
+	}
+}
+
+// TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL verifies that the OIDC JWKS TTL from the
+// oidcConfig struct is correctly propagated to the JWT authentication block in the
+// gateway AuthPolicy spec.
+func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		MaaSAPINamespace: "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "gateway-ns",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	tests := []struct {
+		name    string
+		ttl     int
+		wantTTL int64
+	}{
+		{name: "default TTL", ttl: 300, wantTTL: 300},
+		{name: "custom TTL 60s", ttl: 60, wantTTL: 60},
+		{name: "minimum TTL 30s", ttl: 30, wantTTL: 30},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oidc := &oidcConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       tc.ttl,
+			}
+			spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+			obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+
+			gotTTL, found, err := unstructured.NestedInt64(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "ttl")
+			if err != nil || !found {
+				t.Fatalf("oidc jwt.ttl missing: found=%v err=%v", found, err)
+			}
+			if gotTTL != tc.wantTTL {
+				t.Errorf("oidc jwt.ttl = %d, want %d", gotTTL, tc.wantTTL)
+			}
+		})
+	}
+}
+
+// TestFetchOIDCConfig_TTLExtraction verifies that fetchOIDCConfig correctly extracts the
+// TTL field from the Tenant CR's spec.externalOIDC and applies the default (300) when
+// the field is absent or zero.
+func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
+	const namespace = "default"
+
+	tests := []struct {
+		name    string
+		oidc    *maasv1alpha1.TenantExternalOIDCConfig
+		wantTTL int
+		wantNil bool
+	}{
+		{
+			name: "explicit TTL 600",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       600,
+			},
+			wantTTL: 600,
+		},
+		{
+			name: "minimum TTL 30",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       30,
+			},
+			wantTTL: 30,
+		},
+		{
+			name: "TTL zero defaults to 300",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       0,
+			},
+			wantTTL: 300,
+		},
+		{
+			name: "TTL below minimum returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       10,
+			},
+			wantNil: true,
+		},
+		{
+			name: "negative TTL returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       -1,
+			},
+			wantNil: true,
+		},
+		{
+			name:    "missing issuerUrl returns nil",
+			oidc:    &maasv1alpha1.TenantExternalOIDCConfig{ClientID: "maas-client", TTL: 120},
+			wantNil: true,
+		},
+		{
+			name:    "missing clientId returns nil",
+			oidc:    &maasv1alpha1.TenantExternalOIDCConfig{IssuerURL: "https://keycloak.example.com/realms/test", TTL: 120},
+			wantNil: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tenant := &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: namespace,
+				},
+				Spec: maasv1alpha1.TenantSpec{
+					ExternalOIDC: tc.oidc,
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(tenant).
+				Build()
+
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: namespace}
+			log := ctrl.Log.WithName("test")
+			got := r.fetchOIDCConfig(context.Background(), log, namespace)
+
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("expected nil oidcConfig, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("expected non-nil oidcConfig, got nil")
+			}
+			if got.TTL != tc.wantTTL {
+				t.Errorf("TTL = %d, want %d", got.TTL, tc.wantTTL)
+			}
+		})
 	}
 }
 

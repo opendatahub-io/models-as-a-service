@@ -109,8 +109,9 @@ INGRESS_MODE="${INGRESS_MODE:-clusterip}"
 export INGRESS_MODE
 # Gateway programming can lag during fresh cluster bring-up; allow a generous timeout.
 GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
-# OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
-OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
+# OIDC readiness gate: fail before pytest if Keycloak/Authorino isn't ready.
+# Set to false to warn-only (useful during local development against a partially ready cluster).
+OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-true}"
 # Multi-tenancy Phase 1: patch maas-controller for tenant namespace discovery E2E.
 ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
 AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
@@ -165,6 +166,12 @@ apply_default_oidc_for_keycloak() {
     export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-test-client}"
     export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
     export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
+    # dave_noaccess has no group memberships — used by the empty-list test.
+    export OIDC_USERNAME_NO_ACCESS="${OIDC_USERNAME_NO_ACCESS:-dave_noaccess}"
+    export OIDC_PASSWORD_NO_ACCESS="${OIDC_PASSWORD_NO_ACCESS:-letmein}"
+    # tenant-b token URL for per-tenant OIDC isolation test.
+    local realm_b_base="https://keycloak.${cluster_domain}/realms/tenant-b"
+    export OIDC_TOKEN_URL_TENANT_B="${OIDC_TOKEN_URL_TENANT_B:-${realm_b_base}/protocol/openid-connect/token}"
     echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
 }
 
