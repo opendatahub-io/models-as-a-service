@@ -6,7 +6,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
 2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
-3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable AI Gateway Operator and modelsAsAService in your DataScienceCluster
+3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable modelsAsAService in your DataScienceCluster
 4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
 
@@ -143,7 +143,7 @@ After creating the database Secret and Gateways, create or update your DataScien
         see [OdhDashboardConfig Feature Flags](#odhdashboardconfig-feature-flags) below.
 
     !!! note "Connectivity Link warning (ODH with Kuadrant)"
-        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` in the Kserve status initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
+        When using ODH with Kuadrant (upstream), you may see `Warning: Red Hat Connectivity Link is not installed, LLMInferenceService cannot be used` initially. This typically resolves after a few minutes as the operator reconciles. If it persists, run `kubectl describe datasciencecluster default-dsc` and check that the Kuadrant/Connectivity Link operator is installed and healthy.
 
     **Validate DataScienceCluster:**
 
@@ -151,9 +151,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     # Check DataScienceCluster status
     kubectl get datasciencecluster default-dsc
 
-    # Wait for KServe and ModelsAsService to be ready (optional)
-    kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="KserveReady")].status}'=True \
-      datasciencecluster/default-dsc --timeout=300s
+    # Wait for MaaS to be ready (optional)
     kubectl wait --for=jsonpath='{.status.conditions[?(@.type=="ModelControllerReady")].status}'=True \
       datasciencecluster/default-dsc --timeout=300s
 
@@ -174,7 +172,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
     ### Tenant CR
 
-    With `modelsAsAService` **Managed**, the [AI Gateway Operator](https://github.com/opendatahub-io/opendatahub-operator) (via the `aigateway` component) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `Tenant` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
+    With `modelsAsAService` **Managed**, the ODH operator (via the `aigateway` component) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `Tenant` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
 
     **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`. Going forward, set OIDC on `AITenant/models-as-a-service.spec.oidc`. For AITenant-managed tenants, Gateway and OIDC platform context comes from `AITenant`; existing `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values are preserved for compatibility but ignored.
 

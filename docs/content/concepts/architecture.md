@@ -8,7 +8,7 @@ Our future plans include improved request routing and discovery—and we're alre
 
 ## Deployment Architecture
 
-MaaS is deployed as a sub-component of the **AI Gateway Operator** inside the OpenDataHub/RHOAI operator. Enabling `aigateway.modelsAsAService: Managed` in your `DataScienceCluster` triggers the following component chain:
+MaaS is deployed as a sub-component of the **AI Gateway Operator**, managed by the ODH/RHOAI operator. Enabling `aigateway.modelsAsAService: Managed` in your `DataScienceCluster` triggers the following component chain:
 
 ```
 DataScienceCluster
