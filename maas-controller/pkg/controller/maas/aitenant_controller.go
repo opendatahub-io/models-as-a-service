@@ -26,7 +26,7 @@ import (
 	"strings"
 	"time"
 
-	batchv1 "k8s.io/api/batch/v1"
+	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -60,11 +60,11 @@ const (
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
 
-	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked"
+	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked" //nolint:gosec // Annotation name, not a credential.
 
 	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
-	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"
-	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt"
+	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
+	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -550,7 +550,11 @@ func namespaceDeletionStatus(ns *corev1.Namespace) (string, string) {
 			continue
 		}
 		switch condition.Type {
-		case corev1.NamespaceContentRemaining, corev1.NamespaceFinalizersRemaining, corev1.NamespaceDeletionContentFailure:
+		case corev1.NamespaceContentRemaining,
+			corev1.NamespaceFinalizersRemaining,
+			corev1.NamespaceDeletionContentFailure,
+			corev1.NamespaceDeletionDiscoveryFailure,
+			corev1.NamespaceDeletionGVParsingFailure:
 			message := condition.Message
 			if message == "" {
 				message = fmt.Sprintf("tenant namespace %q deletion is blocked by %s", ns.Name, condition.Type)
@@ -570,7 +574,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 	}
 
 	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
-	var existing batchv1.Job
+	var existing batcv1.Job
 	if err := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
 		if !isNotFoundError(err) {
 			return false, fmt.Errorf("get API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
@@ -610,7 +614,7 @@ func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aiten
 	return nil
 }
 
-func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batchv1.Job {
+func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
 	tenantID := aitenant.Name
 	if tenantID == tenantreconcile.DefaultAITenantName {
 		tenantID = ""
@@ -627,7 +631,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	command := fmt.Sprintf("curl --fail --silent --show-error --max-time 30 --cacert %s -X DELETE https://%s:8443/internal/v1/tenants/%s/api-keys", aitenantAPIKeyCleanupCABundlePath, serviceHost, tenantName)
 	jobName := "maas-api-revoke-keys-" + aitenant.Name
 
-	return &batchv1.Job{
+	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      jobName,
 			Namespace: namespace,
@@ -644,7 +648,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 				aitenantNamespaceAnnotation: aitenant.Namespace,
 			},
 		},
-		Spec: batchv1.JobSpec{
+		Spec: batcv1.JobSpec{
 			BackoffLimit:          &backoffLimit,
 			ActiveDeadlineSeconds: &activeDeadlineSeconds,
 			Template: corev1.PodTemplateSpec{
@@ -716,18 +720,18 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	}
 }
 
-func jobComplete(job *batchv1.Job) bool {
+func jobComplete(job *batcv1.Job) bool {
 	for _, condition := range job.Status.Conditions {
-		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+		if condition.Type == batcv1.JobComplete && condition.Status == corev1.ConditionTrue {
 			return true
 		}
 	}
 	return false
 }
 
-func jobFailed(job *batchv1.Job) bool {
+func jobFailed(job *batcv1.Job) bool {
 	for _, condition := range job.Status.Conditions {
-		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+		if condition.Type == batcv1.JobFailed && condition.Status == corev1.ConditionTrue {
 			return true
 		}
 	}

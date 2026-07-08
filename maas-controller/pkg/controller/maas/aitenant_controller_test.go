@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	batchv1 "k8s.io/api/batch/v1"
+	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -35,7 +35,7 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
-	utilruntime.Must(batchv1.AddToScheme(s))
+	utilruntime.Must(batcv1.AddToScheme(s))
 	utilruntime.Must(gatewayapiv1.Install(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
@@ -1530,7 +1530,7 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
-	var job batchv1.Job
+	var job batcv1.Job
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "maas-api-revoke-keys-team-revoke", Namespace: "odh-ai-gateway-infra"}, &job)).To(Succeed())
 	g.Expect(job.Spec.Template.Labels).To(HaveKeyWithValue("app", "maas-api-cleanup"))
 	g.Expect(job.Spec.Template.Spec.ServiceAccountName).To(Equal("maas-api-cleanup"))
@@ -1552,7 +1552,7 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("DeletionInProgress"))
 }
 
-func jobHasVolume(job *batchv1.Job, name, configMapName string) bool {
+func jobHasVolume(job *batcv1.Job, name, configMapName string) bool {
 	for _, volume := range job.Spec.Template.Spec.Volumes {
 		if volume.Name == name && volume.ConfigMap != nil && volume.ConfigMap.Name == configMapName {
 			return true
@@ -1582,9 +1582,9 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *tes
 		},
 	}
 	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
-	job.Status.Conditions = []batchv1.JobCondition{
+	job.Status.Conditions = []batcv1.JobCondition{
 		{
-			Type:               batchv1.JobComplete,
+			Type:               batcv1.JobComplete,
 			Status:             corev1.ConditionTrue,
 			LastProbeTime:      metav1.Now(),
 			LastTransitionTime: metav1.Now(),
@@ -1609,7 +1609,7 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *tes
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &updated)).To(Succeed())
 	g.Expect(updated.Annotations).To(HaveKeyWithValue(aitenantAPIKeysRevokedAnnotation, "true"))
 
-	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batchv1.Job{})
+	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{})
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
@@ -1646,9 +1646,9 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		},
 	}
 	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
-	job.Status.Conditions = []batchv1.JobCondition{
+	job.Status.Conditions = []batcv1.JobCondition{
 		{
-			Type:               batchv1.JobFailed,
+			Type:               batcv1.JobFailed,
 			Status:             corev1.ConditionTrue,
 			Reason:             "BackoffLimitExceeded",
 			Message:            "pod failed",
@@ -1686,7 +1686,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 	g.Expect(ready.Reason).To(Equal("DeletionBlocked"))
 	g.Expect(ready.Message).To(ContainSubstring("API key revocation Job"))
 
-	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batchv1.Job{})
+	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{})
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 	var remainingTenant maasv1alpha1.Tenant
