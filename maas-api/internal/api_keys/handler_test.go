@@ -58,6 +58,15 @@ func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscripti
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
+type failingInvalidateTenantStore struct {
+	*MockStore
+	err error
+}
+
+func (s failingInvalidateTenantStore) InvalidateTenant(_ context.Context, _ string) (int, error) {
+	return 0, s.err
+}
+
 // Test constants.
 const (
 	testBulkRevokeAliceJSON = `{"username": "alice"}`
@@ -1760,6 +1769,29 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
 		assert.Contains(t, w.Body.String(), "tenant mismatch")
+		assert.NotContains(t, w.Body.String(), "other-tenant")
+	})
+
+	t.Run("StoreFailureReturnsInternalServerError", func(t *testing.T) {
+		store := failingInvalidateTenantStore{
+			MockStore: NewMockStore(),
+			err:       fmt.Errorf("database unavailable: internal dsn details"),
+		}
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
+
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "Failed to revoke tenant API keys")
+		assert.NotContains(t, w.Body.String(), "database unavailable")
+		assert.NotContains(t, w.Body.String(), "internal dsn details")
 	})
 }
 

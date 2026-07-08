@@ -472,7 +472,7 @@ func (s *PostgresStore) InvalidateAll(ctx context.Context, username string, tena
 // Returns the count of keys that were revoked.
 func (s *PostgresStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
 	if tenant != s.tenantName {
-		return 0, fmt.Errorf("tenant mismatch: attempted to revoke keys for tenant %q but store is scoped to %q", tenant, s.tenantName)
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
 	}
 
 	query := `UPDATE api_keys SET status = 'revoked' WHERE tenant = $1 AND status = 'active'`

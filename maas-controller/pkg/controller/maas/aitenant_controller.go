@@ -61,6 +61,10 @@ const (
 	aitenantAccessRoleSuffix      = "object-admin"
 
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked"
+
+	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
+	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"
+	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt"
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -93,7 +97,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -619,7 +623,8 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	}
 	backoffLimit := int32(2)
 	activeDeadlineSeconds := int64(120)
-	command := fmt.Sprintf("curl -sf -k -X DELETE https://%s:8443/internal/v1/tenants/%s/api-keys", serviceName, tenantName)
+	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
+	command := fmt.Sprintf("curl --fail --silent --show-error --max-time 30 --cacert %s -X DELETE https://%s:8443/internal/v1/tenants/%s/api-keys", aitenantAPIKeyCleanupCABundlePath, serviceHost, tenantName)
 	jobName := "maas-api-revoke-keys-" + aitenant.Name
 
 	return &batchv1.Job{
@@ -652,16 +657,39 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 					},
 				},
 				Spec: corev1.PodSpec{
-					ServiceAccountName: "maas-api",
-					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					ServiceAccountName:           aitenantAPIKeyCleanupServiceAccountName,
+					AutomountServiceAccountToken: boolPtr(false),
+					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "maas-api-service-ca",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: aitenantAPIKeyCleanupCABundleName,
+									},
+									Items: []corev1.KeyToPath{
+										{Key: "service-ca.crt", Path: "service-ca.crt"},
+									},
+								},
+							},
+						},
 					},
 					Containers: []corev1.Container{
 						{
 							Name:    "revoke-keys",
 							Image:   image,
 							Command: []string{"/bin/sh", "-c", command},
+							VolumeMounts: []corev1.VolumeMount{
+								{
+									Name:      "maas-api-service-ca",
+									MountPath: "/etc/pki/maas-api",
+									ReadOnly:  true,
+								},
+							},
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceMemory: resourceQuantity("16Mi"),

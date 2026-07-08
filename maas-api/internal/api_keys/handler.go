@@ -570,7 +570,14 @@ func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
 	count, err := h.service.RevokeTenantAPIKeys(c.Request.Context(), tenant)
 	if err != nil {
 		h.logger.Error("Failed to revoke tenant API keys", "error", err, "tenant", tenant)
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		switch {
+		case errors.Is(err, ErrTenantRequired):
+			c.JSON(http.StatusBadRequest, gin.H{"error": ErrTenantRequired.Error()})
+		case errors.Is(err, ErrTenantMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": ErrTenantMismatch.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke tenant API keys"})
+		}
 		return
 	}
 

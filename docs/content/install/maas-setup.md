@@ -332,13 +332,13 @@ For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD 
 
 ### Delete a tenant
 
-Delete the `AITenant` resource to remove the tenant's MaaS state:
+Delete the `AITenant` resource to start tenant cleanup:
 
 ```bash
 kubectl delete aitenant team-red -n ai-tenants
 ```
 
-Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. Gateway resources and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
+Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if namespace content or finalizers block deletion. The shared Gateway object and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
 
 ## Next steps
 

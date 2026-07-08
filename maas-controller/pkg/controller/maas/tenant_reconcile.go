@@ -573,7 +573,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 
 	tenantName, err := tenantreconcile.TenantNameFor(tenant)
 	if err != nil {
-		return err
+		log.Error(err, "failed to resolve tenant name for cleanup logging, continuing with fallback")
+		tenantName = tenantID
+		if tenantName == "" {
+			tenantName = tenant.Namespace
+		}
 	}
 
 	appNs := r.appNamespaceForTenant()

@@ -23,6 +23,11 @@ import (
 // that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
 var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._-]+$`)
 
+var (
+	ErrTenantRequired = errors.New("tenant is required")
+	ErrTenantMismatch = errors.New("tenant mismatch")
+)
+
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
 	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
@@ -351,10 +356,10 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant
 func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, error) {
 	tenant = strings.TrimSpace(tenant)
 	if tenant == "" {
-		return 0, errors.New("tenant is required")
+		return 0, ErrTenantRequired
 	}
 	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
-		return 0, fmt.Errorf("tenant mismatch: requested tenant %q but service is scoped to %q", tenant, configuredTenant)
+		return 0, fmt.Errorf("%w: requested tenant %q but service is scoped to %q", ErrTenantMismatch, tenant, configuredTenant)
 	}
 	return s.store.InvalidateTenant(ctx, tenant)
 }

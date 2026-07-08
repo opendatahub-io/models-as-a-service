@@ -1533,9 +1533,16 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	var job batchv1.Job
 	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "maas-api-revoke-keys-team-revoke", Namespace: "odh-ai-gateway-infra"}, &job)).To(Succeed())
 	g.Expect(job.Spec.Template.Labels).To(HaveKeyWithValue("app", "maas-api-cleanup"))
-	g.Expect(job.Spec.Template.Spec.ServiceAccountName).To(Equal("maas-api"))
+	g.Expect(job.Spec.Template.Spec.ServiceAccountName).To(Equal("maas-api-cleanup"))
+	g.Expect(job.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
+	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeFalse())
 	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
-	g.Expect(strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")).To(ContainSubstring("DELETE https://maas-api-team-revoke:8443/internal/v1/tenants/team-revoke/api-keys"))
+	command := strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")
+	g.Expect(command).To(ContainSubstring("--cacert /etc/pki/maas-api/service-ca.crt"))
+	g.Expect(command).To(ContainSubstring("DELETE https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys"))
+	g.Expect(command).NotTo(ContainSubstring(" -k "))
+	g.Expect(jobHasVolume(&job, "maas-api-service-ca", "openshift-service-ca.crt")).To(BeTrue())
+	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-service-ca", "/etc/pki/maas-api")).To(BeTrue())
 
 	var updated maasv1alpha1.AITenant
 	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
@@ -1543,6 +1550,24 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("DeletionInProgress"))
+}
+
+func jobHasVolume(job *batchv1.Job, name, configMapName string) bool {
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.Name == name && volume.ConfigMap != nil && volume.ConfigMap.Name == configMapName {
+			return true
+		}
+	}
+	return false
+}
+
+func containerHasVolumeMount(container *corev1.Container, name, mountPath string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == name && mount.MountPath == mountPath && mount.ReadOnly {
+			return true
+		}
+	}
+	return false
 }
 
 func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *testing.T) {
