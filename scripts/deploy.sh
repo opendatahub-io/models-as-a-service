@@ -75,6 +75,22 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=deployment-helpers.sh
 source "${SCRIPT_DIR}/deployment-helpers.sh"
 
+# Derive infrastructure namespace from controller namespace (matches Go code logic)
+derive_infra_namespace() {
+  local controller_ns="$1"
+  case "$controller_ns" in
+    redhat-ods-applications)
+      echo "redhat-ai-gateway-infra"
+      ;;
+    opendatahub)
+      echo "odh-ai-gateway-infra"
+      ;;
+    *)
+      echo "$controller_ns"
+      ;;
+  esac
+}
+
 # Set log level from environment variable if provided
 case "${LOG_LEVEL:-}" in
   DEBUG)
@@ -605,6 +621,26 @@ EOF
     }
   fi
 
+  # Patch INFRA_NAMESPACE if set via environment variable
+  # Patch INFRA_NAMESPACE if explicitly set (including empty string for ROSA)
+  # Use parameter expansion to distinguish: unset vs set-to-empty vs set-to-value
+  if [ "${INFRA_NAMESPACE+x}" = "x" ]; then
+    log_info "  Patching maas-controller with INFRA_NAMESPACE=${INFRA_NAMESPACE}"
+    local infra_ns_value="$INFRA_NAMESPACE"
+
+    # Find the index of INFRA_NAMESPACE in the env array
+    local env_index
+    env_index=$(kubectl get deployment maas-controller -n "$NAMESPACE" -o json | \
+      jq '.spec.template.spec.containers[0].env | map(.name) | index("INFRA_NAMESPACE")')
+
+    if [ "$env_index" != "null" ]; then
+      kubectl patch deployment maas-controller -n "$NAMESPACE" --type=json -p="[
+        {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${env_index}\",
+         \"value\": {\"name\": \"INFRA_NAMESPACE\", \"value\": \"${infra_ns_value}\"}}
+      ]" || log_warn "Failed to patch INFRA_NAMESPACE (non-fatal)"
+    fi
+  fi
+
   log_info "  Waiting for maas-controller to be ready..."
   if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
     log_error "maas-controller deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
@@ -615,16 +651,23 @@ EOF
   # Wait for the Tenant reconciler to deploy maas-api.
   # The controller creates a default-tenant CR on startup, and the Tenant
   # reconciler renders and SSA-applies maas-api manifests + gateway policies.
-  # All maas-api instances deploy to redhat-ai-gateway-infra infrastructure namespace.
+  # All maas-api instances deploy to infrastructure namespace (controlled by INFRA_NAMESPACE).
+  # Infrastructure namespace is configurable via deployment overlays (params.env).
   log_info ""
   log_info "Waiting for Tenant reconciler to deploy maas-api..."
-  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace
+  if [ "$infra_namespace_raw" = "AUTO" ]; then
+    infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  else
+    infra_namespace="$infra_namespace_raw"
+  fi
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do
-    if kubectl get deployment maas-api -n "$maas_api_namespace" &>/dev/null; then
-      log_info "  maas-api deployment found in $maas_api_namespace, waiting for rollout..."
-      if kubectl rollout status deployment/maas-api -n "$maas_api_namespace" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
+    if kubectl get deployment maas-api -n "$infra_namespace" &>/dev/null; then
+      log_info "  maas-api deployment found in $infra_namespace, waiting for rollout..."
+      if kubectl rollout status deployment/maas-api -n "$infra_namespace" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
         log_info "  maas-api is ready"
         break
       fi
@@ -636,9 +679,9 @@ EOF
     fi
   done
 
-  if ! kubectl get deployment maas-api -n "$maas_api_namespace" &>/dev/null; then
+  if ! kubectl get deployment maas-api -n "$infra_namespace" &>/dev/null; then
     log_error "maas-api deployment not created by Tenant reconciler after ${maas_api_timeout}s"
-    log_error "Expected in namespace: $maas_api_namespace"
+    log_error "Expected in namespace: $infra_namespace"
     log_error "Check maas-controller logs: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
     return 1
   fi
@@ -657,9 +700,9 @@ EOF
   log_info ""
   log_info "MaaS API and MaaS Controller deployment completed successfully!"
   local deployed_api_image deployed_ctrl_image
-  deployed_api_image=$(kubectl get deployment/maas-api -n "$maas_api_namespace" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
+  deployed_api_image=$(kubectl get deployment/maas-api -n "$infra_namespace" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
   deployed_ctrl_image=$(kubectl get deployment/maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || echo "unknown")
-  log_info "  maas-api image:        $deployed_api_image (namespace: $maas_api_namespace)"
+  log_info "  maas-api image:        $deployed_api_image (namespace: $infra_namespace)"
   log_info "  maas-controller image: $deployed_ctrl_image (namespace: $NAMESPACE)"
 
   log_info "==================================================="
@@ -770,8 +813,14 @@ validate_postgres_connection() {
 }
 
 deploy_postgresql() {
-  # Namespace where maas-api and postgres run (operator namespace)
-  local infra_ns="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
+  # Namespace where maas-api and postgres run (infrastructure namespace)
+  local infra_ns_raw="${INFRA_NAMESPACE:-opendatahub}"
+  local infra_ns
+  if [ "$infra_ns_raw" = "AUTO" ]; then
+    infra_ns=$(derive_infra_namespace "$NAMESPACE")
+  else
+    infra_ns="$infra_ns_raw"
+  fi
 
   if [[ -n "$POSTGRES_CONNECTION" ]]; then
     validate_postgres_connection "$POSTGRES_CONNECTION" || exit 1
@@ -1570,9 +1619,15 @@ configure_tls_backend() {
   # Restart deployments to pick up TLS config
   log_info "Restarting deployments to pick up TLS configuration..."
 
-  # maas-api deploys to operator namespace
-  local maas_api_namespace="${MAAS_CONTROLLER_NAMESPACE:-opendatahub}"
-  kubectl rollout restart deployment/maas-api -n "$maas_api_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
+  # maas-api deploys to infrastructure namespace
+  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace
+  if [ "$infra_namespace_raw" = "AUTO" ]; then
+    infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  else
+    infra_namespace="$infra_namespace_raw"
+  fi
+  kubectl rollout restart deployment/maas-api -n "$infra_namespace" 2>/dev/null || log_debug "maas-api deployment not found or not yet ready"
   kubectl rollout restart deployment/authorino -n "$authorino_namespace" 2>/dev/null || log_debug "authorino deployment not found or not yet ready"
   
   # Wait for Authorino to be ready after restart
