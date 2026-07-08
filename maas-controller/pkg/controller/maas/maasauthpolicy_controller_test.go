@@ -1542,7 +1542,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 // gateway AuthPolicy spec.
 func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		InfraNamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
