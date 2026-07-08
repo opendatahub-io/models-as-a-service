@@ -72,7 +72,7 @@ def tenant_service_urls(shared_test_tenants):
 
     # Construct internal service URLs
     # Format: https://{service-name}.{namespace}.svc.cluster.local:{port}
-    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE (opendatahub),
+    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE,
     # NOT in the tenant-specific namespace (ai-tenant-xxx)
     def service_url(tenant):
         # Service name follows pattern: maas-api-{tenant-name}
