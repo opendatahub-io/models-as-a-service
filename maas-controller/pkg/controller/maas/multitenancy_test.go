@@ -209,7 +209,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		// Controller's default gateway (different from tenant's gateway)
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "openshift-ingress",
-		MaaSAPINamespace: "opendatahub",
+		InfraNamespace:   "opendatahub",
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}

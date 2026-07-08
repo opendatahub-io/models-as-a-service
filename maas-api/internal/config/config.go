@@ -36,6 +36,14 @@ type Config struct {
 	// Used to filter database queries to enforce tenant isolation.
 	TenantName string
 
+	// AITenantName is the AITenant CR name for this tenant (used for SubjectAccessReview authorization).
+	// Defaults to TenantName.
+	AITenantName string
+
+	// AITenantNamespace is the namespace where AITenant CRs are created.
+	// Default: "ai-tenants"
+	AITenantNamespace string
+
 	// Server configuration
 	Address string // Listen address for HTTPS (host:port)
 	Secure  bool   // Use HTTPS
@@ -109,6 +117,9 @@ func Load() *Config {
 		panic("TENANT_NAME environment variable must be non-empty (tenant isolation required)")
 	}
 
+	aitenantName := env.GetString("AITENANT_NAME", tenantName)
+	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
+
 	c := &Config{
 		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
 		Namespace:                 env.GetString("NAMESPACE", constant.DefaultNamespace),
@@ -116,6 +127,8 @@ func Load() *Config {
 		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
 		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
 		TenantName:                tenantName,
+		AITenantName:              aitenantName,
+		AITenantNamespace:         aitenantNamespace,
 		Address:                   env.GetString("ADDRESS", ""),
 		Secure:                    secure,
 		TLS:                       loadTLSConfig(),

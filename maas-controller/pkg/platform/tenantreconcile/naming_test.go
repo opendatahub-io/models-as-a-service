@@ -296,7 +296,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "redteam-gateway",
 		}}
-		params, err := BuildPlatformParams(tenant, platformContext, "redhat-ai-gateway-infra", "https://kubernetes.default.svc", logr.Discard())
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "redteam", params.TenantIdentifier)

@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -261,4 +262,98 @@ func ownerReferenceToConfig(refs []metav1.OwnerReference, uid types.UID) (metav1
 		}
 	}
 	return metav1.OwnerReference{}, false
+}
+
+func TestLifecycleReconciler_LimitadorServiceMonitorDefaultInterval(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const monitoringNS = "opendatahub"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-limitador"),
+		},
+		Spec: maasv1alpha1.ConfigSpec{},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+	r := &LifecycleReconciler{
+		Client:              cl,
+		Scheme:              s,
+		MonitoringNamespace: monitoringNS,
+	}
+
+	err := r.ensureLimitadorServiceMonitor(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	sm := &unstructured.Unstructured{}
+	sm.SetAPIVersion("monitoring.coreos.com/v1")
+	sm.SetKind("ServiceMonitor")
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name:      "limitador-metrics",
+		Namespace: monitoringNS,
+	}, sm)).To(Succeed())
+
+	spec, found, err := unstructured.NestedMap(sm.Object, "spec")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+
+	endpoints, found, err := unstructured.NestedSlice(spec, "endpoints")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+	g.Expect(endpoints).To(HaveLen(1))
+
+	endpoint, ok := endpoints[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(endpoint["interval"]).To(Equal("30s"))
+}
+
+func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const monitoringNS = "opendatahub"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-limitador-custom"),
+		},
+		Spec: maasv1alpha1.ConfigSpec{
+			LimitadorScrapeInterval: "1m",
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+	r := &LifecycleReconciler{
+		Client:              cl,
+		Scheme:              s,
+		MonitoringNamespace: monitoringNS,
+	}
+
+	err := r.ensureLimitadorServiceMonitor(context.Background())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	sm := &unstructured.Unstructured{}
+	sm.SetAPIVersion("monitoring.coreos.com/v1")
+	sm.SetKind("ServiceMonitor")
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name:      "limitador-metrics",
+		Namespace: monitoringNS,
+	}, sm)).To(Succeed())
+
+	spec, found, err := unstructured.NestedMap(sm.Object, "spec")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+
+	endpoints, found, err := unstructured.NestedSlice(spec, "endpoints")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+	g.Expect(endpoints).To(HaveLen(1))
+
+	endpoint, ok := endpoints[0].(map[string]any)
+	g.Expect(ok).To(BeTrue())
+	g.Expect(endpoint["interval"]).To(Equal("1m"))
 }

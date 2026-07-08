@@ -107,7 +107,7 @@ func TestMaaSAuthPolicyReconciler_ManagedAnnotation(t *testing.T) {
 				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -168,7 +168,7 @@ func TestMaaSAuthPolicyReconciler_DuplicateReconciliation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -260,7 +260,7 @@ func TestMaaSAuthPolicyReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSAuthPolicy: %v", err)
 			}
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -319,7 +319,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -418,7 +418,7 @@ func TestMaaSAuthPolicyReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -560,7 +560,7 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
 	}
@@ -820,7 +820,7 @@ func TestMaaSAuthPolicyReconciler_CachingConfiguration(t *testing.T) {
 			r := &MaaSAuthPolicyReconciler{
 				Client:           c,
 				Scheme:           scheme,
-				MaaSAPINamespace: "maas-system",
+				InfraNamespace:   "maas-system",
 				GatewayName:      "maas-default-gateway",
 				GatewayNamespace: gatewayNS,
 				MetadataCacheTTL: tc.metadataTTL,
@@ -1009,7 +1009,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyIsolation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1130,7 +1130,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1223,7 +1223,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1331,7 +1331,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructured.Unstructured {
 	t.Helper()
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -1404,6 +1404,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	oidc := &oidcConfig{
 		IssuerURL: "https://keycloak.example.com/realms/test",
 		ClientID:  "maas-client",
+		TTL:       300,
 	}
 	obj := gatewayAuthPolicySpecTestObject(t, oidc)
 
@@ -1468,7 +1469,7 @@ func TestBuildGatewayAuthPolicySpec_RouteScopedRules(t *testing.T) {
 
 func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -1536,6 +1537,156 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	}
 }
 
+// TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL verifies that the OIDC JWKS TTL from the
+// oidcConfig struct is correctly propagated to the JWT authentication block in the
+// gateway AuthPolicy spec.
+func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "gateway-ns",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	tests := []struct {
+		name    string
+		ttl     int
+		wantTTL int64
+	}{
+		{name: "default TTL", ttl: 300, wantTTL: 300},
+		{name: "custom TTL 60s", ttl: 60, wantTTL: 60},
+		{name: "minimum TTL 30s", ttl: 30, wantTTL: 30},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			oidc := &oidcConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       tc.ttl,
+			}
+			spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+			obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+
+			gotTTL, found, err := unstructured.NestedInt64(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "ttl")
+			if err != nil || !found {
+				t.Fatalf("oidc jwt.ttl missing: found=%v err=%v", found, err)
+			}
+			if gotTTL != tc.wantTTL {
+				t.Errorf("oidc jwt.ttl = %d, want %d", gotTTL, tc.wantTTL)
+			}
+		})
+	}
+}
+
+// TestFetchOIDCConfig_TTLExtraction verifies that fetchOIDCConfig correctly extracts the
+// TTL field from the Tenant CR's spec.externalOIDC and applies the default (300) when
+// the field is absent or zero.
+func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
+	const namespace = "default"
+
+	tests := []struct {
+		name    string
+		oidc    *maasv1alpha1.TenantExternalOIDCConfig
+		wantTTL int
+		wantNil bool
+	}{
+		{
+			name: "explicit TTL 600",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       600,
+			},
+			wantTTL: 600,
+		},
+		{
+			name: "minimum TTL 30",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       30,
+			},
+			wantTTL: 30,
+		},
+		{
+			name: "TTL zero defaults to 300",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       0,
+			},
+			wantTTL: 300,
+		},
+		{
+			name: "TTL below minimum returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       10,
+			},
+			wantNil: true,
+		},
+		{
+			name: "negative TTL returns nil",
+			oidc: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/test",
+				ClientID:  "maas-client",
+				TTL:       -1,
+			},
+			wantNil: true,
+		},
+		{
+			name:    "missing issuerUrl returns nil",
+			oidc:    &maasv1alpha1.TenantExternalOIDCConfig{ClientID: "maas-client", TTL: 120},
+			wantNil: true,
+		},
+		{
+			name:    "missing clientId returns nil",
+			oidc:    &maasv1alpha1.TenantExternalOIDCConfig{IssuerURL: "https://keycloak.example.com/realms/test", TTL: 120},
+			wantNil: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			tenant := &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "default-tenant",
+					Namespace: namespace,
+				},
+				Spec: maasv1alpha1.TenantSpec{
+					ExternalOIDC: tc.oidc,
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(tenant).
+				Build()
+
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: namespace}
+			log := ctrl.Log.WithName("test")
+			got := r.fetchOIDCConfig(context.Background(), log, namespace)
+
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("expected nil oidcConfig, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatal("expected non-nil oidcConfig, got nil")
+			}
+			if got.TTL != tc.wantTTL {
+				t.Errorf("TTL = %d, want %d", got.TTL, tc.wantTTL)
+			}
+		})
+	}
+}
+
 // contains is a helper to check if a string contains a substring (case-sensitive).
 // assertCacheKeyContains fetches a nested string from an unstructured object and asserts it
 // contains each of the required substrings. It is a test helper that reduces cyclomatic
@@ -1587,10 +1738,10 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1646,10 +1797,10 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1720,10 +1871,10 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		MaaSAPINamespace: namespace,
-		GatewayName:      "openshift-ingress/maas-default-gateway",
+		Client:         c,
+		Scheme:         scheme,
+		InfraNamespace: namespace,
+		GatewayName:    "openshift-ingress/maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -1771,7 +1922,7 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policy.Name, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1831,7 +1982,7 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: gatewayNS,
 		MetadataCacheTTL: 60,
@@ -1916,7 +2067,7 @@ func TestMaaSAuthPolicyReconciler_StaleEvent_NoOp(t *testing.T) {
 		WithRESTMapper(testRESTMapper()).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "gone-policy", Namespace: "default"}}
 
 	res, err := r.Reconcile(context.Background(), req)
@@ -2103,7 +2254,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}
@@ -2178,7 +2329,7 @@ func TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference(t *testing.T) 
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      gatewayName,
 	}
@@ -2265,7 +2416,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}
@@ -2349,7 +2500,7 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 	r := &MaaSAuthPolicyReconciler{
 		Client:           c,
 		Scheme:           scheme,
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayNamespace: defaultGwNS,
 		GatewayName:      defaultGwName,
 	}

@@ -23,7 +23,11 @@ Test Realms:
   tenant-a:
     - alice_lead  (groups: Engineering, Project-Alpha)
     - bob_sre     (groups: Site-Reliability)
-    - client: test-client (public, direct access grants)
+    - evil_user   (groups: unsafe;group — semicolon triggers oidc-groups-safe rejection)
+    - dave_noaccess (groups: none — valid token, no group memberships → empty model list)
+    - client: test-client (public, direct access grants, groups mapper)
+    - client: wrong-client (public, direct access grants, no groups mapper —
+      used only to obtain tokens with azp=wrong-client for client-binding tests)
 
   tenant-b:
     - charlie_sec_lead  (groups: Product-Security, Project-Omega)
@@ -36,6 +40,7 @@ from __future__ import annotations
 import base64
 import json
 import os
+import subprocess
 import time
 import uuid
 import logging
@@ -215,14 +220,20 @@ def _wait_for_api_key_revocation(
 
 
 def _tenant_b_token_url() -> str:
-    """Derive the tenant-b token URL from the tenant-a issuer URL.
+    """Return the token endpoint URL for the tenant-b Keycloak realm.
 
-    The test infra sets OIDC_ISSUER_URL to the tenant-a realm. We swap
-    'tenant-a' → 'tenant-b' to get the sibling realm.
+    Resolution order:
+    1. OIDC_TOKEN_URL_TENANT_B — explicit override, set by prow_run_smoke_test.sh.
+    2. Derive from OIDC_ISSUER_URL by swapping 'tenant-a' → 'tenant-b' (fallback
+       for environments where only the tenant-a issuer URL is configured).
     """
+    explicit = os.environ.get("OIDC_TOKEN_URL_TENANT_B", "")
+    if explicit:
+        return explicit
     issuer = _required_env("OIDC_ISSUER_URL")
     assert "tenant-a" in issuer, (
-        f"Expected OIDC_ISSUER_URL to contain 'tenant-a', got: {issuer}"
+        f"Expected OIDC_ISSUER_URL to contain 'tenant-a' for tenant-b derivation, "
+        f"got: {issuer}. Set OIDC_TOKEN_URL_TENANT_B explicitly to avoid this."
     )
     tenant_b_issuer = issuer.replace("tenant-a", "tenant-b")
     return f"{tenant_b_issuer}/protocol/openid-connect/token"
@@ -673,6 +684,53 @@ class TestOIDCAPIKeyLifecycle:
         )
         log.info(f"API key {key_id} create→revoke lifecycle completed")
 
+    def test_api_key_owner_matches_oidc_username(self, maas_api_base_url: str):
+        """API key's owner field reflects the preferred_username from the OIDC token.
+
+        Verifies that the identity extracted from the JWT (preferred_username
+        claim) is stored as the key's owner when the key is minted. This
+        ensures identity propagation from OIDC → API key creation → stored
+        metadata works end-to-end.
+        """
+        token = _request_oidc_token()
+        expected_username = _decode_jwt_payload(token).get("preferred_username")
+        assert expected_username, "OIDC token is missing preferred_username claim"
+
+        key_data = _create_oidc_api_key(
+            maas_api_base_url, token,
+            name=f"e2e-owner-{uuid.uuid4().hex[:8]}"
+        )
+        key_id = key_data["id"]
+
+        try:
+            response = _oidc_request_with_retry(
+                requests.get,
+                f"{maas_api_base_url}/v1/api-keys/{key_id}",
+                token,
+                label="OIDC API key GET",
+            )
+            assert response.status_code == 200, (
+                f"GET /v1/api-keys/{key_id} failed: "
+                f"{response.status_code} {response.text}"
+            )
+            data = response.json()
+            owner = data.get("owner") or data.get("username") or data.get("userId")
+            assert owner == expected_username, (
+                f"Expected API key owner to be '{expected_username}' "
+                f"(preferred_username from OIDC token), got '{owner}'. "
+                f"Full response: {data}"
+            )
+            log.info(
+                f"API key owner '{owner}' correctly matches OIDC preferred_username"
+            )
+        finally:
+            _oidc_request_with_retry(
+                requests.delete,
+                f"{maas_api_base_url}/v1/api-keys/{key_id}",
+                token,
+                label="OIDC cleanup owner test key",
+            )
+
 
 # ---------------------------------------------------------------------------
 # Tests — Header Injection (Security)
@@ -843,4 +901,233 @@ class TestOIDCHeaderInjection:
         log.info(
             "API key minted successfully with injected X-MaaS-Username — "
             "gateway overwrote it with real OIDC identity"
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason="EXTERNAL_OIDC not enabled",
+)
+class TestOIDCClientBinding:
+    """Verify that oidc-client-bound rejects tokens from the wrong OAuth client.
+
+    MaaS is configured with OIDC_CLIENT_ID (e.g. test-client). The tenant-a
+    realm also contains wrong-client — a second public client with no groups
+    mapper. Tokens obtained via wrong-client carry azp=wrong-client. Because
+    the issuer is valid, authentication succeeds and Authorino verifies the
+    signature. The oidc-client-bound authorization rule then rejects the token
+    with 403 because auth.identity.azp != configured clientId.
+
+    A 401 (authentication failure) would mean the issuer check failed, which
+    would indicate wrong-client is on a different realm — that is not what this
+    test is checking. The assertion specifically requires 403.
+    """
+
+    def test_wrong_oauth_client_token_is_rejected(self, maas_api_base_url: str):
+        """Token from wrong OAuth client (azp mismatch) is rejected with 403.
+
+        The token has a valid signature and the correct issuer, so it passes
+        Authorino OIDC authentication. The oidc-client-bound authorization rule
+        then checks auth.identity.azp and denies with 403.
+        """
+        token = _request_oidc_token(client_id="wrong-client")
+
+        payload = _decode_jwt_payload(token)
+        assert payload.get("azp") == "wrong-client", (
+            f"Expected azp=wrong-client in token but got: {payload.get('azp')}. "
+            "Ensure wrong-client is configured in the tenant-a realm."
+        )
+
+        response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"name": f"e2e-wrong-client-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 403, (
+            f"Expected 403 for wrong OAuth client token (azp=wrong-client, "
+            f"configured clientId={_oidc_client_id()}), "
+            f"got {response.status_code}: {response.text}"
+        )
+        log.info(
+            "wrong-client token correctly rejected with 403 "
+            "(oidc-client-bound azp enforcement working)"
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason="EXTERNAL_OIDC not enabled",
+)
+class TestOIDCGroupSafety:
+    """Verify that oidc-groups-safe rejects tokens containing unsafe group names.
+
+    evil_user belongs to 'unsafe;group'. The semicolon is outside
+    safeGroupNamePattern (^[A-Za-z0-9:._/-]+$), so the OPA rule denies
+    the request with 403 even though the token is otherwise fully valid
+    (correct issuer, correct azp, valid signature).
+
+    A 401 would mean authentication failed — that is not what this test checks.
+    403 is required: authentication passes, authorization denies.
+    """
+
+    def test_unsafe_group_name_is_rejected(self, maas_api_base_url: str):
+        """Token with unsafe group name (semicolon) is rejected with 403.
+
+        The oidc-groups-safe OPA rule fires because count(unsafe_group) != 0,
+        where unsafe_group is any group whose name does not match
+        ^[A-Za-z0-9:._/-]+$.
+        """
+        token = _request_oidc_token(username="evil_user", password="letmein")
+
+        payload = _decode_jwt_payload(token)
+        groups = payload.get("groups", [])
+        assert any(";" in g for g in groups), (
+            f"Expected token to contain a group with ';' but got: {groups}. "
+            "Ensure evil_user is a member of 'unsafe;group' in the tenant-a realm."
+        )
+
+        response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"name": f"e2e-unsafe-group-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 403, (
+            f"Expected 403 for token with unsafe group name 'unsafe;group' "
+            f"(oidc-groups-safe enforcement), "
+            f"got {response.status_code}: {response.text}"
+        )
+        log.info(
+            "unsafe group name correctly rejected with 403 "
+            "(oidc-groups-safe OPA rule working)"
+        )
+
+    def test_mixed_safe_and_unsafe_groups_is_rejected(self, maas_api_base_url: str):
+        """Token with one safe group AND one unsafe group is still rejected with 403.
+
+        The oidc-groups-safe OPA rule uses count(unsafe_group) == 0 — even a
+        single unsafe group in an otherwise-valid groups list causes denial.
+        mixed_user belongs to ['Engineering', 'unsafe;group']; the safe group
+        must not be sufficient to bypass the rule.
+        """
+        token = _request_oidc_token(username="mixed_user", password="letmein")
+
+        payload = _decode_jwt_payload(token)
+        groups = payload.get("groups", [])
+        has_safe = any(";" not in g for g in groups)
+        has_unsafe = any(";" in g for g in groups)
+        assert has_safe and has_unsafe, (
+            f"Expected mixed_user token to contain both safe and unsafe groups, "
+            f"got: {groups}. Ensure mixed_user is a member of both Engineering "
+            f"and 'unsafe;group' in the tenant-a realm."
+        )
+
+        response = requests.post(
+            f"{maas_api_base_url}/v1/api-keys",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type": "application/json",
+            },
+            json={"name": f"e2e-mixed-group-{uuid.uuid4().hex[:8]}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code == 403, (
+            f"Expected 403 for token with mixed safe+unsafe groups "
+            f"(oidc-groups-safe must reject if ANY group is unsafe), "
+            f"got {response.status_code}: {response.text}"
+        )
+        log.info(
+            "mixed safe+unsafe groups correctly rejected with 403 "
+            "(oidc-groups-safe rejects on any unsafe group, not all)"
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason="EXTERNAL_OIDC not enabled",
+)
+class TestOIDCDirectModelAccess:
+    """Verify that an OIDC token can call GET /v1/models directly.
+
+    This mirrors the verification step in the official Red Hat docs (section
+    1.15.2): 'Use the OIDC token to list available models.' All other model
+    listing tests in this suite use a minted API key; this class ensures the
+    raw JWT bearer path through the gateway also works.
+    """
+
+    def test_oidc_token_can_list_models_directly(self, maas_api_base_url: str):
+        """OIDC bearer token is accepted by GET /v1/models without minting an API key first."""
+        token = _request_oidc_token()
+
+        response = _oidc_request_with_retry(
+            requests.get,
+            f"{maas_api_base_url}/v1/models",
+            token,
+            label="OIDC direct model list",
+        )
+        assert response.status_code == 200, (
+            f"Expected 200 when listing models with OIDC bearer token, "
+            f"got {response.status_code}: {response.text}"
+        )
+        data = response.json()
+        assert data.get("object") == "list", (
+            f"Expected object=list in response, got: {data.get('object')}"
+        )
+        assert isinstance(data.get("data"), list), (
+            f"Expected data array in response, got: {type(data.get('data'))}"
+        )
+        log.info(
+            f"OIDC token can list models directly — {len(data.get('data', []))} model(s) returned"
+        )
+
+
+@pytest.mark.skipif(
+    os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
+    reason="EXTERNAL_OIDC not enabled",
+)
+class TestOIDCAlertingInfra:
+    """Verify that the Authorino alerting infrastructure is present in the cluster.
+
+    The MaaSAuthorinoAuthenticationHighFailureRate PrometheusRule was introduced
+    as part of RHOAIENG-60847. If it is accidentally deleted or misconfigured,
+    the auth failure rate alerting silently stops working. This class provides
+    a lightweight smoke check that the rule exists.
+    """
+
+    def test_authorino_prometheusrule_exists(self):
+        """PrometheusRule authorino-maas-authentication-alerts is present in kuadrant-system."""
+        # The rule is deployed to kuadrant-system (where Authorino runs) by
+        # scripts/observability/install-observability.sh, not kustomize base.
+        namespace = os.environ.get("AUTHORINO_NAMESPACE", "kuadrant-system")
+        rule_name = "authorino-maas-authentication-alerts"
+        result = subprocess.run(
+            [
+                "kubectl", "get", "prometheusrule", rule_name,
+                "-n", namespace,
+                "--ignore-not-found",
+                "-o", "jsonpath={.metadata.name}",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0, (
+            f"kubectl get prometheusrule failed (exit {result.returncode}): {result.stderr}"
+        )
+        assert result.stdout.strip() == rule_name, (
+            f"PrometheusRule '{rule_name}' not found in namespace '{namespace}'. "
+            "Ensure install-observability.sh has been run and the rule was applied to kuadrant-system."
+        )
+        log.info(
+            f"PrometheusRule {rule_name} present in namespace '{namespace}'"
         )

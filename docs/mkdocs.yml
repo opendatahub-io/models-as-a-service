@@ -79,6 +79,7 @@ nav:
     - Configuration & Management:
       - Quota and Access Configuration: configuration-and-management/quota-and-access-configuration.md
       - API Key Administration: configuration-and-management/api-key-administration.md
+      - Infrastructure Namespace Separation: configuration-and-management/infra-namespace-migration.md
       - Namespace User Permissions (RBAC): configuration-and-management/namespace-rbac.md
       - Tenant RBAC: configuration-and-management/tenant-rbac.md
       - Troubleshooting ExternalModel RBAC: configuration-and-management/troubleshooting-external-model-rbac.md
@@ -91,6 +92,7 @@ nav:
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
+      - External OIDC: advanced-administration/external-oidc.md
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md

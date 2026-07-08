@@ -48,10 +48,13 @@ type TenantReconciler struct {
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
 	ManifestPath string
-	// AppNamespace is the namespace where maas-api workloads are deployed (--maas-api-namespace,
+	// AppNamespace is the namespace where maas-api workloads are deployed (--infra-namespace,
 	// default opendatahub for ODH, redhat-ods-applications for RHOAI).
 	// Used by appNamespaceForTenant() and isProtectedNamespace().
 	AppNamespace string
+	// ControllerNamespace is the namespace where maas-controller runs (--controller-namespace).
+	// Used for automatic legacy cleanup when infrastructure namespace differs from controller namespace.
+	ControllerNamespace string
 	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
 	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
@@ -108,8 +111,10 @@ type TenantReconciler struct {
 
 // Escalation-check mirror for maas-api ClusterRole — maas-controller must hold every verb it grants.
 // namespaces create: bootstrap the subscription namespace at startup (ensureSubscriptionNamespaceWithClient).
+// endpoints, pods: used by controller for service discovery and health checks.
 // serviceaccounts/token create, tokenreviews, subjectaccessreviews: required by maas-api for bound SA token
 // projection and access checks. maasmodelrefs/maassubscriptions: read-only cross-reconciler references.
+// gateways, routes: NOT included here - maas-api gets these via its own ClusterRole, not escalated from controller.
 // +kubebuilder:rbac:groups="",resources=endpoints,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch

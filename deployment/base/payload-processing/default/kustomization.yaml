@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../manager
   - ../rbac
+  - ../networking
 
 labels:
   - includeSelectors: true

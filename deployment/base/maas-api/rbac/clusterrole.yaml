@@ -42,6 +42,13 @@ rules:
   resources: ["httproutes"]
   verbs: ["get", "list", "watch"]
 
+# Gateways for /v1/tenants endpoint (gateway discovery)
+# Only 'get' needed - code uses .Get(gatewayName) not .List()
+# External hostname comes from Gateway status (status.addresses or listener.hostname)
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways"]
+  verbs: ["get"]
+
 # Metrics and monitoring
 - apiGroups: [""]
   resources: ["pods", "services", "endpoints"]

@@ -20,6 +20,7 @@ import (
 	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -29,6 +30,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tenant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tracing"
@@ -281,6 +283,12 @@ func registerHandlers(
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
+
+	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
+	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
+	v1Routes.GET("/tenants",
+		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tenantHandler.GetTenantInfo)
 
 	// Internal routes (no auth required - called by Authorino / CronJob)
 	internalRoutes := router.Group("/internal/v1")

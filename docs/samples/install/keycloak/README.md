@@ -87,10 +87,10 @@ The easiest way to configure realms is through the web UI:
    - **Add to userinfo:** ON
    - Click "Save"
 
-6. **Get Client Credentials**
+6. **Note Client Credentials (for testing only)**
    - Navigate to: Clients → maas → Credentials tab
    - Copy the "Client secret"
-   - Save for MaaS OIDC configuration
+   - This secret is used when obtaining tokens from Keycloak (e.g., for testing with `curl`). MaaS does **not** require or store the client secret — only the `clientId` and `issuerUrl` are configured in the MaaS CR.
 
 ### Method 2: Import Test Realms (Development Only)
 
@@ -121,7 +121,7 @@ cp docs/samples/install/keycloak/custom-realm-template.json my-realm.json
 
 ## OIDC Configuration for MaaS
 
-Once you have a realm configured with groups and users, you'll need to configure MaaS to use Keycloak as an OIDC provider.
+Once you have a realm configured with groups and users, configure MaaS to use Keycloak as the OIDC provider via the `AITenant` or `Tenant` CR.
 
 ### Required Information
 
@@ -129,20 +129,40 @@ From your Keycloak configuration, you'll need:
 
 1. **Issuer URL:** `https://{keycloak-hostname}/realms/{realm-name}`
 2. **Client ID:** The client you created (e.g., `maas`)
-3. **Client Secret:** From the client credentials tab
-4. **Groups Claim:** `groups` (from the mapper configuration)
+3. **Groups Claim:** `groups` (from the mapper configuration)
 
-### Example Configuration
+MaaS validates OIDC tokens using **JWT bearer validation against the public JWKS** — no `client_secret` is needed at runtime. The `clientId` is configuration only; it is enforced by checking the `azp` claim in incoming tokens.
+
+### AITenant CR (operator-managed tenants)
 
 ```yaml
-# This will be configured in MaaS (implementation pending)
-oidc:
-  issuer: https://keycloak.apps.my-cluster.example.com/realms/my-company
-  clientId: maas
-  clientSecret: {from-keycloak-client-credentials}
-  groupsClaim: groups
-  usernameClaim: preferred_username  # or "sub" for user ID
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: AITenant
+metadata:
+  name: my-tenant
+  namespace: ai-tenants
+spec:
+  oidc:
+    issuerUrl: "https://keycloak.apps.my-cluster.example.com/realms/my-company"
+    clientId: maas
+    ttl: 300  # optional: JWKS cache TTL in seconds (default 300, minimum 30)
 ```
+
+### Tenant CR (legacy / unmanaged tenants)
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: Tenant
+metadata:
+  name: default-tenant
+spec:
+  externalOIDC:
+    issuerUrl: "https://keycloak.apps.my-cluster.example.com/realms/my-company"
+    clientId: maas
+    ttl: 300  # optional
+```
+
+For full configuration reference, IdP outage behavior, and security controls see [External OIDC Configuration](../../../content/advanced-administration/external-oidc.md).
 
 ## Verifying Realm Configuration
 
@@ -223,7 +243,7 @@ The secret persists as long as the Keycloak instance exists, so you can retrieve
 
 After configuring Keycloak realms:
 
-1. Configure MaaS to use Keycloak as OIDC provider (implementation pending)
+1. Configure MaaS to use Keycloak as OIDC provider — see [External OIDC Configuration](../../../content/advanced-administration/external-oidc.md)
 2. Create MaaSSubscription resources with groups matching Keycloak groups
 3. Create MaaSAuthPolicy resources to grant access to models
 4. Test authentication with OIDC tokens

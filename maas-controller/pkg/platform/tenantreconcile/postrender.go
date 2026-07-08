@@ -385,7 +385,7 @@ func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructu
 
 	// Rename HTTPRoute for non-default tenants
 	if tenantID != "" {
-		newName := fmt.Sprintf("maas-api-%s-route", tenantID)
+		newName := MaaSAPIRouteName(tenantID)
 		log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
 		resource.SetName(newName)
 	}

@@ -54,9 +54,9 @@ import (
 type MaaSAuthPolicyReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
-	// MaaSAPINamespace is the namespace where maas-api service is deployed.
+	// InfraNamespace is the infrastructure namespace where maas-api service is deployed.
 	// Used to construct the subscription selector endpoint URL.
-	MaaSAPINamespace string
+	InfraNamespace string
 
 	// TenantNamespace is the namespace where the Tenant CR lives (configurable via flags).
 	// Defaults to "models-as-a-service".
@@ -90,6 +90,7 @@ type MaaSAuthPolicyReconciler struct {
 type oidcConfig struct {
 	IssuerURL string
 	ClientID  string
+	TTL       int
 }
 
 // authzCacheTTL returns the safe TTL for authorization caches that depend on metadata.
@@ -234,14 +235,33 @@ func (r *MaaSAuthPolicyReconciler) fetchOIDCConfig(ctx context.Context, log logr
 		return nil
 	}
 
+	const (
+		defaultOIDCJWKSTTL = 300
+		minOIDCJWKSTTL     = 30
+	)
+
+	ttl := oidc.TTL
+	switch {
+	case ttl == 0:
+		ttl = defaultOIDCJWKSTTL
+	case ttl < minOIDCJWKSTTL:
+		log.Error(nil, "Tenant external OIDC ttl below minimum, rejecting OIDC config",
+			"ttl", ttl,
+			"minimum", minOIDCJWKSTTL,
+			"source", platformContext.Source)
+		return nil
+	}
+
 	log.Info("OIDC configuration loaded from tenant platform context",
 		"issuerUrl", oidc.IssuerURL,
 		"clientId", oidc.ClientID,
+		"ttl", ttl,
 		"source", platformContext.Source)
 
 	return &oidcConfig{
 		IssuerURL: oidc.IssuerURL,
 		ClientID:  oidc.ClientID,
+		TTL:       ttl,
 	}
 }
 
@@ -614,8 +634,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 		maasAPIServiceName = fmt.Sprintf("maas-api-%s", tenantID)
 	}
 
-	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.MaaSAPINamespace)
-	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.MaaSAPINamespace)
+	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.InfraNamespace)
+	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.InfraNamespace)
 
 	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
 	subscriptionInfoBody := fmt.Sprintf(`{
@@ -675,7 +695,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 		authenticationRules["oidc-identities"] = map[string]any{
 			"jwt": map[string]any{
 				"issuerUrl": oidc.IssuerURL,
-				"ttl":       int64(300),
+				"ttl":       int64(oidc.TTL),
 			},
 			"when": []any{
 				map[string]any{
@@ -846,6 +866,30 @@ allow {
 allow {
 	count(unsafe_group) == 0
 }`,
+			},
+		}
+		// oidc-client-bound enforces that OIDC JWTs were issued to the configured
+		// OAuth client (azp claim). The has(auth.identity.azp) guard is required so
+		// that OpenShift TokenReview identities (which carry no azp claim) are not
+		// matched by this rule and denied with 403.
+		authorizationRules["oidc-client-bound"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey +
+						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")` +
+						` && has(auth.identity.azp)`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{
+						"selector": "auth.identity.azp",
+						"operator": "eq",
+						"value":    oidc.ClientID,
+					},
+				},
 			},
 		}
 	}

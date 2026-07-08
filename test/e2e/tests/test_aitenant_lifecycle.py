@@ -23,6 +23,18 @@ MAAS_SUBSCRIPTION_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "mod
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+# Infrastructure namespace where maas-api deployment and HTTPRoutes are created
+# Handles: not set → AUTO-derived, "" → no separation (use DEPLOYMENT_NAMESPACE), "AUTO" → derive, explicit value → use it
+_infra_ns_raw = os.environ.get("INFRA_NAMESPACE")
+if _infra_ns_raw is None or _infra_ns_raw == "AUTO":
+    # Default to AUTO-derived (opendatahub → odh-ai-gateway-infra, redhat-ods-applications → redhat-ai-gateway-infra)
+    INFRA_NAMESPACE = "odh-ai-gateway-infra" if DEPLOYMENT_NAMESPACE == "opendatahub" else "redhat-ai-gateway-infra"
+elif _infra_ns_raw == "":
+    # Empty string means no separation (ROSA case)
+    INFRA_NAMESPACE = DEPLOYMENT_NAMESPACE
+else:
+    # Explicit custom namespace
+    INFRA_NAMESPACE = _infra_ns_raw
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
@@ -287,10 +299,10 @@ class TestAITenantLifecycle:
             "name": GATEWAY_NAME,
         }
 
-        assert _wait_for_json("deployment", "maas-api", DEPLOYMENT_NAMESPACE, timeout=180) is not None
-        assert _wait_for_json("service", "maas-api", DEPLOYMENT_NAMESPACE, timeout=180) is not None
-        assert _wait_for_json("httproute", "maas-api-route", DEPLOYMENT_NAMESPACE, timeout=180) is not None
-        assert _get_json_or_none("deployment", "maas-api-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
+        assert _wait_for_json("deployment", "maas-api", INFRA_NAMESPACE, timeout=180) is not None
+        assert _wait_for_json("service", "maas-api", INFRA_NAMESPACE, timeout=180) is not None
+        assert _wait_for_json("httproute", "maas-api-route", INFRA_NAMESPACE, timeout=180) is not None
+        assert _get_json_or_none("deployment", "maas-api-models-as-a-service", INFRA_NAMESPACE) is None
         assert _get_json_or_none("service", "maas-api-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
         assert _get_json_or_none("httproute", "maas-api-route-models-as-a-service", DEPLOYMENT_NAMESPACE) is None
 
