@@ -7,9 +7,12 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -42,6 +45,14 @@ func tenantTestNamespace(name string) client.Object {
 			Name: name,
 		},
 	}
+}
+
+func tenantTestUnstructured(gvk schema.GroupVersionKind, namespace, name string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetNamespace(namespace)
+	obj.SetName(name)
+	return obj
 }
 
 func TestTenantReconcile_DeletionIsNoOp(t *testing.T) {
@@ -158,6 +169,48 @@ func TestTenantReconcile_DefaultTenantDoesNotAddCleanupFinalizer(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty(), "default-tenant teardown is Config-driven; no tenant-cleanup finalizer")
 }
 
+func TestTenantReconcile_AITenantManagedDefaultAddsCleanupFinalizer(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const testNS = "models-as-a-service"
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: testNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   testNS,
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(tenant, tenantTestNamespace(testNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     testNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updated maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
+}
+
 func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
@@ -235,6 +288,75 @@ func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
 	var updated maasv1alpha1.Tenant
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
+}
+
+func TestTenantReconcile_AITenantManagedDefaultDeletionCleansPlatformResources(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+	ctx := context.Background()
+	now := metav1.NewTime(time.Now())
+
+	const tenantNS = "models-as-a-service"
+	const appNS = "odh-ai-gateway-infra"
+	const gatewayNS = "openshift-ingress"
+
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.TenantInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   tenantNS,
+			},
+		},
+	}
+
+	resources := []client.Object{
+		tenant,
+		tenantTestUnstructured(tenantreconcile.GVKDeployment, appNS, tenantreconcile.MaaSAPIDeploymentName("")),
+		tenantTestUnstructured(tenantreconcile.GVKService, appNS, tenantreconcile.MaaSAPIServiceName("")),
+		tenantTestUnstructured(tenantreconcile.GVKHTTPRoute, appNS, tenantreconcile.MaaSAPIRouteName("")),
+		tenantTestUnstructured(tenantreconcile.GVKCronJob, appNS, tenantreconcile.MaaSAPIKeyCleanupCronJobName("")),
+		tenantTestUnstructured(tenantreconcile.GVKTokenRateLimitPolicy, gatewayNS, tenantreconcile.GatewayTokenRateLimitDefaultDenyPolicyName("")),
+		tenantTestUnstructured(tenantreconcile.GVKDestinationRule, gatewayNS, tenantreconcile.GatewayDestinationRuleName("")),
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Tenant{}).
+		WithObjects(resources...).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     appNS,
+		TenantNamespace:  tenantNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: gatewayNS,
+	}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	for _, obj := range resources[1:] {
+		err := cl.Get(ctx, client.ObjectKeyFromObject(obj), obj)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "expected %s %s/%s to be deleted", obj.GetObjectKind().GroupVersionKind().Kind, obj.GetNamespace(), obj.GetName())
+	}
+
+	var updated maasv1alpha1.Tenant
+	err = cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)
+	if err == nil {
+		g.Expect(updated.Finalizers).NotTo(ContainElement(tenantFinalizer))
+	} else {
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	}
 }
 
 func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing.T) {

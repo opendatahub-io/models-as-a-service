@@ -392,15 +392,8 @@ class TestAITenantLifecycle:
             _wait_for_not_found("tenant", TENANT_NAME, case["tenant_ns"])
             _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
             _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
+            _wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
 
-            namespace = _get_json_or_none("namespace", case["tenant_ns"])
-            assert namespace is not None
-            labels = namespace["metadata"].get("labels") or {}
-            annotations = namespace["metadata"].get("annotations") or {}
-            assert labels.get("maas.opendatahub.io/managed-by-aitenant") is None
-            assert labels.get("ai-gateway.opendatahub.io/tenant") is None
-            assert annotations.get("maas.opendatahub.io/aitenant-name") is None
-            assert annotations.get("maas.opendatahub.io/aitenant-namespace") is None
             gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             assert gateway is not None
             assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]

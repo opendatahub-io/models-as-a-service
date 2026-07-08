@@ -22,14 +22,17 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -56,6 +59,8 @@ const (
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
+
+	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked"
 )
 
 // AITenantReconciler reconciles AITenant tenant bootstrap resources.
@@ -82,10 +87,11 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
+// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;list;watch;create;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -395,9 +401,62 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
 		return ctrl.Result{}, nil
 	}
-	if err := r.deleteAITenantChildren(ctx, aitenant); err != nil {
+
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	statusSnapshot := aitenant.Status.DeepCopy()
+	aitenant.Status.TenantNamespace = tenantNamespace
+	setAITenantPhase(aitenant, "Terminating", "DeletionInProgress", "AITenant deletion cleanup is in progress")
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
 	}
+
+	apiKeysRevoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	if err != nil {
+		statusSnapshot = aitenant.Status.DeepCopy()
+		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if !apiKeysRevoked {
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	tenantDeleted, err := r.deleteTenantConfig(ctx, aitenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !tenantDeleted {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
+	if err := r.deleteAITenantScopedChildren(ctx, aitenant); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	namespaceDeleted, reason, message, err := r.deleteTenantNamespace(ctx, aitenant)
+	if err != nil {
+		statusSnapshot = aitenant.Status.DeepCopy()
+		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, err
+	}
+	if !namespaceDeleted {
+		statusSnapshot = aitenant.Status.DeepCopy()
+		setAITenantPhase(aitenant, "Terminating", reason, message)
+		if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
+
+	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	base := aitenant.DeepCopy()
 	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
@@ -406,14 +465,39 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	return ctrl.Result{}, nil
 }
 
-func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
-	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
-		return err
+
+	var tenant maasv1alpha1.Tenant
+	key := client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.TenantInstanceName}
+	if err := r.get(ctx, key, &tenant); err != nil {
+		if isNotFoundError(err) {
+			return true, nil
+		}
+		return false, fmt.Errorf("get Tenant %s/%s during AITenant deletion: %w", key.Namespace, key.Name, err)
 	}
-	if err := r.deleteOwned(ctx, aitenant, &maasv1alpha1.Tenant{}, client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.TenantInstanceName}); err != nil {
-		return err
+	if !ownedByAITenant(&tenant, aitenant) {
+		return true, nil
 	}
+	if !tenant.DeletionTimestamp.IsZero() {
+		return false, nil
+	}
+	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+		base := tenant.DeepCopy()
+		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+		if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+			return false, fmt.Errorf("add cleanup finalizer to Tenant %s/%s: %w", key.Namespace, key.Name, err)
+		}
+		return false, nil
+	}
+	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
+		return false, fmt.Errorf("delete Tenant %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return false, nil
+}
+
+func (r *AITenantReconciler) deleteAITenantScopedChildren(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.RoleBinding{}, client.ObjectKey{Namespace: tenantNamespace, Name: tenantAdminRoleName(aitenant)}); err != nil {
 		return err
 	}
@@ -426,28 +510,203 @@ func (r *AITenantReconciler) deleteAITenantChildren(ctx context.Context, aitenan
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
 		return err
 	}
-	return r.cleanupTenantNamespaceMetadata(ctx, aitenant)
+	return nil
 }
 
-func (r *AITenantReconciler) cleanupTenantNamespaceMetadata(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+func (r *AITenantReconciler) deleteTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, string, string, error) {
 	var ns corev1.Namespace
 	key := client.ObjectKey{Name: r.tenantNamespaceName(aitenant)}
 	if err := r.get(ctx, key, &ns); err != nil {
-		return client.IgnoreNotFound(err)
+		if isNotFoundError(err) {
+			return true, "Deleted", fmt.Sprintf("tenant namespace %q has been deleted", key.Name), nil
+		}
+		return false, "DeletionBlocked", "", fmt.Errorf("get tenant namespace %q during deletion: %w", key.Name, err)
 	}
 	if !ownedByAITenant(&ns, aitenant) {
-		return nil
+		return false, "DeletionBlocked", "", fmt.Errorf("tenant namespace %q is not owned by AITenant %s/%s", key.Name, aitenant.Namespace, aitenant.Name)
 	}
-	base := ns.DeepCopy()
-	removeAITenantMetadata(&ns, aitenant, key.Name)
-	removeMapValueIfEqual(&ns.Labels, "opendatahub.io/generated-namespace", "true")
-	if equality.Semantic.DeepEqual(base, &ns) {
-		return nil
+	if ns.DeletionTimestamp.IsZero() {
+		if err := r.Delete(ctx, &ns); client.IgnoreNotFound(err) != nil {
+			return false, "DeletionBlocked", "", fmt.Errorf("delete tenant namespace %q: %w", key.Name, err)
+		}
+		return false, "DeletionInProgress", fmt.Sprintf("tenant namespace %q deletion has been requested", key.Name), nil
 	}
-	if err := r.Patch(ctx, &ns, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("cleanup tenant namespace %q metadata: %w", key.Name, err)
+	reason, message := namespaceDeletionStatus(&ns)
+	return false, reason, message, nil
+}
+
+func namespaceDeletionStatus(ns *corev1.Namespace) (string, string) {
+	for _, condition := range ns.Status.Conditions {
+		if condition.Status != corev1.ConditionTrue {
+			continue
+		}
+		switch condition.Type {
+		case corev1.NamespaceContentRemaining, corev1.NamespaceFinalizersRemaining, corev1.NamespaceDeletionContentFailure:
+			message := condition.Message
+			if message == "" {
+				message = fmt.Sprintf("tenant namespace %q deletion is blocked by %s", ns.Name, condition.Type)
+			}
+			return "DeletionBlocked", message
+		}
+	}
+	return "DeletionInProgress", fmt.Sprintf("tenant namespace %q is terminating", ns.Name)
+}
+
+func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	if aitenant.Annotations != nil && aitenant.Annotations[aitenantAPIKeysRevokedAnnotation] == "true" {
+		return true, nil
+	}
+	if strings.TrimSpace(r.AppNamespace) == "" {
+		return false, errors.New("app namespace is required to revoke tenant API keys")
+	}
+
+	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
+	var existing batchv1.Job
+	if err := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
+		if !isNotFoundError(err) {
+			return false, fmt.Errorf("get API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
+		}
+		if err := r.Create(ctx, job); err != nil {
+			if !isAlreadyExistsError(err) {
+				return false, fmt.Errorf("create API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
+			}
+		}
+		return false, nil
+	}
+
+	if jobComplete(&existing) {
+		if err := r.markTenantAPIKeysRevoked(ctx, aitenant); err != nil {
+			return false, err
+		}
+		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return true, nil
+	}
+	if jobFailed(&existing) {
+		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete failed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return false, fmt.Errorf("API key revocation Job %s/%s failed", existing.Namespace, existing.Name)
+	}
+	return false, nil
+}
+
+func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	base := aitenant.DeepCopy()
+	setMapValue(&aitenant.Annotations, aitenantAPIKeysRevokedAnnotation, "true")
+	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("mark tenant API keys revoked on AITenant %s/%s: %w", aitenant.Namespace, aitenant.Name, err)
 	}
 	return nil
+}
+
+func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batchv1.Job {
+	tenantID := aitenant.Name
+	if tenantID == tenantreconcile.DefaultAITenantName {
+		tenantID = ""
+	}
+	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
+	tenantName := aitenant.Name
+	image := tenantreconcile.DefaultMaaSAPIKeyCleanupImage
+	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
+		image = related
+	}
+	backoffLimit := int32(2)
+	activeDeadlineSeconds := int64(120)
+	command := fmt.Sprintf("curl -sf -k -X DELETE https://%s:8443/internal/v1/tenants/%s/api-keys", serviceName, tenantName)
+	jobName := "maas-api-revoke-keys-" + aitenant.Name
+
+	return &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      jobName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"app":                           "maas-api-cleanup",
+				"app.kubernetes.io/component":   "api",
+				"app.kubernetes.io/managed-by":  "maas-controller",
+				"app.kubernetes.io/name":        "maas-api",
+				"app.kubernetes.io/part-of":     "models-as-a-service",
+				tenantreconcile.LabelTenantName: aitenant.Name,
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+		Spec: batchv1.JobSpec{
+			BackoffLimit:          &backoffLimit,
+			ActiveDeadlineSeconds: &activeDeadlineSeconds,
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: map[string]string{
+						"app":                         "maas-api-cleanup",
+						"app.kubernetes.io/component": "api",
+						"app.kubernetes.io/name":      "maas-api",
+						"app.kubernetes.io/part-of":   "models-as-a-service",
+					},
+				},
+				Spec: corev1.PodSpec{
+					ServiceAccountName: "maas-api",
+					RestartPolicy:      corev1.RestartPolicyOnFailure,
+					SecurityContext: &corev1.PodSecurityContext{
+						RunAsNonRoot: boolPtr(true),
+					},
+					Containers: []corev1.Container{
+						{
+							Name:    "revoke-keys",
+							Image:   image,
+							Command: []string{"/bin/sh", "-c", command},
+							Resources: corev1.ResourceRequirements{
+								Requests: corev1.ResourceList{
+									corev1.ResourceMemory: resourceQuantity("16Mi"),
+									corev1.ResourceCPU:    resourceQuantity("10m"),
+								},
+								Limits: corev1.ResourceList{
+									corev1.ResourceMemory: resourceQuantity("32Mi"),
+									corev1.ResourceCPU:    resourceQuantity("50m"),
+								},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: boolPtr(false),
+								ReadOnlyRootFilesystem:   boolPtr(true),
+								RunAsNonRoot:             boolPtr(true),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{"ALL"},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func jobComplete(job *batchv1.Job) bool {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == batchv1.JobComplete && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func jobFailed(job *batchv1.Job) bool {
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == batchv1.JobFailed && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func boolPtr(v bool) *bool {
+	return &v
+}
+
+func resourceQuantity(value string) resource.Quantity {
+	return resource.MustParse(value)
 }
 
 func (r *AITenantReconciler) deleteOwned(ctx context.Context, aitenant *maasv1alpha1.AITenant, obj client.Object, key client.ObjectKey) error {

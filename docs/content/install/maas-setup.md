@@ -330,6 +330,16 @@ kubectl get tenant default-tenant -n ai-tenant-team-red
 
 For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
 
+### Delete a tenant
+
+Delete the `AITenant` resource to remove the tenant's MaaS state:
+
+```bash
+kubectl delete aitenant team-red -n ai-tenants
+```
+
+Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. Gateway resources and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
+
 ## Next steps
 
 * **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.

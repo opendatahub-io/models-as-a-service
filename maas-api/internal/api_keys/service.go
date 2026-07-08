@@ -346,6 +346,19 @@ func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant
 	return s.store.InvalidateAll(ctx, username, tenant)
 }
 
+// RevokeTenantAPIKeys revokes all active keys for a tenant.
+// Returns count of revoked keys.
+func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, error) {
+	tenant = strings.TrimSpace(tenant)
+	if tenant == "" {
+		return 0, errors.New("tenant is required")
+	}
+	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
+		return 0, fmt.Errorf("tenant mismatch: requested tenant %q but service is scoped to %q", tenant, configuredTenant)
+	}
+	return s.store.InvalidateTenant(ctx, tenant)
+}
+
 // StartDebounceCleanup starts a background goroutine that periodically evicts
 // stale entries from the lastUsedDebounce map. Without this the map grows
 // indefinitely — one entry per unique key ID that has ever been validated.

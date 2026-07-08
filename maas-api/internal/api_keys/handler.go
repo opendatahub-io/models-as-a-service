@@ -563,6 +563,24 @@ func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
 	})
 }
 
+// RevokeTenantAPIKeys handles DELETE /internal/v1/tenants/:tenant/api-keys.
+// Revokes all active API keys for this maas-api instance's tenant.
+func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
+	tenant := strings.TrimSpace(c.Param("tenant"))
+	count, err := h.service.RevokeTenantAPIKeys(c.Request.Context(), tenant)
+	if err != nil {
+		h.logger.Error("Failed to revoke tenant API keys", "error", err, "tenant", tenant)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	h.logger.Info("Revoked tenant API keys", "tenant", tenant, "count", count)
+	c.JSON(http.StatusOK, TenantRevokeResponse{
+		RevokedCount: count,
+		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for tenant %s", count, tenant),
+	})
+}
+
 // BulkRevokeAPIKeys handles POST /v1/api-keys/bulk-revoke
 // Revokes all active API keys for a specific user.
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {

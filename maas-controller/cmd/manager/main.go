@@ -21,7 +21,6 @@ import (
 	stderrors "errors"
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -198,8 +197,20 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 	})
 }
 
-func ensureSubscriptionNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
-	return ensureManagedNamespaceWithClient(ctx, namespace, "subscription", clientset)
+func subscriptionNamespaceExists(ctx context.Context, namespace string, clientset kubernetes.Interface) (bool, error) {
+	ns, err := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err == nil {
+		return ns.Status.Phase != corev1.NamespaceTerminating, nil
+	}
+	if errors.IsNotFound(err) {
+		return false, nil
+	}
+	if errors.IsForbidden(err) {
+		setupLog.Info("insufficient permissions to check subscription namespace existence, assuming it exists",
+			"namespace", namespace, "error", err)
+		return true, nil
+	}
+	return false, fmt.Errorf("unable to check if subscription namespace %q exists: %w", namespace, err)
 }
 
 func ensureAITenantNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
@@ -239,41 +250,6 @@ func resolveNamespaceAfterTerminationWait(namespace string, finalNs *corev1.Name
 	}
 	return fmt.Errorf("namespace %q exists in unexpected state after termination wait (phase=%q)",
 		namespace, finalNs.Status.Phase), false
-}
-
-// checkSubscriptionNamespaceReady returns nil if the subscription namespace exists and controllers can rely on it.
-// Terminating and missing namespaces are not ready. Forbidden on GET matches startup behavior (assume operator-managed).
-//
-// Namespace.Status.Phase is documented as Active or Terminating; an empty string is treated as ready because it is
-// commonly seen before status is fully populated and matches Kubernetes' defaulting to an active namespace.
-func checkSubscriptionNamespaceReady(ctx context.Context, clientset kubernetes.Interface, namespace string) error {
-	ns, err := clientset.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
-	if errors.IsNotFound(err) {
-		return fmt.Errorf("subscription namespace %q does not exist", namespace)
-	}
-	if errors.IsForbidden(err) {
-		setupLog.V(1).Info("readiness: insufficient permissions to check namespace, assuming ready", "namespace", namespace, "error", err)
-		return nil
-	}
-	if err != nil {
-		return fmt.Errorf("subscription namespace %q ready check: %w", namespace, err)
-	}
-	if ns.Status.Phase == corev1.NamespaceTerminating {
-		return fmt.Errorf("subscription namespace %q is terminating", namespace)
-	}
-	if ns.Status.Phase == corev1.NamespaceActive || ns.Status.Phase == "" {
-		return nil
-	}
-	return fmt.Errorf("subscription namespace %q is not ready (phase=%q)", namespace, ns.Status.Phase)
-}
-
-// subscriptionNamespaceReadiness performs an uncached Namespace GET on each probe for an accurate signal.
-// Load is bounded by the kubelet readiness probe interval (often ~10s); avoid short-lived caching here so
-// Terminating / deleted namespaces are reflected promptly.
-func subscriptionNamespaceReadiness(clientset kubernetes.Interface, namespace string) healthz.Checker {
-	return func(req *http.Request) error {
-		return checkSubscriptionNamespaceReady(req.Context(), clientset, namespace)
-	}
 }
 
 // managedNamespaceMonitor periodically re-runs ensureManagedNamespaceWithClient so a namespace
@@ -624,10 +600,6 @@ func main() {
 		setupLog.Error(err, "unable to create Kubernetes client for managed namespace setup")
 		os.Exit(1)
 	}
-	if err := ensureSubscriptionNamespaceWithClient(context.Background(), maasSubscriptionNamespace, clientset); err != nil {
-		setupLog.Error(err, "unable to ensure subscription namespace exists", "namespace", maasSubscriptionNamespace)
-		os.Exit(1)
-	}
 	if err := ensureAITenantNamespaceWithClient(context.Background(), aitenantNamespace, clientset); err != nil {
 		setupLog.Error(err, "unable to ensure AITenant namespace exists", "namespace", aitenantNamespace)
 		os.Exit(1)
@@ -641,6 +613,11 @@ func main() {
 		}
 	}
 
+	defaultSubscriptionNamespaceExists, err := subscriptionNamespaceExists(context.Background(), maasSubscriptionNamespace, clientset)
+	if err != nil {
+		setupLog.Error(err, "unable to inspect subscription namespace", "namespace", maasSubscriptionNamespace)
+		os.Exit(1)
+	}
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
@@ -652,7 +629,7 @@ func main() {
 		},
 	}
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
-	if enableTenantNamespaceDiscovery {
+	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
 		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
 		cacheOpts = cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
@@ -661,8 +638,9 @@ func main() {
 				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
 			},
 		}
-		setupLog.Info("watching MaaS CRs across all namespaces for tenant discovery",
+		setupLog.Info("watching MaaS CRs across all namespaces",
 			"defaultNamespace", maasSubscriptionNamespace,
+			"defaultNamespaceExists", defaultSubscriptionNamespaceExists,
 			"tenantNamespaceLabel", tenantreconcile.LabelAIGatewayTenant,
 			"compatTenantNamespaceLabel", tenantreconcile.LabelManagedByAITenant)
 	}
@@ -751,16 +729,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(&managedNamespaceMonitor{
-		clientset:          clientset,
-		namespace:          maasSubscriptionNamespace,
-		purpose:            "subscription",
-		interval:           subscriptionNamespaceMaintainInterval,
-		needLeaderElection: enableLeaderElection,
-	}); err != nil {
-		setupLog.Error(err, "unable to add subscription namespace monitor")
-		os.Exit(1)
-	}
 	if err := mgr.Add(&managedNamespaceMonitor{
 		clientset:          clientset,
 		namespace:          aitenantNamespace,
@@ -865,8 +833,7 @@ func main() {
 		setupLog.Error(err, "unable to set up health check")
 		os.Exit(1)
 	}
-	// readyz: uncached Namespace GET each probe — see subscriptionNamespaceReadiness.
-	if err := mgr.AddReadyzCheck("readyz", subscriptionNamespaceReadiness(clientset, maasSubscriptionNamespace)); err != nil {
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up ready check")
 		os.Exit(1)
 	}

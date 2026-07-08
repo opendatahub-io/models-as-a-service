@@ -1707,6 +1707,62 @@ func TestCleanupExpiredEphemeralKeys(t *testing.T) {
 	})
 }
 
+func TestRevokeTenantAPIKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+
+	t.Run("RevokesTenantKeys", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false))
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
+
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response TenantRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 2, response.RevokedCount)
+
+		key, err := store.Get(ctx, "tenant-delete-1")
+		require.NoError(t, err)
+		assert.Equal(t, StatusRevoked, key.Status)
+		key, err = store.Get(ctx, "tenant-delete-2")
+		require.NoError(t, err)
+		assert.Equal(t, StatusRevoked, key.Status)
+		key, err = store.Get(ctx, "other-tenant-key")
+		require.NoError(t, err)
+		assert.Equal(t, StatusActive, key.Status)
+	})
+
+	t.Run("TenantMismatchReturnsBadRequest", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/other-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "other-tenant"}}
+
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "tenant mismatch")
+	})
+}
+
 func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()

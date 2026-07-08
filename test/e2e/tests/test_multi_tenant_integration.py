@@ -45,6 +45,8 @@ from multitenancy_helpers import (
     remove_discovery_labels,
     require_aitenant_crd,
     require_tenant_namespace_discovery,
+    wait_for_aitenant_cleanup_resources,
+    wait_for_aitenant_cleanup_resources_deleted,
     wait_for_annotation_contains,
     wait_for_finalizer,
     wait_for_json,
@@ -105,16 +107,13 @@ class TestMultiTenantIntegration:
                 case["tenant_ns"],
                 expected_phase="Active",
             )
+            wait_for_aitenant_cleanup_resources(case)
 
             delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
             wait_for_not_found("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             wait_for_not_found("role", role_name, case["tenant_ns"], timeout=180)
-
-            namespace = get_json_or_none("namespace", case["tenant_ns"])
-            assert namespace is not None
-            labels = namespace.get("metadata", {}).get("labels") or {}
-            assert labels.get("ai-gateway.opendatahub.io/tenant") is None
-            assert labels.get("maas.opendatahub.io/managed-by-aitenant") is None
+            wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
+            wait_for_aitenant_cleanup_resources_deleted(case)
         finally:
             cleanup_discovery_case(case)
 

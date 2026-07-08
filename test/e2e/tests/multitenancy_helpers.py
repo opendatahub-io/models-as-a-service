@@ -972,13 +972,57 @@ def http_route_backend_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) ->
     return refs
 
 
+def per_tenant_resource_name(base_name: str, tenant_name: str) -> str:
+    if not tenant_name:
+        return base_name
+    return f"{base_name}-{tenant_name}"
+
+
 def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:
     return {
-        "deployment": f"maas-api-{tenant_name}",
-        "service": f"maas-api-{tenant_name}",
-        "httproute": f"maas-api-route-{tenant_name}",
-        "authpolicy": f"maas-api-{tenant_name}-auth",
+        "deployment": per_tenant_resource_name("maas-api", tenant_name),
+        "service": per_tenant_resource_name("maas-api", tenant_name),
+        "httproute": per_tenant_resource_name("maas-api-route", tenant_name),
+        "cronjob": per_tenant_resource_name("maas-api-key-cleanup", tenant_name),
+        "authpolicy": per_tenant_resource_name("maas-api-auth-policy", tenant_name),
     }
+
+
+def per_tenant_gateway_policy_names(tenant_name: str, gateway_name: str) -> dict[str, str]:
+    return {
+        "gateway_authpolicy": f"{gateway_name}-maas-auth",
+        "default_deny": per_tenant_resource_name("gateway-default-deny", tenant_name),
+        "destinationrule": per_tenant_resource_name("maas-api-backend-tls", tenant_name),
+    }
+
+
+def aitenant_cleanup_resource_refs(case: dict[str, str]) -> list[tuple[str, str, str]]:
+    maas_api_names = per_tenant_maas_api_names(case["tenant_label_name"])
+    gateway_policy_names = per_tenant_gateway_policy_names(case["tenant_label_name"], case["gateway_name"])
+    return [
+        ("deployment", maas_api_names["deployment"], INFRA_NAMESPACE),
+        ("service", maas_api_names["service"], INFRA_NAMESPACE),
+        ("httproute", maas_api_names["httproute"], INFRA_NAMESPACE),
+        ("cronjob", maas_api_names["cronjob"], INFRA_NAMESPACE),
+        ("authpolicy", gateway_policy_names["gateway_authpolicy"], GATEWAY_NAMESPACE),
+        ("tokenratelimitpolicy", gateway_policy_names["default_deny"], GATEWAY_NAMESPACE),
+        ("destinationrule", gateway_policy_names["destinationrule"], GATEWAY_NAMESPACE),
+    ]
+
+
+def wait_for_aitenant_cleanup_resources(case: dict[str, str], *, timeout: int = 180) -> None:
+    for kind, name, namespace in aitenant_cleanup_resource_refs(case):
+        wait_for_json(kind, name, namespace, timeout=timeout)
+
+
+def wait_for_aitenant_cleanup_resources_deleted(case: dict[str, str], *, timeout: int = 180) -> None:
+    for kind, name, namespace in aitenant_cleanup_resource_refs(case):
+        wait_for_not_found(kind, name, namespace, timeout=timeout)
+
+    # The route-level maas-api AuthPolicy is no longer rendered, but the delete
+    # path still removes stale instances left by older deployments.
+    maas_api_names = per_tenant_maas_api_names(case["tenant_label_name"])
+    wait_for_not_found("authpolicy", maas_api_names["authpolicy"], INFRA_NAMESPACE, timeout=timeout)
 
 
 def get_gateway_authpolicy(namespace: str = GATEWAY_NAMESPACE, name: str = GATEWAY_AUTH_POLICY_NAME) -> Optional[dict]:

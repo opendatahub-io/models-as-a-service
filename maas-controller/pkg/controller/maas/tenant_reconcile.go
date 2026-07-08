@@ -60,7 +60,7 @@ func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.Tenant) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return tenantID != "", nil
+	return tenantreconcile.TenantUsesAITenantPlatformContext(tenant) || tenantID != "", nil
 }
 
 func managementState(ann map[string]string) string {
@@ -174,6 +174,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
+		if err := r.cleanupMaaSSubscriptions(ctx, log, tenant); err != nil {
+			log.Error(err, "failed to cleanup MaaSSubscriptions")
+			return ctrl.Result{}, err
+		}
+
 		if err := r.cleanupMaaSAuthPolicies(ctx, log, tenant); err != nil {
 			log.Error(err, "failed to cleanup MaaSAuthPolicies")
 			return ctrl.Result{}, err
@@ -566,53 +571,112 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		return err
 	}
 
-	// Skip cleanup for default tenant (tenantID="") - those resources are managed by Config lifecycle
-	if tenantID == "" {
-		return nil
+	tenantName, err := tenantreconcile.TenantNameFor(tenant)
+	if err != nil {
+		return err
 	}
 
 	appNs := r.appNamespaceForTenant()
-	log.Info("Cleaning up per-tenant maas-api resources", "tenant", tenantID, "namespace", appNs)
+	gatewayNs := r.GatewayNamespace
+	log.Info("Cleaning up per-tenant maas-api resources", "tenant", tenantName, "tenantID", tenantID, "appNamespace", appNs, "gatewayNamespace", gatewayNs)
 
-	// List of resources to delete (name functions from tenantreconcile package)
-	resourcesToDelete := []struct {
-		gvk  schema.GroupVersionKind
-		name string
+	appResourcesToDelete := []struct {
+		gvk       schema.GroupVersionKind
+		name      string
+		namespace string
 	}{
 		{
-			gvk:  tenantreconcile.GVKDeployment,
-			name: tenantreconcile.MaaSAPIDeploymentName(tenantID),
+			gvk:       tenantreconcile.GVKDeployment,
+			name:      tenantreconcile.MaaSAPIDeploymentName(tenantID),
+			namespace: appNs,
 		},
 		{
-			gvk:  tenantreconcile.GVKService,
-			name: tenantreconcile.MaaSAPIServiceName(tenantID),
+			gvk:       tenantreconcile.GVKService,
+			name:      tenantreconcile.MaaSAPIServiceName(tenantID),
+			namespace: appNs,
 		},
 		{
-			gvk:  tenantreconcile.GVKHTTPRoute,
-			name: tenantreconcile.MaaSAPIRouteName(tenantID),
+			gvk:       tenantreconcile.GVKHTTPRoute,
+			name:      tenantreconcile.MaaSAPIRouteName(tenantID),
+			namespace: appNs,
 		},
 		{
-			gvk:  tenantreconcile.GVKCronJob,
-			name: tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
+			gvk:       tenantreconcile.GVKCronJob,
+			name:      tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
+			namespace: appNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKAuthPolicy,
+			name:      tenantreconcile.MaaSAPIAuthPolicyName(tenantID),
+			namespace: appNs,
 		},
 	}
 
-	for _, res := range resourcesToDelete {
+	gatewayResourcesToDelete := []struct {
+		gvk       schema.GroupVersionKind
+		name      string
+		namespace string
+	}{
+		{
+			gvk:       tenantreconcile.GVKTokenRateLimitPolicy,
+			name:      tenantreconcile.GatewayTokenRateLimitDefaultDenyPolicyName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDestinationRule,
+			name:      tenantreconcile.GatewayDestinationRuleName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKTelemetryPolicy,
+			name:      tenantreconcile.TelemetryPolicyName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKIstioTelemetry,
+			name:      tenantreconcile.IstioTelemetryName(tenantID),
+			namespace: gatewayNs,
+		},
+	}
+
+	for _, res := range append(appResourcesToDelete, gatewayResourcesToDelete...) {
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(res.gvk)
 		obj.SetName(res.name)
-		obj.SetNamespace(appNs)
+		obj.SetNamespace(res.namespace)
 
 		if err := r.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 			log.Error(err, "failed to delete tenant resource",
 				"gvk", res.gvk.String(),
 				"name", res.name,
-				"namespace", appNs)
+				"namespace", res.namespace)
 			return err
 		}
-		log.Info("Deleted tenant resource", "gvk", res.gvk.Kind, "name", res.name)
+		log.Info("Deleted tenant resource", "gvk", res.gvk.Kind, "name", res.name, "namespace", res.namespace)
 	}
 
+	return nil
+}
+
+// cleanupMaaSSubscriptions deletes all MaaSSubscription CRs in the tenant namespace.
+// MaaSSubscription finalizers clean up generated TokenRateLimitPolicies.
+func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
+	log.Info("Cleaning up MaaSSubscription CRs", "namespace", tenant.Namespace)
+
+	subscriptionList := &maasv1alpha1.MaaSSubscriptionList{}
+	if err := r.List(ctx, subscriptionList, client.InNamespace(tenant.Namespace)); err != nil {
+		return fmt.Errorf("failed to list MaaSSubscriptions: %w", err)
+	}
+
+	for i := range subscriptionList.Items {
+		subscription := &subscriptionList.Items[i]
+		log.Info("Deleting MaaSSubscription", "name", subscription.Name, "namespace", subscription.Namespace)
+		if err := r.Delete(ctx, subscription); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("failed to delete MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+		}
+	}
+
+	log.Info("Cleaned up MaaSSubscription CRs", "count", len(subscriptionList.Items))
 	return nil
 }
 
@@ -620,16 +684,6 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 // MaaSAuthPolicyReconciler's handleDeletion will clean up the gateway AuthPolicy
 // when the last MaaSAuthPolicy is deleted.
 func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant) error {
-	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
-	if err != nil {
-		return err
-	}
-
-	// Skip cleanup for default tenant - Config lifecycle handles it
-	if tenantID == "" {
-		return nil
-	}
-
 	log.Info("Cleaning up MaaSAuthPolicy CRs", "namespace", tenant.Namespace)
 
 	// List all MaaSAuthPolicy CRs in this namespace

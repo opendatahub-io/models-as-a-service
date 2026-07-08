@@ -1542,7 +1542,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 // gateway AuthPolicy spec.
 func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
 	r := &MaaSAuthPolicyReconciler{
-		MaaSAPINamespace: "maas-system",
+		InfraNamespace:   "maas-system",
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "gateway-ns",
 		ClusterAudience:  "https://kubernetes.default.svc",
@@ -1667,7 +1667,7 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 				WithObjects(tenant).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, MaaSAPINamespace: namespace}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: namespace}
 			log := ctrl.Log.WithName("test")
 			got := r.fetchOIDCConfig(context.Background(), log, namespace)
 

@@ -278,6 +278,7 @@ func registerHandlers(
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
