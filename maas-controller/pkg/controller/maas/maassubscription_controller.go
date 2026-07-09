@@ -45,7 +45,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1095,9 +1094,17 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		))
 
 	// Watch generated TokenRateLimitPolicies — Kuadrant CRD must be registered for this watch to succeed.
-	// If the CRD is not yet registered at startup, register a CRD watcher that adds the
-	// real watch dynamically when it appears — no pod restart needed.
-	kuadrantTRLPExists := crdExists(context.Background(), mgr.GetAPIReader(), "kuadrant.io", "TokenRateLimitPolicy")
+	// If the CRD is not yet registered at startup, skip the watch to avoid crash-looping
+	// and restart automatically once it becomes available.
+	if crdExists(context.Background(), mgr.GetAPIReader(), "kuadrant.io", "TokenRateLimitPolicy") {
+		generatedTRLP := &unstructured.Unstructured{}
+		generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+		b = b.Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
+			r.mapGeneratedTRLPToParent,
+		))
+	} else {
+		watchForCRDAndRestart(mgr, "kuadrant.io", "v1alpha1", "TokenRateLimitPolicy")
+	}
 
 	if r.TenantNamespaceDiscoveryEnabled {
 		// Watch Namespaces so that subscriptions in newly labeled tenant
@@ -1107,32 +1114,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
-	c, err := b.Build(r)
-	if err != nil {
-		return err
-	}
-
-	// Dynamically register the TokenRateLimitPolicy watch — no pod restart needed.
-	trlpTypedHandler := handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
-		func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-			return r.mapGeneratedTRLPToParent(ctx, obj)
-		},
-	)
-	trlpSrc := func() source.Source {
-		trlp := &unstructured.Unstructured{}
-		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
-		return source.Kind(mgr.GetCache(), trlp, trlpTypedHandler)
-	}
-	if kuadrantTRLPExists {
-		if err := c.Watch(trlpSrc()); err != nil {
-			return err
-		}
-	} else {
-		if err := registerWatchWhenCRDAppears(c, mgr, "kuadrant.io", "TokenRateLimitPolicy", trlpSrc); err != nil {
-			return err
-		}
-	}
-	return nil
+	return b.Complete(r)
 }
 
 func (r *MaaSSubscriptionReconciler) mapAITenantToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {

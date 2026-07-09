@@ -20,7 +20,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
@@ -37,13 +39,12 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -414,13 +415,14 @@ func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
 }
 
 // SetupWithManager sets up the controller with the Manager.
-// crdExists checks if a CRD is registered in the cluster via a targeted Get by CRD name.
+// crdExists checks if a CRD is registered in the cluster by directly listing CRD
+// objects via the API server reader. The REST mapper is not used because it is
+// scheme-aware: types registered via AddToScheme (e.g. kservev1alpha1) make the
+// mapper return no error even when the CRD is absent from the cluster, causing
+// the watch to register and the informer to crash on cache sync timeout.
 // Uses mgr.GetAPIReader() (not mgr.GetClient()) because SetupWithManager is called
-// before the manager's cache starts. The REST mapper is not used because scheme-registered
-// types cause false positives even when the CRD is absent.
+// before the manager's cache starts — GetClient() would fail with "cache not started".
 func crdExists(ctx context.Context, reader client.Reader, group, kind string) bool {
-	// CRD name format: <plural-lowercase-kind>.<group>
-	// We search by group+kind since we don't know the plural form.
 	crdList := &apiextensionsv1.CustomResourceDefinitionList{}
 	if err := reader.List(ctx, crdList); err != nil {
 		ctrl.Log.Error(err, "failed to list CRDs; watch will be skipped", "group", group, "kind", kind)
@@ -434,34 +436,27 @@ func crdExists(ctx context.Context, reader client.Reader, group, kind string) bo
 	return false
 }
 
-// registerWatchWhenCRDAppears registers a watch on CustomResourceDefinition objects.
-// When the target CRD appears, it dynamically adds the real watch to the controller
-// without restarting the pod — other controllers keep running uninterrupted.
-func registerWatchWhenCRDAppears(
-	c controller.Controller,
-	mgr ctrl.Manager,
-	group, kind string,
-	makeSource func() source.Source,
-) error {
-	log := ctrl.Log.WithName("crd-watcher").WithValues("group", group, "kind", kind)
-	log.Info("CRD not yet registered at startup; will register watch dynamically when it appears")
-	return c.Watch(source.Kind(
-		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
-			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
-				if crd.Spec.Group != group || crd.Spec.Names.Kind != kind {
-					return nil
-				}
-				if err := c.Watch(makeSource()); err != nil {
-					log.Error(err, "failed to register watch after CRD appeared")
-				} else {
-					log.Info("CRD is now registered; watch added dynamically")
-				}
+// watchForCRDAndRestart polls every 30 s for a CRD that was not yet registered at
+// startup. When the CRD appears, it exits the process so Kubernetes restarts the
+// pod and the watch is registered on the next startup.
+func watchForCRDAndRestart(mgr ctrl.Manager, group, version, kind string) {
+	log := ctrl.Log.WithName("crd-watcher").WithValues("group", group, "version", version, "kind", kind)
+	log.Info("CRD not yet registered at startup; will restart when it becomes available")
+	_ = mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
 				return nil
-			},
-		),
-	))
+			case <-ticker.C:
+				if crdExists(ctx, mgr.GetAPIReader(), group, kind) {
+					log.Info("CRD is now registered; restarting controller to register watches")
+					os.Exit(0)
+				}
+			}
+		}
+	}))
 }
 
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
@@ -481,7 +476,19 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapHTTPRouteToMaaSModelRefs,
 		))
 
-	c, err := b.
+	// Watch LLMInferenceServices — KServe CRD must be registered for this watch to succeed.
+	// If the CRD is not yet registered at startup, skip the watch to avoid crash-looping
+	// and restart automatically once it becomes available.
+	if crdExists(context.Background(), mgr.GetAPIReader(), "serving.kserve.io", "LLMInferenceService") {
+		b = b.Watches(&kservev1alpha1.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
+			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
+		)
+	} else {
+		watchForCRDAndRestart(mgr, "serving.kserve.io", "v1alpha1", "LLMInferenceService")
+	}
+
+	return b.
 		// Watch MaaSSubscriptions so we re-reconcile when governance state changes
 		// (spec, status/phase, or deletion). No predicate filter — the reconciler's
 		// equality.Semantic.DeepEqual check gates unnecessary status writes.
@@ -492,35 +499,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSAuthPolicyToMaaSModelRefs,
 		)).
-		Build(r)
-	if err != nil {
-		return err
-	}
-
-	// Watch LLMInferenceServices — KServe CRD must be registered for this watch to succeed.
-	// If the CRD is not yet registered at startup, register a CRD watcher that adds the
-	// real watch dynamically when it appears — no pod restart needed.
-	llmTypedHandler := handler.TypedEnqueueRequestsFromMapFunc[*kservev1alpha1.LLMInferenceService](
-		func(ctx context.Context, obj *kservev1alpha1.LLMInferenceService) []reconcile.Request {
-			return r.mapLLMISvcToMaaSModelRefs(ctx, obj)
-		},
-	)
-	llmSrc := func() source.Source {
-		// Note: predicates omitted here since the reconciler has idempotency guards.
-		// The initial sync when KServe CRD appears will reconcile all existing resources.
-		return source.Kind(mgr.GetCache(), &kservev1alpha1.LLMInferenceService{}, llmTypedHandler)
-	}
-	if crdExists(context.Background(), mgr.GetAPIReader(), "serving.kserve.io", "LLMInferenceService") {
-		if err := c.Watch(llmSrc()); err != nil {
-			return err
-		}
-	} else {
-		if err := registerWatchWhenCRDAppears(c, mgr, "serving.kserve.io", "LLMInferenceService", llmSrc); err != nil {
-			return err
-		}
-	}
-
-	return nil
+		Complete(r)
 }
 
 // mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs in the HTTPRoute's namespace.
