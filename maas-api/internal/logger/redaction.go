@@ -102,6 +102,21 @@ func RedactHeaders(headers http.Header, hashPrefix bool) map[string]string {
 	return result
 }
 
+// RedactValue returns an HMAC-SHA256 prefix of a sensitive value (e.g. username)
+// for log correlation without exposing the original. The per-process HMAC key
+// prevents rainbow-table reversal while keeping the prefix stable within a
+// single process lifetime (CWE-532 mitigation).
+func RedactValue(value string) string {
+	if value == "" {
+		return "<empty>"
+	}
+	initHMACKey()
+	mac := hmac.New(sha256.New, hmacKey)
+	mac.Write([]byte(value))
+	digest := mac.Sum(nil)
+	return "sha256:" + base64.URLEncoding.EncodeToString(digest)[:12]
+}
+
 // IsSensitiveHeader checks if a header name is in the sensitive list.
 // Matching is case-insensitive using canonical MIME header names.
 func IsSensitiveHeader(name string) bool {

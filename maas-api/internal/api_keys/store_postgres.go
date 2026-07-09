@@ -84,7 +84,7 @@ func (s *PostgresStore) AddKey(
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "user", username, "ephemeral", ephemeral)
+	s.logger.Debug("Stored API key", "id", keyID, "user", logger.RedactValue(username), "ephemeral", ephemeral)
 	return nil
 }
 
@@ -464,7 +464,7 @@ func (s *PostgresStore) InvalidateAll(ctx context.Context, username string, tena
 	}
 
 	count := int(rows)
-	s.logger.Info("Revoked all keys for user", "count", count, "user", username)
+	s.logger.Info("Revoked all keys for user", "count", count, "user", logger.RedactValue(username))
 	return count, nil
 }
 
