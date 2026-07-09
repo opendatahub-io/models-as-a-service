@@ -1613,6 +1613,58 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *tes
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
+func TestEnsureTenantAPIKeysRevoked_UsesAPIReaderForJobLookup(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-revoke-uncached",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job.Status.Conditions = []batcv1.JobCondition{
+		{
+			Type:               batcv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	apiReader := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant.DeepCopy(), job).
+		Build()
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*batcv1.Job); ok {
+					return apierrors.NewNotFound(schema.GroupResource{Group: "batch", Resource: "jobs"}, key.Name)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		APIReader:    apiReader,
+		AppNamespace: "odh-ai-gateway-infra",
+	}
+
+	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(revoked).To(BeTrue())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &updated)).To(Succeed())
+	g.Expect(updated.Annotations).To(HaveKeyWithValue(aitenantAPIKeysRevokedAnnotation, "true"))
+}
+
 func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeues(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

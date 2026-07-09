@@ -575,7 +575,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 
 	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
 	var existing batcv1.Job
-	if err := r.Get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
+	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
 		if !isNotFoundError(err) {
 			return false, fmt.Errorf("get API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
 		}
