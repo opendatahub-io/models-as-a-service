@@ -14,21 +14,37 @@ import (
 )
 
 func TestPruneLegacyCleanupResources(t *testing.T) {
-	t.Run("deletes legacy CronJob and NetworkPolicy", func(t *testing.T) {
+	t.Run("deletes legacy CronJob and NetworkPolicy for default tenant", func(t *testing.T) {
 		appNs := "tenant-ns"
 		cronJob := newLegacyResource(GVKCronJob, LegacyMaaSAPIKeyCleanupCronJobName, appNs, nil)
 		networkPolicy := newLegacyResource(GVKNetworkPolicy, LegacyMaaSAPICleanupNetworkPolicyName, appNs, nil)
 
 		c := fake.NewClientBuilder().WithObjects(cronJob, networkPolicy).Build()
-		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, appNs))
+		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, appNs, ""))
 
 		assertNotFound(t, c, GVKCronJob, LegacyMaaSAPIKeyCleanupCronJobName, appNs)
 		assertNotFound(t, c, GVKNetworkPolicy, LegacyMaaSAPICleanupNetworkPolicyName, appNs)
 	})
 
+	t.Run("deletes tenant-scoped legacy CronJob for AITenant", func(t *testing.T) {
+		appNs := "tenant-ns"
+		tenantID := "redteam"
+		cronJobName := LegacyMaaSAPIKeyCleanupCronJobNameForTenant(tenantID)
+		require.NotEqual(t, LegacyMaaSAPIKeyCleanupCronJobName, cronJobName)
+
+		cronJob := newLegacyResource(GVKCronJob, cronJobName, appNs, nil)
+		networkPolicy := newLegacyResource(GVKNetworkPolicy, LegacyMaaSAPICleanupNetworkPolicyName, appNs, nil)
+
+		c := fake.NewClientBuilder().WithObjects(cronJob, networkPolicy).Build()
+		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, appNs, tenantID))
+
+		assertNotFound(t, c, GVKCronJob, cronJobName, appNs)
+		assertNotFound(t, c, GVKNetworkPolicy, LegacyMaaSAPICleanupNetworkPolicyName, appNs)
+	})
+
 	t.Run("no-op when legacy resources are absent", func(t *testing.T) {
 		c := fake.NewClientBuilder().Build()
-		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, "tenant-ns"))
+		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, "tenant-ns", ""))
 	})
 
 	t.Run("skips resources with opendatahub.io/managed=false", func(t *testing.T) {
@@ -38,7 +54,7 @@ func TestPruneLegacyCleanupResources(t *testing.T) {
 		})
 
 		c := fake.NewClientBuilder().WithObjects(cronJob).Build()
-		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, appNs))
+		require.NoError(t, PruneLegacyCleanupResources(context.Background(), logr.Discard(), c, appNs, ""))
 
 		obj := &unstructured.Unstructured{}
 		obj.SetGroupVersionKind(GVKCronJob)
