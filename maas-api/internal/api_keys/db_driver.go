@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -33,13 +34,12 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
 		return nil, fmt.Errorf(
-			"invalid database URL: %q. Expected format: postgresql://user:password@host:port/database",
-			databaseURL)
+			"invalid database URL scheme. Expected format: postgresql://user:password@host:port/database")
 	}
 
 	db, err := sql.Open("pgx", databaseURL)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open PostgreSQL connection: %w", err)
+		return nil, fmt.Errorf("failed to open PostgreSQL connection: %s", redactDatabaseURL(err.Error(), databaseURL))
 	}
 
 	configureConnectionPool(db)
@@ -92,6 +92,18 @@ func runMigrations(db *sql.DB, log *logger.Logger) error {
 	}
 
 	return nil
+}
+
+// redactDatabaseURL removes userinfo (user:password) from any occurrence of
+// the database URL in a message to prevent credential leakage into logs.
+func redactDatabaseURL(message, databaseURL string) string {
+	u, err := url.Parse(databaseURL)
+	if err != nil || u.User == nil {
+		return message
+	}
+	redacted := *u
+	redacted.User = url.User("[REDACTED]")
+	return strings.ReplaceAll(message, databaseURL, redacted.Redacted())
 }
 
 // configureConnectionPool sets optimal connection pool settings.
