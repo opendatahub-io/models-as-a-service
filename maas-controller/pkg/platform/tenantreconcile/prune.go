@@ -16,21 +16,41 @@ import (
 // PruneLegacyCleanupResources removes ephemeral-key cleanup operands dropped from the
 // platform overlay in PR934. ApplyRendered is SSA-only and does not prune resources
 // removed from manifests; this runs after apply so upgrades converge automatically.
-func PruneLegacyCleanupResources(ctx context.Context, log logr.Logger, c client.Client, appNs string) error {
-	legacy := []struct {
+//
+// The cleanup CronJob was renamed per tenant (maas-api-key-cleanup-<tenantID>) while the
+// default tenant kept the bare name, so both names are pruned for the given tenant. The
+// NetworkPolicy was never suffixed and is always pruned by its bare name.
+func PruneLegacyCleanupResources(ctx context.Context, log logr.Logger, c client.Client, appNs, tenantID string) error {
+	type legacyResource struct {
 		gvk  schema.GroupVersionKind
 		kind string
 		name string
-	}{
-		{gvk: GVKCronJob, kind: "CronJob", name: LegacyMaaSAPIKeyCleanupCronJobName},
+	}
+
+	legacy := []legacyResource{
 		{gvk: GVKNetworkPolicy, kind: "NetworkPolicy", name: LegacyMaaSAPICleanupNetworkPolicyName},
 	}
+	for _, name := range legacyCleanupCronJobNames(tenantID) {
+		legacy = append(legacy, legacyResource{gvk: GVKCronJob, kind: "CronJob", name: name})
+	}
+
 	for _, resource := range legacy {
 		if err := deleteLegacyResourceIfExists(ctx, log, c, resource.kind, resource.name, appNs, resource.gvk); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// legacyCleanupCronJobNames returns the legacy cleanup CronJob names to prune for a tenant:
+// the tenant-scoped name plus the bare name, de-duplicated (they coincide for the default
+// tenant where tenantID is empty).
+func legacyCleanupCronJobNames(tenantID string) []string {
+	tenantScoped := LegacyMaaSAPIKeyCleanupCronJobNameForTenant(tenantID)
+	if tenantScoped == LegacyMaaSAPIKeyCleanupCronJobName {
+		return []string{LegacyMaaSAPIKeyCleanupCronJobName}
+	}
+	return []string{tenantScoped, LegacyMaaSAPIKeyCleanupCronJobName}
 }
 
 func deleteLegacyResourceIfExists(ctx context.Context, log logr.Logger, c client.Client, kind, name, namespace string, gvk schema.GroupVersionKind) error {
