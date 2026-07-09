@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1804,10 +1805,6 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			"effectiveAuthzTTL", r.authzCacheTTL())
 	}
 
-	// Watch generated AuthPolicies so we re-reconcile when someone manually edits them.
-	generatedAuthPolicy := &unstructured.Unstructured{}
-	generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-
 	// Watch Tenant so we re-reconcile when OIDC configuration changes.
 	tenant := &unstructured.Unstructured{}
 	tenant.SetGroupVersionKind(schema.GroupVersionKind{
@@ -1830,10 +1827,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSModelRefToMaaSAuthPolicies,
 		)).
-		// Watch generated AuthPolicies so manual edits get overwritten by the controller.
-		Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
-			r.mapGeneratedAuthPolicyToParent,
-		)).
+
 		// Watch Tenant so OIDC configuration changes trigger reconciles.
 		Watches(tenant, handler.EnqueueRequestsFromMapFunc(
 			r.mapTenantToMaaSAuthPolicies,
@@ -1843,6 +1837,12 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapAITenantToMaaSAuthPolicies,
 		))
+
+	// Watch generated AuthPolicies — Kuadrant CRD must be registered for this watch to succeed.
+	// If the CRD is not yet registered at startup, register a CRD watcher that adds the
+	// real watch dynamically when it appears — no pod restart needed.
+	kuadrantAuthPolicyExists := crdExists(context.Background(), mgr.GetAPIReader(), "kuadrant.io", "AuthPolicy")
+
 	if r.TenantNamespaceDiscoveryEnabled {
 		// Watch Namespaces so that policies in newly labeled tenant
 		// namespaces are discovered without a controller restart.
@@ -1861,7 +1861,32 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return b.Complete(r)
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	// Dynamically register the AuthPolicy watch — no pod restart needed.
+	apTypedHandler := handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+		func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+			return r.mapGeneratedAuthPolicyToParent(ctx, obj)
+		},
+	)
+	authPolicySrc := func() source.Source {
+		ap := &unstructured.Unstructured{}
+		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		return source.Kind(mgr.GetCache(), ap, apTypedHandler)
+	}
+	if kuadrantAuthPolicyExists {
+		if err := c.Watch(authPolicySrc()); err != nil {
+			return err
+		}
+	} else {
+		if err := registerWatchWhenCRDAppears(c, mgr, "kuadrant.io", "AuthPolicy", authPolicySrc); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *MaaSAuthPolicyReconciler) mapAITenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
