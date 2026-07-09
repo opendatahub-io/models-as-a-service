@@ -33,7 +33,7 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 	databaseURL = strings.TrimSpace(databaseURL)
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
-		return nil, fmt.Errorf(
+		return nil, errors.New(
 			"invalid database URL scheme. Expected format: postgresql://user:password@host:port/database")
 	}
 
@@ -46,7 +46,7 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 
 	if err := db.PingContext(ctx); err != nil {
 		db.Close()
-		return nil, fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		return nil, fmt.Errorf("failed to connect to PostgreSQL: %s", redactDatabaseURL(err.Error(), databaseURL))
 	}
 
 	// Apply schema migrations
@@ -102,7 +102,7 @@ func redactDatabaseURL(message, databaseURL string) string {
 		return message
 	}
 	redacted := *u
-	redacted.User = url.User("[REDACTED]")
+	redacted.User = url.User("REDACTED")
 	return strings.ReplaceAll(message, databaseURL, redacted.Redacted())
 }
 
