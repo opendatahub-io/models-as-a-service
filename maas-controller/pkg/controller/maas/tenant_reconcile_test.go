@@ -319,7 +319,7 @@ func TestTenantReconcile_AITenantManagedDefaultDeletionCleansPlatformResources(t
 		tenantTestUnstructured(tenantreconcile.GVKDeployment, appNS, tenantreconcile.MaaSAPIDeploymentName("")),
 		tenantTestUnstructured(tenantreconcile.GVKService, appNS, tenantreconcile.MaaSAPIServiceName("")),
 		tenantTestUnstructured(tenantreconcile.GVKHTTPRoute, appNS, tenantreconcile.MaaSAPIRouteName("")),
-		tenantTestUnstructured(tenantreconcile.GVKCronJob, appNS, tenantreconcile.MaaSAPIKeyCleanupCronJobName("")),
+		tenantTestUnstructured(tenantreconcile.GVKCronJob, appNS, tenantreconcile.LegacyMaaSAPIKeyCleanupCronJobNameForTenant("")),
 		tenantTestUnstructured(tenantreconcile.GVKTokenRateLimitPolicy, gatewayNS, tenantreconcile.GatewayTokenRateLimitDefaultDenyPolicyName("")),
 		tenantTestUnstructured(tenantreconcile.GVKDestinationRule, gatewayNS, tenantreconcile.GatewayDestinationRuleName("")),
 	}
