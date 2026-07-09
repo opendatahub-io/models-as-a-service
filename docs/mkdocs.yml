@@ -62,6 +62,7 @@ nav:
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
     - Model Reference: concepts/model-reference.md
+    - Authentication Modes: concepts/auth-modes.md
     - API Key Authentication: concepts/api-key-authentication.md
     - Model Access Control: concepts/model-access-control.md
   - Install:
@@ -74,6 +75,8 @@ nav:
       - Model Setup: install/model-setup.md
       - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
+      - Multi-Tenant Setup: install/multi-tenant-setup.md
+      - Multi-Tenant Validation: install/multi-tenant-validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:

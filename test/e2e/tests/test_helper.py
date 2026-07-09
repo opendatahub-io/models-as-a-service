@@ -15,6 +15,8 @@ Environment variables (all optional unless noted):
   - MAAS_API_BASE_URL: MaaS API URL (auto-derived from GATEWAY_HOST if not set)
   - MAAS_SUBSCRIPTION_NAMESPACE: MaaS CRs namespace (default: models-as-a-service)
   - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api workloads run (default: derived INFRA_NAMESPACE)
+  - E2E_CURL_POD_NAMESPACE: Namespace for ephemeral kubectl-run curl probes (default: GATEWAY_NAMESPACE)
+  - GATEWAY_NAMESPACE: Gateway namespace (default: openshift-ingress)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
@@ -88,6 +90,10 @@ def _resolve_maas_api_deployment_namespace() -> str:
 
 # Infrastructure namespace where maas-api workloads run.
 MAAS_API_DEPLOYMENT_NAMESPACE = _resolve_maas_api_deployment_namespace()
+GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
+# Ephemeral curl probes must run in a namespace allowed by maas-api NetworkPolicy
+# (openshift-ingress gateway namespace), not in the maas-api infra namespace.
+E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", GATEWAY_NAMESPACE)
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")

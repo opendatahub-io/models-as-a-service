@@ -100,6 +100,8 @@ spec:
 ## Related Documentation
 
 - [MaasTenantConfig CRD](tenant.md) - MaaS runtime config object
+- [Multi-Tenant Setup](../../install/multi-tenant-setup.md) - End-to-end guide for deploying additional tenants
+- [Multi-Tenant Validation](../../install/multi-tenant-validation.md) - Validation steps for additional tenants
 - [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
 - [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting
 - [Tenant RBAC](../../configuration-and-management/tenant-rbac.md) - Granting tenant administration access with RoleBindings

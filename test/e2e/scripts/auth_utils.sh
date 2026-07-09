@@ -28,7 +28,9 @@
 #   ./test/e2e/scripts/auth_utils.sh
 #
 # Environment:
-#   DEPLOYMENT_NAMESPACE       - MaaS API and controller namespace (default: opendatahub)
+#   DEPLOYMENT_NAMESPACE       - MaaS controller namespace (default: opendatahub)
+#   INFRA_NAMESPACE            - MaaS API infrastructure namespace, AUTO-derived by default
+#   E2E_MAAS_API_DEPLOYMENT_NAMESPACE - Override namespace where maas-api workloads run
 #   MAAS_SUBSCRIPTION_NAMESPACE - MaaS CRs namespace (default: models-as-a-service)
 #   AUTHORINO_NAMESPACE        - Authorino namespace (default: kuadrant-system)
 #   OPERATOR_NAMESPACE         - RHOAI operator namespace (default: redhat-ods-operator)
@@ -226,8 +228,11 @@ collect_cluster_state() {
     kubectl get nodes -o wide 2>/dev/null || true
     kubectl get ns 2>/dev/null || true
     echo ""
-    echo "--- MaaS deployment namespace ($DEPLOYMENT_NAMESPACE) ---"
+    echo "--- MaaS controller namespace ($DEPLOYMENT_NAMESPACE) ---"
     kubectl get all -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+    echo ""
+    echo "--- MaaS API deployment namespace ($MAAS_API_DEPLOYMENT_NAMESPACE) ---"
+    kubectl get all -n "$MAAS_API_DEPLOYMENT_NAMESPACE" 2>/dev/null || true
     echo ""
     echo "--- RHOAI Operator namespace ($OPERATOR_NAMESPACE) ---"
     kubectl get pods,deployments,csv -n "$OPERATOR_NAMESPACE" -o wide 2>/dev/null || true
@@ -292,6 +297,7 @@ collect_e2e_artifacts() {
   local ns
   for ns in \
     "$DEPLOYMENT_NAMESPACE" \
+    "$MAAS_API_DEPLOYMENT_NAMESPACE" \
     "$MAAS_SUBSCRIPTION_NAMESPACE" \
     "$OPERATOR_NAMESPACE" \
     "$APPLICATIONS_NAMESPACE" \
