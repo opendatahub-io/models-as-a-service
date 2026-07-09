@@ -32,3 +32,54 @@ func TestNewPostgresStoreFromURL_WhitespacePrefix_NoCredentialLeak(t *testing.T)
 
 	assert.NotContains(t, err.Error(), "s3cret", "error message must not contain the password")
 }
+
+func TestRedactDatabaseURL(t *testing.T) {
+	tests := []struct {
+		name        string
+		message     string
+		databaseURL string
+		wantContain string
+		wantAbsent  string
+	}{
+		{
+			name:        "redacts user:password from message",
+			message:     "connection failed: postgresql://admin:s3cret@host:5432/db",
+			databaseURL: "postgresql://admin:s3cret@host:5432/db",
+			wantContain: "REDACTED",
+			wantAbsent:  "s3cret",
+		},
+		{
+			name:        "preserves message when no userinfo",
+			message:     "connection failed: postgresql://host:5432/db",
+			databaseURL: "postgresql://host:5432/db",
+			wantContain: "connection failed",
+			wantAbsent:  "",
+		},
+		{
+			name:        "handles unparseable URL gracefully",
+			message:     "some error with bad url",
+			databaseURL: "://invalid",
+			wantContain: "some error with bad url",
+			wantAbsent:  "",
+		},
+		{
+			name:        "redacts user-only (no password)",
+			message:     "error: postgresql://admin@host:5432/db",
+			databaseURL: "postgresql://admin@host:5432/db",
+			wantContain: "REDACTED",
+			wantAbsent:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := api_keys.RedactDatabaseURL(tt.message, tt.databaseURL)
+			if tt.wantContain != "" {
+				assert.Contains(t, result, tt.wantContain)
+			}
+			if tt.wantAbsent != "" {
+				assert.NotContains(t, result, tt.wantAbsent)
+			}
+		})
+	}
+}
