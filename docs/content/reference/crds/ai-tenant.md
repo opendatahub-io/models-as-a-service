@@ -99,6 +99,8 @@ spec:
 
 ## Related Documentation
 
+- [Multi-Tenant Setup](../../install/multi-tenant-setup.md) - End-to-end guide for deploying additional tenants
+- [Multi-Tenant Validation](../../install/multi-tenant-validation.md) - Validation steps for additional tenants
 - [Tenant CRD](tenant.md) - Temporary MaaS runtime config object
 - [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
 - [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting
