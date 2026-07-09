@@ -6,8 +6,13 @@ spec:
   parentRefs:
     - name: maas-default-gateway
       namespace: openshift-ingress
+  # WARNING: Rule order matters — the payload-processing EnvoyFilter
+  # (deployment/base/payload-processing/manager/envoy-filter.yaml) disables
+  # ext_proc per-route using Istio's "<namespace>.<httproute-name>.<rule-index>"
+  # naming convention. Adding, removing, or reordering rules here requires
+  # updating the EnvoyFilter route indices to match.
   rules:
-    # OpenAI-compatible /v1/models endpoint at top level
+    # Rule 0: OpenAI-compatible /v1/models endpoint at top level
     # NOTE: Using PathPrefix /v1/models (not /v1) to exclude /v1/tenants which is internal-only
     - matches:
         - path:
@@ -17,7 +22,7 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # /v1/subscriptions endpoint at top level
+    # Rule 1: /v1/subscriptions endpoint at top level
     - matches:
         - path:
             type: PathPrefix
@@ -26,7 +31,7 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # /v1/api-keys endpoint at top level
+    # Rule 2: /v1/api-keys endpoint at top level
     - matches:
         - path:
             type: PathPrefix
@@ -35,7 +40,7 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # IMPORTANT: /v1/tenants is NOT routed through Gateway (internal-only)
+    # Rule 3: IMPORTANT: /v1/tenants is NOT routed through Gateway (internal-only)
     # It must be called via maas-api Service directly for tenant-scoped auth
     # All other maas-api endpoints remain under /maas-api prefix
     - matches:

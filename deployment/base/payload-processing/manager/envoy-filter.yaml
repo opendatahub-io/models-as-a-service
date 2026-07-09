@@ -64,8 +64,10 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
-    # Disable ext_proc on non-inference routes (maas-api /v1/models).
+    # Disable ext_proc on all non-inference maas-api routes.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
+    # Rule indices correspond to httproute.yaml rules:
+    #   0 = /v1/models, 1 = /v1/subscriptions, 2 = /v1/api-keys, 3 = /maas-api/*
     - applyTo: HTTP_ROUTE
       match:
         context: GATEWAY
@@ -83,7 +85,6 @@ spec:
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
-    # Disable ext_proc on non-inference routes (maas-api /maas-api/*).
     - applyTo: HTTP_ROUTE
       match:
         context: GATEWAY
@@ -91,6 +92,40 @@ spec:
           vhost:
             route:
               name: "PLACEHOLDER.maas-api-route.1"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.ext_proc.ipp-pre:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+            envoy.filters.http.ext_proc.ipp:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: "PLACEHOLDER.maas-api-route.2"
+      patch:
+        operation: MERGE
+        value:
+          typed_per_filter_config:
+            envoy.filters.http.ext_proc.ipp-pre:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+            envoy.filters.http.ext_proc.ipp:
+              "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
+              disabled: true
+    - applyTo: HTTP_ROUTE
+      match:
+        context: GATEWAY
+        routeConfiguration:
+          vhost:
+            route:
+              name: "PLACEHOLDER.maas-api-route.3"
       patch:
         operation: MERGE
         value:

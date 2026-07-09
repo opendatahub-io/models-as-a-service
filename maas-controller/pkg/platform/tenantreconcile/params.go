@@ -402,8 +402,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 4 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 4 entries, got %d", len(configPatches))
+	if !found || len(configPatches) < 6 {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least 6 entries, got %d", len(configPatches))
 	}
 
 	clusterByIndex := []string{beforeCluster, afterCluster}
@@ -427,9 +427,10 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		configPatches[i] = patch
 	}
 
-	// Patches 2 and 3 disable ext_proc on non-inference routes.
+	// Patches 2–5 disable ext_proc on all non-inference maas-api routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	for i := 2; i < 4; i++ {
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
+	for i := 2; i < 6; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
