@@ -359,6 +359,30 @@ func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 	}
 }
 
+func TestExternalModel_ReconcileRoute_InferenceExternalModelHTTPRouteNameNotSet(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	model.Status.HTTPRouteName = "stale-route"
+	model.Status.Endpoint = "https://stale.example.com/gpt-4o"
+
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+	inferenceEM.Object["status"] = map[string]any{}
+
+	r, _ := newTestReconcilerWithMapper(model, inferenceEM)
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	err := handler.ReconcileRoute(context.Background(), log, model)
+	if err != nil {
+		t.Fatalf("ReconcileRoute: expected nil (wait for reconciler), got: %v", err)
+	}
+	if model.Status.HTTPRouteName != "" {
+		t.Errorf("HTTPRouteName should be cleared when status.httpRouteName not set, got %q", model.Status.HTTPRouteName)
+	}
+	if model.Status.Endpoint != "" {
+		t.Errorf("Endpoint should be cleared when status.httpRouteName not set, got %q", model.Status.Endpoint)
+	}
+}
+
 func TestExternalModel_ReconcileRoute_BothMissing(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "", "")
 
@@ -409,6 +433,24 @@ func TestExternalModelRouteResolver(t *testing.T) {
 	}
 	if routeNS != "default" {
 		t.Errorf("routeNS = %q, want %q", routeNS, "default")
+	}
+}
+
+func TestExternalModelRouteResolver_InferenceExistsButHTTPRouteNameNotSet(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+	// Clear status.httpRouteName to simulate the reconciler not having set it yet
+	inferenceEM.Object["status"] = map[string]any{}
+
+	_, c := newTestReconcilerWithMapper(model, inferenceEM)
+	resolver := externalModelRouteResolver{}
+
+	_, _, err := resolver.HTTPRouteForModel(context.Background(), c, model)
+	if err == nil {
+		t.Fatal("HTTPRouteForModel: expected error when inference ExternalModel has no status.httpRouteName")
+	}
+	if !strings.Contains(err.Error(), "HTTPRoute not found yet") {
+		t.Errorf("HTTPRouteForModel: expected ErrHTTPRouteNotFound, got: %v", err)
 	}
 }
 

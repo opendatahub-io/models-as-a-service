@@ -288,6 +288,8 @@ func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c clien
 			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
 				return name, routeNamespace, nil
 			}
+			return "", routeNamespace, fmt.Errorf("%w: inference ExternalModel %s/%s exists but status.httpRouteName is not set yet",
+				ErrHTTPRouteNotFound, model.Namespace, model.Spec.ModelRef.Name)
 		} else if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
 			return "", routeNamespace, fmt.Errorf("failed to get inference ExternalModel %s/%s: %w",
 				model.Namespace, model.Spec.ModelRef.Name, err)
