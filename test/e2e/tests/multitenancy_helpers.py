@@ -936,7 +936,7 @@ def parse_annotation_list(value: str) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
-def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
+def deployment_env(name: str, namespace: str = INFRA_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
     deployment = get_json_or_none("deployment", name, namespace)
     if not deployment:
         return {}
@@ -945,14 +945,14 @@ def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, containe
     return {entry.get("name"): entry.get("value") for entry in container.get("env") or [] if entry.get("name")}
 
 
-def http_route_parent_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_parent_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
     return ((route.get("spec") or {}).get("parentRefs") or [])
 
 
-def http_route_backend_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_backend_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
@@ -1030,7 +1030,7 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
         delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
         try:
-            remove_gateway_access_label(DEPLOYMENT_NAMESPACE, case["gateway_name"])
+            remove_gateway_access_label(INFRA_NAMESPACE, case["gateway_name"])
         except Exception as exc:  # noqa: BLE001
             print(f"[cleanup] failed to remove gateway access label for {case['gateway_name']}: {exc}")
 

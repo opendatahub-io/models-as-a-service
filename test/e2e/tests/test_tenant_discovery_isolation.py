@@ -16,7 +16,7 @@ import json
 import os
 
 from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE
+from test_helper import E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token
 
 log = logging.getLogger(__name__)
 
