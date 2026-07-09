@@ -1768,7 +1768,6 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/other-tenant/api-keys", nil)
 		c.Params = gin.Params{{Key: "tenant", Value: "other-tenant"}}
 
-		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
 		handler.RevokeTenantAPIKeys(c)
 
 		assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -1790,7 +1789,6 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
 		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
 
-		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
 		handler.RevokeTenantAPIKeys(c)
 
 		assert.Equal(t, http.StatusInternalServerError, w.Code)
