@@ -9,6 +9,8 @@ import uuid
 
 import pytest
 
+from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE
+
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
 CONFIG_CRD = "configs.maas.opendatahub.io"
@@ -22,19 +24,7 @@ AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 MAAS_SUBSCRIPTION_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
-DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
-# Infrastructure namespace where maas-api deployment and HTTPRoutes are created
-# Handles: not set → AUTO-derived, "" → no separation (use DEPLOYMENT_NAMESPACE), "AUTO" → derive, explicit value → use it
-_infra_ns_raw = os.environ.get("INFRA_NAMESPACE")
-if _infra_ns_raw is None or _infra_ns_raw == "AUTO":
-    # Default to AUTO-derived (opendatahub → odh-ai-gateway-infra, redhat-ods-applications → redhat-ai-gateway-infra)
-    INFRA_NAMESPACE = "odh-ai-gateway-infra" if DEPLOYMENT_NAMESPACE == "opendatahub" else "redhat-ai-gateway-infra"
-elif _infra_ns_raw == "":
-    # Empty string means no separation (ROSA case)
-    INFRA_NAMESPACE = DEPLOYMENT_NAMESPACE
-else:
-    # Explicit custom namespace
-    INFRA_NAMESPACE = _infra_ns_raw
+INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 

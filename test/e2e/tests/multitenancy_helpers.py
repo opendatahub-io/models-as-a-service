@@ -15,6 +15,8 @@ import pytest
 import requests
 
 from test_helper import (
+    DEPLOYMENT_NAMESPACE,
+    MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
     TIMEOUT,
@@ -45,19 +47,7 @@ AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
-DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
-# Infrastructure namespace where maas-api deployment and HTTPRoutes are created
-# Handles: not set → AUTO-derived, "" → no separation (use DEPLOYMENT_NAMESPACE), "AUTO" → derive, explicit value → use it
-_infra_ns_raw = os.environ.get("INFRA_NAMESPACE")
-if _infra_ns_raw is None or _infra_ns_raw == "AUTO":
-    # Default to AUTO-derived (opendatahub → odh-ai-gateway-infra, redhat-ods-applications → redhat-ai-gateway-infra)
-    INFRA_NAMESPACE = "odh-ai-gateway-infra" if DEPLOYMENT_NAMESPACE == "opendatahub" else "redhat-ai-gateway-infra"
-elif _infra_ns_raw == "":
-    # Empty string means no separation (ROSA case)
-    INFRA_NAMESPACE = DEPLOYMENT_NAMESPACE
-else:
-    # Explicit custom namespace
-    INFRA_NAMESPACE = _infra_ns_raw
+INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
@@ -301,7 +291,7 @@ def wait_for_status_condition(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
-def wait_for_deployment_available(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, timeout: int = 180) -> dict:
+def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
         if status.get("availableReplicas", 0) < 1:
@@ -946,7 +936,7 @@ def parse_annotation_list(value: str) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
-def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
+def deployment_env(name: str, namespace: str = INFRA_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
     deployment = get_json_or_none("deployment", name, namespace)
     if not deployment:
         return {}
@@ -955,14 +945,14 @@ def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, containe
     return {entry.get("name"): entry.get("value") for entry in container.get("env") or [] if entry.get("name")}
 
 
-def http_route_parent_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_parent_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
     return ((route.get("spec") or {}).get("parentRefs") or [])
 
 
-def http_route_backend_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_backend_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
@@ -1040,7 +1030,7 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
         delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
         try:
-            remove_gateway_access_label(DEPLOYMENT_NAMESPACE, case["gateway_name"])
+            remove_gateway_access_label(INFRA_NAMESPACE, case["gateway_name"])
         except Exception as exc:  # noqa: BLE001
             print(f"[cleanup] failed to remove gateway access label for {case['gateway_name']}: {exc}")
 
