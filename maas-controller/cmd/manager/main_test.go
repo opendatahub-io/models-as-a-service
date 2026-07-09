@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"testing"
 
+	confv1 "github.com/openshift/api/config/v1"
 	appsv1 "k8s.io/api/apps/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -13,6 +16,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -41,8 +45,68 @@ func managerTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(confv1.Install(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func TestFetchTLSProfileWithRetryTransientErrorFallsBackToIntermediate(t *testing.T) {
+	originalDelay := tlsProfileRetryDelay
+	defer func() {
+		tlsProfileRetryDelay = originalDelay
+	}()
+	tlsProfileRetryDelay = 0
+
+	calls := 0
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(managerTestScheme(t)).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				calls++
+				return apierrors.NewInternalError(errors.New("apiserver unavailable"))
+			},
+		}).
+		Build()
+
+	profile, adherence, available, err := fetchTLSProfileWithRetry(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("fetchTLSProfileWithRetry returned error: %v", err)
+	}
+	if calls != tlsProfileFetchMaxRetries {
+		t.Fatalf("Get calls = %d, want %d", calls, tlsProfileFetchMaxRetries)
+	}
+	if !available {
+		t.Fatalf("available = false, want true so watcher can self-heal")
+	}
+	if adherence != confv1.TLSAdherencePolicyNoOpinion {
+		t.Fatalf("adherence = %q, want %q", adherence, confv1.TLSAdherencePolicyNoOpinion)
+	}
+	if profile.MinTLSVersion != confv1.VersionTLS12 {
+		t.Fatalf("MinTLSVersion = %q, want Intermediate TLS 1.2", profile.MinTLSVersion)
+	}
+	if len(profile.Ciphers) == 0 {
+		t.Fatalf("default Intermediate profile should include TLS ciphers")
+	}
+}
+
+func TestFetchTLSProfileWithRetryAPIUnavailableSkipsWatcher(t *testing.T) {
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(managerTestScheme(t)).
+		Build()
+
+	profile, adherence, available, err := fetchTLSProfileWithRetry(context.Background(), cl)
+	if err != nil {
+		t.Fatalf("fetchTLSProfileWithRetry returned error: %v", err)
+	}
+	if available {
+		t.Fatalf("available = true, want false for non-OpenShift API absence")
+	}
+	if adherence != confv1.TLSAdherencePolicyNoOpinion {
+		t.Fatalf("adherence = %q, want %q", adherence, confv1.TLSAdherencePolicyNoOpinion)
+	}
+	if profile.MinTLSVersion != confv1.VersionTLS12 {
+		t.Fatalf("MinTLSVersion = %q, want Intermediate TLS 1.2", profile.MinTLSVersion)
+	}
 }
 
 func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *testing.T) {

@@ -76,6 +76,8 @@ const (
 	tlsProfileFetchRetryDelay = 2 * time.Second
 )
 
+var tlsProfileRetryDelay = tlsProfileFetchRetryDelay
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
@@ -520,10 +522,10 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 // fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
 // If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
 // default Intermediate profile immediately with available=false. For transient
-// errors on OpenShift, it retries a few times before returning an error.
+// errors on OpenShift, it retries a few times before logging and returning the
+// default Intermediate profile with available=true, allowing the watcher to
+// self-heal when the API recovers.
 func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
-	var lastErr error
-
 	for attempt := range tlsProfileFetchMaxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
 		profile, err := utiltls.FetchAPIServerTLSProfile(fetchCtx, c)
@@ -544,7 +546,6 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 				confv1.TLSAdherencePolicyNoOpinion, false, nil
 		}
 
-		lastErr = err
 		if attempt < tlsProfileFetchMaxRetries-1 {
 			setupLog.Info("transient error fetching cluster TLS profile, retrying",
 				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
@@ -552,15 +553,16 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 			case <-ctx.Done():
 				return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
 					confv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
-			case <-time.After(tlsProfileFetchRetryDelay):
+			case <-time.After(tlsProfileRetryDelay):
 			}
 		} else {
-			setupLog.Error(err, "failed to fetch cluster TLS profile after retries")
+			setupLog.Info("failed to fetch cluster TLS profile after retries, using default Intermediate TLS profile",
+				"error", err)
 		}
 	}
 
 	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
-		confv1.TLSAdherencePolicyNoOpinion, false, lastErr
+		confv1.TLSAdherencePolicyNoOpinion, true, nil
 }
 
 // resolveInfraNamespace determines the infrastructure namespace for maas-api and maas-db-config.
@@ -733,9 +735,9 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	// Fetch the cluster TLS security profile from the APIServer resource.
-	// On non-OpenShift clusters the GVK doesn't exist → fall back gracefully.
-	// On OpenShift, transient errors are retried to avoid running with a weaker
-	// default profile when the admin has configured something stricter.
+	// On non-OpenShift clusters the GVK doesn't exist, so we fall back gracefully.
+	// On OpenShift, transient errors are retried and then fall back to the
+	// Intermediate profile so startup is not blocked by config API availability.
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	if err != nil {
 		setupLog.Error(err, "unable to create pre-manager Kubernetes client for TLS profile fetch")
@@ -974,8 +976,8 @@ func main() {
 				cancel()
 			},
 		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "TLSProfileWatcher")
-			os.Exit(1)
+			setupLog.Info("unable to create TLS profile watcher, continuing with current TLS profile",
+				"controller", "TLSProfileWatcher", "error", err)
 		}
 	}
 

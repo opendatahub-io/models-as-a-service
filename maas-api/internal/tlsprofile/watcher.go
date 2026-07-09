@@ -33,23 +33,27 @@ func NewWatcher(restConfig *rest.Config, initialProfile ProfileSpec, onChange fu
 
 	factory := configinformers.NewSharedInformerFactory(configClient, 0)
 	informer := factory.Config().V1().APIServers().Informer()
+	handleAPIServer := func(obj any) {
+		apiServer, ok := obj.(*confv1.APIServer)
+		if !ok {
+			return
+		}
+		if apiServer.Name != "cluster" {
+			return
+		}
+		current, err := profileFromAPIServer(apiServer)
+		if err != nil {
+			return
+		}
+		if !profileEqual(initialProfile, current) && onChange != nil {
+			onChange(initialProfile, current)
+		}
+	}
 
 	if _, err = informer.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: handleAPIServer,
 		UpdateFunc: func(_, newObj any) {
-			apiServer, ok := newObj.(*confv1.APIServer)
-			if !ok {
-				return
-			}
-			if apiServer.Name != "cluster" {
-				return
-			}
-			current, err := profileFromAPIServer(apiServer)
-			if err != nil {
-				return
-			}
-			if !profileEqual(initialProfile, current) && onChange != nil {
-				onChange(initialProfile, current)
-			}
+			handleAPIServer(newObj)
 		},
 	}); err != nil {
 		return nil, fmt.Errorf("adding event handler: %w", err)

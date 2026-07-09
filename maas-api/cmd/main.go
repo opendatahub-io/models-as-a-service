@@ -49,6 +49,11 @@ const (
 	tlsProfileFetchRetryDelay = 2 * time.Second
 )
 
+var (
+	fetchClusterTLSProfile = tlsprofile.FetchTLSProfile
+	tlsProfileRetryDelay   = tlsProfileFetchRetryDelay
+)
+
 func serve() error {
 	cfg := config.Load()
 	flag.Parse()
@@ -158,7 +163,7 @@ func serve() error {
 
 	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
 	if tlsErr != nil {
-		return fmt.Errorf("refusing to start with weakened TLS policy: %w", tlsErr)
+		return fmt.Errorf("failed to set up TLS profile: %w", tlsErr)
 	}
 
 	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
@@ -330,27 +335,24 @@ func debugCORSConfig() cors.Config {
 
 // setupTLSProfile fetches the OpenShift cluster TLS security profile and starts
 // a watcher that cancels the context on profile changes. Returns the profile's
-// minVersion and cipherSuites for use in buildTLSConfig. On non-OpenShift clusters
-// or when HTTPS is disabled, returns zero values (flag-based defaults apply).
+// minVersion and cipherSuites for use in buildTLSConfig. When HTTPS is disabled,
+// returns zero values so flag-based defaults apply.
 //
-// On OpenShift, transient fetch errors are retried. If the profile cannot be
-// obtained after retries, the function returns an error to prevent starting with
-// a weaker default profile (fail-closed).
+// Fetch and watcher errors are logged and the server continues with the
+// Intermediate profile defaults so transient config API issues do not block
+// startup.
 func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16, error) {
 	restConfig := cluster.RESTConfig()
 	if !cfg.Secure || restConfig == nil {
 		return 0, nil, nil
 	}
 
-	profile, available, fetchErr := fetchTLSProfileWithRetry(ctx, log, restConfig)
+	profile, watchProfile, fetchErr := fetchTLSProfileWithRetry(ctx, log, restConfig)
 	if fetchErr != nil {
-		return 0, nil, fmt.Errorf("cluster TLS profile fetch failed after retries: %w", fetchErr)
-	}
-	if !available {
-		return 0, nil, nil
+		return 0, nil, fetchErr
 	}
 
-	log.Info("Fetched cluster TLS security profile",
+	log.Info("Using cluster TLS security profile",
 		"type", string(profile.Type), "minTLSVersion", profile.MinTLSVersion)
 
 	profileMinVersion, profileCipherSuites, unsupported := tlsprofile.TLSConfigFromProfile(profile)
@@ -362,33 +364,38 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 		log.Warn("TLS profile produced no TLS 1.2 cipher suites; Go defaults will be used for TLS 1.2 negotiation")
 	}
 
-	watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
-		log.Info("TLS security profile changed, initiating graceful shutdown to reload",
-			"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
-		cancel()
-	})
-	if watchErr != nil {
-		return 0, nil, fmt.Errorf("starting TLS profile watcher: %w", watchErr)
-	}
-	go func() {
-		if err := watcher.Start(ctx.Done()); err != nil {
-			log.Error("TLS profile watcher failed, initiating graceful shutdown to restart", "error", err)
+	if watchProfile {
+		watcher, watchErr := tlsprofile.NewWatcher(restConfig, profile, func(oldProfile, newProfile tlsprofile.ProfileSpec) {
+			log.Info("TLS security profile changed, initiating graceful shutdown to reload",
+				"oldType", string(oldProfile.Type), "newType", string(newProfile.Type))
 			cancel()
+		})
+		if watchErr != nil {
+			log.Info("TLS profile watcher could not be created; continuing with current TLS profile",
+				"error", watchErr)
+		} else {
+			go func() {
+				if err := watcher.Start(ctx.Done()); err != nil {
+					log.Info("TLS profile watcher stopped before syncing; continuing with current TLS profile",
+						"error", err)
+				}
+			}()
 		}
-	}()
+	}
 
 	return profileMinVersion, profileCipherSuites, nil
 }
 
 // fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
 // If the config.openshift.io API doesn't exist (non-OpenShift), returns
-// available=false with nil error. For transient errors on OpenShift, retries a
-// few times and returns a non-nil error if all attempts fail (fail-closed).
+// watchProfile=false with nil error. For transient errors on OpenShift, retries
+// a few times before logging and returning the default Intermediate profile with
+// watchProfile=true, allowing the watcher to self-heal when the API recovers.
 func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfig *rest.Config) (tlsprofile.ProfileSpec, bool, error) {
 	var lastErr error
 	for attempt := range tlsProfileFetchMaxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
-		profile, err := tlsprofile.FetchTLSProfile(fetchCtx, restConfig)
+		profile, err := fetchClusterTLSProfile(fetchCtx, restConfig)
 		fetchCancel()
 
 		if err == nil {
@@ -396,7 +403,7 @@ func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfi
 		}
 
 		if tlsprofile.IsAPIUnavailable(err) {
-			log.Info("config.openshift.io API not available, using flag-based TLS defaults "+
+			log.Info("config.openshift.io API not available, using default Intermediate TLS profile "+
 				"(expected on non-OpenShift clusters)", "error", err)
 			return tlsprofile.DefaultProfile(), false, nil
 		}
@@ -408,10 +415,12 @@ func fetchTLSProfileWithRetry(ctx context.Context, log *logger.Logger, restConfi
 			select {
 			case <-ctx.Done():
 				return tlsprofile.DefaultProfile(), false, ctx.Err()
-			case <-time.After(tlsProfileFetchRetryDelay):
+			case <-time.After(tlsProfileRetryDelay):
 			}
 		}
 	}
 
-	return tlsprofile.DefaultProfile(), false, lastErr
+	log.Info("Failed to fetch cluster TLS profile after retries, using default Intermediate TLS profile",
+		"error", lastErr)
+	return tlsprofile.DefaultProfile(), true, nil
 }

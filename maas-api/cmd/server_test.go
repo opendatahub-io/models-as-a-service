@@ -1,13 +1,20 @@
 package main
 
 import (
+	"context"
 	"crypto/tls"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
 
 func TestBuildTLSConfig_ProfileOverridesFlag(t *testing.T) {
@@ -73,4 +80,47 @@ func TestBuildTLSConfig_ProfileCipherSuitesEmpty(t *testing.T) {
 	assert.Nil(t, tlsCfg.CipherSuites,
 		"CipherSuites should be nil when profile provides empty slice (Go defaults apply)")
 	assert.Equal(t, []string{"h2", "http/1.1"}, tlsCfg.NextProtos)
+}
+
+func TestFetchTLSProfileWithRetry_TransientErrorFallsBackToIntermediate(t *testing.T) {
+	originalFetch := fetchClusterTLSProfile
+	originalDelay := tlsProfileRetryDelay
+	defer func() {
+		fetchClusterTLSProfile = originalFetch
+		tlsProfileRetryDelay = originalDelay
+	}()
+
+	tlsProfileRetryDelay = 0
+	calls := 0
+	fetchClusterTLSProfile = func(context.Context, *rest.Config) (tlsprofile.ProfileSpec, error) {
+		calls++
+		return tlsprofile.DefaultProfile(), errors.New("temporary apiserver error")
+	}
+
+	profile, watchProfile, err := fetchTLSProfileWithRetry(context.Background(), logger.New(false), &rest.Config{})
+	require.NoError(t, err)
+
+	assert.Equal(t, tlsProfileFetchMaxRetries, calls)
+	assert.True(t, watchProfile, "OpenShift-like transient failures should still start the watcher")
+	assert.Equal(t, tlsprofile.ProfileIntermediate, profile.Type)
+}
+
+func TestFetchTLSProfileWithRetry_APIUnavailableFallsBackAndSkipsWatcher(t *testing.T) {
+	originalFetch := fetchClusterTLSProfile
+	defer func() {
+		fetchClusterTLSProfile = originalFetch
+	}()
+
+	fetchClusterTLSProfile = func(context.Context, *rest.Config) (tlsprofile.ProfileSpec, error) {
+		return tlsprofile.DefaultProfile(), apierrors.NewNotFound(
+			schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"},
+			"cluster",
+		)
+	}
+
+	profile, watchProfile, err := fetchTLSProfileWithRetry(context.Background(), logger.New(false), &rest.Config{})
+	require.NoError(t, err)
+
+	assert.False(t, watchProfile, "non-OpenShift clusters should skip the config.openshift.io watcher")
+	assert.Equal(t, tlsprofile.ProfileIntermediate, profile.Type)
 }

@@ -129,9 +129,9 @@ At startup, each component fetches `spec.tlsSecurityProfile` from the `APIServer
 - **maas-controller**: Applies the profile to the controller-runtime webhook server
   on port 9443. Metrics remains HTTP on port 8080 and does not use this profile.
 
-Both components watch the `APIServer` resource for changes. When the TLS profile is
-updated, the component performs a graceful shutdown so the Pod restarts with the new
-TLS settings.
+Both components watch the `APIServer` resource for changes when the resource is
+available. When the TLS profile is updated, the component performs a graceful
+shutdown so the Pod restarts with the new TLS settings.
 
 ### Supported profiles
 
@@ -142,16 +142,23 @@ TLS settings.
 | **Old** | TLS 1.0 | Legacy compatibility — use as last resort |
 | **Custom** | Configurable | Admin-defined cipher suites and min version |
 
-When the `APIServer` resource has no `tlsSecurityProfile` set (or on non-OpenShift
-clusters), the **Intermediate** profile is used as the default.
+When the `APIServer` resource has no `tlsSecurityProfile` set, cannot be fetched
+temporarily, or is not present on non-OpenShift clusters, the **Intermediate**
+profile is used as the default.
 
 ### Fallback behavior
+
+If the TLS profile cannot be fetched at startup, MaaS logs the error and starts
+with the Intermediate profile defaults. This keeps the service available during
+transient `config.openshift.io` API failures; when the API can be watched, the
+profile watcher triggers a graceful restart later after it observes a different
+cluster profile.
 
 On non-OpenShift clusters (e.g., Kind for development), the `APIServer` resource does
 not exist. In this case:
 
 - **maas-controller** falls back to the Intermediate profile defaults
-- **maas-api** falls back to its flag-based `--tls-min-version` setting (default: TLS 1.2)
+- **maas-api** falls back to the Intermediate profile defaults
 
 ### Known limitations
 
