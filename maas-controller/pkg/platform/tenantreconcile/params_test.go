@@ -453,7 +453,6 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 		ClusterAudience:           "openshift-custom",
 		MaaSAPIImage:              "quay.io/example/maas-api:test",
 		PayloadProcessingImage:    "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:    "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays:   "45",
 		MaaSAPIReplicas:           &maasReplicas,
 		PayloadProcessingReplicas: &payloadReplicas,
@@ -487,7 +486,6 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 		SubscriptionNamespace:   "ai-tenant-redteam",
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
 		PayloadProcessingImage:  "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
 	}
 

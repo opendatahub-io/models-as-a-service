@@ -62,6 +62,10 @@ const (
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
+	// DefaultMaaSAPIKeyCleanupImage is the minimal image used to run the per-tenant
+	// API key revocation Job (overridable via RELATED_IMAGE_UBI_MINIMAL_IMAGE).
+	DefaultMaaSAPIKeyCleanupImage = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
 	// For legacy/default tenant (empty tenantID), these values are used as-is.
