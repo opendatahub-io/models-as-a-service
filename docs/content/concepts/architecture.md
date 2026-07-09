@@ -6,6 +6,20 @@ The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Ga
 
 Our future plans include improved request routing and discovery—and we're already sketching what comes after that.
 
+## Deployment Architecture
+
+MaaS is deployed as a sub-component of the **AI Gateway Operator**, managed by the ODH/RHOAI operator. Enabling `aigateway.modelsAsAService: Managed` in your `DataScienceCluster` triggers the following component chain:
+
+```
+DataScienceCluster
+  └── aigateway.modelsAsAService: Managed
+        └── AI Gateway Operator
+              └── maas-controller
+                    └── maas-api, Tenant, MaaSAuthPolicy, MaaSSubscription, ...
+```
+
+This replaces the previous `kserve.modelsAsService` nesting. KServe is no longer a prerequisite for MaaS — include it only if you need independent model serving.
+
 ## Architecture
 
 ### 🏗️ High-Level Architecture

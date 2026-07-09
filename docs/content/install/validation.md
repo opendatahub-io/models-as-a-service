@@ -167,3 +167,7 @@ openssl s_client -connect localhost:8443 \
 For detailed TLS configuration options, see [TLS Configuration](../configuration-and-management/tls-configuration.md).
 
 For troubleshooting common issues, see [Troubleshooting](troubleshooting.md).
+
+## Multi-Tenant Validation
+
+For validating additional tenants beyond the default, see [Multi-Tenant Validation](multi-tenant-validation.md).
