@@ -4,9 +4,9 @@ This document describes how the MaaS Controller **reconciles** resources, **owne
 
 ---
 
-## Tenant reconciler
+## MaasTenantConfig reconciler
 
-The **Tenant** reconciler watches the singleton **`MaasTenantConfig`** CR named **`default-tenant`** (`maas.opendatahub.io/v1alpha1`). It:
+The **MaasTenantConfig** reconciler watches **`MaasTenantConfig`** CRs named **`default-tenant`** (`maas.opendatahub.io/v1alpha1`) in tenant namespaces. It:
 
 - Resolves platform context from the owning **`AITenant`** (Gateway and OIDC) and validates **cluster dependencies** (for example AuthConfig / Kuadrant CRDs).
 - Runs **prerequisite checks** in the application namespace before applying manifests.
@@ -27,13 +27,13 @@ For `spec` fields (API keys and telemetry), see [MaasTenantConfig CR](../install
 
 ---
 
-## Tenant resource layout
+## MaasTenantConfig resource layout
 
-The `MaasTenantConfig` CR is namespace-scoped and lives in the **application namespace** for MaaS platform configuration (default **`models-as-a-service`**; configurable via install). It owns resources across three scopes — same-namespace children use standard **`ownerReference`**, while cluster-scoped and cross-namespace children use **tracking labels**.
+The `MaasTenantConfig` CR is namespace-scoped and lives in the **tenant namespace** for MaaS platform configuration. The default AITenant uses **`models-as-a-service`** as its tenant namespace; non-default AITenants use their derived tenant namespaces. It owns resources across three scopes — same-namespace children use standard **`ownerReference`**, while cluster-scoped and cross-namespace children use **tracking labels**.
 
 ```mermaid
 graph TB
-    subgraph "models-as-a-service namespace"
+    subgraph "tenant namespace (for example models-as-a-service)"
         Tenant["MaasTenantConfig CR<br/>default-tenant"]
         API["maas-api Deployment"]
         CM["ConfigMaps"]

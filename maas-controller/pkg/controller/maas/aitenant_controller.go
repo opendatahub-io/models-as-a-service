@@ -56,6 +56,7 @@ const (
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
+	legacyDefaultGatewayName      = "maas-default-gateway"
 )
 
 // AITenantReconciler reconciles AITenant tenant bootstrap resources.
@@ -73,6 +74,8 @@ type AITenantReconciler struct {
 	TenantNamespace string
 	// AITenantNamespace is the infrastructure namespace where AITenant CRs are accepted.
 	AITenantNamespace string
+	// GatewayName is the legacy/default Gateway name used by single-tenant installs.
+	GatewayName string
 	// GatewayNamespace is where tenant Gateway resources are expected to exist.
 	GatewayNamespace string
 }
@@ -320,7 +323,10 @@ func (r *AITenantReconciler) migrateLegacyTenantPlatformContext(ctx context.Cont
 				"AITenant supports gateway name migration only, so update --gateway-namespace or clear the legacy namespace before migration",
 			legacy.Namespace, legacy.Name, legacy.Spec.GatewayRef.Namespace, r.GatewayNamespace)
 	}
-	if legacy.Spec.GatewayRef.Name != "" && (aitenant.Spec.Gateway == nil || aitenant.Spec.Gateway.Name == "") {
+	shouldCopyLegacyGateway := legacy.Spec.GatewayRef.Name != "" &&
+		(aitenant.Spec.Gateway == nil || aitenant.Spec.Gateway.Name == "") &&
+		!r.legacyGatewayNameIsSharedDefault(aitenant, legacy.Spec.GatewayRef.Name)
+	if shouldCopyLegacyGateway {
 		if aitenant.Spec.Gateway == nil {
 			aitenant.Spec.Gateway = &maasv1alpha1.AITenantGatewayRef{}
 		}
@@ -333,6 +339,14 @@ func (r *AITenantReconciler) migrateLegacyTenantPlatformContext(ctx context.Cont
 		return false, fmt.Errorf("patch AITenant with legacy Tenant platform context: %w", err)
 	}
 	return true, nil
+}
+
+func (r *AITenantReconciler) legacyGatewayNameIsSharedDefault(aitenant *maasv1alpha1.AITenant, gatewayName string) bool {
+	defaultGatewayName := r.GatewayName
+	if defaultGatewayName == "" {
+		defaultGatewayName = legacyDefaultGatewayName
+	}
+	return aitenant.Name != tenantreconcile.DefaultAITenantName && gatewayName == defaultGatewayName
 }
 
 func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {

@@ -412,6 +412,85 @@ func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
 	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
 }
 
+func TestAITenantReconcile_IgnoresLegacyDefaultGatewayForNonDefaultTenant(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-migrateme",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ai-tenant-team-migrateme"}}
+	legacyTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-team-migrateme",
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "maas-default-gateway",
+			},
+		},
+	}
+	defaultGatewayClaim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gatewayClaimName(maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "maas-default-gateway"}),
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/gateway-claim": "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+		Data: map[string]string{
+			"gatewayNamespace": "openshift-ingress",
+			"gatewayName":      "maas-default-gateway",
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(
+			aitenant,
+			ns,
+			legacyTenant,
+			defaultGatewayClaim,
+			existingAITenantGateway("maas-default-gateway"),
+			existingAITenantGateway("team-migrateme"),
+		).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantTwice(t, r, key)
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(context.Background(), key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	g.Expect(updated.Spec.Gateway).To(BeNil())
+	g.Expect(updated.Status.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "team-migrateme",
+	}))
+
+	var config maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-migrateme"}, &config)).To(Succeed())
+	g.Expect(config.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "team-migrateme"))
+}
+
 func TestAITenantReconcile_LegacyGatewayNamespaceMismatchFailsMigration(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

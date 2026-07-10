@@ -736,6 +736,7 @@ func main() {
 		AppNamespace:      infraNamespace,
 		TenantNamespace:   maasSubscriptionNamespace,
 		AITenantNamespace: aitenantNamespace,
+		GatewayName:       gatewayName,
 		GatewayNamespace:  gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
