@@ -34,6 +34,7 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -462,6 +463,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
 		return ctrl.Result{}, err
 	}
@@ -542,6 +547,39 @@ func (r *AITenantReconciler) deleteTenantNamespace(ctx context.Context, aitenant
 	}
 	reason, message := namespaceDeletionStatus(&ns)
 	return false, reason, message, nil
+}
+
+func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+		return nil
+	}
+
+	gatewayRef := aitenant.Status.GatewayRef
+	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
+		gatewayRef = r.gatewayRefFor(aitenant)
+	}
+	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
+		return nil
+	}
+
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+	authPolicy.SetName(fmt.Sprintf("%s-maas-auth", gatewayRef.Name))
+	authPolicy.SetNamespace(gatewayRef.Namespace)
+
+	if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("get tenant gateway AuthPolicy %s/%s during AITenant deletion: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+	}
+	if !isManaged(authPolicy) {
+		return nil
+	}
+	if err := r.Delete(ctx, authPolicy); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+	}
+	return nil
 }
 
 func namespaceDeletionStatus(ns *corev1.Namespace) (string, string) {

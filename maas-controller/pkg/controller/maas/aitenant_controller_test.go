@@ -14,6 +14,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -806,11 +807,15 @@ func TestAITenantReconcile_DeletionCleansChildrenAndRequestsNamespaceDeletionBut
 	gateway := existingAITenantGateway("team-del")
 	gateway.Labels[aiGatewayTenantLabel] = "preexisting-value"
 	gateway.Annotations[aitenantNameAnnotation] = "team-del"
+	gatewayAuthPolicy := &unstructured.Unstructured{}
+	gatewayAuthPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+	gatewayAuthPolicy.SetNamespace("openshift-ingress")
+	gatewayAuthPolicy.SetName("team-del-maas-auth")
 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, gateway, role, binding, userBinding, objRole, objBinding).
+		WithObjects(aitenant, ns, gateway, gatewayAuthPolicy, role, binding, userBinding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -841,10 +846,13 @@ func TestAITenantReconcile_DeletionCleansChildrenAndRequestsNamespaceDeletionBut
 
 	err = cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-del"}, &corev1.Namespace{})
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(gatewayAuthPolicy), gatewayAuthPolicy)).To(Succeed())
 
 	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+	err = cl.Get(ctx, client.ObjectKeyFromObject(gatewayAuthPolicy), gatewayAuthPolicy)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 	var remaining maasv1alpha1.AITenant
 	err = cl.Get(ctx, key, &remaining)
