@@ -1058,7 +1058,7 @@ install_primary_operator() {
   case "$OPERATOR_TYPE" in
     rhoai)
       # Support custom catalog for RHOAI snapshot/development builds
-      # This allows testing with pre-release RHOAI versions that have modelsAsService support
+      # This allows testing with pre-release RHOAI versions that have modelsAsAService support
       if [[ -n "$OPERATOR_CATALOG" ]]; then
         log_info "Using custom RHOAI catalog: $OPERATOR_CATALOG"
         create_custom_catalogsource "rhoai-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
@@ -1068,7 +1068,7 @@ install_primary_operator() {
       else
         catalog_source="redhat-operators"
         # Use 'stable-3.x' channel for RHOAI v3 (with MaaS support)
-        # RHOAI 2.x (fast channel) does not support modelsAsService
+        # RHOAI 2.x (fast channel) does not support aigateway.modelsAsAService
         channel="${OPERATOR_CHANNEL:-stable-3.x}"
       fi
 
@@ -1236,7 +1236,7 @@ EOF
 }
 
 apply_dsc() {
-  log_info "Applying DataScienceCluster with ModelsAsService..."
+  log_info "Applying DataScienceCluster with aigateway.modelsAsAService..."
 
   local data_dir="${SCRIPT_DIR}/data"
 
@@ -1244,60 +1244,37 @@ apply_dsc() {
     local existing_dsc
     existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
 
-    # Extract all spec.components leaf paths and expected values from the manifest
-    # jq produces lines like: .spec.components.kserve.managementState=Managed
-    local dsc_manifest="${data_dir}/datasciencecluster.yaml"
-    local mismatches=()
+    # Check for 3.5+ field: aigateway.modelsAsAService=Managed
+    local new_field
+    new_field=$(kubectl get datasciencecluster "$existing_dsc" \
+      -o jsonpath='{.spec.components.aigateway.modelsAsAService.managementState}' 2>/dev/null || echo "")
 
-    local expected_fields
-    if ! expected_fields=$(kubectl create --dry-run=client -o json -f "$dsc_manifest" 2>/dev/null | jq -r '
-      # Recursively flatten .spec.components into dot-notation paths with values
-      def leaf_paths:
-        . as $in |
-        paths(scalars) | . as $p |
-        ($in | getpath($p)) as $v |
-        [($p | map(tostring) | join(".")), ($v | tostring)];
-      .spec.components | leaf_paths | ".\(.[0])=\(.[1])"
-    '); then
-      log_warn "Failed to parse DSC manifest at ${dsc_manifest}. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+    # Check for 3.4 legacy field: kserve.modelsAsService=Managed
+    local old_field
+    old_field=$(kubectl get datasciencecluster "$existing_dsc" \
+      -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
+
+    if [[ "$new_field" == "Managed" ]]; then
+      log_info "Existing DSC '$existing_dsc' already has aigateway.modelsAsAService=Managed, skipping"
       return 0
-    fi
-
-    if [[ -z "$expected_fields" ]]; then
-      log_warn "DSC manifest at ${dsc_manifest} produced no fields. Skipping validation, proceeding with existing DSC '$existing_dsc'."
+    elif [[ "$old_field" == "Managed" ]]; then
+      # 3.4 → 3.5 upgrade: existing DSC uses kserve.modelsAsService (backward compat path).
+      # Apply the new DSC on top — server-side merge adds aigateway fields while the old
+      # kserve.modelsAsService field stays frozen (CEL self==oldSelf). The operator's
+      # backward compat handles MaaS deployment until the user migrates the DSC.
+      log_info "Existing DSC '$existing_dsc' has kserve.modelsAsService=Managed (3.4 style) — upgrading to aigateway.modelsAsAService"
+      kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
       return 0
+    else
+      log_error "Existing DSC '$existing_dsc' does not have MaaS enabled."
+      log_error "  aigateway.modelsAsAService: '${new_field:-unset}' (expected Managed)"
+      log_error "  kserve.modelsAsService (legacy): '${old_field:-unset}'"
+      log_error "Enable MaaS via aigateway.modelsAsAService in your DSC and re-run."
+      return 1
     fi
-
-    while IFS='=' read -r field_path expected; do
-      local full_path=".spec.components${field_path}"
-      local actual
-      actual=$(kubectl get datasciencecluster "$existing_dsc" \
-        -o jsonpath="{${full_path}}" 2>/dev/null || echo "")
-      if [[ "$actual" != "$expected" ]]; then
-        mismatches+=("${full_path}: '${actual:-unset}' (expected '${expected}')")
-      fi
-    done <<< "$expected_fields"
-
-    if [[ ${#mismatches[@]} -eq 0 ]]; then
-      log_info "Existing DataScienceCluster '$existing_dsc' meets MaaS requirements, skipping creation"
-      return 0
-    fi
-
-    log_error "Existing DataScienceCluster '$existing_dsc' does not meet MaaS requirements:"
-    for mismatch in "${mismatches[@]}"; do
-      log_error "  $mismatch"
-    done
-
-    log_error "Fix the required fields in DSC deployment and try again..."
-    return 1
   fi
 
-  # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
-  # Without modelsAsService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
-  # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
-  #
-  # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
-  #       Only ODH currently supports this feature
+  # No existing DSC — apply fresh 3.5+ DSC with aigateway.modelsAsAService
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
@@ -1308,7 +1285,7 @@ apply_dsc() {
 apply_kuadrant_cr() {
   local namespace=$1
 
-  log_info "Initializing Gateway API and ModelsAsService gateway..."
+  log_info "Initializing Gateway API and MaaS gateway..."
 
   # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
   # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
