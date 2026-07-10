@@ -732,10 +732,20 @@ deploy_via_operator() {
     exit 1
   fi
 
-  # Apply custom resources
+  # Apply custom resources (DSCI + DSC with aigateway.modelsAsAService)
   apply_custom_resources
 
-  # Deploy PostgreSQL for API key storage (requires namespace to exist)
+  # DSC triggers: ODH operator → ai-gateway-operator → maas-controller → AITenant → maas-api
+  # Wait for ai-gateway-operator before anything else in the chain can proceed.
+  log_info "Waiting for ai-gateway-operator deployment..."
+  if ! kubectl rollout status deployment/ai-gateway-operator -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    log_error "ai-gateway-operator not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+    exit 1
+  fi
+  log_info "  ai-gateway-operator ready."
+
+  # Deploy PostgreSQL BEFORE waiting for maas-controller so the maas-db-config
+  # secret exists by the time the Tenant reconciler creates maas-api.
   deploy_postgresql
 
   # Deploy Keycloak identity provider (optional, if enabled)
@@ -743,14 +753,21 @@ deploy_via_operator() {
     deploy_keycloak
   fi
 
+  # Wait for maas-controller (deployed by ai-gateway-operator).
+  log_info "Waiting for maas-controller deployment..."
+  if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
+    log_error "maas-controller not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+    exit 1
+  fi
+  log_info "  maas-controller ready."
+
+  # Wait for maas-api (deployed by maas-controller via AITenant reconciler).
+  wait_for_operator_maas_api
+
   # Configure TLS backend (if enabled)
   if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
     configure_tls_backend
   fi
-
-  # Custom maas-api image injection is handled by the Tenant reconciler
-  # in maas-controller (common block in main). The controller receives
-  # RELATED_IMAGE_ODH_MAAS_API_IMAGE env var and applies it during PostRender.
 
   log_info "Operator deployment completed"
 }
@@ -812,9 +829,41 @@ validate_postgres_connection() {
   fi
 }
 
+# wait_for_operator_maas_api waits for maas-api to be deployed by the Tenant
+# reconciler (maas-controller) in the infrastructure namespace.
+wait_for_operator_maas_api() {
+  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace
+  if [ "$infra_namespace_raw" = "AUTO" ]; then
+    infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  else
+    infra_namespace="$infra_namespace_raw"
+  fi
+
+  log_info "Waiting for Tenant reconciler to deploy maas-api in $infra_namespace..."
+  local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
+  local elapsed=0
+  while [[ $elapsed -lt $maas_api_timeout ]]; do
+    if kubectl get deployment maas-api -n "$infra_namespace" &>/dev/null; then
+      log_info "  maas-api deployment found, waiting for rollout..."
+      if kubectl rollout status deployment/maas-api -n "$infra_namespace" --timeout="$((maas_api_timeout - elapsed))s" 2>/dev/null; then
+        log_info "  maas-api is ready"
+        return 0
+      fi
+    fi
+    sleep 10
+    elapsed=$((elapsed + 10))
+    (( elapsed % 60 == 0 )) && log_info "  Still waiting for maas-api... (${elapsed}s / ${maas_api_timeout}s)"
+  done
+
+  log_error "maas-api not created after ${maas_api_timeout}s in $infra_namespace"
+  log_error "Check: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
+  return 1
+}
+
 deploy_postgresql() {
-  # Namespace where maas-api and postgres run (infrastructure namespace)
-  local infra_ns_raw="${INFRA_NAMESPACE:-opendatahub}"
+  # Infrastructure namespace where maas-api runs (AUTO = derive from controller namespace)
+  local infra_ns_raw="${INFRA_NAMESPACE:-AUTO}"
   local infra_ns
   if [ "$infra_ns_raw" = "AUTO" ]; then
     infra_ns=$(derive_infra_namespace "$NAMESPACE")
