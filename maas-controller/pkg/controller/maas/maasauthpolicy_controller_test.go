@@ -981,7 +981,7 @@ func TestMaaSAuthPolicyReconciler_NegativeTTLRejection(t *testing.T) {
 //
 // After the gateway-level AuthPolicy refactor the key structure changes:
 //   - Gateway policy: apiKeyValidation, subscription-info, auth-valid, subscription-valid
-//     use dynamic CEL (celModelIdentity) for runtime model isolation
+//     use dynamic CEL (celModelIdentityExpr) for runtime model isolation
 //   - Group policy: require-group-membership uses static model namespace/name in the key
 //
 // This is a security-critical test: incorrect cache keys could leak authentication
@@ -1147,7 +1147,7 @@ func TestMaaSAuthPolicyReconciler_CacheKeyModelIsolation(t *testing.T) {
 	}
 
 	// Singleton gateway policy: subscription-info/auth-valid/subscription-valid use dynamic
-	// celModelIdentity for runtime isolation, so the CEL expression is the same string in
+	// celModelIdentityExpr for runtime isolation, so the CEL expression is the same string in
 	// both reconciles (they're writing to the same policy). Verify it contains the model
 	// identity extractor expression rather than static model names.
 	gwPolicy := &unstructured.Unstructured{}
@@ -1957,8 +1957,8 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 }
 
 // TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization verifies that the generated
-// gateway AuthPolicy normalizes canonical model IDs (publishers/{ns}/models/{name})
-// to the internal {ns}/{name} format in both CEL and OPA Rego expressions.
+// gateway AuthPolicy resolves publisher model IDs via a controller-computed lookup table
+// and passes through non-canonical model names unchanged.
 func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 	const (
 		modelName      = "llm"
@@ -2000,47 +2000,50 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	t.Run("CEL normalizes canonical publishers/ prefix", func(t *testing.T) {
-		// The CEL celModelIdentity is embedded in auth-valid authorization block.
-		// Check that the gateway AuthPolicy's auth-valid rego or CEL-based expressions
-		// contain the normalization for publishers/ prefix.
-		// celModelIdentity is used in the response and cache-key sections.
-		// It should handle: publishers/{ns}/models/{name} -> {ns}/{name}
-		if !strings.Contains(celModelIdentity, `startsWith("publishers/")`) {
-			t.Errorf("celModelIdentity should normalize canonical model IDs with publishers/ prefix, got: %s", celModelIdentity)
+	t.Run("CEL handles publishers/ prefix for header-based routing", func(t *testing.T) {
+		celExpr := celModelIdentityExpr(nil)
+		if !strings.Contains(celExpr, `startsWith("publishers/")`) {
+			t.Errorf("celModelIdentityExpr should check for publishers/ prefix, got: %s", celExpr)
 		}
-		if !strings.Contains(celModelIdentity, `split("/")[1]`) || !strings.Contains(celModelIdentity, `split("/")[3]`) {
-			t.Errorf("celModelIdentity should extract ns (index 1) and name (index 3) from canonical format, got: %s", celModelIdentity)
-		}
-		if !strings.Contains(celModelIdentity, `x-gateway-model-name`) {
-			t.Errorf("celModelIdentity should read from x-gateway-model-name header, got: %s", celModelIdentity)
+		if !strings.Contains(celExpr, `x-gateway-model-name`) {
+			t.Errorf("celModelIdentityExpr should read from x-gateway-model-name header, got: %s", celExpr)
 		}
 	})
 
-	t.Run("OPA Rego normalizes canonical publishers/ prefix", func(t *testing.T) {
+	t.Run("CEL with publisher map generates lookup expression", func(t *testing.T) {
+		pubMap := map[string]string{
+			"publishers/llm/models/facebook/opt-125m": "llm/facebook-opt-125m-simulated",
+		}
+		celExpr := celModelIdentityExpr(pubMap)
+		if !strings.Contains(celExpr, `"publishers/llm/models/facebook/opt-125m": "llm/facebook-opt-125m-simulated"`) {
+			t.Errorf("celModelIdentityExpr should embed publisher-to-identity map, got: %s", celExpr)
+		}
+	})
+
+	t.Run("OPA Rego uses publisher_to_identity lookup", func(t *testing.T) {
 		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
 		if err != nil || !found {
 			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
 		}
 
+		if !strings.Contains(rego, "publisher_to_identity") {
+			t.Errorf("rego should contain publisher_to_identity lookup table, got: %s", rego)
+		}
 		if !strings.Contains(rego, "raw_header_model_identity") {
 			t.Errorf("rego should extract raw header value before normalization, got: %s", rego)
 		}
 		if !strings.Contains(rego, `startswith(raw_header_model_identity, "publishers/")`) {
 			t.Errorf("rego should check for publishers/ prefix, got: %s", rego)
 		}
-		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[1]`) {
-			t.Errorf("rego should extract namespace at index 1 from canonical format, got: %s", rego)
-		}
-		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[3]`) {
-			t.Errorf("rego should extract model name at index 3 from canonical format, got: %s", rego)
+		if !strings.Contains(rego, `publisher_to_identity[raw_header_model_identity]`) {
+			t.Errorf("rego should resolve publisher paths via lookup table, got: %s", rego)
 		}
 	})
 
 	t.Run("CEL passes through short model names unchanged", func(t *testing.T) {
-		// When the header doesn't start with "publishers/", the raw value should be used as-is
-		if !strings.Contains(celModelIdentity, `: request.headers["x-gateway-model-name"])`) {
-			t.Errorf("celModelIdentity should pass through non-canonical model names as-is, got: %s", celModelIdentity)
+		celExpr := celModelIdentityExpr(nil)
+		if !strings.Contains(celExpr, `: request.headers["x-gateway-model-name"])`) {
+			t.Errorf("celModelIdentityExpr should pass through non-canonical model names as-is, got: %s", celExpr)
 		}
 	})
 
@@ -2049,9 +2052,131 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 		if err != nil || !found {
 			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
 		}
-		// The else clause should assign the raw value when not canonical
 		if !strings.Contains(rego, "else := raw_header_model_identity") {
 			t.Errorf("rego should fall back to raw header value for non-canonical names, got: %s", rego)
+		}
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_PublisherPathResolution verifies that the controller
+// correctly maps LLMInferenceService publisher paths to MaaS model identities using
+// the controller-computed lookup table, and that this mapping is embedded in both
+// the CEL and Rego expressions of the gateway AuthPolicy.
+func TestMaaSAuthPolicyReconciler_PublisherPathResolution(t *testing.T) {
+	const (
+		modelName      = "facebook-opt-125m-simulated"
+		llmisvcName    = "facebook-opt-125m-simulated"
+		specModelName  = "facebook/opt-125m"
+		namespace      = "llm"
+		gatewayNS      = "gateway-ns"
+		maasPolicyName = "policy-llm"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "LLMInferenceService", llmisvcName)
+	route := newHTTPRoute(llmisvcName, namespace)
+	route.Labels = map[string]string{
+		"app.kubernetes.io/name":      llmisvcName,
+		"app.kubernetes.io/component": "llminferenceservice-router",
+		"app.kubernetes.io/part-of":   "llminferenceservice",
+	}
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-llm", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	llmisvc := &unstructured.Unstructured{}
+	llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "serving.kserve.io",
+		Version: "v1alpha1",
+		Kind:    "LLMInferenceService",
+	})
+	llmisvc.SetName(llmisvcName)
+	llmisvc.SetNamespace(namespace)
+	_ = unstructured.SetNestedField(llmisvc.Object, specModelName, "spec", "model", "name")
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy, llmisvc).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	t.Run("buildPublisherToIdentityMap resolves LLMISVC publisher paths", func(t *testing.T) {
+		pubMap, err := r.buildPublisherToIdentityMap(context.Background(), namespace)
+		if err != nil {
+			t.Fatalf("buildPublisherToIdentityMap: unexpected error: %v", err)
+		}
+
+		expectedPublisherPath := "publishers/llm/models/facebook/opt-125m"
+		expectedModelIdentity := "llm/facebook-opt-125m-simulated"
+
+		got, ok := pubMap[expectedPublisherPath]
+		if !ok {
+			t.Fatalf("publisher path %q not found in map: %v", expectedPublisherPath, pubMap)
+		}
+		if got != expectedModelIdentity {
+			t.Errorf("publisher path %q mapped to %q, want %q", expectedPublisherPath, got, expectedModelIdentity)
+		}
+	})
+
+	t.Run("reconciled AuthPolicy embeds publisher mapping in Rego", func(t *testing.T) {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+		if _, err := r.Reconcile(context.Background(), req); err != nil {
+			t.Fatalf("Reconcile: unexpected error: %v", err)
+		}
+
+		gwPolicy := &unstructured.Unstructured{}
+		gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+			t.Fatalf("Get gateway AuthPolicy: %v", err)
+		}
+
+		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+		if err != nil || !found {
+			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+		}
+
+		if !strings.Contains(rego, "publishers/llm/models/facebook/opt-125m") {
+			t.Errorf("rego should contain publisher path in lookup table, got:\n%s", rego)
+		}
+		if !strings.Contains(rego, "llm/facebook-opt-125m-simulated") {
+			t.Errorf("rego should contain model identity in lookup table, got:\n%s", rego)
+		}
+	})
+
+	t.Run("ExternalModel models are not included in publisher map", func(t *testing.T) {
+		extModel := newMaaSModelRef("ext-model", namespace, "ExternalModel", "gpt-4o")
+		extRoute := newHTTPRoute("gpt-4o", namespace)
+		extPolicy := newMaaSAuthPolicy("policy-ext", namespace, "team-ext", maasv1alpha1.ModelRef{Name: "ext-model", Namespace: namespace})
+
+		c2 := fake.NewClientBuilder().
+			WithScheme(scheme).
+			WithRESTMapper(testRESTMapper()).
+			WithObjects(extModel, extRoute, extPolicy).
+			WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+			Build()
+
+		r2 := &MaaSAuthPolicyReconciler{
+			Client:           c2,
+			Scheme:           scheme,
+			InfraNamespace:   "maas-system",
+			GatewayName:      "maas-default-gateway",
+			GatewayNamespace: gatewayNS,
+		}
+
+		pubMap, err := r2.buildPublisherToIdentityMap(context.Background(), namespace)
+		if err != nil {
+			t.Fatalf("buildPublisherToIdentityMap: unexpected error: %v", err)
+		}
+		if len(pubMap) != 0 {
+			t.Errorf("ExternalModel should not produce publisher mappings, got: %v", pubMap)
 		}
 	})
 }

@@ -326,10 +326,12 @@ const (
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
 )
 
-// celModelIdentity extracts model identity (namespace/name) from the request at gateway level.
+// celModelIdentityExpr generates a CEL expression that extracts model identity (namespace/name)
+// from the request at gateway level.
 // For path-routed inference (/<model-namespace>/<model-name>/...), extract from URL.
 // For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc).
-// Canonical model IDs (publishers/{ns}/models/{name}) are normalized to {ns}/{name}.
+// Publisher model IDs (publishers/{ns}/models/{name}) are resolved via a controller-computed
+// lookup table that maps publisher paths to the correct MaaS model identity ({ns}/{metadata.name}).
 // For listing endpoints like /v1/models where no model target exists, returns empty string
 // so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
 const (
@@ -338,14 +340,38 @@ const (
 		celPathParts + `[0] != "v1" && ` +
 		celPathParts + `[0] != "maas-api"`
 	celModelIdentityAvailable = `(` + celPathModelIdentityAvailable + ` || "x-gateway-model-name" in request.headers)`
-	celModelIdentity          = `(` + celPathModelIdentityAvailable +
+)
+
+func celModelIdentityExpr(publisherToIdentity map[string]string) string {
+	headerExpr := `request.headers["x-gateway-model-name"]`
+
+	var publisherBranch string
+	if len(publisherToIdentity) > 0 {
+		keys := make([]string, 0, len(publisherToIdentity))
+		for k := range publisherToIdentity {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+
+		var mapEntries []string
+		for _, k := range keys {
+			mapEntries = append(mapEntries, fmt.Sprintf(`"%s": "%s"`, k, publisherToIdentity[k]))
+		}
+		mapLiteral := "{" + strings.Join(mapEntries, ", ") + "}"
+		publisherBranch = fmt.Sprintf(`(%s in %s ? %s[%s] : %s)`,
+			headerExpr, mapLiteral, mapLiteral, headerExpr, headerExpr)
+	} else {
+		publisherBranch = headerExpr
+	}
+
+	return `(` + celPathModelIdentityAvailable +
 		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
 		` : ("x-gateway-model-name" in request.headers` +
-		`   ? (request.headers["x-gateway-model-name"].startsWith("publishers/")` +
-		`     ? request.headers["x-gateway-model-name"].split("/")[1] + "/" + request.headers["x-gateway-model-name"].split("/")[3]` +
-		`     : request.headers["x-gateway-model-name"])` +
+		`   ? (` + headerExpr + `.startsWith("publishers/")` +
+		`     ? ` + publisherBranch +
+		`     : ` + headerExpr + `)` +
 		`   : ""))`
-)
+}
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
@@ -360,7 +386,7 @@ const gatewayDefaultAuthPolicyName = "gateway-default-auth"
 // gatewayAuthzCacheKeySelector builds the cache-key expression for gateway-level
 // model authorization checks: "userId|groups|modelIdentity".
 // This prevents authz cache collisions across different model targets.
-func gatewayAuthzCacheKeySelector() string {
+func gatewayAuthzCacheKeySelector(celModelIdentity string) string {
 	return fmt.Sprintf(
 		`(%s) + "|" + (%s).join(",") + "|" + %s`,
 		celUserID, celGroups, celModelIdentity,
@@ -370,7 +396,7 @@ func gatewayAuthzCacheKeySelector() string {
 // subscriptionGatewayCacheKeySelector builds the cache-key expression for the gateway-level
 // subscription-info and subscription-valid evaluators: "userId|groups|subscription|modelIdentity".
 // Model identity is derived dynamically from X-Gateway-Model-Name header or request path.
-func subscriptionGatewayCacheKeySelector() string {
+func subscriptionGatewayCacheKeySelector(celModelIdentity string) string {
 	return fmt.Sprintf(
 		`(%s) + "|" + (%s).join(",") + "|" + (%s) + "|" + %s`,
 		celUserID, celGroups, celSubscription, celModelIdentity,
@@ -387,6 +413,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list
 
@@ -455,6 +482,13 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, err
 	}
 
+	publisherToIdentity, err := r.buildPublisherToIdentityMap(ctx, policy.Namespace)
+	if err != nil {
+		log.Error(err, "failed to build publisher-to-identity map")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to build publisher model mapping: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
 	if err != nil {
@@ -491,7 +525,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		return ctrl.Result{}, nil
 	}
 
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
+	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), publisherToIdentity, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
@@ -620,9 +654,10 @@ type modelSubjectAllowlist struct {
 }
 
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
-// Gateway-level policy. Model identity is resolved dynamically via CEL on every request
-// rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+// Gateway-level policy. Model identity is resolved dynamically via CEL on every request.
+// publisherToIdentity maps publisher model IDs (publishers/{ns}/models/{spec.model.name})
+// to the correct MaaS model identity ({ns}/{metadata.name}) for LLMInferenceService models.
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, publisherToIdentity map[string]string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -632,6 +667,8 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 
 	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.InfraNamespace)
 	subscriptionSelectorURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/subscriptions/select", maasAPIServiceName, r.InfraNamespace)
+
+	celModelIdentity := celModelIdentityExpr(publisherToIdentity)
 
 	// subscription-info body: same fields as per-model, but requestedModel uses dynamic CEL
 	subscriptionInfoBody := fmt.Sprintf(`{
@@ -719,8 +756,11 @@ allow { true }`,
 		},
 	}
 
+	publisherToIdentityJSON, _ := json.Marshal(publisherToIdentity)
 	requireGroupMembershipRego := fmt.Sprintf(`
 model_access := %s
+
+publisher_to_identity := %s
 
 request_path := object.get(input.context.request.http, "path", "")
 request_headers := object.get(input.context.request.http, "headers", {})
@@ -735,7 +775,7 @@ path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
 
 raw_header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
 
-header_model_identity := sprintf("%%s/%%s", [split(raw_header_model_identity, "/")[1], split(raw_header_model_identity, "/")[3]]) {
+header_model_identity := publisher_to_identity[raw_header_model_identity] {
 	startswith(raw_header_model_identity, "publishers/")
 } else := raw_header_model_identity
 
@@ -783,7 +823,7 @@ allow {
 	g := groups[_]
 	model_rules.groups[_] == g
 }
-`, modelAccessJSON)
+`, modelAccessJSON, string(publisherToIdentityJSON))
 
 	authorizationRules := map[string]any{
 		"tenant-gateway-isolation": tenantGatewayIsolationRule,
@@ -825,7 +865,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": subscriptionGatewayCacheKeySelector(),
+					"selector": subscriptionGatewayCacheKeySelector(celModelIdentity),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -838,7 +878,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": gatewayAuthzCacheKeySelector(),
+					"selector": gatewayAuthzCacheKeySelector(celModelIdentity),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -931,7 +971,7 @@ allow {
 				},
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": subscriptionGatewayCacheKeySelector(),
+						"selector": subscriptionGatewayCacheKeySelector(celModelIdentity),
 					},
 					"ttl": r.MetadataCacheTTL,
 				},
@@ -1107,7 +1147,7 @@ allow {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string) error {
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, publisherToIdentity map[string]string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string) error {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
 	// Calculate tenantName from tenantID
@@ -1117,7 +1157,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, publisherToIdentity, oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
 
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
@@ -1304,6 +1344,82 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 	}
 
 	return aggregate, nil
+}
+
+// buildPublisherToIdentityMap builds a mapping from publisher model IDs to MaaS model
+// identities for LLMInferenceService-backed models. Publisher paths have the format
+// publishers/{namespace}/models/{spec.model.name}, but MaaS uses {namespace}/{metadata.name}
+// as the model identity. CEL/Rego expressions at request time cannot resolve this mapping
+// by string manipulation alone (spec.model.name != metadata.name), so the controller
+// pre-computes it during reconciliation and embeds it in the AuthPolicy.
+func (r *MaaSAuthPolicyReconciler) buildPublisherToIdentityMap(ctx context.Context, policyNamespace string) (map[string]string, error) {
+	log := logr.FromContextOrDiscard(ctx)
+
+	var policies maasv1alpha1.MaaSAuthPolicyList
+	if err := r.List(ctx, &policies, client.InNamespace(policyNamespace)); err != nil {
+		return nil, fmt.Errorf("failed to list MaaSAuthPolicies for publisher mapping: %w", err)
+	}
+
+	type modelRefKey struct{ ns, name string }
+	seen := make(map[modelRefKey]bool)
+	var refs []maasv1alpha1.ModelRef
+	for _, p := range policies.Items {
+		if !p.GetDeletionTimestamp().IsZero() {
+			continue
+		}
+		for _, ref := range p.Spec.ModelRefs {
+			k := modelRefKey{ref.Namespace, ref.Name}
+			if !seen[k] {
+				seen[k] = true
+				refs = append(refs, ref)
+			}
+		}
+	}
+
+	publisherMap := make(map[string]string)
+	for _, ref := range refs {
+		modelRef := &maasv1alpha1.MaaSModelRef{}
+		if err := r.Get(ctx, types.NamespacedName{Namespace: ref.Namespace, Name: ref.Name}, modelRef); err != nil {
+			continue
+		}
+
+		if modelRef.Spec.ModelRef.Kind != "LLMInferenceService" {
+			continue
+		}
+
+		llmisvc := &unstructured.Unstructured{}
+		llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "serving.kserve.io",
+			Version: "v1alpha1",
+			Kind:    "LLMInferenceService",
+		})
+		llmKey := types.NamespacedName{Namespace: ref.Namespace, Name: modelRef.Spec.ModelRef.Name}
+		if err := r.Get(ctx, llmKey, llmisvc); err != nil {
+			log.V(1).Info("LLMInferenceService not found for publisher mapping, skipping",
+				"name", llmKey.Name, "namespace", llmKey.Namespace)
+			continue
+		}
+
+		specModelName, found, err := unstructured.NestedString(llmisvc.Object, "spec", "model", "name")
+		if err != nil || !found || specModelName == "" {
+			log.V(1).Info("LLMInferenceService has no spec.model.name, skipping publisher mapping",
+				"name", llmKey.Name, "namespace", llmKey.Namespace)
+			continue
+		}
+
+		publisherPath := fmt.Sprintf("publishers/%s/models/%s", ref.Namespace, specModelName)
+		modelIdentity := ref.Namespace + "/" + ref.Name
+
+		if existing, ok := publisherMap[publisherPath]; ok && existing != modelIdentity {
+			log.Info("Ambiguous publisher path maps to multiple model identities",
+				"publisherPath", publisherPath,
+				"existingIdentity", existing,
+				"newIdentity", modelIdentity)
+		}
+		publisherMap[publisherPath] = modelIdentity
+	}
+
+	return publisherMap, nil
 }
 
 func (r *MaaSAuthPolicyReconciler) modelAuthPolicyExists(ctx context.Context, modelNamespace, modelName string) (bool, error) {
