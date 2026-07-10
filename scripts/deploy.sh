@@ -1285,7 +1285,7 @@ apply_dsc() {
 apply_kuadrant_cr() {
   local namespace=$1
 
-  log_info "Initializing Gateway API and MaaS gateway..."
+  log_info "Initializing Gateway API and ModelsAsAService gateway..."
 
   # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
   # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
