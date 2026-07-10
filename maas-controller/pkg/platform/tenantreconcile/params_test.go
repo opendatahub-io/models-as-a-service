@@ -81,6 +81,48 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
+
+	t.Run("AuthWasmFilterName defaults to kuadrant convention when env is unset", func(t *testing.T) {
+		t.Setenv("AUTH_WASM_FILTER_NAME", "")
+
+		tenant := &maasv1alpha1.Tenant{
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+			},
+		}
+
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		assert.NoError(t, err)
+		assert.Equal(t, "extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway", got.AuthWasmFilterName)
+	})
+
+	t.Run("AUTH_WASM_FILTER_NAME env var overrides kuadrant default for RHCL", func(t *testing.T) {
+		t.Setenv("AUTH_WASM_FILTER_NAME", "envoy.filters.http.wasm")
+
+		tenant := &maasv1alpha1.Tenant{
+			Spec: maasv1alpha1.TenantSpec{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{
+					Namespace: "openshift-ingress",
+					Name:      "maas-default-gateway",
+				},
+			},
+		}
+
+		platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "maas-default-gateway",
+		}}
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		assert.NoError(t, err)
+		assert.Equal(t, "envoy.filters.http.wasm", got.AuthWasmFilterName)
+	})
 }
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
@@ -94,6 +136,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		PayloadProcessingImage:  "quay.io/example/payload:test",
 		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
+		AuthWasmFilterName:      kuadrantWasmFilterName("gateway-ns", "custom-gateway"),
 	}
 
 	err := applyPlatformParams(logr.Discard(), resources, params)
@@ -180,7 +223,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, found)
 	require.Len(t, configPatches, 6, "expected six configPatches (INSERT_BEFORE + INSERT_AFTER + 4x MERGE)")
 
-	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantAnchor := params.AuthWasmFilterName
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
 	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
@@ -239,6 +282,40 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	firstSubject, ok := subjects[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
+}
+
+func TestApplyPlatformParamsWithRHCLAnchor(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+	rhclAnchor := "envoy.filters.http.wasm"
+	params := PlatformParams{
+		AppNamespace:            "tenant-ns",
+		GatewayNamespace:        "gateway-ns",
+		GatewayName:             "custom-gateway",
+		ClusterAudience:         "openshift-custom",
+		MaaSAPIImage:            "quay.io/example/maas-api:test",
+		PayloadProcessingImage:  "quay.io/example/payload:test",
+		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
+		APIKeyMaxExpirationDays: "45",
+		AuthWasmFilterName:      rhclAnchor,
+	}
+
+	err := applyPlatformParams(logr.Discard(), resources, params)
+	require.NoError(t, err)
+
+	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingName)
+	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 6)
+
+	// Verify both INSERT_BEFORE and INSERT_AFTER patches use the RHCL wasm filter anchor.
+	for i, raw := range configPatches[:2] {
+		cp, ok := raw.(map[string]any)
+		require.True(t, ok, "configPatches[%d] should be a map", i)
+
+		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
+		assert.Equal(t, rhclAnchor, anchor, "configPatches[%d] subFilter.name should be RHCL wasm filter", i)
+	}
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

@@ -80,6 +80,12 @@ spec:
                 key: monitoring-namespace
                 name: maas-parameters
                 optional: true
+          - name: AUTH_WASM_FILTER_NAME
+            valueFrom:
+              configMapKeyRef:
+                key: auth-wasm-filter-name
+                name: maas-parameters
+                optional: true
         image: maas-controller
         name: manager
         imagePullPolicy: Always

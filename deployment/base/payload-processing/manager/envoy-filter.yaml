@@ -18,7 +18,7 @@ spec:
             filter:
               name: "envoy.filters.network.http_connection_manager"
               subFilter:
-                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+                name: PLACEHOLDER_AUTH_WASM_FILTER
       patch:
         operation: INSERT_BEFORE
         value:
@@ -45,7 +45,7 @@ spec:
             filter:
               name: "envoy.filters.network.http_connection_manager"
               subFilter:
-                name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+                name: PLACEHOLDER_AUTH_WASM_FILTER
       patch:
         operation: INSERT_AFTER
         value:

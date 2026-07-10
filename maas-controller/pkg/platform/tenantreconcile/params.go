@@ -31,6 +31,14 @@ type PlatformParams struct {
 	MaaSAPIKeyCleanupImage string
 
 	APIKeyMaxExpirationDays string
+
+	// AuthWasmFilterName is the Envoy HTTP filter name used as the insertion
+	// anchor for ext_proc filters in the EnvoyFilter configPatches. Kuadrant
+	// registers its WasmPlugin with a name derived from gateway coordinates
+	// (extensions.istio.io/wasmplugin/<ns>.kuadrant-<gw>), while RHCL 1.4
+	// uses the generic name "envoy.filters.http.wasm". Set the environment
+	// variable AUTH_WASM_FILTER_NAME to override the default Kuadrant convention.
+	AuthWasmFilterName string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the Tenant CR,
@@ -41,10 +49,13 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
 	}
 
+	gwNs := platformContext.GatewayRef.Namespace
+	gwName := platformContext.GatewayRef.Name
+
 	params := PlatformParams{
 		AppNamespace:            appNamespace,
-		GatewayNamespace:        platformContext.GatewayRef.Namespace,
-		GatewayName:             platformContext.GatewayRef.Name,
+		GatewayNamespace:        gwNs,
+		GatewayName:             gwName,
 		ClusterAudience:         clusterAudience,
 		SubscriptionNamespace:   tenant.Namespace,
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
@@ -53,13 +64,15 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
+		AuthWasmFilterName:      firstNonEmpty(os.Getenv("AUTH_WASM_FILTER_NAME"), kuadrantWasmFilterName(gwNs, gwName)),
 	}
 
 	log.Info("Built platform params",
 		"tenant", tenant.Namespace+"/"+tenant.Name,
 		"tenantID", tenantID,
 		"subscriptionNamespace", params.SubscriptionNamespace,
-		"gatewayName", params.GatewayName)
+		"gatewayName", params.GatewayName,
+		"authWasmFilterName", params.AuthWasmFilterName)
 
 	return params, nil
 }
@@ -366,7 +379,9 @@ func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 	return nil
 }
 
-func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
+// kuadrantWasmFilterName returns the Envoy HTTP filter name that Kuadrant
+// assigns to its WasmPlugin. This is the default insertion anchor for ext_proc.
+func kuadrantWasmFilterName(gatewayNamespace, gatewayName string) string {
 	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
 }
 
@@ -394,7 +409,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("write EnvoyFilter targetRefs: %w", err)
 	}
 
-	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	anchorName := params.AuthWasmFilterName
 	beforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
 	afterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
 
