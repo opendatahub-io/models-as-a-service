@@ -333,6 +333,9 @@ For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD 
 
 Delete the `AITenant` resource to start tenant cleanup:
 
+!!! warning "Do not delete the default tenant"
+    Do not delete `AITenant/models-as-a-service` in `ai-tenants` unless you are intentionally tearing down MaaS. The controller bootstraps the default AITenant only once per `Config/default`; after deletion it is not automatically recreated. MaaS UI and API workflows that depend on the default tenant may stop working until the default tenant state is restored.
+
 ```bash
 kubectl delete aitenant team-red -n ai-tenants
 ```
