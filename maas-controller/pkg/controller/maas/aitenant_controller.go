@@ -22,6 +22,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -666,7 +667,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	backoffLimit := int32(2)
 	activeDeadlineSeconds := int64(120)
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
-	endpoint := fmt.Sprintf("https://%s:8443/internal/v1/tenants/%s/api-keys", serviceHost, tenantName)
+	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
 	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
 
 	return &batcv1.Job{
