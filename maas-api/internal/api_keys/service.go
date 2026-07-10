@@ -166,7 +166,7 @@ func (s *Service) CreateAPIKey(
 	}
 	if selectErr != nil {
 		s.logger.Warn("Subscription selection failed when creating API key",
-			"user", username,
+			"user", logger.RedactValue(username),
 			"requestedSubscription", requestedSubscription,
 			"error", selectErr,
 		)
@@ -185,7 +185,7 @@ func (s *Service) CreateAPIKey(
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created API key", "user", username, "groups", userGroups, "id", keyID, "ephemeral", ephemeral)
+	s.logger.Info("Created API key", "user", logger.RedactValue(username), "groups", userGroups, "id", keyID, "ephemeral", ephemeral)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)

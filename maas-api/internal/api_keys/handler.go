@@ -162,8 +162,8 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 	}
 	if !authorized {
 		h.logger.Warn("Unauthorized API key access attempt",
-			"requestingUser", user.Username,
-			"keyOwner", tok.Username,
+			"requestingUser", logger.RedactValue(user.Username),
+			"keyOwner", logger.RedactValue(tok.Username),
 			"keyId", tokenID,
 		)
 		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
@@ -295,7 +295,7 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	h.reqLogger(c).Info("Created API key",
 		"keyId", result.ID,
 		"keyPrefix", result.KeyPrefix,
-		"username", user.Username,
+		"username", logger.RedactValue(user.Username),
 		"ephemeral", req.Ephemeral,
 	)
 
@@ -383,8 +383,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 	}
 	if !authorized {
 		h.logger.Warn("Unauthorized API key revocation attempt",
-			"requestingUser", user.Username,
-			"keyOwner", keyMetadata.Username,
+			"requestingUser", logger.RedactValue(user.Username),
+			"keyOwner", logger.RedactValue(keyMetadata.Username),
 			"keyId", keyID,
 		)
 		// Return 404 instead of 403 to prevent key enumeration (IDOR protection)
@@ -403,7 +403,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 		return
 	}
 
-	h.reqLogger(c).Info("Revoked API key", "keyId", keyID, "revokedBy", user.Username)
+	h.reqLogger(c).Info("Revoked API key", "keyId", keyID, "revokedBy", logger.RedactValue(user.Username))
 
 	// Return the revoked key metadata (per OpenAPI spec)
 	revokedKey, err := h.service.GetAPIKey(c.Request.Context(), keyID)
@@ -530,7 +530,7 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to search API keys",
 			"error", err,
-			"username", targetUsername,
+			"username", logger.RedactValue(targetUsername),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to search API keys"})
 		return
@@ -587,8 +587,8 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 		}
 		if !isAdmin {
 			h.logger.Warn("Unauthorized bulk revoke attempt",
-				"requestingUser", user.Username,
-				"targetUser", req.Username,
+				"requestingUser", logger.RedactValue(user.Username),
+				"targetUser", logger.RedactValue(req.Username),
 			)
 			c.JSON(http.StatusForbidden, gin.H{
 				"error": "Access denied: you can only bulk revoke your own API keys",
@@ -602,8 +602,8 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 	if err != nil {
 		h.logger.Error("Failed to bulk revoke API keys",
 			"error", err,
-			"targetUser", req.Username,
-			"requestingUser", user.Username,
+			"targetUser", logger.RedactValue(req.Username),
+			"requestingUser", logger.RedactValue(user.Username),
 		)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke API keys"})
 		return
@@ -611,8 +611,8 @@ func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
 
 	h.reqLogger(c).Info("Bulk revoked API keys",
 		"count", count,
-		"targetUser", req.Username,
-		"revokedBy", user.Username,
+		"targetUser", logger.RedactValue(req.Username),
+		"revokedBy", logger.RedactValue(user.Username),
 	)
 
 	response := BulkRevokeResponse{
