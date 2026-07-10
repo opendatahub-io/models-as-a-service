@@ -666,8 +666,8 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	backoffLimit := int32(2)
 	activeDeadlineSeconds := int64(120)
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
-	command := fmt.Sprintf("curl --fail --silent --show-error --max-time 30 --cacert %s -X DELETE https://%s:8443/internal/v1/tenants/%s/api-keys", aitenantAPIKeyCleanupCABundlePath, serviceHost, tenantName)
-	jobName := "maas-api-revoke-keys-" + aitenant.Name
+	endpoint := fmt.Sprintf("https://%s:8443/internal/v1/tenants/%s/api-keys", serviceHost, tenantName)
+	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -724,7 +724,19 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 						{
 							Name:    "revoke-keys",
 							Image:   image,
-							Command: []string{"/bin/sh", "-c", command},
+							Command: []string{"curl"},
+							Args: []string{
+								"--fail",
+								"--silent",
+								"--show-error",
+								"--max-time",
+								"30",
+								"--cacert",
+								aitenantAPIKeyCleanupCABundlePath,
+								"-X",
+								"DELETE",
+								endpoint,
+							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
 									Name:      "maas-api-service-ca",
@@ -756,6 +768,13 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 			},
 		},
 	}
+}
+
+func aitenantAPIKeyRevocationJobName(aitenantName string) string {
+	// Job-created pod names append "-<suffix>", so keep the Job name below the
+	// label limit rather than merely fitting the Job object's own name.
+	const maxJobNameForGeneratedPods = validation.DNS1123LabelMaxLength - 6
+	return aitenantBoundedName("maas-api-revoke-keys-", aitenantName, "", maxJobNameForGeneratedPods)
 }
 
 func jobComplete(job *batcv1.Job) bool {
@@ -1186,21 +1205,29 @@ func aitenantAccessRoleName(aitenant *maasv1alpha1.AITenant) string {
 
 func aitenantChildName(aitenantName, suffix string) string {
 	const prefix = "aitenant-"
-	name := prefix + aitenantName + "-" + suffix
-	if len(name) <= 63 {
+	return aitenantBoundedName(prefix, aitenantName, "-"+suffix, validation.DNS1123LabelMaxLength)
+}
+
+func aitenantBoundedName(prefix, aitenantName, suffix string, maxLength int) string {
+	name := prefix + aitenantName + suffix
+	if len(name) <= maxLength {
 		return name
 	}
 	sum := sha256.Sum256([]byte(aitenantName))
 	hash := hex.EncodeToString(sum[:])[:8]
-	budget := 63 - len(prefix) - len(suffix) - len(hash) - 2
+	budget := maxLength - len(prefix) - len(suffix) - len(hash) - 1
 	if budget < 1 {
-		return prefix + hash + "-" + suffix
+		fallback := strings.TrimSuffix(prefix, "-") + "-" + hash + suffix
+		if len(fallback) <= maxLength {
+			return fallback
+		}
+		return strings.TrimSuffix(prefix, "-") + "-" + hash
 	}
 	trimmed := strings.Trim(aitenantName[:budget], "-.")
 	if trimmed == "" {
 		trimmed = hash
 	}
-	return prefix + trimmed + "-" + suffix + "-" + hash
+	return prefix + trimmed + suffix + "-" + hash
 }
 
 func objectKind(obj client.Object) string {

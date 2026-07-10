@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -1010,6 +1011,19 @@ func TestAITenantChildName_Truncation(t *testing.T) {
 	g.Expect(got).To(ContainSubstring("-tenant-admin-"))
 }
 
+func TestAITenantAPIKeyRevocationJobName_Truncation(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(aitenantAPIKeyRevocationJobName("team-revoke")).To(Equal("maas-api-revoke-keys-team-revoke"))
+
+	name := strings.Repeat("a", 41)
+	got := aitenantAPIKeyRevocationJobName(name)
+	g.Expect(len(got)).To(BeNumerically("<=", validation.DNS1123LabelMaxLength-6))
+	g.Expect(len(got + "-abcde")).To(BeNumerically("<=", validation.DNS1123LabelMaxLength))
+	g.Expect(got).To(HavePrefix("maas-api-revoke-keys-"))
+	g.Expect(got).NotTo(Equal("maas-api-revoke-keys-" + name))
+}
+
 func TestGatewayClaimName_Deterministic(t *testing.T) {
 	g := NewWithT(t)
 
@@ -1545,10 +1559,21 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(job.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
 	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeFalse())
 	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
-	command := strings.Join(job.Spec.Template.Spec.Containers[0].Command, " ")
-	g.Expect(command).To(ContainSubstring("--cacert /etc/pki/maas-api/service-ca.crt"))
-	g.Expect(command).To(ContainSubstring("DELETE https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys"))
-	g.Expect(command).NotTo(ContainSubstring(" -k "))
+	container := job.Spec.Template.Spec.Containers[0]
+	g.Expect(container.Command).To(Equal([]string{"curl"}))
+	g.Expect(container.Args).To(Equal([]string{
+		"--fail",
+		"--silent",
+		"--show-error",
+		"--max-time",
+		"30",
+		"--cacert",
+		"/etc/pki/maas-api/service-ca.crt",
+		"-X",
+		"DELETE",
+		"https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys",
+	}))
+	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring(" -k "))
 	g.Expect(jobHasVolume(&job, "maas-api-service-ca", "openshift-service-ca.crt")).To(BeTrue())
 	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-service-ca", "/etc/pki/maas-api")).To(BeTrue())
 
