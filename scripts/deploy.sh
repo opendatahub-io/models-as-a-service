@@ -738,8 +738,8 @@ deploy_via_operator() {
   # DSC triggers: ODH operator → ai-gateway-operator → maas-controller → AITenant → maas-api
   # Wait for ai-gateway-operator before anything else in the chain can proceed.
   log_info "Waiting for ai-gateway-operator deployment..."
-  if ! kubectl rollout status deployment/ai-gateway-operator -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-    log_error "ai-gateway-operator not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+  if ! kubectl rollout status deployment/ai-gateway-operator -n "$NAMESPACE" --timeout="${POD_TIMEOUT:-300}s"; then
+    log_error "ai-gateway-operator not ready (timeout: ${POD_TIMEOUT:-300}s)"
     exit 1
   fi
   log_info "  ai-gateway-operator ready."
@@ -755,8 +755,8 @@ deploy_via_operator() {
 
   # Wait for maas-controller (deployed by ai-gateway-operator).
   log_info "Waiting for maas-controller deployment..."
-  if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s"; then
-    log_error "maas-controller not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+  if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${POD_TIMEOUT:-300}s"; then
+    log_error "maas-controller not ready (timeout: ${POD_TIMEOUT:-300}s)"
     exit 1
   fi
   log_info "  maas-controller ready."
