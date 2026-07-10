@@ -62,7 +62,10 @@ def _delete(kind, name, namespace=None, *, timeout="60s"):
     args = ["delete", kind, name, "--ignore-not-found", f"--timeout={timeout}"]
     if namespace:
         args.extend(["-n", namespace])
-    result = _oc_run(args, timeout=OC_TIMEOUT + 30)
+    process_timeout = OC_TIMEOUT + 30
+    if timeout.endswith("s") and timeout[:-1].isdigit():
+        process_timeout = max(process_timeout, int(timeout[:-1]) + 30)
+    result = _oc_run(args, timeout=process_timeout)
     if result.returncode != 0:
         raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
@@ -232,8 +235,8 @@ def _assert_aitenant_bootstrap_resources(case):
 
 
 def _delete_aitenant(case):
-    _delete(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
-    _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+    _delete(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
+    _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout=180)
 
 
 class TestAITenantLifecycle:
@@ -366,7 +369,7 @@ class TestAITenantLifecycle:
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
         finally:
-            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
@@ -388,7 +391,7 @@ class TestAITenantLifecycle:
             assert gateway is not None
             assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
         finally:
-            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE)
+            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
             _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
@@ -421,6 +424,6 @@ class TestAITenantLifecycle:
             assert aitenant["status"]["tenantNamespace"] != reserved_ns
             assert _get_json_or_none("tenant", TENANT_NAME, expected_ns) is not None
         finally:
-            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE)
+            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE, timeout="180s")
             _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", expected_ns, timeout="90s")

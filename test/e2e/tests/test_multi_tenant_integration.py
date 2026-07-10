@@ -109,7 +109,7 @@ class TestMultiTenantIntegration:
             )
             wait_for_aitenant_cleanup_resources(case)
 
-            delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
+            delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
             wait_for_not_found("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             wait_for_not_found("role", role_name, case["tenant_ns"], timeout=180)
             wait_for_not_found("namespace", case["tenant_ns"], timeout=180)

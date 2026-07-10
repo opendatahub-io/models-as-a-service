@@ -158,7 +158,10 @@ def _delete(kind: str, name: str, namespace: Optional[str] = None, *, timeout: s
     args = ["delete", kind, name, "--ignore-not-found", f"--timeout={timeout}"]
     if namespace:
         args.extend(["-n", namespace])
-    result = _oc_run(args, timeout=OC_TIMEOUT + 30)
+    process_timeout = OC_TIMEOUT + 30
+    if timeout.endswith("s") and timeout[:-1].isdigit():
+        process_timeout = max(process_timeout, int(timeout[:-1]) + 30)
+    result = _oc_run(args, timeout=process_timeout)
     if result.returncode != 0:
         raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
@@ -1065,7 +1068,7 @@ def auth_can_create_maassubscription(subject: str, namespace: str) -> bool:
 
 
 def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True) -> None:
-    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
+    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     delete_maas_auth_policy(case["policy_name"], case["tenant_ns"])
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
     delete_namespace_best_effort(case["tenant_ns"])
