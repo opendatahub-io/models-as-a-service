@@ -1067,8 +1067,7 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast}"
       else
         catalog_source="redhat-operators"
-        # Use 'stable-3.x' channel for RHOAI v3 (with MaaS support)
-        # RHOAI 2.x (fast channel) does not support aigateway.modelsAsAService
+        # Use 'stable-3.x' channel — required for RHOAI 3.5+ with aigateway.modelsAsAService support
         channel="${OPERATOR_CHANNEL:-stable-3.x}"
       fi
 
