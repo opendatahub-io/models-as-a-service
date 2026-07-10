@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1093,17 +1094,18 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapAITenantToMaaSSubscriptions,
 		))
 
-	// Watch generated TokenRateLimitPolicies — Kuadrant CRD must be registered for this watch to succeed.
-	// If the CRD is not yet registered at startup, skip the watch to avoid crash-looping
-	// and restart automatically once it becomes available.
-	if crdExists(context.Background(), mgr.GetAPIReader(), "kuadrant.io", "TokenRateLimitPolicy") {
+	// Watch generated TokenRateLimitPolicies — Kuadrant CRD must be present for this watch to succeed.
+	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
+	const trlpCRD = "tokenratelimitpolicies.kuadrant.io"
+	trlpExists := crdExists(context.Background(), mgr.GetAPIReader(), trlpCRD)
+	if trlpExists {
 		generatedTRLP := &unstructured.Unstructured{}
 		generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 		b = b.Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedTRLPToParent,
 		))
 	} else {
-		watchForCRDAndRestart(mgr, "kuadrant.io", "v1alpha1", "TokenRateLimitPolicy")
+		ctrl.Log.Info("TokenRateLimitPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
 
 	if r.TenantNamespaceDiscoveryEnabled {
@@ -1114,7 +1116,27 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
-	return b.Complete(r)
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	if !trlpExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, trlpCRD, func() source.Source {
+			trlp := &unstructured.Unstructured{}
+			trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+			return source.Kind(mgr.GetCache(), trlp,
+				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+						return r.mapGeneratedTRLPToParent(ctx, obj)
+					},
+				),
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for TokenRateLimitPolicy: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *MaaSSubscriptionReconciler) mapAITenantToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {

@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1837,17 +1838,18 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapAITenantToMaaSAuthPolicies,
 		))
 
-	// Watch generated AuthPolicies — Kuadrant CRD must be registered for this watch to succeed.
-	// If the CRD is not yet registered at startup, skip the watch to avoid crash-looping
-	// and restart automatically once it becomes available.
-	if crdExists(context.Background(), mgr.GetAPIReader(), "kuadrant.io", "AuthPolicy") {
+	// Watch generated AuthPolicies — Kuadrant CRD must be present for this watch to succeed.
+	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
+	const authPolicyCRD = "authpolicies.kuadrant.io"
+	authPolicyExists := crdExists(context.Background(), mgr.GetAPIReader(), authPolicyCRD)
+	if authPolicyExists {
 		generatedAuthPolicy := &unstructured.Unstructured{}
 		generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 		b = b.Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
 		))
 	} else {
-		watchForCRDAndRestart(mgr, "kuadrant.io", "v1", "AuthPolicy")
+		ctrl.Log.Info("AuthPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
 
 	if r.TenantNamespaceDiscoveryEnabled {
@@ -1868,7 +1870,27 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	return b.Complete(r)
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	if !authPolicyExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, authPolicyCRD, func() source.Source {
+			authPolicy := &unstructured.Unstructured{}
+			authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+			return source.Kind(mgr.GetCache(), authPolicy,
+				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+						return r.mapGeneratedAuthPolicyToParent(ctx, obj)
+					},
+				),
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for AuthPolicy: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *MaaSAuthPolicyReconciler) mapAITenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
