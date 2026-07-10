@@ -48,7 +48,8 @@ type MetadataStore interface {
 		subscription,
 		tenant string,
 		expiresAt *time.Time,
-		ephemeral bool) error
+		ephemeral bool,
+		labels map[string]string) error
 
 	// Search returns API keys matching the search criteria.
 	// Supports filtering, sorting, and pagination.
