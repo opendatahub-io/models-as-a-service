@@ -1239,18 +1239,18 @@ apply_dsc() {
 
   local data_dir="${SCRIPT_DIR}/data"
 
-  if kubectl get datasciencecluster -A --no-headers 2>/dev/null | grep -q .; then
-    local existing_dsc
-    existing_dsc=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  # Scope to default-dsc — consistent with the manifest name and wait_datasciencecluster_ready target
+  if kubectl get datasciencecluster default-dsc &>/dev/null; then
+    local existing_dsc="default-dsc"
 
     # Check for 3.5+ field: aigateway.modelsAsAService=Managed
     local new_field
-    new_field=$(kubectl get datasciencecluster "$existing_dsc" \
+    new_field=$(kubectl get datasciencecluster default-dsc \
       -o jsonpath='{.spec.components.aigateway.modelsAsAService.managementState}' 2>/dev/null || echo "")
 
     # Check for 3.4 legacy field: kserve.modelsAsService=Managed
     local old_field
-    old_field=$(kubectl get datasciencecluster "$existing_dsc" \
+    old_field=$(kubectl get datasciencecluster default-dsc \
       -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
 
     if [[ "$new_field" == "Managed" ]]; then
