@@ -8,15 +8,18 @@ import (
 	"testing"
 	"time"
 
+	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -34,6 +37,7 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	t.Helper()
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
+	utilruntime.Must(batcv1.AddToScheme(s))
 	utilruntime.Must(gatewayapiv1.Install(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
@@ -879,7 +883,7 @@ func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) 
 	g.Expect(ready.Message).To(ContainSubstring("another AITenant"))
 }
 
-func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesGatewayAndUserRoleBindingsUntouched(t *testing.T) {
+func TestAITenantReconcile_DeletionCleansChildrenAndRequestsNamespaceDeletionButLeavesGateway(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -889,6 +893,9 @@ func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesG
 			Name:       "team-del",
 			Namespace:  tenantreconcile.DefaultAITenantNamespace,
 			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
 		},
 		Spec: maasv1alpha1.AITenantSpec{},
 	}
@@ -906,26 +913,6 @@ func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesG
 				"opendatahub.io/generated-namespace":   "true",
 				"maas.opendatahub.io/tenant-name":      "team-del",
 				"maas.opendatahub.io/tenant-namespace": "ai-tenant-team-del",
-			},
-		},
-	}
-	tenantConfig := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-			Namespace: "ai-tenant-team-del",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
-			},
-		},
-	}
-	legacyTenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: "ai-tenant-team-del",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
 			},
 		},
 	}
@@ -984,11 +971,15 @@ func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesG
 	gateway := existingAITenantGateway("team-del")
 	gateway.Labels[aiGatewayTenantLabel] = "preexisting-value"
 	gateway.Annotations[aitenantNameAnnotation] = "team-del"
+	gatewayAuthPolicy := &unstructured.Unstructured{}
+	gatewayAuthPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+	gatewayAuthPolicy.SetNamespace("openshift-ingress")
+	gatewayAuthPolicy.SetName("team-del-maas-auth")
 
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, gateway, tenantConfig, legacyTenant, role, binding, userBinding, objRole, objBinding).
+		WithObjects(aitenant, ns, gateway, gatewayAuthPolicy, role, binding, userBinding, objRole, objBinding).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -1004,7 +995,7 @@ func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesG
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
 	var survivingGateway gatewayapiv1.Gateway
 	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "openshift-ingress", Name: "team-del"}, &survivingGateway)).To(Succeed())
@@ -1018,19 +1009,22 @@ func TestAITenantReconcile_DeletionCleansChildrenAndLegacyRoleBindingsButLeavesG
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: tenantAdminRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: aitenantAccessRoleName(aitenant)}, &rbacv1.RoleBinding{}))).To(BeTrue())
 
-	var survivingUserBinding rbacv1.RoleBinding
-	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: "team-del-manual-admin"}, &survivingUserBinding)).To(Succeed())
+	err = cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-del"}, &corev1.Namespace{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(gatewayAuthPolicy), gatewayAuthPolicy)).To(Succeed())
 
-	var surviving corev1.Namespace
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-del"}, &surviving)).To(Succeed())
-	g.Expect(surviving.Labels).NotTo(HaveKey(aitenantManagedLabel))
-	g.Expect(surviving.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
-	g.Expect(surviving.Labels).NotTo(HaveKey("opendatahub.io/generated-namespace"))
-	g.Expect(surviving.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
-	g.Expect(surviving.Annotations).NotTo(HaveKey(aitenantNamespaceAnnotation))
-	g.Expect(surviving.Annotations).NotTo(HaveKey(aitenantCreatedAnnotation))
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+	err = cl.Get(ctx, client.ObjectKeyFromObject(gatewayAuthPolicy), gatewayAuthPolicy)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, key, &maasv1alpha1.AITenant{}))).To(BeTrue())
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if !apierrors.IsNotFound(err) {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
+	}
 }
 
 func TestAITenantUpsert_PatchesAfterCreateAlreadyExistsRace(t *testing.T) {
@@ -1179,6 +1173,19 @@ func TestAITenantChildName_Truncation(t *testing.T) {
 	g.Expect(len(got)).To(BeNumerically("<=", 63))
 	g.Expect(got).To(HavePrefix("aitenant-tenant-"))
 	g.Expect(got).To(ContainSubstring("-tenant-admin-"))
+}
+
+func TestAITenantAPIKeyRevocationJobName_Truncation(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(aitenantAPIKeyRevocationJobName("team-revoke")).To(Equal("maas-api-revoke-keys-team-revoke"))
+
+	name := strings.Repeat("a", 41)
+	got := aitenantAPIKeyRevocationJobName(name)
+	g.Expect(len(got)).To(BeNumerically("<=", validation.DNS1123LabelMaxLength-6))
+	g.Expect(len(got + "-abcde")).To(BeNumerically("<=", validation.DNS1123LabelMaxLength))
+	g.Expect(got).To(HavePrefix("maas-api-revoke-keys-"))
+	g.Expect(got).NotTo(Equal("maas-api-revoke-keys-" + name))
 }
 
 func TestGatewayClaimName_Deterministic(t *testing.T) {
@@ -1352,6 +1359,11 @@ func TestAITenantReconcile_GatewayClaimCleanedOnDeletion(t *testing.T) {
 
 	// Delete the AITenant and reconcile.
 	var toDelete maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &toDelete)).To(Succeed())
+	setMapValue(&toDelete.Annotations, aitenantAPIKeysRevokedAnnotation, "true")
+	g.Expect(cl.Update(ctx, &toDelete)).To(Succeed())
+	g.Expect(cl.Delete(ctx, &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-cleanup"}})).To(Succeed())
+	g.Expect(cl.Delete(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ai-tenant-team-cleanup"}})).To(Succeed())
 	g.Expect(cl.Get(ctx, key, &toDelete)).To(Succeed())
 	g.Expect(cl.Delete(ctx, &toDelete)).To(Succeed())
 
@@ -1635,24 +1647,18 @@ func TestAITenantReconcile_DeletionCleansAllClaimsIncludingStale(t *testing.T) {
 			Name:       "team-delall",
 			Namespace:  tenantreconcile.DefaultAITenantNamespace,
 			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "current-gw"},
 		},
 	}
-	ns := &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: "ai-tenant-team-delall",
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-delall",
-				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
-			},
-		},
-	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, ns, staleClaim, currentClaim, existingAITenantGateway("current-gw")).
+		WithObjects(aitenant, staleClaim, currentClaim, existingAITenantGateway("current-gw")).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -1675,6 +1681,498 @@ func TestAITenantReconcile_DeletionCleansAllClaimsIncludingStale(t *testing.T) {
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	err = cl.Get(ctx, client.ObjectKey{Namespace: tenantreconcile.DefaultAITenantNamespace, Name: gatewayClaimName(currentRef)}, &corev1.ConfigMap{})
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-revoke",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var job batcv1.Job
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "maas-api-revoke-keys-team-revoke", Namespace: "odh-ai-gateway-infra"}, &job)).To(Succeed())
+	g.Expect(job.Spec.Template.Labels).To(HaveKeyWithValue("app", "maas-api-cleanup"))
+	g.Expect(job.Spec.Template.Spec.ServiceAccountName).To(Equal("maas-api-cleanup"))
+	g.Expect(job.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
+	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeFalse())
+	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
+	container := job.Spec.Template.Spec.Containers[0]
+	g.Expect(container.Command).To(Equal([]string{"curl"}))
+	g.Expect(container.Args).To(Equal([]string{
+		"--fail",
+		"--silent",
+		"--show-error",
+		"--max-time",
+		"30",
+		"--cacert",
+		"/etc/pki/maas-api/service-ca.crt",
+		"-X",
+		"DELETE",
+		"https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys",
+	}))
+	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring(" -k "))
+	g.Expect(jobHasVolume(&job, "maas-api-service-ca", "openshift-service-ca.crt")).To(BeTrue())
+	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-service-ca", "/etc/pki/maas-api")).To(BeTrue())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Terminating"))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("DeletionInProgress"))
+}
+
+func jobHasVolume(job *batcv1.Job, name, configMapName string) bool {
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.Name == name && volume.ConfigMap != nil && volume.ConfigMap.Name == configMapName {
+			return true
+		}
+	}
+	return false
+}
+
+func containerHasVolumeMount(container *corev1.Container, name, mountPath string) bool {
+	for _, mount := range container.VolumeMounts {
+		if mount.Name == name && mount.MountPath == mountPath && mount.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndDeletesJob(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-revoke-done",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job.Status.Conditions = []batcv1.JobCondition{
+		{
+			Type:               batcv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant, job).
+		Build()
+	r := &AITenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		APIReader:    cl,
+		AppNamespace: "odh-ai-gateway-infra",
+	}
+
+	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(revoked).To(BeTrue())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &updated)).To(Succeed())
+	g.Expect(updated.Annotations).To(HaveKeyWithValue(aitenantAPIKeysRevokedAnnotation, "true"))
+
+	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
+func TestEnsureTenantAPIKeysRevoked_UsesAPIReaderForJobLookup(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-revoke-uncached",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job.Status.Conditions = []batcv1.JobCondition{
+		{
+			Type:               batcv1.JobComplete,
+			Status:             corev1.ConditionTrue,
+			LastProbeTime:      metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	apiReader := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant.DeepCopy(), job).
+		Build()
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(aitenant).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*batcv1.Job); ok {
+					return apierrors.NewNotFound(schema.GroupResource{Group: "batch", Resource: "jobs"}, key.Name)
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).
+		Build()
+	r := &AITenantReconciler{
+		Client:       cl,
+		Scheme:       s,
+		APIReader:    apiReader,
+		AppNamespace: "odh-ai-gateway-infra",
+	}
+
+	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(revoked).To(BeTrue())
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &updated)).To(Succeed())
+	g.Expect(updated.Annotations).To(HaveKeyWithValue(aitenantAPIKeysRevokedAnnotation, "true"))
+}
+
+func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeues(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-revoke-fail",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+	}
+	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, "models-as-a-service")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantNamespace,
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+	}
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job.Status.Conditions = []batcv1.JobCondition{
+		{
+			Type:               batcv1.JobFailed,
+			Status:             corev1.ConditionTrue,
+			Reason:             "BackoffLimitExceeded",
+			Message:            "pod failed",
+			LastProbeTime:      metav1.Now(),
+			LastTransitionTime: metav1.Now(),
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, tenant, ns, job).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Terminating"))
+	g.Expect(updated.Finalizers).To(ContainElement(aitenantFinalizer))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("DeletionBlocked"))
+	g.Expect(ready.Message).To(ContainSubstring("API key revocation Job"))
+
+	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+	var remainingTenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant)).To(Succeed())
+	g.Expect(remainingTenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
+	g.Expect(remainingTenant.DeletionTimestamp.IsZero()).To(BeTrue())
+
+	var remainingNS corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: tenantNamespace}, &remainingNS)).To(Succeed())
+	g.Expect(remainingNS.DeletionTimestamp.IsZero()).To(BeTrue())
+}
+
+func TestAITenantReconcile_DeletionAddsTenantFinalizerBeforeDelete(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tenantreconcile.DefaultAITenantName,
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
+			Finalizers: []string{aitenantFinalizer},
+		},
+	}
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "models-as-a-service",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   "models-as-a-service",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "models-as-a-service",
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, tenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+
+	var updatedTenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "models-as-a-service"}, &updatedTenant)).To(Succeed())
+	g.Expect(updatedTenant.Finalizers).To(ContainElement(tenantFinalizer))
+	g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeTrue())
+}
+
+func TestAITenantReconcile_NamespaceFinalizersSetDeletionBlocked(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	now := metav1.Now()
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-ns-blocked",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
+		},
+	}
+	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, "models-as-a-service")
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              tenantNamespace,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"example.com/stuck"},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+		Status: corev1.NamespaceStatus{
+			Conditions: []corev1.NamespaceCondition{
+				{
+					Type:               corev1.NamespaceFinalizersRemaining,
+					Status:             corev1.ConditionTrue,
+					Message:            "some resources have finalizers",
+					LastTransitionTime: metav1.Now(),
+				},
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Terminating"))
+	g.Expect(updated.Finalizers).To(ContainElement(aitenantFinalizer))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("DeletionBlocked"))
+	g.Expect(ready.Message).To(Equal("some resources have finalizers"))
+
+	var remainingNS corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: tenantNamespace}, &remainingNS)).To(Succeed())
+	g.Expect(remainingNS.Finalizers).To(ContainElement("example.com/stuck"))
+}
+
+func TestAITenantReconcile_DefaultTenantDeletionCompletesInZeroTenantState(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	gatewayRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "maas-default-gateway"}
+	claim := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gatewayClaimName(gatewayRef),
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/gateway-claim": "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       tenantreconcile.DefaultAITenantName,
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: gatewayRef.Name},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, claim).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: gatewayRef.Namespace,
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	err = cl.Get(ctx, client.ObjectKey{Name: "models-as-a-service"}, &corev1.Namespace{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	err = cl.Get(ctx, client.ObjectKey{Namespace: "models-as-a-service", Name: maasv1alpha1.MaasTenantConfigInstanceName}, &maasv1alpha1.MaasTenantConfig{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	err = cl.Get(ctx, client.ObjectKeyFromObject(claim), &corev1.ConfigMap{})
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if !apierrors.IsNotFound(err) {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
+	}
+}
+
+func TestNamespaceDeletionStatusReportsBlockedFinalizers(t *testing.T) {
+	g := NewWithT(t)
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: "ai-tenant-blocked"},
+		Status: corev1.NamespaceStatus{
+			Conditions: []corev1.NamespaceCondition{
+				{
+					Type:    corev1.NamespaceFinalizersRemaining,
+					Status:  corev1.ConditionTrue,
+					Message: "some resources have finalizers",
+				},
+			},
+		},
+	}
+
+	reason, message := namespaceDeletionStatus(ns)
+	g.Expect(reason).To(Equal("DeletionBlocked"))
+	g.Expect(message).To(Equal("some resources have finalizers"))
 }
 
 func TestIsClaimOwnedByAITenant_OwnerRefTakesPrecedenceOverAnnotations(t *testing.T) {

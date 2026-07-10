@@ -120,7 +120,7 @@ type AITenantRBACSubject struct {
 type AITenantStatus struct {
 	// Phase is a high-level lifecycle phase for the tenant bootstrap.
 	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=Pending;Active;Failed
+	// +kubebuilder:validation:Enum=Pending;Active;Failed;Terminating
 	Phase string `json:"phase,omitempty"`
 
 	// TenantNamespace is the reconciled tenant namespace.
