@@ -45,6 +45,12 @@ func setPrerequisiteConditionsFromReport(tenant *maasv1alpha1.Tenant, rep tenant
 			"PrerequisitesMet", "Prerequisites satisfied; see Degraded for warnings")
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
 			"PrerequisitesWarning", agg)
+	case len(rep.Informational) > 0:
+		agg := strings.Join(rep.Informational, "; ")
+		setTenantCondition(tenant, tenantreconcile.ConditionMaaSPrerequisitesAvailable, metav1.ConditionTrue,
+			"PrerequisitesMet", agg)
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
+			"PrerequisitesMet", agg)
 	default:
 		setTenantCondition(tenant, tenantreconcile.ConditionMaaSPrerequisitesAvailable, metav1.ConditionTrue,
 			"PrerequisitesMet", "All prerequisites are satisfied")

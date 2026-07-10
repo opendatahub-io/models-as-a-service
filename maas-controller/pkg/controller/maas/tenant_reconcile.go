@@ -298,7 +298,8 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	setPrerequisiteConditionsFromReport(tenant, rep)
 	if len(rep.Blocking) > 0 {
 		tenant.Status.Phase = "Failed"
-		agg := fmt.Sprintf("%s; %s", strings.Join(rep.Blocking, "; "), strings.Join(rep.Warnings, "; "))
+		parts := append(append(append([]string{}, rep.Blocking...), rep.Warnings...), rep.Informational...)
+		agg := strings.Join(parts, "; ")
 		setDeploymentsAvailableCondition(tenant, false, "PrerequisitesMissing", agg)
 		apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
 			Type:               tenantreconcile.ReadyConditionType,

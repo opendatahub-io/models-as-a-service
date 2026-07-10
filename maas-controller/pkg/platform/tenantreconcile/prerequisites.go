@@ -33,10 +33,12 @@ func gvkListKind(gvk schema.GroupVersionKind) schema.GroupVersionKind {
 	return out
 }
 
-// PrerequisiteReport separates blocking errors from warnings.
+// PrerequisiteReport separates blocking errors from warnings and informational messages.
+// Informational messages are surfaced in status conditions but do not cause Degraded status.
 type PrerequisiteReport struct {
-	Blocking []string
-	Warnings []string
+	Blocking      []string
+	Warnings      []string
+	Informational []string
 }
 
 // CollectPrerequisiteReport runs prerequisite checks and returns blocking vs warning messages.
@@ -53,8 +55,8 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 		log.Error(nil, "MaaS prerequisite error", "check", "database-secret", "message", msg)
 	}
 	if msg := checkDSCIMonitoring(ctx, c); msg != "" {
-		rep.Warnings = append(rep.Warnings, msg)
-		log.V(1).Info("MaaS prerequisite warning", "check", "dsci-monitoring", "message", msg)
+		rep.Informational = append(rep.Informational, msg)
+		log.V(1).Info("MaaS prerequisite info", "check", "dsci-monitoring", "message", msg)
 	}
 
 	return rep
@@ -65,7 +67,7 @@ func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespac
 func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace string) error {
 	rep := CollectPrerequisiteReport(ctx, c, appNamespace)
 	if len(rep.Blocking) > 0 {
-		all := append(append([]string{}, rep.Blocking...), rep.Warnings...)
+		all := append(append(append([]string{}, rep.Blocking...), rep.Warnings...), rep.Informational...)
 		return fmt.Errorf("blocking prerequisites missing: %s", strings.Join(all, "; "))
 	}
 	return nil
