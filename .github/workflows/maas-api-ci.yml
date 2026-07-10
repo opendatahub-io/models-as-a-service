@@ -52,7 +52,7 @@ jobs:
           cache-dependency-path: ${{ env.PROJECT_DIR }}/go.sum
 
       - name: Run govulncheck
-        run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./...
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.4.0 ./...
 
   test:
     runs-on: ubuntu-latest
