@@ -5,7 +5,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 **Installation flow:**
 
 1. [Database Setup](#database-setup) — Create the PostgreSQL connection Secret
-2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsService)
+2. [Create Gateway](#create-gateway) — Deploy maas-default-gateway (required before modelsAsAService)
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable modelsAsAService in your DataScienceCluster
 4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
@@ -54,17 +54,17 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
     ```
 
 !!! note "Restarting maas-api"
-    If you add or update the Secret after the DataScienceCluster already has modelsAsService in managed state, restart the maas-api deployment to pick up the config:
+    If you add or update the Secret after the DataScienceCluster already has modelsAsAService in managed state, restart the maas-api deployment to pick up the config:
 
     ```bash
     kubectl rollout restart deployment/maas-api -n opendatahub
     ```
 
-    This is not required when the Secret exists before enabling modelsAsService in your DataScienceCluster.
+    This is not required when the Secret exists before enabling modelsAsAService in your DataScienceCluster.
 
 ## Create Gateway
 
-Create `maas-default-gateway` in `openshift-ingress` **before** enabling `modelsAsService` in your DataScienceCluster.
+Create `maas-default-gateway` in `openshift-ingress` **before** enabling `aigateway.modelsAsAService` in your DataScienceCluster.
 
 `scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
 
