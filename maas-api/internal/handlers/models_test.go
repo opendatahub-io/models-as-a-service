@@ -741,7 +741,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		assert.True(t, subscriptionNames["sub-b"], "Should have models from sub-b")
 	})
 
-	t.Run("user token - returns empty list when user has no subscriptions", func(t *testing.T) {
+	t.Run("user token - returns 403 with guidance when user has no subscriptions", func(t *testing.T) {
 		emptySubscriptionLister := &fakeSubscriptionListerWithMeta{
 			subscriptions: []*unstructured.Unstructured{
 				createSubscriptionWithMeta("sub-a", []string{"other-group"}, "", ""),
@@ -771,14 +771,17 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		req.Header.Set(constant.HeaderGroup, `["user-group"]`)
 		router2.ServeHTTP(w, req)
 
-		require.Equal(t, http.StatusOK, w.Code)
+		require.Equal(t, http.StatusForbidden, w.Code)
 
-		var response pagination.Page[models.Model]
-		err = json.Unmarshal(w.Body.Bytes(), &response)
+		var errorResponse map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
 		require.NoError(t, err)
 
-		assert.Equal(t, "list", response.Object)
-		assert.Empty(t, response.Data, "Should return empty list when user has no subscriptions")
+		errorObj, ok := errorResponse["error"].(map[string]any)
+		require.True(t, ok, "Expected error object")
+		assert.Equal(t, "permission_error", errorObj["type"])
+		assert.Contains(t, errorObj["message"], "API key")
+		assert.Contains(t, errorObj["message"], "POST /v1/api-keys")
 	})
 
 	t.Run("user token - attaches subscription metadata to models", func(t *testing.T) {
