@@ -773,6 +773,9 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 
 		require.Equal(t, http.StatusForbidden, w.Code)
 
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"),
+			"Expected Cache-Control: no-store on 403 response to prevent caching stale authorization decisions")
+
 		var errorResponse map[string]any
 		err = json.Unmarshal(w.Body.Bytes(), &errorResponse)
 		require.NoError(t, err)

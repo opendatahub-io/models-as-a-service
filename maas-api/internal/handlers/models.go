@@ -381,6 +381,10 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		h.logger.Debug("User token request - returning all accessible models")
 	}
 
+	// Prevent clients and proxies from caching authorization-checked model listings.
+	// Set early so every return path (including early 403s) includes the header.
+	c.Header("Cache-Control", "no-store")
+
 	// Determine which subscriptions to use for model filtering
 	subscriptionsToUse, shouldReturn := h.selectSubscriptionsForListing(c, userContext, requestedSubscription, returnAllModels)
 	if shouldReturn {
@@ -405,11 +409,12 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 		// Distinguish between "no subscription system" and "user has zero subscriptions"
 		if len(subscriptionsToUse) == 0 {
-			if h.subscriptionSelector == nil {
+			switch {
+			case h.subscriptionSelector == nil:
 				// Legacy case: no subscription system configured
 				h.logger.Debug("No subscription system configured, filtering models without subscription header")
 				modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
-			} else if returnAllModels {
+			case returnAllModels:
 				h.logger.Debug("User token with no accessible subscriptions, returning guidance to use API key")
 				c.JSON(http.StatusForbidden, gin.H{
 					"error": gin.H{
@@ -418,7 +423,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 						"type": "permission_error",
 					}})
 				return
-			} else {
+			default:
 				h.logger.Debug("User has zero accessible subscriptions, returning empty model list")
 			}
 		} else {
@@ -432,10 +437,7 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 		h.logger.Debug("MaaSModelRef lister not configured, returning empty model list")
 	}
 
-	// Prevent clients and proxies from caching authorization-checked model listings.
-	// The access check is a point-in-time snapshot; auth policies may change at any moment.
 	// X-Access-Checked-At lets clients assess the freshness of the authorization decision.
-	c.Header("Cache-Control", "no-store")
 	c.Header("X-Access-Checked-At", accessCheckedAt.Format(time.RFC3339))
 
 	h.logger.Debug("GET /v1/models returning models", "count", len(modelList))
