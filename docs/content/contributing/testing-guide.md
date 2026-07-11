@@ -68,6 +68,25 @@ test/e2e/
 
 Both generate a `coverage.html` report in their respective directories.
 
+### Integration Tests (PostgreSQL)
+
+Integration tests for `maas-api` verify JSONB storage, GIN index queries, and NULL handling against a real PostgreSQL database.
+
+```bash
+# Start PostgreSQL
+podman run --name maas-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
+
+# Create test database
+podman exec -it maas-test psql -U postgres -c "CREATE DATABASE maas_test;"
+
+# Run integration tests
+export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/maas_test?sslmode=disable"
+go test -tags=integration -v -run "TestPostgres" ./internal/api_keys
+
+# Cleanup
+podman stop maas-test && podman rm maas-test
+```
+
 ### E2E Tests (Python)
 
 !!! note "Prerequisites"
