@@ -2643,3 +2643,89 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 		t.Fatalf("expected unmanaged stale tenant gateway AuthPolicy %q to be preserved, but Get returned error: %v", staleAuthPolicyName, getErr)
 	}
 }
+
+// TestContainsUnsafeCELChars is a table-driven test for the containsUnsafeCELChars
+// helper which validates model names before they are interpolated into CEL expressions.
+// This is security-relevant: incorrect validation could allow CEL injection.
+func TestContainsUnsafeCELChars(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  bool
+	}{
+		{
+			name:  "empty string",
+			input: "",
+			want:  false,
+		},
+		{
+			name:  "normal ASCII model name",
+			input: "facebook/opt-125m",
+			want:  false,
+		},
+		{
+			name:  "alphanumeric with dots and hyphens",
+			input: "meta-llama/Llama-3.1-8B-Instruct",
+			want:  false,
+		},
+		{
+			name:  "string with double quote",
+			input: `model"name`,
+			want:  true,
+		},
+		{
+			name:  "string with backslash",
+			input: `model\name`,
+			want:  true,
+		},
+		{
+			name:  "string with null control character",
+			input: "model\x00name",
+			want:  true,
+		},
+		{
+			name:  "string with newline control character",
+			input: "model\nname",
+			want:  true,
+		},
+		{
+			name:  "string with tab control character",
+			input: "model\tname",
+			want:  true,
+		},
+		{
+			name:  "mixed valid and invalid characters",
+			input: "valid-prefix/\"injected",
+			want:  true,
+		},
+		{
+			name:  "supplementary-plane emoji (U+1F600)",
+			input: "model-\U0001F600-name",
+			want:  true,
+		},
+		{
+			name:  "supplementary-plane character (U+10000)",
+			input: "model-\U00010000-name",
+			want:  true,
+		},
+		{
+			name:  "BMP Unicode is safe (U+00E9 e-acute)",
+			input: "modél",
+			want:  false,
+		},
+		{
+			name:  "highest BMP character (U+FFFF) is safe",
+			input: "model-￿",
+			want:  false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := containsUnsafeCELChars(tc.input)
+			if got != tc.want {
+				t.Errorf("containsUnsafeCELChars(%q) = %v, want %v", tc.input, got, tc.want)
+			}
+		})
+	}
+}

@@ -375,11 +375,14 @@ func celModelIdentityExpr(publisherToIdentity map[string]string) string {
 }
 
 // containsUnsafeCELChars returns true if s contains double quotes, backslashes,
-// or control characters (U+0000..U+001F). These characters could break CEL
-// string literals or enable injection when interpolated into expressions.
+// control characters (U+0000..U+001F), or supplementary-plane Unicode (U+10000+).
+// These characters could break CEL string literals or enable injection when
+// interpolated into expressions. Supplementary-plane characters are rejected
+// because strconv.Quote emits \U (8-digit) escapes for them, but CEL only
+// supports \u (4-digit) escapes.
 func containsUnsafeCELChars(s string) bool {
 	for _, r := range s {
-		if r == '"' || r == '\\' || r <= 0x1f {
+		if r == '"' || r == '\\' || r <= 0x1f || r > 0xffff {
 			return true
 		}
 	}
