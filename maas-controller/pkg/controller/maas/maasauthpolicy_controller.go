@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"reflect"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/go-logr/logr"
@@ -355,7 +356,7 @@ func celModelIdentityExpr(publisherToIdentity map[string]string) string {
 
 		var mapEntries []string
 		for _, k := range keys {
-			mapEntries = append(mapEntries, fmt.Sprintf(`"%s": "%s"`, k, publisherToIdentity[k]))
+			mapEntries = append(mapEntries, strconv.Quote(k)+": "+strconv.Quote(publisherToIdentity[k]))
 		}
 		mapLiteral := "{" + strings.Join(mapEntries, ", ") + "}"
 		publisherBranch = fmt.Sprintf(`(%s in %s ? %s[%s] : %s)`,
@@ -371,6 +372,18 @@ func celModelIdentityExpr(publisherToIdentity map[string]string) string {
 		`     ? ` + publisherBranch +
 		`     : ` + headerExpr + `)` +
 		`   : ""))`
+}
+
+// containsUnsafeCELChars returns true if s contains double quotes, backslashes,
+// or control characters (U+0000..U+001F). These characters could break CEL
+// string literals or enable injection when interpolated into expressions.
+func containsUnsafeCELChars(s string) bool {
+	for _, r := range s {
+		if r == '"' || r == '\\' || r <= 0x1f {
+			return true
+		}
+	}
+	return false
 }
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
@@ -1404,6 +1417,12 @@ func (r *MaaSAuthPolicyReconciler) buildPublisherToIdentityMap(ctx context.Conte
 		if err != nil || !found || specModelName == "" {
 			log.V(1).Info("LLMInferenceService has no spec.model.name, skipping publisher mapping",
 				"name", llmKey.Name, "namespace", llmKey.Namespace)
+			continue
+		}
+
+		if containsUnsafeCELChars(specModelName) {
+			log.Info("LLMInferenceService spec.model.name contains invalid characters, skipping publisher mapping",
+				"name", llmKey.Name, "namespace", llmKey.Namespace, "specModelName", specModelName)
 			continue
 		}
 

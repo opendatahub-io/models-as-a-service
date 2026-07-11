@@ -1338,7 +1338,7 @@ func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructur
 		MetadataCacheTTL: 60,
 		AuthzCacheTTL:    60,
 	}
-	spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	spec := r.buildGatewayAuthPolicySpec("{}", nil, oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 }
 
@@ -1477,7 +1477,7 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 		AuthzCacheTTL:    60,
 	}
 
-	spec := r.buildGatewayAuthPolicySpec("{}", nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
+	spec := r.buildGatewayAuthPolicySpec("{}", nil, nil, true, "", "models-as-a-service", "gateway-ns", "maas-default-gateway")
 	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 	auth, found, err := unstructured.NestedMap(obj.Object, "spec", "defaults", "rules", "authentication")
@@ -1566,7 +1566,7 @@ func TestBuildGatewayAuthPolicySpec_OIDCJWKsTTL(t *testing.T) {
 				ClientID:  "maas-client",
 				TTL:       tc.ttl,
 			}
-			spec := r.buildGatewayAuthPolicySpec("{}", oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+			spec := r.buildGatewayAuthPolicySpec("{}", nil, oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 			obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
 
 			gotTTL, found, err := unstructured.NestedInt64(obj.Object, "spec", "defaults", "rules", "authentication", "oidc-identities", "jwt", "ttl")
