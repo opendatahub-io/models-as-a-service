@@ -92,7 +92,7 @@ func (s *PostgresStore) AddKey(
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
 	`
 
-    var labelsParam interface{}
+    var labelsParam any
     if labelsJSON != nil {
         labelsParam = labelsJSON
     } else {
