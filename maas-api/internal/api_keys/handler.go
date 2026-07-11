@@ -29,8 +29,12 @@ const (
 // Regular expressions to match invalid control characters in key name and label values.
 var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
 var invalidLabelCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
-var validLabelKeyPattern = regexp.MustCompile(`^[a-zA-Z0-9._-]+$`) // alphanumerics, dots, underscores, hyphens
-
+// Kubernetes-style label keys: optional DNS prefix + name
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+// Prefix: DNS subdomain (alphanumeric, dots, hyphens) ending with /
+// Name: alphanumeric, dots, underscores, hyphens
+// Examples: "environment", "app.kubernetes.io/name", "company.com/project-id"
+var validLabelKeyPattern = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?/)?[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
