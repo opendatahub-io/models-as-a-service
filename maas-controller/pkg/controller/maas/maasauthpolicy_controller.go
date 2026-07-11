@@ -673,7 +673,11 @@ type modelSubjectAllowlist struct {
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request.
 // publisherToIdentity maps publisher model IDs (publishers/{ns}/models/{spec.model.name})
 // to the correct MaaS model identity ({ns}/{metadata.name}) for LLMInferenceService models.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, publisherToIdentity map[string]string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(
+	modelAccessJSON string, publisherToIdentity map[string]string,
+	oidc *oidcConfig, xAPIKeyEnabled bool,
+	tenantID, tenantName, gatewayNamespace, gatewayName string,
+) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -772,7 +776,10 @@ allow { true }`,
 		},
 	}
 
-	publisherToIdentityJSON, _ := json.Marshal(publisherToIdentity)
+	publisherToIdentityJSON, err := json.Marshal(publisherToIdentity)
+	if err != nil {
+		publisherToIdentityJSON = []byte("{}")
+	}
 	requireGroupMembershipRego := fmt.Sprintf(`
 model_access := %s
 
@@ -1163,7 +1170,12 @@ allow {
 
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, publisherToIdentity map[string]string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string) error {
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
+	ctx context.Context, log logr.Logger,
+	modelAccessJSON string, publisherToIdentity map[string]string,
+	oidc *oidcConfig, xAPIKeyEnabled bool,
+	tenantID, gatewayNamespace, gatewayName string,
+) error {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
 	// Calculate tenantName from tenantID
