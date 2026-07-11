@@ -33,7 +33,7 @@ var invalidLabelCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 // Prefix: DNS subdomain (alphanumeric, dots, hyphens) ending with /
 // Name: alphanumeric, dots, underscores, hyphens
-// Examples: "environment", "app.kubernetes.io/name", "company.com/project-id"
+// Examples: "environment", "app.kubernetes.io/name", "company.com/project-id".
 var validLabelKeyPattern = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?/)?[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 
 // AdminChecker is an interface for checking if a user is an admin.
@@ -335,7 +335,7 @@ func validateLabels(labels map[string]string) error {
     for key, value := range labels {
         // Key validation
         if len(key) == 0 {
-            return fmt.Errorf("label keys cannot be empty")
+            return errors.New("label keys cannot be empty")
         }
         if len(key) > constant.MaxLabelKeyLength {
             return fmt.Errorf("label key '%s' exceeds %d characters", key, constant.MaxLabelKeyLength)

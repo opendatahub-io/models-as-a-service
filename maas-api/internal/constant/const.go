@@ -34,7 +34,7 @@ const (
 	AnnotationModelCapabilities = "opendatahub.io/model-capabilities"
 
 	// MaxLabelsEntries is the maximum number of label key-value pairs per API key (prevent abuse).
-	MaxLabelsEntries = 50
-	MaxLabelKeyLength = 128
+	MaxLabelsEntries    = 50
+	MaxLabelKeyLength   = 128
 	MaxLabelValueLength = 1024
 )

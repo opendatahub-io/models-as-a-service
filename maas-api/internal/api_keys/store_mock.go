@@ -45,7 +45,18 @@ var _ MetadataStore = (*MockStore)(nil)
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (m *MockStore) AddKey(
-	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool, labels map[string]string,
+	ctx context.Context, 
+	username, 
+	keyID, 
+	keyHash, 
+	name, 
+	description string, 
+	userGroups []string, 
+	subscription string, 
+	tenant string, 
+	expiresAt *time.Time, 
+	ephemeral bool, 
+	labels map[string]string,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
