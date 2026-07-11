@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
@@ -2624,4 +2626,451 @@ func TestCreateAPIKey_NameValidation(t *testing.T) {
 			assert.Contains(t, response["error"], tc.errMsg, "error message should mention %s for %s", tc.errMsg, tc.reason)
 		})
 	}
+}
+
+// TestValidateLabels_Success tests valid label configurations.
+func TestValidateLabels_Success(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{
+			name:   "nil labels",
+			labels: nil,
+		},
+		{
+			name:   "empty labels",
+			labels: map[string]string{},
+		},
+		{
+			name: "single label",
+			labels: map[string]string{
+				"environment": "production",
+			},
+		},
+		{
+			name: "multiple valid labels",
+			labels: map[string]string{
+				"cmdb_id":      "AST123456",
+				"cost_center":  "CC-DATA-001",
+				"environment":  "production",
+				"project_code": "PROJ-ML-2024",
+				"owner_email":  "ml-team@company.com",
+			},
+		},
+		{
+			name: "kubernetes-style prefixed keys",
+			labels: map[string]string{
+				"app.kubernetes.io/name":    "maas",
+				"app.kubernetes.io/version": "1.0",
+				"company.com/project-id":    "PROJ-123",
+				"example.org/owner":         "ml-team",
+			},
+		},
+		{
+			name: "simple keys with dots underscores hyphens",
+			labels: map[string]string{
+				"some_underscore_key": "value",
+				"some-hyphen-key":     "value",
+				"some.dot.key":        "value",
+				"mixed.key_with-all":  "value",
+			},
+		},
+		{
+			name: "max entries (50)",
+			labels: makeLargeLabels(constant.MaxLabelsEntries),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLabels(tt.labels)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestValidateLabels_Errors tests label validation failures.
+func TestValidateLabels_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		labels  map[string]string
+		wantErr string
+	}{
+		{
+			name:    "too many entries",
+			labels:  makeLargeLabels(constant.MaxLabelsEntries + 1),
+			wantErr: fmt.Sprintf("cannot exceed %d", constant.MaxLabelsEntries),
+		},
+		{
+			name:    "empty key",
+			labels:  map[string]string{"": "value"},
+			wantErr: "label keys cannot be empty",
+		},
+		{
+			name:    "key too long",
+			labels:  map[string]string{strings.Repeat("a", constant.MaxLabelKeyLength+1): "value"},
+			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:    "value too long",
+			labels:  map[string]string{"key": strings.Repeat("a", constant.MaxLabelValueLength+1)},
+			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:    "invalid key - spaces",
+			labels:  map[string]string{"key with spaces": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - special chars",
+			labels:  map[string]string{"key!@#$": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - slash without prefix",
+			labels:  map[string]string{"key/slash/invalid": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - prefix with underscore",
+			labels:  map[string]string{"bad_prefix.com/name": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - starts with hyphen",
+			labels:  map[string]string{"-starts-with-hyphen": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - ends with hyphen",
+			labels:  map[string]string{"ends-with-hyphen-": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - starts with dot",
+			labels:  map[string]string{".starts.with.dot": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "control characters in value - null",
+			labels:  map[string]string{"key": "value\x00null"},
+			wantErr: "invalid control characters",
+		},
+		{
+			name:    "control characters in value - newline",
+			labels:  map[string]string{"key": "value\nwith\nnewlines"},
+			wantErr: "invalid control characters",
+		},
+		{
+			name:    "control characters in value - tab",
+			labels:  map[string]string{"key": "value\twith\ttabs"},
+			wantErr: "invalid control characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLabels(tt.labels)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// Helper function to create a map with a specific number of entries.
+func makeLargeLabels(count int) map[string]string {
+	labels := make(map[string]string)
+	for i := 0; i < count; i++ {
+		labels[fmt.Sprintf("key_%d", i)] = fmt.Sprintf("value_%d", i)
+	}
+	return labels
+}
+
+// TestCreateAPIKey_WithLabels tests creating an API key with labels.
+func TestCreateAPIKey_WithLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+
+	labels := map[string]string{
+		"cmdb_id":      "AST123456",
+		"cost_center":  "CC-DATA-001",
+		"environment":  "production",
+		"project_code": "PROJ-ML-2024",
+	}
+
+	body := `{
+		"name": "prod-pipeline",
+		"description": "Production data processing",
+		"labels": {
+			"cmdb_id": "AST123456",
+			"cost_center": "CC-DATA-001",
+			"environment": "production",
+			"project_code": "PROJ-ML-2024"
+		}
+	}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var resp CreateAPIKeyResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// Verify labels are in the response
+	assert.Equal(t, labels, resp.Labels)
+
+	// Verify labels were stored
+	storedKey, err := store.Get(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.Equal(t, labels, storedKey.Labels)
+}
+
+// TestCreateAPIKey_WithoutLabels tests backward compatibility.
+func TestCreateAPIKey_WithoutLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+
+	body := `{
+		"name": "legacy-key",
+		"description": "Key without labels"
+	}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var resp CreateAPIKeyResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// Labels should be nil (not present in request)
+	assert.Nil(t, resp.Labels)
+
+	// Verify stored key also has nil labels
+	storedKey, err := store.Get(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.Nil(t, storedKey.Labels)
+}
+
+// TestCreateAPIKey_InvalidLabels tests validation error responses.
+func TestCreateAPIKey_InvalidLabels(t *testing.T) {
+	tests := []struct {
+		name       string
+		labelsJSON string
+		wantStatus int
+		wantErr    string
+	}{
+		{
+			name:       "too many labels",
+			labelsJSON: makeLargeLabelsJSON(51),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "cannot exceed 50",
+		},
+		{
+			name:       "invalid key characters",
+			labelsJSON: `{"invalid key!": "value"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "invalid characters",
+		},
+		{
+			name:       "key too long",
+			labelsJSON: fmt.Sprintf(`{"%s": "value"}`, strings.Repeat("a", 129)),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "exceeds 128 characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			svc := NewService(store, &config.Config{}, fixedSubSelector{})
+			handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+
+			body := fmt.Sprintf(`{"name": "test-key", "labels": %s}`, tt.labelsJSON)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"data-science"},
+				Tenant:   "test-tenant",
+			})
+
+			handler.CreateAPIKey(c)
+
+			assert.Equal(t, tt.wantStatus, w.Code)
+			
+			var errResp map[string]interface{}
+			err := json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Contains(t, errResp["error"], tt.wantErr)
+		})
+	}
+}
+
+// Helper to generate JSON for large labels map.
+func makeLargeLabelsJSON(count int) string {
+	labels := makeLargeLabels(count)
+	bytes, _ := json.Marshal(labels)
+	return string(bytes)
+}
+
+// TestSearchAPIKeys_ByLabels tests searching API keys by label filters.
+func TestSearchAPIKeys_ByLabels(t *testing.T) {
+	ctx := context.Background()
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+
+	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+
+	// Create keys with different labels
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cmdb_id": "AST123", "env": "prod"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cmdb_id": "AST456", "env": "dev"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cost_center": "CC-001"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-4", "hash-4", "Key 4", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false, nil) // No labels
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		labelsContain map[string]string
+		wantIDs       []string
+	}{
+		{
+			name:          "search by cmdb_id exact match",
+			labelsContain: map[string]string{"cmdb_id": "AST123"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search by env",
+			labelsContain: map[string]string{"env": "prod"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search by cost_center",
+			labelsContain: map[string]string{"cost_center": "CC-001"},
+			wantIDs:       []string{"key-3"},
+		},
+		{
+			name:          "search by multiple labels (AND logic)",
+			labelsContain: map[string]string{"cmdb_id": "AST123", "env": "prod"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search with no matches",
+			labelsContain: map[string]string{"cmdb_id": "NONEXISTENT"},
+			wantIDs:       []string{},
+		},
+		{
+			name:          "search with empty filter returns all",
+			labelsContain: nil,
+			wantIDs:       []string{"key-1", "key-2", "key-3", "key-4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := SearchAPIKeysRequest{
+				Filters: &SearchFilters{
+					LabelsContain: tt.labelsContain,
+				},
+			}
+			body, _ := json.Marshal(reqBody)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", testUser)
+
+			handler.SearchAPIKeys(c)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var resp SearchAPIKeysResponse
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+
+			gotIDs := make([]string, len(resp.Data))
+			for i, key := range resp.Data {
+				gotIDs[i] = key.ID
+			}
+
+			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
+// TestGetAPIKey_WithLabels tests retrieving an API key that has labels.
+func TestGetAPIKey_WithLabels(t *testing.T) {
+	ctx := context.Background()
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+
+	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+
+	labels := map[string]string{
+		"environment": "production",
+		"team":        "data-science",
+	}
+
+	err := store.AddKey(ctx, testUser.Username, "test-key-id", "hash", "Test Key", "Description",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false, labels)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/test-key-id", nil)
+	c.Params = gin.Params{{Key: "id", Value: "test-key-id"}}
+	c.Set("user", testUser)
+
+	handler.GetAPIKey(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var key ApiKey
+	err = json.Unmarshal(w.Body.Bytes(), &key)
+	require.NoError(t, err)
+
+	assert.Equal(t, labels, key.Labels)
 }
