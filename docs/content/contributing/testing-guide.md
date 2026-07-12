@@ -72,6 +72,13 @@ Both generate a `coverage.html` report in their respective directories.
 
 Integration tests for `maas-api` verify JSONB storage, GIN index queries, and NULL handling against a real PostgreSQL database.
 
+**Integration tests skip protection:**
+
+- Build tag check (requires `-tags=integration`)
+- `testing.Short()` check (skipped in short mode)
+- Environment variable check (skips if `TEST_DATABASE_URL` not set)
+
+
 ```bash
 # Start PostgreSQL
 podman run --name maas-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
