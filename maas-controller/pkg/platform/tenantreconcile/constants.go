@@ -85,12 +85,6 @@ const (
 	// DefaultOTELTracesSamplerArg samples all traces on dev/CI clusters (use 0.1 in prod).
 	DefaultOTELTracesSamplerArg = "1.0"
 
-	// DefaultTenantKeyRevocationImage is the minimal image used to run the per-tenant
-	// API key revocation Job created on AITenant deletion (overridable via
-	// RELATED_IMAGE_UBI_MINIMAL_IMAGE). It only needs curl to call maas-api's
-	// internal revoke endpoint.
-	DefaultTenantKeyRevocationImage = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
 	// For legacy/default tenant (empty tenantID), these values are used as-is.
