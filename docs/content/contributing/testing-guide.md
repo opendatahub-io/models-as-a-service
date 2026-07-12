@@ -83,6 +83,9 @@ Integration tests for `maas-api` verify JSONB storage, GIN index queries, and NU
 # Start PostgreSQL
 podman run --name maas-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
 
+# Wait for PostgreSQL readiness before creating the database.
+podman logs --follow maas-test
+
 # Create test database
 podman exec -it maas-test psql -U postgres -c "CREATE DATABASE maas_test;"
 

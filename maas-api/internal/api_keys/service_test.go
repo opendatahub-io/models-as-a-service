@@ -436,12 +436,12 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		tenantAIDs := []string{"tenant-revoke-a1", "tenant-revoke-a2", "tenant-revoke-a3"}
 		for _, id := range tenantAIDs {
 			_, hash := createTestAPIKey(t)
-			err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false)
+			err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false, nil)
 			require.NoError(t, err)
 		}
 
 		_, hash := createTestAPIKey(t)
-		require.NoError(t, store.AddKey(ctx, "bob", "tenant-revoke-b1", hash, "Tenant B", "", []string{"users"}, "default-sub", "tenant-b", nil, false))
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-revoke-b1", hash, "Tenant B", "", []string{"users"}, "default-sub", "tenant-b", nil, false, nil))
 
 		count, err := svc.RevokeTenantAPIKeys(ctx, "tenant-a")
 		require.NoError(t, err)
@@ -462,7 +462,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		svc, store := createTestService(t)
 
 		_, hash := createTestAPIKey(t)
-		require.NoError(t, store.AddKey(ctx, "alice", "tenant-revoke-idem", hash, "Idempotent", "", []string{"users"}, "default-sub", "tenant-a", nil, false))
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-revoke-idem", hash, "Idempotent", "", []string{"users"}, "default-sub", "tenant-a", nil, false, nil))
 
 		count, err := svc.RevokeTenantAPIKeys(ctx, "tenant-a")
 		require.NoError(t, err)

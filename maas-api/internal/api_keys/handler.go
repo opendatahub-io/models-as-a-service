@@ -218,6 +218,12 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		return
 	}
 
+	// Validate labels if provided
+	if err := validateLabels(req.Labels); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	// Auto-generate name for ephemeral keys if not provided
 	name := req.Name
 	if req.Ephemeral && name == "" {
@@ -234,11 +240,6 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		}
 		if invalidKeyNameCharsPattern.MatchString(name) {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "key name contains invalid control characters"})
-			return
-		}
-		// Validate labels if provided
-		if err := validateLabels(req.Labels); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
 	}

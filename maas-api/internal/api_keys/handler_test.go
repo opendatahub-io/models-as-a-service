@@ -189,7 +189,7 @@ func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	// Create a key via service so hash and subscription are correct
 	resp, err := service.CreateAPIKey(
 		context.Background(), "alice", []string{"system:authenticated"},
-		"Val Key", "", nil, false, "", "redteam",
+		"Val Key", "", nil, false, "", "redteam", nil,
 	)
 	require.NoError(t, err)
 
@@ -1731,9 +1731,9 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
 
-		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
-		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
-		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false, nil))
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false, nil))
+		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false, nil))
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
@@ -2800,7 +2800,7 @@ func makeLargeLabels(count int) map[string]string {
 func TestCreateAPIKey_WithLabels(t *testing.T) {
 	store := NewMockStore()
 	svc := NewService(store, &config.Config{}, fixedSubSelector{})
-	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 	labels := map[string]string{
 		"cmdb_id":      "AST123456",
@@ -2851,7 +2851,7 @@ func TestCreateAPIKey_WithLabels(t *testing.T) {
 func TestCreateAPIKey_WithoutLabels(t *testing.T) {
 	store := NewMockStore()
 	svc := NewService(store, &config.Config{}, fixedSubSelector{})
-	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 	body := `{
 		"name": "legacy-key",
@@ -2917,7 +2917,7 @@ func TestCreateAPIKey_InvalidLabels(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			store := NewMockStore()
 			svc := NewService(store, &config.Config{}, fixedSubSelector{})
-			handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+			handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 			body := fmt.Sprintf(`{"name": "test-key", "labels": %s}`, tt.labelsJSON)
 
@@ -2943,6 +2943,34 @@ func TestCreateAPIKey_InvalidLabels(t *testing.T) {
 	}
 }
 
+// TestCreateEphemeralKey_InvalidLabels verifies that label validation
+// is enforced for ephemeral keys with auto-generated names.
+func TestCreateEphemeralKey_InvalidLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	body := fmt.Sprintf(`{"ephemeral": true, "labels": {"%s": "value"}}`, strings.Repeat("a", constant.MaxLabelKeyLength+1))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength))
+}
+
 // Helper to generate JSON for large labels map.
 func makeLargeLabelsJSON(t *testing.T, count int) string {
 	t.Helper()
@@ -2957,7 +2985,7 @@ func TestSearchAPIKeys_ByLabels(t *testing.T) {
 	ctx := context.Background()
 	store := NewMockStore()
 	svc := NewService(store, &config.Config{}, fixedSubSelector{})
-	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
 
@@ -3056,7 +3084,7 @@ func TestGetAPIKey_WithLabels(t *testing.T) {
 	ctx := context.Background()
 	store := NewMockStore()
 	svc := NewService(store, &config.Config{}, fixedSubSelector{})
-	handler := NewHandler(logger.Development(), svc, newMockAdminChecker())
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
 

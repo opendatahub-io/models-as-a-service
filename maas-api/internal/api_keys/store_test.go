@@ -381,9 +381,9 @@ func TestInvalidateTenant(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "tenant-a-1", "tenant-ah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "bob", "tenant-a-2", "tenant-ah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "tenant-b-1", "tenant-bh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-a-1", "tenant-ah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "bob", "tenant-a-2", "tenant-ah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-b-1", "tenant-bh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false, nil))
 
 	count, err := store.InvalidateTenant(ctx, "tenant-a")
 	require.NoError(t, err)
