@@ -789,6 +789,7 @@ func main() {
 		AITenantNamespace:           aitenantNamespace,
 		ObservabilityManifestsPath:  observabilityManifestsPath,
 		MonitoringNamespace:         monitoringNamespace,
+		GatewayNamespace:            gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
 		os.Exit(1)
