@@ -11,15 +11,14 @@ spec:
   policyTypes:
   - Ingress
   ingress:
+  # Allow the maas-controller to call the internal tenant API-key revocation
+  # endpoint in-process when an AITenant is deleted. The controller runs in its
+  # own namespace, so match by pod label across all namespaces.
   - from:
-    - podSelector:
+    - namespaceSelector: {}
+      podSelector:
         matchLabels:
-          app: maas-api-cleanup
-          app.kubernetes.io/name: maas-api
-          app.kubernetes.io/component: api
-          app.kubernetes.io/part-of: models-as-a-service
+          app: maas-controller
     ports:
-    - protocol: TCP
-      port: 8080
     - protocol: TCP
       port: 8443
