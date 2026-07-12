@@ -1841,3 +1841,132 @@ class TestAPIKeySubscriptionFilter:
         finally:
             for kid in key_ids:
                 requests.delete(f"{api_keys_base_url}/{kid}", headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+
+class TestAPIKeyLabels:
+    """Tests for API key label creation, search, validation, and backward compatibility."""
+
+    def test_create_api_key_with_labels(self, api_keys_base_url: str, headers: dict):
+        """Create an API key with labels and verify they're returned and persisted."""
+        labels = {
+            "cmdb_id": "AST123456",
+            "cost_center": "CC-DATA-001",
+            "environment": "production",
+            "project_code": "PROJ-ML-2024",
+        }
+
+        r = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={
+                "name": "e2e-label-create",
+                "description": "E2E label round-trip test",
+                "labels": labels,
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
+        data = r.json()
+        assert "key" in data and "id" in data
+        assert data.get("labels") == labels, "Labels in create response don't match request"
+
+        r_get = requests.get(
+            f"{api_keys_base_url}/{data['id']}",
+            headers=headers,
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_get.status_code == 200
+        assert r_get.json().get("labels") == labels, "Labels from GET don't match original"
+
+    def test_search_api_keys_by_labels(self, api_keys_base_url: str, headers: dict):
+        """Create keys with different labels and verify search filtering."""
+        labels1 = {"cmdb_id": "AST111", "env": "prod"}
+        labels2 = {"cmdb_id": "AST222", "env": "dev"}
+        labels3 = {"cost_center": "CC-999"}
+
+        r1 = requests.post(api_keys_base_url, headers=headers,
+                           json={"name": "e2e-label-search-1", "labels": labels1},
+                           timeout=30, verify=TLS_VERIFY)
+        assert r1.status_code in (200, 201)
+        key1_id = r1.json()["id"]
+
+        r2 = requests.post(api_keys_base_url, headers=headers,
+                           json={"name": "e2e-label-search-2", "labels": labels2},
+                           timeout=30, verify=TLS_VERIFY)
+        assert r2.status_code in (200, 201)
+        key2_id = r2.json()["id"]
+
+        r3 = requests.post(api_keys_base_url, headers=headers,
+                           json={"name": "e2e-label-search-3", "labels": labels3},
+                           timeout=30, verify=TLS_VERIFY)
+        assert r3.status_code in (200, 201)
+
+        # Search by CMDB ID — should find key1 only
+        r_search = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={"filters": {"labelsContain": {"cmdb_id": "AST111"}}},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_search.status_code == 200
+        items = r_search.json().get("items") or r_search.json().get("data") or []
+        found_ids = [k["id"] for k in items]
+        assert key1_id in found_ids, "Should find key with cmdb_id AST111"
+
+        found_key = next(k for k in items if k["id"] == key1_id)
+        assert found_key["labels"]["cmdb_id"] == "AST111"
+
+        # Search by env=prod — should find key1, not key2
+        r_search = requests.post(
+            f"{api_keys_base_url}/search",
+            headers=headers,
+            json={"filters": {"labelsContain": {"env": "prod"}}},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_search.status_code == 200
+        items = r_search.json().get("items") or r_search.json().get("data") or []
+        found_ids = [k["id"] for k in items]
+        assert key1_id in found_ids
+        assert key2_id not in found_ids, "Should not find dev key when searching for prod"
+
+    def test_labels_validation_errors(self, api_keys_base_url: str, headers: dict):
+        """Verify invalid labels are rejected with 400 and clear error messages."""
+        # Too many labels (>50)
+        large_labels = {f"key{i}": f"value{i}" for i in range(51)}
+        r = requests.post(api_keys_base_url, headers=headers,
+                          json={"name": "e2e-label-too-many", "labels": large_labels},
+                          timeout=30, verify=TLS_VERIFY)
+        assert r.status_code == 400
+        assert "50" in r.json().get("error", "")
+
+        # Key too long (>128 chars)
+        r = requests.post(api_keys_base_url, headers=headers,
+                          json={"name": "e2e-label-long-key", "labels": {"a" * 129: "value"}},
+                          timeout=30, verify=TLS_VERIFY)
+        assert r.status_code == 400
+        assert "128" in r.json().get("error", "")
+
+        # Invalid characters in key
+        r = requests.post(api_keys_base_url, headers=headers,
+                          json={"name": "e2e-label-bad-chars", "labels": {"invalid key!": "value"}},
+                          timeout=30, verify=TLS_VERIFY)
+        assert r.status_code == 400
+
+    def test_backward_compatibility_no_labels(self, api_keys_base_url: str, headers: dict):
+        """Keys created without labels still work (backward compatibility)."""
+        r = requests.post(api_keys_base_url, headers=headers,
+                          json={"name": "e2e-label-none", "description": "No labels"},
+                          timeout=30, verify=TLS_VERIFY)
+        assert r.status_code in (200, 201)
+        data = r.json()
+        key_id = data["id"]
+        assert data.get("labels") is None or data.get("labels") == {}
+
+        r_get = requests.get(f"{api_keys_base_url}/{key_id}", headers=headers,
+                             timeout=30, verify=TLS_VERIFY)
+        assert r_get.status_code == 200
+        assert r_get.json().get("labels") is None or r_get.json().get("labels") == {}
