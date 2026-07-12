@@ -172,7 +172,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
     "filters": {
       "labelsContain": {
         "environment": "production",
-        "project_code": "PROJ-ML-2024"
+        "acme.inc/project_code": "PROJ-ML-2024"
       }
     }
   }' | jq
@@ -208,13 +208,21 @@ curl -sS "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "my-api-key",
   "description": "Key for model access",
-  "username": "alice",
+  "username": "admin",
+  "subscription": "simulator-subscription",
+  "tenant": "models-as-a-service",
+  "creationDate": "2026-07-12T01:27:45Z",
+  "expirationDate": "2026-10-10T01:27:45Z",
   "status": "active",
-  "subscription": "premium-subscription",
-  "creationDate": "2026-04-28T12:00:00Z",
-  "expirationDate": "2026-07-27T12:00:00Z",
-  "lastUsedAt": "2026-04-29T10:30:00Z",
-  "ephemeral": false
+  "ephemeral": false,
+  "labels": {
+    "acme.inc/project_code": "PROJ-ML-2024",
+    "cmdb_id": "AST123456",
+    "cost_center": "CC-DATA-001",
+    "environment": "production",
+    "owner": "alice",
+    "owner_email": "ml-team@acme.inc"
+  }
 }
 ```
 
