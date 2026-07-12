@@ -51,6 +51,28 @@ echo "API Key: ${API_KEY}"
 !!! tip "TLS certificate errors"
     If `curl` returns `curl: (60) SSL certificate problem`, see [Troubleshooting - TLS Certificate Validation](../install/troubleshooting.md#tls-certificate-validation).
 
+#### Create an API Key with Labels
+
+When creating an API key, include the `labels` field with custom key-value pairs to aid API-key management:
+
+```bash
+curl -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "production-pipeline",
+    "description": "Production data processing pipeline",
+    "labels": {
+      "cmdb_id": "AST123456",
+      "cost_center": "CC-DATA-001",
+      "environment": "production",
+      "acme.inc/project_code": "PROJ-ML-2024",
+      "owner_email": "ml-team@acme.inc",
+      "owner": "alice"
+    }
+  }'
+```
+
 **Request body fields:**
 
 | Field | Required | Description |
@@ -60,6 +82,7 @@ echo "API Key: ${API_KEY}"
 | `expiresIn` | No | Key expiration duration. See [Expiration Format](#expiration-format) below. Omit to use configured maximum (typically 90 days). |
 | `subscription` | No | MaaSSubscription name to bind. Omit to auto-select highest priority. |
 | `ephemeral` | No | Set to `true` for short-lived keys (max 1 hour). See [Ephemeral Keys](#ephemeral-keys). |
+| `labels` | No | A JSON-formatted key/value pair for attaching labels to API keys that assist in API-key management. See below for formatting rules. |
 
 **Response:**
 
@@ -74,6 +97,14 @@ echo "API Key: ${API_KEY}"
   "ephemeral": false
 }
 ```
+
+**Label constraints**
+
+- **Key format:** Label keys follow Kubernetes label syntax: optional DNS subdomain prefix (a-zA-Z0-9?/) plus a name of alphanumerics, dots, underscores, and hyphens (must start/end alphanumeric). Examples: environment, app.kubernetes.io/name.
+- **Label creation:** Labels are ephemeral and can only be defined during API-key creation. This ensures strong auditability.
+- **Maximum entries:** The maximum number of labels is 50.
+- **Key length:** Maximum label key length is 128 characters.
+- **Value length:** Maximum label value length is 1024 characters.
 
 ### Subscription Binding
 
@@ -112,6 +143,52 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
       "offset": 0
     }
   }' | jq .
+```
+
+### Searching API Keys using Labels
+
+Use the `labelsContain` filter to search for keys by label values:
+
+**Search by owner**
+
+```bash
+curl -X POST "${HOST}/maas-api/v1/api-keys/search" 
+  -H "Authorization: Bearer ${oc whoami -t}" 
+  -H "Content-Type: application/json" 
+  -d '{
+    "filters": {
+    "labelsContain": {"owner": "alice"}
+    }
+  }' | jq
+```
+
+**Search by cost center**
+
+```bash
+curl -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filters": {
+      "labelsContain": {"cost_center": "CC-DATA-001"}
+    }
+  }'
+```
+
+**Search by multiple label fields (AND logic)**
+
+```bash
+curl -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filters": {
+      "labelsContain": {
+        "environment": "production",
+        "project_code": "PROJ-ML-2024"
+      }
+    }
+  }'
 ```
 
 **Request options:**
