@@ -19,21 +19,22 @@ package maas
 import (
 	"context"
 	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net"
-	"os"
+	"net/http"
 	"strings"
 	"time"
 
-	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -71,13 +72,15 @@ const (
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked" //nolint:gosec // Annotation name, not a credential.
 	aitenantAPIKeysRevokedCondition  = "APIKeysRevoked"
 
-	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
-	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
-	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
-	aitenantAPIKeyCleanupTTLSeconds         = int32(300)
+	// aitenantAPIKeyCleanupCABundleName is the OpenShift service-ca injected ConfigMap in the
+	// application namespace; its service-ca.crt key verifies maas-api's serving certificate.
+	aitenantAPIKeyCleanupCABundleName = "openshift-service-ca.crt" //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
+
+	// tenantAPIKeyRevocationTimeout bounds the in-process revocation HTTP call.
+	tenantAPIKeyRevocationTimeout = 30 * time.Second
 )
 
-var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
+var errTenantAPIKeyRevocationFailed = errors.New("API key revocation failed")
 
 // AITenantReconciler reconciles AITenant tenant bootstrap resources.
 type AITenantReconciler struct {
@@ -103,6 +106,10 @@ type AITenantReconciler struct {
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
 	Recorder record.EventRecorder
+
+	// revokeTenantAPIKeys performs the in-process HTTP DELETE against the maas-api
+	// internal revocation endpoint. Defaults to httpRevokeTenantAPIKeys; tests override it.
+	revokeTenantAPIKeys func(ctx context.Context, endpoint string, caBundle []byte) error
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -115,7 +122,6 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
-// +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -626,7 +632,7 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
-		if errors.Is(err, errTenantAPIKeyRevocationJobFailed) {
+		if errors.Is(err, errTenantAPIKeyRevocationFailed) {
 			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 		}
 		return ctrl.Result{}, err
@@ -672,15 +678,6 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
 	}
-	// Keep the completed Job as durable proof of revocation until every other
-	// cleanup step and the AITenant finalizer removal have succeeded. Deleting it
-	// earlier can cause a later reconciliation to run revocation again after the
-	// per-tenant maas-api workload has already been removed.
-	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
-		// The AITenant is already unblocked. The Job TTL is a fallback for this
-		// narrow failure window, so report the error without making deletion fail.
-		ctrl.LoggerFrom(ctx).Error(err, "failed to delete completed API key revocation Job")
-	}
 	return ctrl.Result{}, nil
 }
 
@@ -723,9 +720,6 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
-	}
-	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
-		log.Error(err, "best-effort deleteTenantAPIKeyRevocationJob failed during forced finalizer removal")
 	}
 	return ctrl.Result{}, nil
 }
@@ -848,6 +842,10 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 	return nil
 }
 
+// ensureTenantAPIKeysRevoked revokes all of a tenant's API keys by calling the maas-api
+// internal revocation endpoint in-process. It returns true once revocation has succeeded
+// (idempotent; recorded via an annotation), or false with a wrapped
+// errTenantAPIKeyRevocationFailed so the caller requeues and retries.
 func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	if tenantAPIKeysRevoked(aitenant) {
 		return true, nil
@@ -856,54 +854,24 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		return false, errors.New("app namespace is required to revoke tenant API keys")
 	}
 
-	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
-	var existing batcv1.Job
-	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
-		if !isNotFoundError(err) {
-			return false, fmt.Errorf("get API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
-		}
-		if err := r.Create(ctx, job); err != nil {
-			if !isAlreadyExistsError(err) {
-				return false, fmt.Errorf("create API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
-			}
-		}
-		return false, nil
-	}
-	if !tenantAPIKeyRevocationJobMatchesAITenant(&existing, aitenant) {
-		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
-			return false, fmt.Errorf("delete stale API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
-		}
-		return false, nil
+	caBundle, err := r.loadServiceCABundle(ctx)
+	if err != nil {
+		return false, fmt.Errorf("%w: %w", errTenantAPIKeyRevocationFailed, err)
 	}
 
-	if jobComplete(&existing) {
-		if err := r.markTenantAPIKeysRevoked(ctx, aitenant); err != nil {
-			return false, err
-		}
-		return true, nil
+	revoke := r.revokeTenantAPIKeys
+	if revoke == nil {
+		revoke = httpRevokeTenantAPIKeys
 	}
-	if jobFailed(&existing) {
-		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
-			return false, fmt.Errorf("delete failed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
-		}
-		return false, fmt.Errorf("%w: %s/%s", errTenantAPIKeyRevocationJobFailed, existing.Namespace, existing.Name)
+	endpoint := tenantAPIKeyRevocationEndpoint(aitenant, r.AppNamespace)
+	if err := revoke(ctx, endpoint, caBundle); err != nil {
+		return false, fmt.Errorf("%w: %s: %w", errTenantAPIKeyRevocationFailed, endpoint, err)
 	}
-	return false, nil
-}
 
-func (r *AITenantReconciler) deleteTenantAPIKeyRevocationJob(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
-	var existing batcv1.Job
-	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
-		if isNotFoundError(err) {
-			return nil
-		}
-		return fmt.Errorf("get completed API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
+	if err := r.markTenantAPIKeysRevoked(ctx, aitenant); err != nil {
+		return false, err
 	}
-	if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
-	}
-	return nil
+	return true, nil
 }
 
 func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
@@ -911,7 +879,7 @@ func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aiten
 	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
 		Type:               aitenantAPIKeysRevokedCondition,
 		Status:             metav1.ConditionTrue,
-		Reason:             "RevocationJobCompleted",
+		Reason:             "APIKeysRevoked",
 		Message:            "Tenant API keys were revoked",
 		ObservedGeneration: aitenant.Generation,
 		LastTransitionTime: metav1.Now(),
@@ -930,162 +898,68 @@ func tenantAPIKeysRevoked(aitenant *maasv1alpha1.AITenant) bool {
 	return condition != nil && condition.Status == metav1.ConditionTrue
 }
 
-func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1alpha1.AITenant) bool {
-	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
-}
-
-func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
+// tenantAPIKeyRevocationEndpoint builds the maas-api internal revocation URL for a tenant.
+// The service name is tenant-scoped (empty tenantID for the default tenant), while the URL
+// path segment uses the AITenant name.
+func tenantAPIKeyRevocationEndpoint(aitenant *maasv1alpha1.AITenant, namespace string) string {
 	tenantID := aitenant.Name
 	if tenantID == tenantreconcile.DefaultAITenantName {
 		tenantID = ""
 	}
-	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
-	tenantName := aitenant.Name
-	image := tenantreconcile.DefaultTenantKeyRevocationImage
-	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
-		image = related
-	}
-	backoffLimit := int32(2)
-	activeDeadlineSeconds := int64(120)
-	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
-	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
-	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
-	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
+	serviceHost := fmt.Sprintf("%s.%s.svc", tenantreconcile.MaaSAPIServiceName(tenantID), namespace)
+	return fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), aitenant.Name)
+}
 
-	return &batcv1.Job{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      jobName,
-			Namespace: namespace,
-			Labels: map[string]string{
-				"app":                           "maas-api-cleanup",
-				"app.kubernetes.io/component":   "api",
-				"app.kubernetes.io/managed-by":  "maas-controller",
-				"app.kubernetes.io/name":        "maas-api",
-				"app.kubernetes.io/part-of":     "models-as-a-service",
-				tenantreconcile.LabelTenantName: aitenant.Name,
-			},
-			Annotations: map[string]string{
-				aitenantNameAnnotation:      aitenant.Name,
-				aitenantNamespaceAnnotation: aitenant.Namespace,
-				aitenantUIDAnnotation:       string(aitenant.UID),
-			},
-		},
-		Spec: batcv1.JobSpec{
-			BackoffLimit:            &backoffLimit,
-			ActiveDeadlineSeconds:   &activeDeadlineSeconds,
-			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
-			Template: corev1.PodTemplateSpec{
-				ObjectMeta: metav1.ObjectMeta{
-					Labels: map[string]string{
-						"app":                         "maas-api-cleanup",
-						"app.kubernetes.io/component": "api",
-						"app.kubernetes.io/name":      "maas-api",
-						"app.kubernetes.io/part-of":   "models-as-a-service",
-					},
-				},
-				Spec: corev1.PodSpec{
-					ServiceAccountName:           aitenantAPIKeyCleanupServiceAccountName,
-					AutomountServiceAccountToken: boolPtr(false),
-					RestartPolicy:                corev1.RestartPolicyOnFailure,
-					SecurityContext: &corev1.PodSecurityContext{
-						RunAsNonRoot: boolPtr(true),
-					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "maas-api-service-ca",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: aitenantAPIKeyCleanupCABundleName,
-									},
-									Items: []corev1.KeyToPath{
-										{Key: "service-ca.crt", Path: "service-ca.crt"},
-									},
-								},
-							},
-						},
-					},
-					Containers: []corev1.Container{
-						{
-							Name:    "revoke-keys",
-							Image:   image,
-							Command: []string{"curl"},
-							Args: []string{
-								"--fail",
-								"--silent",
-								"--show-error",
-								"--max-time",
-								"30",
-								"--cacert",
-								aitenantAPIKeyCleanupCABundlePath,
-								"-X",
-								"DELETE",
-								endpoint,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "maas-api-service-ca",
-									MountPath: "/etc/pki/maas-api",
-									ReadOnly:  true,
-								},
-							},
-							Resources: corev1.ResourceRequirements{
-								Requests: corev1.ResourceList{
-									corev1.ResourceMemory: resourceQuantity("16Mi"),
-									corev1.ResourceCPU:    resourceQuantity("10m"),
-								},
-								Limits: corev1.ResourceList{
-									corev1.ResourceMemory: resourceQuantity("32Mi"),
-									corev1.ResourceCPU:    resourceQuantity("50m"),
-								},
-							},
-							SecurityContext: &corev1.SecurityContext{
-								AllowPrivilegeEscalation: boolPtr(false),
-								ReadOnlyRootFilesystem:   boolPtr(true),
-								RunAsNonRoot:             boolPtr(true),
-								Capabilities: &corev1.Capabilities{
-									Drop: []corev1.Capability{"ALL"},
-								},
-							},
-						},
-					},
-				},
-			},
+// loadServiceCABundle reads the OpenShift service-ca bundle from the application namespace,
+// used to verify maas-api's serving certificate for the in-process revocation call.
+func (r *AITenantReconciler) loadServiceCABundle(ctx context.Context) ([]byte, error) {
+	var cm corev1.ConfigMap
+	key := client.ObjectKey{Namespace: r.AppNamespace, Name: aitenantAPIKeyCleanupCABundleName}
+	if err := r.get(ctx, key, &cm); err != nil {
+		return nil, fmt.Errorf("get service CA bundle %s/%s: %w", r.AppNamespace, aitenantAPIKeyCleanupCABundleName, err)
+	}
+	caPEM := strings.TrimSpace(cm.Data["service-ca.crt"])
+	if caPEM == "" {
+		return nil, fmt.Errorf("service CA bundle %s/%s is missing key %q", r.AppNamespace, aitenantAPIKeyCleanupCABundleName, "service-ca.crt")
+	}
+	return []byte(caPEM), nil
+}
+
+// httpRevokeTenantAPIKeys issues a service-CA-verified HTTPS DELETE to the maas-api internal
+// revocation endpoint. Any non-2xx response or transport error is returned so the caller
+// requeues; the endpoint is idempotent, so retries are safe.
+func httpRevokeTenantAPIKeys(ctx context.Context, endpoint string, caBundle []byte) error {
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caBundle) {
+		return errors.New("service CA bundle contains no valid certificates")
+	}
+
+	httpClient := &http.Client{
+		Timeout: tenantAPIKeyRevocationTimeout,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		},
 	}
-}
 
-func aitenantAPIKeyRevocationJobName(aitenantName string) string {
-	// Job-created pod names append "-<suffix>", so keep the Job name below the
-	// label limit rather than merely fitting the Job object's own name.
-	const maxJobNameForGeneratedPods = validation.DNS1123LabelMaxLength - 6
-	return aitenantBoundedName("maas-api-revoke-keys-", aitenantName, "", maxJobNameForGeneratedPods)
-}
+	reqCtx, cancel := context.WithTimeout(ctx, tenantAPIKeyRevocationTimeout)
+	defer cancel()
 
-func jobComplete(job *batcv1.Job) bool {
-	for _, condition := range job.Status.Conditions {
-		if condition.Type == batcv1.JobComplete && condition.Status == corev1.ConditionTrue {
-			return true
-		}
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, endpoint, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("build revocation request: %w", err)
 	}
-	return false
-}
 
-func jobFailed(job *batcv1.Job) bool {
-	for _, condition := range job.Status.Conditions {
-		if condition.Type == batcv1.JobFailed && condition.Status == corev1.ConditionTrue {
-			return true
-		}
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("call revocation endpoint: %w", err)
 	}
-	return false
-}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.Copy(io.Discard, resp.Body)
 
-func boolPtr(v bool) *bool {
-	return &v
-}
-
-func resourceQuantity(value string) resource.Quantity {
-	return resource.MustParse(value)
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return fmt.Errorf("revocation endpoint returned HTTP %d", resp.StatusCode)
+	}
+	return nil
 }
 
 func (r *AITenantReconciler) deleteOwned(ctx context.Context, aitenant *maasv1alpha1.AITenant, obj client.Object, key client.ObjectKey) error {

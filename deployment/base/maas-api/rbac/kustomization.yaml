@@ -6,7 +6,6 @@ metadata:
 
 resources:
 - serviceaccount.yaml
-- serviceaccount-cleanup.yaml
 - clusterrole.yaml
 - clusterrolebinding.yaml
 - supplemental-clusterrole.yaml

@@ -107,14 +107,6 @@ rules:
   - delete
   - get
 - apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - create
-  - delete
-  - get
-- apiGroups:
   - cert-manager.io
   resources:
   - certificates
