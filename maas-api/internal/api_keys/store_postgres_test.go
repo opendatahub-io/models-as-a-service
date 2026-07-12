@@ -66,12 +66,12 @@ func TestPostgresStore_SearchByLabels(t *testing.T) {
 	labels2 := map[string]string{"cmdb_id": "AST456", "env": "dev"}
 	labels3 := map[string]string{"cost_center": "CC-001"}
 
-	store.AddKey(ctx, "alice", uuid.New().String(), "hash1",
+	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash1",
 		"key1", "", []string{}, "sub1", "test-tenant", nil, false, labels1)
-	store.AddKey(ctx, "alice", uuid.New().String(), "hash2",
+	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash2",
 		"key2", "", []string{}, "sub1", "test-tenant", nil, false, labels2)
-	store.AddKey(ctx, "alice", uuid.New().String(), "hash3",
-		"key3", "", []string{}, "sub1", "test-tenant", nil, false, labels3)
+	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash3",
+		"key3", "", []string{}, "sub1", "test-tenant", nil, false, labels3))
 
 	// Search by exact match
 	result, err := store.Search(ctx, "alice", "test-tenant",

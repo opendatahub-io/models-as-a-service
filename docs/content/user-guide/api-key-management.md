@@ -93,8 +93,8 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys"   -H "Authorization: Bea
 
 ```json
 {
-  "key": "sk-oai-18Mub7kHaDLdDYX1d_FOQB6eJfBKGbM2mgv1YXOjVC7BfH1xCkjt2R1xTW9MA",
-  "keyPrefix": "sk-oai-18Mub7kHaDLd...",
+  "key": "<REDACTED_API_KEY>",
+  "keyPrefix": "<REDACTED_KEY_PREFIX>",
   "id": "c2011e55-bd97-41e6-aab7-1b8ff6713d95",
   "name": "my-api-key",
   "subscription": "simulator-subscription",
