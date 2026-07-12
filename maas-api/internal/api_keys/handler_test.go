@@ -2894,6 +2894,12 @@ func TestCreateAPIKey_InvalidLabels(t *testing.T) {
 		wantErr    string
 	}{
 		{
+			name:       "empty key",
+			labelsJSON: `{"": "value"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "label keys cannot be empty",
+		},
+		{
 			name:       "too many labels",
 			labelsJSON: makeLargeLabelsJSON(t, constant.MaxLabelsEntries+1),
 			wantStatus: http.StatusBadRequest,
@@ -2910,6 +2916,18 @@ func TestCreateAPIKey_InvalidLabels(t *testing.T) {
 			labelsJSON: fmt.Sprintf(`{"%s": "value"}`, strings.Repeat("a", constant.MaxLabelKeyLength+1)),
 			wantStatus: http.StatusBadRequest,
 			wantErr:    fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:       "value too long",
+			labelsJSON: fmt.Sprintf(`{"key": "%s"}`, strings.Repeat("a", constant.MaxLabelValueLength+1)),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:       "control characters in value",
+			labelsJSON: `{"k": "val\u0000ue"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "contains invalid control characters",
 		},
 	}
 
