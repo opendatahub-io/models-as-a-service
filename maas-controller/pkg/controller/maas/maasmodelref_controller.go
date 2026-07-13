@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -464,6 +465,24 @@ func registerWatchWhenCRDAppears(
 	))
 }
 
+// unstructuredLLMIsvcReadyStatus extracts the Ready condition status from an
+// unstructured LLMInferenceService — mirrors llmisvcReadyStatus for typed objects.
+func unstructuredLLMIsvcReadyStatus(obj *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Ready" {
+			if status, ok := cond["status"].(string); ok {
+				return status
+			}
+		}
+	}
+	return ""
+}
+
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
@@ -513,12 +532,41 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 
 	if !llmisvcExists {
 		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
-			return source.Kind(mgr.GetCache(), &kservev1alpha1.LLMInferenceService{},
-				handler.TypedEnqueueRequestsFromMapFunc[*kservev1alpha1.LLMInferenceService](
-					func(ctx context.Context, obj *kservev1alpha1.LLMInferenceService) []reconcile.Request {
-						return r.mapLLMISvcToMaaSModelRefs(ctx, obj)
+			// Use unstructured to bypass the REST mapper — typed watches require the REST
+			// mapper to know the GVK, which may be stale when the CRD is installed after startup.
+			llmisvc := &unstructured.Unstructured{}
+			llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "serving.kserve.io", Version: "v1alpha1", Kind: "LLMInferenceService",
+			})
+			return source.Kind(mgr.GetCache(), llmisvc,
+				// Mirror the static-path predicates (GenerationChangedPredicate +
+				// llmisvcReadyChangedPredicate) using handler.TypedFuncs so we have
+				// access to both old and new objects on Update events.
+				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
+					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
+							q.Add(req)
+						}
 					},
-				),
+					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						if e.ObjectOld == nil || e.ObjectNew == nil {
+							return
+						}
+						// Mirrors GenerationChangedPredicate + llmisvcReadyChangedPredicate.
+						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
+							unstructuredLLMIsvcReadyStatus(e.ObjectOld) == unstructuredLLMIsvcReadyStatus(e.ObjectNew) {
+							return
+						}
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.ObjectNew) {
+							q.Add(req)
+						}
+					},
+					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
+							q.Add(req)
+						}
+					},
+				},
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
@@ -595,13 +643,12 @@ func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(ctx context.Co
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
-	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
-	if !ok {
-		return nil
-	}
+	// Use GetName/GetNamespace — works for both typed *kservev1alpha1.LLMInferenceService
+	// (static watch at startup) and *unstructured.Unstructured (dynamic watch registered
+	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
-		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", llmisvc.Name)
+	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: obj.GetName()}); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", obj.GetName())
 		return nil
 	}
 	var requests []reconcile.Request
@@ -611,7 +658,7 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, 
 			continue
 		}
 		// MaaSModelRef references models in the same namespace
-		if m.Namespace == llmisvc.Namespace {
+		if m.Namespace == obj.GetNamespace() {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 			})
