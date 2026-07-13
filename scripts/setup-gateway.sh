@@ -329,7 +329,7 @@ setup_route_mode() {
   # the Route can be created in the next step (see wait_gateway_programmed).
   log_info "  Waiting for Gateway to be Programmed (timeout: ${GATEWAY_TIMEOUT}s)..."
   if ! kubectl wait --for=condition=Programmed gateway/"$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" --timeout="${GATEWAY_TIMEOUT}s" 2>/dev/null; then
-    log_warn "Gateway not Programmed after ${GATEWAY_TIMEOUT}s - check Service Mesh installation"
+    log_warn "Gateway not Programmed after ${GATEWAY_TIMEOUT}s - if on OCP 4.20+, check that servicemeshoperator3 was NOT installed manually (it conflicts with openshift-ingress). Run: kubectl get subscription -A | grep servicemesh"
   else
     log_info "  Gateway is Programmed"
   fi

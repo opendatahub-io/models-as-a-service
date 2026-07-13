@@ -198,6 +198,23 @@ Check that LWS deployments are ready:
 
 ## Install Gateway API Controller
 
+!!! warning "Do not install OpenShift Service Mesh (OSSM) 3 manually"
+    On OCP 4.20+, the `openshift-ingress` ClusterOperator manages OSSM internally
+    and pins it to a version compatible with the cluster release. Manually installing
+    `servicemeshoperator3` (e.g. from the OperatorHub stable channel) prevents the
+    ingress operator from controlling the OSSM version, leaving the GatewayClass in
+    `Accepted: Unknown` ("Waiting for controller") and blocking all Gateway API
+    traffic — including `maas-default-gateway`.
+
+    Additionally, any operator installed into the `openshift-operators` namespace can
+    pull an OSSM upgrade into its InstallPlan (OLM v0 limitation), re-breaking the
+    gateway even after the manual subscription is removed.
+
+    **If you have already installed OSSM 3 manually:** delete the
+    `servicemeshoperator3` Subscription and CSV. The `openshift-ingress` operator
+    will reinstall OSSM at the correct pinned version automatically. Do **not**
+    approve the upgrade InstallPlan that appears afterward.
+
 Initialize OpenShift's provided Gateway API implementation:
 
 ```yaml

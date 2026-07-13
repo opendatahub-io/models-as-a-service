@@ -98,9 +98,45 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-12. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A manually installed OSSM 3 subscription conflicts with the `openshift-ingress` operator on OCP 4.20+.
 
-13. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+      On OCP 4.20, the `openshift-ingress` ClusterOperator manages OSSM internally and pins it
+      to a version compatible with the cluster. Manually installing `servicemeshoperator3` (e.g.
+      from the stable channel via OperatorHub) prevents the ingress operator from controlling the
+      OSSM version, leaving the GatewayClass and all Gateways stuck.
+
+      - [ ] Check for a manual OSSM 3 subscription:
+
+      ```bash
+      kubectl get subscription -A | grep -i servicemesh
+      ```
+
+      - [ ] Delete the manual subscription and CSV:
+
+      ```bash
+      kubectl delete subscription servicemeshoperator3 -n openshift-operators
+      kubectl delete csv -n openshift-operators -l operators.coreos.com/servicemeshoperator3.openshift-operators
+      ```
+
+      - [ ] Wait for the `openshift-ingress` operator to reinstall OSSM at the pinned version:
+
+      ```bash
+      kubectl wait --for=condition=Available clusteroperator/ingress --timeout=300s
+      ```
+
+      - [ ] Do **not** approve the OSSM upgrade InstallPlan that may appear in `openshift-operators` — approving it re-breaks the gateway
+
+      - [ ] Verify the GatewayClass is now accepted:
+
+      ```bash
+      kubectl get gatewayclass openshift-default
+      ```
+
+      See [Install Gateway API Controller](platform-setup.md#install-gateway-api-controller) for the full warning and context.
+
+13. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+14. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
 
       MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
 
@@ -124,7 +160,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
-14. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+15. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
 
       - [ ] Check which namespace the controller is configured to accept:
 
