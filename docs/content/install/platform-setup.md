@@ -211,7 +211,7 @@ Check that LWS deployments are ready:
     | OCP version | OSSM management | Manual OSSM conflict? |
     |-------------|-----------------|----------------------|
     | 4.19        | OLM             | **Yes** (backport TBD) |
-    | 4.20        | OLM             | **Yes** (noOLM backport in progress) |
+    | 4.20        | OLM             | **Yes** (direct-install backport in progress) |
     | 4.21 < 4.21.22 | OLM         | **Yes** |
     | 4.21.22+    | Sail Library    | No — CIO installs Istio directly |
     | 4.22+       | Sail Library    | No — shipped without OLM from day one |
