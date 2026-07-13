@@ -6,8 +6,6 @@ Istio-managed gateway pods (not just data-science-gateway), and that
 MaaS API endpoints are reachable through maas-default-gateway.
 """
 
-import json
-
 import pytest
 import requests
 
@@ -21,8 +19,6 @@ from multitenancy_helpers import (
 )
 
 NETWORKPOLICY_NAME = "payload-processing"
-EXPECTED_MANAGED_LABEL = "gateway.istio.io/managed"
-EXPECTED_MANAGED_VALUE = "istio.io-gateway-controller"
 EXT_PROC_PORT = 9004
 
 
@@ -54,8 +50,8 @@ class TestPayloadProcessingNetworkPolicyExists:
                 f"podSelector must select payload-processing pods, got {pod_selector!r}"
             )
 
-    def test_ingress_uses_istio_managed_label(self):
-        """Ingress must use gateway.istio.io/managed to cover all gateways."""
+    def test_ingress_allows_gateway_namespace(self):
+        """Ingress must allow traffic from the gateway namespace."""
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
         ingress_rules = np["spec"].get("ingress") or []
@@ -75,11 +71,11 @@ class TestPayloadProcessingNetworkPolicyExists:
         from_selectors = ext_proc_rule.get("from") or []
         assert len(from_selectors) > 0, "ext_proc ingress rule must have 'from' selectors"
 
-        pod_selector = from_selectors[0].get("podSelector", {})
-        match_labels = pod_selector.get("matchLabels") or {}
-        assert match_labels.get(EXPECTED_MANAGED_LABEL) == EXPECTED_MANAGED_VALUE, (
-            f"ext_proc ingress must use {EXPECTED_MANAGED_LABEL}: {EXPECTED_MANAGED_VALUE} "
-            f"to cover all Istio-managed gateways, got matchLabels: {match_labels!r}"
+        ns_selector = from_selectors[0].get("namespaceSelector", {})
+        match_labels = ns_selector.get("matchLabels") or {}
+        assert match_labels.get("kubernetes.io/metadata.name") == GATEWAY_NAMESPACE, (
+            f"ext_proc ingress must allow traffic from gateway namespace "
+            f"{GATEWAY_NAMESPACE}, got namespaceSelector matchLabels: {match_labels!r}"
         )
 
     def test_ingress_does_not_hardcode_single_gateway(self):
@@ -123,21 +119,6 @@ class TestPayloadProcessingConnectivity:
         ]
         assert len(ready_pods) > 0, (
             f"Gateway {DEFAULT_GATEWAY_NAME} has pods but none are ready"
-        )
-
-    def test_maas_gateway_has_istio_managed_label(self):
-        """maas-default-gateway pods must carry the Istio managed label."""
-        pods = list_json(
-            "pod",
-            GATEWAY_NAMESPACE,
-            labels=f"gateway.networking.k8s.io/gateway-name={DEFAULT_GATEWAY_NAME}",
-        )
-        assert len(pods) > 0
-        pod = pods[0]
-        labels = pod.get("metadata", {}).get("labels") or {}
-        assert labels.get(EXPECTED_MANAGED_LABEL) == EXPECTED_MANAGED_VALUE, (
-            f"Gateway pod must have label {EXPECTED_MANAGED_LABEL}={EXPECTED_MANAGED_VALUE}, "
-            f"got labels: {json.dumps({k: v for k, v in labels.items() if 'gateway' in k.lower() or 'istio' in k.lower() or 'managed' in k.lower()})}"
         )
 
     def test_payload_processing_pods_running(self):

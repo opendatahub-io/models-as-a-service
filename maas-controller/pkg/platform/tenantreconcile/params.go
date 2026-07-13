@@ -159,6 +159,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
+	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
+		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 		return patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace)
 	}
