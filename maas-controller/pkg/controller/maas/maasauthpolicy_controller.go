@@ -338,7 +338,7 @@ const (
 		celPathParts + `[0] != "v1" && ` +
 		celPathParts + `[0] != "maas-api"`
 	celModelIdentityAvailable = `(` + celPathModelIdentityAvailable + ` || "x-gateway-model-name" in request.headers)`
-	celModelIdentity = `(` + celPathModelIdentityAvailable +
+	celModelIdentity          = `(` + celPathModelIdentityAvailable +
 		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
 		` : ("x-gateway-model-name" in request.headers` +
 		`   ? request.headers["x-gateway-model-name"]` +
