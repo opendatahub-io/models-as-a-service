@@ -98,10 +98,10 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A conflicting OSSM subscription prevents the `openshift-ingress` operator from managing Gateway API on OCP 4.20+.
+12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A conflicting OSSM subscription prevents the `openshift-ingress` operator from managing Gateway API on OCP versions where the ingress operator uses OLM for OSSM management (4.19, 4.20, 4.21 before 4.21.22). On OCP 4.21.22+, 4.22+, the ingress operator uses the Sail Library directly and manual OSSM subscriptions do not cause this conflict.
 
-      On OCP 4.20, the `openshift-ingress` ClusterOperator manages OSSM 3 internally and pins it
-      to a version compatible with the cluster. Two scenarios cause this failure:
+      On affected versions, the `openshift-ingress` ClusterOperator manages OSSM 3 via OLM and
+      pins it to a version compatible with the cluster. Two scenarios cause this failure:
 
       - An **OSSM v2.x** subscription (`servicemeshoperator`) blocks OSSM v3 installation —
         v2 and v3 cannot coexist, and the ingress operator reports `GatewayAPIOSSMConflict`.

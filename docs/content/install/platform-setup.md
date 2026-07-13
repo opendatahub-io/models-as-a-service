@@ -198,11 +198,25 @@ Check that LWS deployments are ready:
 
 ## Install Gateway API Controller
 
-!!! warning "Do not install OpenShift Service Mesh manually on OCP 4.20+"
-    On OCP 4.20+, the `openshift-ingress` ClusterOperator manages OSSM 3 internally
-    and pins it to a version compatible with the cluster release. Two common
-    conflicts can leave the GatewayClass in `Accepted: Unknown` ("Waiting for
-    controller") and block all Gateway API traffic — including `maas-default-gateway`:
+!!! warning "Do not install OpenShift Service Mesh manually (OLM-managed OCP versions)"
+    On OCP versions where the `openshift-ingress` ClusterOperator uses OLM to
+    manage OSSM 3, manually installing OSSM can leave the GatewayClass in
+    `Accepted: Unknown` ("Waiting for controller") and block all Gateway API
+    traffic — including `maas-default-gateway`.
+
+    **Which versions are affected?** The ingress operator is migrating from OLM
+    to the Sail Library for OSSM management. The conflict described here applies
+    only to OCP versions still on the OLM path:
+
+    | OCP version | OSSM management | Manual OSSM conflict? |
+    |-------------|-----------------|----------------------|
+    | 4.19        | OLM             | **Yes** (backport TBD) |
+    | 4.20        | OLM             | **Yes** (noOLM backport in progress) |
+    | 4.21 < 4.21.22 | OLM         | **Yes** |
+    | 4.21.22+    | Sail Library    | No — CIO installs Istio directly |
+    | 4.22+       | Sail Library    | No — shipped without OLM from day one |
+
+    On OLM-managed versions, two common conflicts occur:
 
     - **OSSM v2.x subscription present:** OSSM v2 and v3 cannot coexist. An active
       `servicemeshoperator` (v2) subscription prevents the ingress operator from
