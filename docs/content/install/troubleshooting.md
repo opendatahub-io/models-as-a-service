@@ -98,24 +98,27 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A manually installed OSSM 3 subscription conflicts with the `openshift-ingress` operator on OCP 4.20+.
+12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A conflicting OSSM subscription prevents the `openshift-ingress` operator from managing Gateway API on OCP 4.20+.
 
-      On OCP 4.20, the `openshift-ingress` ClusterOperator manages OSSM internally and pins it
-      to a version compatible with the cluster. Manually installing `servicemeshoperator3` (e.g.
-      from the stable channel via OperatorHub) prevents the ingress operator from controlling the
-      OSSM version, leaving the GatewayClass and all Gateways stuck.
+      On OCP 4.20, the `openshift-ingress` ClusterOperator manages OSSM 3 internally and pins it
+      to a version compatible with the cluster. Two scenarios cause this failure:
 
-      - [ ] Check for a manual OSSM 3 subscription:
+      - An **OSSM v2.x** subscription (`servicemeshoperator`) blocks OSSM v3 installation —
+        v2 and v3 cannot coexist, and the ingress operator reports `GatewayAPIOSSMConflict`.
+      - A **manually installed OSSM v3** subscription (`servicemeshoperator3`, e.g. from the
+        stable channel via OperatorHub) pins a version the ingress operator cannot manage.
+
+      - [ ] Check for a conflicting OSSM subscription (v2 or v3):
 
       ```bash
-      kubectl get subscription -A | grep -i servicemesh
+      kubectl get subscription -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | grep -i servicemesh
       ```
 
-      - [ ] Delete the manual subscription and CSV:
+      - [ ] Delete the conflicting subscription and its CSV (replace `<namespace>` and `<operator-name>` with the values from the previous step, e.g. `openshift-operators` and `servicemeshoperator3` or `servicemeshoperator`):
 
       ```bash
-      kubectl delete subscription servicemeshoperator3 -n openshift-operators
-      kubectl delete csv -n openshift-operators -l operators.coreos.com/servicemeshoperator3.openshift-operators
+      kubectl delete subscription <operator-name> -n <namespace>
+      kubectl delete csv -n <namespace> -l operators.coreos.com/<operator-name>.<namespace>
       ```
 
       - [ ] Wait for the `openshift-ingress` operator to reinstall OSSM at the pinned version:
@@ -126,10 +129,10 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       - [ ] Do **not** approve the OSSM upgrade InstallPlan that may appear in `openshift-operators` — approving it re-breaks the gateway
 
-      - [ ] Verify the GatewayClass is now accepted:
+      - [ ] Verify the GatewayClass is now accepted (`Accepted` must be `True`):
 
       ```bash
-      kubectl get gatewayclass openshift-default
+      kubectl get gatewayclass openshift-default -o jsonpath='{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Accepted")]}{.status}{"\t"}{.message}{end}{"\n"}'
       ```
 
       See [Install Gateway API Controller](platform-setup.md#install-gateway-api-controller) for the full warning and context.
@@ -174,7 +177,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get namespace ai-tenants
       ```
 
-      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.
+      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 14 above.
 
 ## Conflicting AuthPolicy Detection
 
