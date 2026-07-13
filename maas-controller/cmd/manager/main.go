@@ -642,6 +642,9 @@ func main() {
 	}
 
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
+	// maas-db-config lives in the infrastructure namespace (where maas-api runs),
+	// not the subscription namespace — scope the Secret informer there.
+	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
 			// Tenant CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
@@ -649,9 +652,9 @@ func main() {
 			&maasv1alpha1.Tenant{}:           {},
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
-			// Restrict the Secret informer to the subscription namespace so the cluster-wide
-			// secrets LIST/WATCH is not required — namespace-scoped RBAC is sufficient.
-			&corev1.Secret{}: {Namespaces: nsCfg},
+			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
+			// so the cluster-wide secrets LIST/WATCH is not required — namespace-scoped RBAC is sufficient.
+			&corev1.Secret{}: {Namespaces: infraNsCfg},
 		},
 	}
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
@@ -662,9 +665,9 @@ func main() {
 				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
-				// Keep secrets scoped even in multi-tenant mode; the watch predicate
-				// (inTenantWorkNamespaces) already filters to relevant namespaces.
-				&corev1.Secret{}: {Namespaces: nsCfg},
+				// Keep Secret informer scoped to the infra namespace even in multi-tenant mode —
+				// maas-db-config always lives in the infra namespace regardless of tenant count.
+				&corev1.Secret{}: {Namespaces: infraNsCfg},
 			},
 		}
 		setupLog.Info("watching MaaS CRs across all namespaces for tenant discovery",
