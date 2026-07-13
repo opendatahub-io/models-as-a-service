@@ -5,9 +5,9 @@ Validates maas-controller behavior when --enable-tenant-namespace-discovery=true
   - Labeled tenant namespaces are reconciled
   - Unlabeled namespaces are ignored
   - Label removal stops reconciliation
-  - Per-tenant OIDC from namespace-local Tenant/default-tenant
+  - Per-tenant OIDC from AITenant platform context
   - Namespace-qualified policy contributor tracking
-  - Webhook rejects CRs without Tenant CR (MT S6 / RHOAIENG-62766)
+  - Webhook rejects CRs without MaasTenantConfig CR (MT S6 / RHOAIENG-62766)
 
 Requires:
   - AITenant CRD (S11)
@@ -133,7 +133,7 @@ class TestTenantNamespaceDiscovery:
             cleanup_discovery_case(case, delete_gateway=False)
 
     def test_unlabeled_namespace_ignored(self):
-        """1.3: CRs in namespaces without discovery labels are ignored (Tenant CR satisfies webhook)."""
+        """1.3: CRs in namespaces without discovery labels are ignored (MaasTenantConfig satisfies webhook)."""
         suffix = uuid.uuid4().hex[:8]
         unlabeled_ns = f"e2e-unlabeled-{suffix}"
         policy_name = f"e2e-unlabeled-policy-{suffix}"
@@ -181,7 +181,7 @@ class TestTenantNamespaceDiscovery:
             cleanup_discovery_case(case, delete_gateway=False)
 
     def test_per_tenant_oidc_configuration(self):
-        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects Tenant externalOIDC (#912)."""
+        """1.4: Gateway-scoped maas-gateway-auth issuerUrl reflects AITenant OIDC."""
         if os.environ.get("EXTERNAL_OIDC") != "true" or not os.environ.get("OIDC_ISSUER_URL"):
             pytest.skip("OIDC_ISSUER_URL not set; per-tenant OIDC E2E requires external OIDC deploy")
 
@@ -189,12 +189,7 @@ class TestTenantNamespaceDiscovery:
         case = new_discovery_case(use_default_gateway=True)
 
         try:
-            apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
-            apply_tenant_cr(
-                case["tenant_ns"],
-                DEFAULT_GATEWAY_NAME,
-                external_oidc={"issuerUrl": issuer, "clientId": os.environ.get("OIDC_CLIENT_ID", "test-client")},
-            )
+            bootstrap_aitenant_tenant(case, use_default_gateway=True)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
             _wait_for_maas_auth_policy_phase(case["policy_name"], namespace=case["tenant_ns"], timeout=180)
 
@@ -301,9 +296,9 @@ class TestTenantNamespaceDiscovery:
 
 
 class TestTenantWebhookValidation:
-    """S6 webhook — reject MaaSSubscription / MaaSAuthPolicy without Tenant CR (PR #942)."""
+    """S6 webhook - reject MaaSSubscription / MaaSAuthPolicy without MaasTenantConfig CR."""
 
-    def test_maassubscription_rejected_without_tenant_cr(self):
+    def test_maassubscription_rejected_without_tenant_config_cr(self):
         suffix = uuid.uuid4().hex[:8]
         ns = f"e2e-webhook-sub-{suffix}"
         try:
@@ -329,7 +324,7 @@ class TestTenantWebhookValidation:
         finally:
             delete_namespace_best_effort(ns)
 
-    def test_maasauthpolicy_rejected_without_tenant_cr(self):
+    def test_maasauthpolicy_rejected_without_tenant_config_cr(self):
         suffix = uuid.uuid4().hex[:8]
         ns = f"e2e-webhook-auth-{suffix}"
         try:

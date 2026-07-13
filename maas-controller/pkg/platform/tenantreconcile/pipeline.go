@@ -41,7 +41,7 @@ func RunPlatform(
 	log logr.Logger,
 	c client.Client,
 	scheme *runtime.Scheme,
-	tenant *maasv1alpha1.Tenant,
+	tenant client.Object,
 	platformContext PlatformContext,
 	manifestPath string,
 	appNs string,
@@ -102,13 +102,13 @@ func RunPlatform(
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
-// The application namespace is derived from tenant.Namespace (Tenant CR is co-located with workloads).
+// The application namespace is derived from the tenant config namespace.
 func Run(
 	ctx context.Context,
 	log logr.Logger,
 	c client.Client,
 	scheme *runtime.Scheme,
-	tenant *maasv1alpha1.Tenant,
+	tenant client.Object,
 	fallbackGatewayRef maasv1alpha1.TenantGatewayRef,
 	manifestPath string,
 	clusterAudience string,
@@ -123,7 +123,7 @@ func Run(
 		return nil, err
 	}
 
-	appNs := tenant.Namespace
+	appNs := tenant.GetNamespace()
 	if errs := validation.IsDNS1123Subdomain(appNs); len(errs) > 0 {
 		return nil, fmt.Errorf("invalid application namespace %q: %v", appNs, errs)
 	}

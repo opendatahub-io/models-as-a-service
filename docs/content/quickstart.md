@@ -70,13 +70,13 @@ For OpenShift clusters, use the unified automated deployment script. Choose your
 The deployment script creates the following core resources:
 
 - **Gateway**: `maas-default-gateway` in `openshift-ingress` namespace
-- **HTTPRoutes**: `maas-api-route` in the application namespace (deployed by Tenant reconciler)
+- **HTTPRoutes**: `maas-api-route` in the application namespace (deployed by MaasTenantConfig reconciler)
 - **Policies**:
-  - `maas-api-auth-policy` (deployed by Tenant reconciler) - Protects MaaS API
-  - `gateway-default-auth` (deployed by Tenant reconciler) - Denies unauthenticated traffic
-  - `gateway-default-deny` (deployed by Tenant reconciler) - Denies unsubscribed traffic
-- **MaaS API**: Deployment and service in the application namespace (deployed by Tenant reconciler)
-- **Default tenant**: `AITenant/models-as-a-service` in `ai-tenants`, plus `Tenant/default-tenant` in `models-as-a-service` (self-bootstrapped by maas-controller)
+  - `maas-api-auth-policy` (deployed by MaasTenantConfig reconciler) - Protects MaaS API
+  - `gateway-default-auth` (deployed by MaasTenantConfig reconciler) - Denies unauthenticated traffic
+  - `gateway-default-deny` (deployed by MaasTenantConfig reconciler) - Denies unsubscribed traffic
+- **MaaS API**: Deployment and service in the application namespace (deployed by MaasTenantConfig reconciler)
+- **Default tenant**: `AITenant/models-as-a-service` in `ai-tenants`, plus `MaasTenantConfig/default-tenant` in `models-as-a-service` (self-bootstrapped by maas-controller)
 - **Operators**: Cert-manager, LWS, Red Hat Connectivity Link and Red Hat OpenShift AI.
 
 Check deployment status:
@@ -101,9 +101,9 @@ kubectl get svc -n ${APP_NS} maas-api
 # Check Kuadrant operators
 kubectl get pods -n kuadrant-system
 
-# Check default AITenant and Tenant CR
+# Check default AITenant and MaasTenantConfig CR
 kubectl get aitenant models-as-a-service -n ai-tenants
-kubectl get tenant default-tenant -n models-as-a-service
+kubectl get maastenantconfig default-tenant -n models-as-a-service
 
 # Check RHOAI/KServe
 kubectl get pods -n kserve

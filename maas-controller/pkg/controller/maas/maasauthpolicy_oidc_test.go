@@ -200,6 +200,61 @@ func TestFetchOIDCConfig_WithAITenantOIDC(t *testing.T) {
 	assert.Equal(t, "team-a-client", config.ClientID)
 }
 
+func TestFetchOIDCConfig_WithMaasTenantConfigAITenantOIDC(t *testing.T) {
+	scheme := maasAuthPolicyOIDCTestScheme(t)
+
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-team-a",
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "team-a",
+				tenantreconcile.LabelTenantNamespace:   "ai-tenant-team-a",
+			},
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationAITenantName:      "team-a",
+				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			OIDC: &maasv1alpha1.TenantExternalOIDCConfig{
+				IssuerURL: "https://keycloak.example.com/realms/team-a",
+				ClientID:  "team-a-client",
+				TTL:       600,
+			},
+		},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "team-a-gateway",
+			},
+		},
+	}
+
+	client := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tenantConfig, aitenant).
+		Build()
+
+	reconciler := &MaaSAuthPolicyReconciler{
+		Client:          client,
+		Scheme:          scheme,
+		TenantNamespace: "models-as-a-service",
+	}
+
+	config := reconciler.fetchOIDCConfig(context.Background(), logr.Discard(), "ai-tenant-team-a")
+	assert.NotNil(t, config, "should return config from owning AITenant")
+	assert.Equal(t, "https://keycloak.example.com/realms/team-a", config.IssuerURL)
+	assert.Equal(t, "team-a-client", config.ClientID)
+}
+
 func TestFetchOIDCConfig_EmptyIssuerURL(t *testing.T) {
 	scheme := maasAuthPolicyOIDCTestScheme(t)
 

@@ -1667,7 +1667,7 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 				WithObjects(tenant).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: namespace}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, TenantNamespace: namespace}
 			log := ctrl.Log.WithName("test")
 			got := r.fetchOIDCConfig(context.Background(), log, namespace)
 

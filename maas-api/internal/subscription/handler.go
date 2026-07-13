@@ -61,7 +61,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 	}
 
 	h.logger.Debug("Processing subscription selection",
-		"username", req.Username,
+		"username", logger.RedactValue(req.Username),
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
 		"requestedModel", req.RequestedModel,
@@ -81,7 +81,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &noSubErr) {
 			h.logger.Debug("No subscription found for user",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"groups", req.Groups,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -104,7 +104,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &accessDeniedErr) {
 			h.logger.Debug("Access denied to subscription",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"subscription", req.RequestedSubscription,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -116,7 +116,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &multipleSubsErr) {
 			h.logger.Debug("Multiple subscriptions found, explicit selection required",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"subscriptions", multipleSubsErr.Subscriptions,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -156,7 +156,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		// All other errors are internal server errors
 		h.logger.Error("Subscription selection failed",
 			"error", err.Error(),
-			"username", req.Username,
+			"username", logger.RedactValue(req.Username),
 		)
 		c.JSON(http.StatusOK, SelectResponse{
 			Error:   "internal_error",
@@ -166,7 +166,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 	}
 
 	h.logger.Debug("Subscription selected successfully",
-		"username", req.Username,
+		"username", logger.RedactValue(req.Username),
 		"subscription", response.Name,
 		"organizationId", response.OrganizationID,
 	)

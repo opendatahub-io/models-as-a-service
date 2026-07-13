@@ -57,11 +57,11 @@ See [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentatio
 
 ### Option 1: Operator-Managed (Recommended)
 
-Enable via Tenant CR:
+Enable via MaasTenantConfig CR:
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
-kind: Tenant
+kind: MaasTenantConfig
 metadata:
   name: default-tenant
   namespace: models-as-a-service
@@ -78,7 +78,7 @@ spec:
 Or patch:
 
 ```bash
-kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"enabled":true}}}'
 ```
 

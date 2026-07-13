@@ -52,7 +52,7 @@ def _oc_json(args):
 TENANT_NAME = "default-tenant"
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
-TENANT_CRD = "tenants.maas.opendatahub.io"
+TENANT_CRD = "maastenantconfigs.maas.opendatahub.io"
 
 _KIND_PLURAL = {
     "maasmodelref": "maasmodelrefs",
@@ -62,7 +62,7 @@ _KIND_PLURAL = {
 
 
 def _tenant_doc():
-    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _tenant_status():
@@ -92,7 +92,7 @@ def require_tenant_crd():
 def require_tenant_singleton():
     if _tenant_status() is None:
         pytest.skip(
-            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found (transitional skip: "
+            f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} not found (transitional skip: "
             "maas-controller should create this on startup once CRDs and controller are installed)."
         )
 
@@ -112,7 +112,7 @@ def _wait_tenant_ready(timeout=180, interval=5):
 class TestTenantLifecycle:
     def test_tenant_ready_and_phase_healthy(self):
         st = _wait_tenant_ready()
-        assert st is not None, "Tenant Ready did not become True in time."
+        assert st is not None, "MaasTenantConfig Ready did not become True in time."
 
         phase = st.get("phase")
         assert phase in ("Active", "Degraded"), (
@@ -121,7 +121,7 @@ class TestTenantLifecycle:
 
     def test_payload_processing_deployed_with_active_tenant(self):
         st = _wait_tenant_ready()
-        assert st is not None, "Tenant not Ready; skip workload checks."
+        assert st is not None, "MaasTenantConfig not Ready; skip workload checks."
         phase = st.get("phase")
         if phase != "Active":
             pytest.skip("Tenant not Active (e.g. Degraded); payload-processing not asserted")
@@ -191,7 +191,7 @@ class TestTenantNoFalseOwnership:
                 pytest.fail(f"`oc get {plural} -n {namespace}` failed: {combined.strip()}")
             for item in json.loads(result.stdout).get("items") or []:
                 owners = item.get("metadata", {}).get("ownerReferences") or []
-                bad = [r for r in owners if r.get("kind") == "Tenant"]
+                bad = [r for r in owners if r.get("kind") in ("Tenant", "MaasTenantConfig")]
                 assert not bad, (
-                    f"{cr_type}/{item['metadata']['name']} has Tenant ownerReferences"
+                    f"{cr_type}/{item['metadata']['name']} has tenant config ownerReferences"
                 )

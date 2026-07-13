@@ -155,9 +155,9 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 			UID:  types.UID("cfg-uid-tenant"),
 		},
 	}
-	tenant := &maasv1alpha1.Tenant{
+	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 			Namespace: tenantNS,
 		},
 	}
@@ -187,8 +187,8 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 
-	var updated maasv1alpha1.Tenant
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
 	g.Expect(updated.OwnerReferences).ToNot(BeEmpty())
 	ref := updated.OwnerReferences[0]
 	g.Expect(ref.UID).To(Equal(types.UID("cfg-uid-tenant")))

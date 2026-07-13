@@ -16,7 +16,7 @@ import (
 
 // overlayDefaultNamespace is the namespace hardcoded in the overlay's
 // kustomization.yaml (namespace: opendatahub). postBuildTransform remaps
-// it to the actual appNamespace from the Tenant CR.
+// it to the actual appNamespace for the tenant config.
 const overlayDefaultNamespace = "opendatahub"
 
 // RenderKustomize runs kustomize build for the ODH maas-api overlay and

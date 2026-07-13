@@ -51,7 +51,7 @@
 #   OIDC_READINESS_STRICT - When true, exit before pytest if the OIDC readiness probe times out.
 #   DEPLOYMENT_NAMESPACE - Namespace of maas-controller (default: opendatahub)
 #   INFRA_NAMESPACE - Namespace of MaaS API infrastructure; AUTO derives from DEPLOYMENT_NAMESPACE (default: AUTO)
-#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and MaasTenantConfig CR (default: models-as-a-service)
 #   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller with discovery flag before pytest (default: true)
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)

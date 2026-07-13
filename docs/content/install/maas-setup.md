@@ -112,7 +112,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 === "Managed (Recommended)"
 
-    The AI Gateway Operator deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service`; that AITenant creates or adopts `Tenant/default-tenant` and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsAService` in Managed state:
+    The AI Gateway Operator deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service`; that AITenant creates or adopts `MaasTenantConfig/default-tenant` and reconciles the MaaS platform workloads (maas-api, gateway policies, telemetry). Create or update your DataScienceCluster with `modelsAsAService` in Managed state:
 
     !!! note "KServe not required for MaaS"
         MaaS is now deployed as a sub-component of the **AI Gateway Operator** (`aigateway.modelsAsAService`), not KServe. You no longer need KServe enabled to use MaaS. Include KServe only if you need model serving capabilities independently.
@@ -160,7 +160,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     kubectl rollout status deployment/maas-api -n opendatahub --timeout=120s
     ```
 
-    The `maas-controller` (deployed by the operator) will automatically create `AITenant/models-as-a-service`, which creates or adopts `Tenant/default-tenant` and reconciles:
+    The `maas-controller` (deployed by the operator) will automatically create `AITenant/models-as-a-service`, which creates or adopts `MaasTenantConfig/default-tenant` and reconciles:
 
     - **MaaS API** (Deployment, Service, ServiceAccount, ClusterRole, ClusterRoleBinding, HTTPRoute)
     - **MaaS API AuthPolicy** (maas-api-auth-policy) - Protects the MaaS API endpoint
@@ -170,19 +170,15 @@ After creating the database Secret and Gateways, create or update your DataScien
     - **DestinationRule** (when TLS is enabled)
     - **NetworkPolicy** (maas-authorino-allow) - Allows Authorino to reach MaaS API
 
-    ### Tenant CR
+    ### MaasTenantConfig CR
 
-    With `modelsAsAService` **Managed**, the ODH operator (via the `aigateway` component) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `Tenant` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `Tenant` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`tenant_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/tenant_types.go).
+    With `modelsAsAService` **Managed**, the ODH/RHOAI operator (via the `aigateway` component) deploys `maas-controller`, which self-bootstraps `AITenant/models-as-a-service` in `ai-tenants`. The AITenant reconciler creates or adopts a **namespace-scoped** `MaasTenantConfig` object. The resource name **must** be `default-tenant` (enforced via CEL validation). The `MaasTenantConfig` CR lives in the `models-as-a-service` namespace (same namespace as `MaaSSubscription` and `MaaSAuthPolicy`). The authoritative API definition is in the maas-controller repo: [`maastenantconfig_types.go`](https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/maastenantconfig_types.go).
 
-    **Nothing in `spec` is required for a default install.** If you omit `spec`, the controller uses the same defaults as this guide: Gateway **`openshift-ingress` / `maas-default-gateway`**, and telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`. Going forward, set OIDC on `AITenant/models-as-a-service.spec.oidc`. For AITenant-managed tenants, Gateway and OIDC platform context comes from `AITenant`; existing `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values are preserved for compatibility but ignored.
+    **Nothing in `spec` is required for a default install.** If you omit `spec`, telemetry metric toggles use the defaults described below. During bootstrap, existing `Tenant/default-tenant.spec.externalOIDC` settings are automatically migrated to `AITenant/models-as-a-service.spec.oidc`, and existing `Tenant/default-tenant.spec.apiKeys` and `spec.telemetry` settings are copied into `MaasTenantConfig/default-tenant` when those fields are unset. Going forward, set OIDC and Gateway on `AITenant`; set API key and telemetry settings on `MaasTenantConfig`.
 
     | Field | What to set |
     | ----- | ----------- |
-    | `spec.gatewayRef.namespace` | Legacy/unmanaged Tenant Gateway namespace. Ignored for AITenant-managed tenants. |
-    | `spec.gatewayRef.name` | Legacy/unmanaged Tenant Gateway name. For AITenant-managed tenants, use `AITenant.spec.gateway.name`. |
     | `spec.apiKeys.maxExpirationDays` | Maximum allowed API key lifetime in **days**. When set, users cannot mint keys with a longer lifetime than this value (via `expiresIn`). Optional; if unset, the controller does not apply a cap through this field (see also `maas-api` / `API_KEY_MAX_EXPIRATION_DAYS` in your deployment). |
-    | `spec.externalOIDC.issuerUrl` | Legacy/unmanaged Tenant OIDC issuer URL. For AITenant-managed tenants, use `AITenant.spec.oidc.issuerUrl`. |
-    | `spec.externalOIDC.clientId` | Legacy/unmanaged Tenant OIDC client ID. For AITenant-managed tenants, use `AITenant.spec.oidc.clientId`. |
     | `spec.telemetry.enabled` | Enable TelemetryPolicy and Istio Telemetry (default `true`). |
     | `spec.telemetry.metrics.captureOrganization` | Include `organization_id` on metrics (default `true`). |
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
@@ -193,7 +189,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
     ```yaml
     apiVersion: maas.opendatahub.io/v1alpha1
-    kind: Tenant
+    kind: MaasTenantConfig
     metadata:
       name: default-tenant
       namespace: models-as-a-service
@@ -208,8 +204,8 @@ After creating the database Secret and Gateways, create or update your DataScien
     ```
 
     ```bash
-    kubectl apply -f tenant.yaml
-    kubectl get tenant default-tenant -n models-as-a-service -o yaml
+    kubectl apply -f maas-tenant-config.yaml
+    kubectl get maastenantconfig default-tenant -n models-as-a-service -o yaml
     ```
 
 === "Kustomize"
@@ -310,7 +306,7 @@ kubectl apply -f aitenant.yaml
 
 The controller will automatically create:
 - Tenant namespace: `ai-tenant-team-red`
-- Tenant CR: `default-tenant` in the tenant namespace
+- MaasTenantConfig CR: `default-tenant` in the tenant namespace
 - maas-api deployment: `maas-api-team-red`
 - HTTPRoute and AuthPolicy for the tenant
 
@@ -323,11 +319,24 @@ kubectl get aitenant team-red -n ai-tenants -o yaml
 # Check tenant namespace was created
 kubectl get namespace ai-tenant-team-red
 
-# Check Tenant CR
-kubectl get tenant default-tenant -n ai-tenant-team-red
+# Check MaasTenantConfig CR
+kubectl get maastenantconfig default-tenant -n ai-tenant-team-red
 ```
 
 For complete AITenant configuration options (OIDC, RBAC), see the [AITenant CRD reference](../reference/crds/ai-tenant.md).
+
+### Delete a tenant
+
+Delete the `AITenant` resource to start tenant cleanup:
+
+!!! warning "Do not delete the default tenant"
+    Do not delete `AITenant/models-as-a-service` in `ai-tenants` unless you are intentionally tearing down MaaS. The controller bootstraps the default AITenant only once per `Config/default`; after deletion it is not automatically recreated. MaaS UI and API workflows that depend on the default tenant may stop working until the default tenant state is restored.
+
+```bash
+kubectl delete aitenant team-red -n ai-tenants
+```
+
+Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if namespace content or finalizers block deletion. The shared Gateway object and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
 
 ## Next steps
 

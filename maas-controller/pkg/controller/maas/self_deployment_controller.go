@@ -51,7 +51,7 @@ const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
-// It links the Deployment, default AITenant, and default Tenant to Config via non-controller
+// It links the Deployment, default AITenant, and default MaasTenantConfig to Config via non-controller
 // ownerReferences (same relationship shape for all). Legacy CleanupFinalizer entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
@@ -67,7 +67,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 
@@ -282,8 +282,8 @@ func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Conte
 	return nil, nil
 }
 
-// ensureTenantReferencesConfig links default-tenant to Config/default via the same non-controller
-// ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the Tenant
+// ensureTenantReferencesConfig links MaasTenantConfig/default-tenant to Config/default via the same non-controller
+// ownerReference pattern as the Deployment. The cluster bootstrap runnable may create the config
 // shell without owner refs; this reconciler converges them once Config has a UID.
 func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) (*ctrl.Result, error) {
 	if r.TenantSubscriptionNamespace == "" {
@@ -297,14 +297,14 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Tenant; requeueing")
+			log.Info("Config anchor not found when linking MaasTenantConfig; requeueing")
 			res := ctrl.Result{RequeueAfter: 2 * time.Second}
 			return &res, nil
 		}
 		return nil, err
 	}
 	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Tenant; requeueing")
+		log.Info("Config anchor is terminating when linking MaasTenantConfig; requeueing")
 		res := ctrl.Result{RequeueAfter: 10 * time.Second}
 		return &res, nil
 	}
@@ -312,8 +312,8 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 		res := ctrl.Result{RequeueAfter: 2 * time.Second}
 		return &res, nil
 	}
-	tKey := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: r.TenantSubscriptionNamespace}
-	var tenant maasv1alpha1.Tenant
+	tKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: r.TenantSubscriptionNamespace}
+	var tenant maasv1alpha1.MaasTenantConfig
 	if err := r.Get(ctx, tKey, &tenant); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, nil
@@ -325,16 +325,16 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	}
 	base := tenant.DeepCopy()
 	if err := controllerutil.SetOwnerReference(&cfg, &tenant, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on tenant: %w", err)
+		return nil, fmt.Errorf("set Config owner reference on MaasTenantConfig: %w", err)
 	}
 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch tenant ownerReferences: %w", err)
+		return nil, fmt.Errorf("patch MaasTenantConfig ownerReferences: %w", err)
 	}
-	log.Info("set Config owner reference on default-tenant", "namespace", r.TenantSubscriptionNamespace)
+	log.Info("set Config owner reference on MaasTenantConfig/default-tenant", "namespace", r.TenantSubscriptionNamespace)
 	return nil, nil
 }
 
-func tenantReferencesConfig(tenant *maasv1alpha1.Tenant, ct *maasv1alpha1.Config) bool {
+func tenantReferencesConfig(tenant *maasv1alpha1.MaasTenantConfig, ct *maasv1alpha1.Config) bool {
 	for _, ref := range tenant.OwnerReferences {
 		if ref.UID == ct.UID &&
 			ref.Kind == maasv1alpha1.ConfigKind &&
@@ -493,7 +493,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		if r.TenantSubscriptionNamespace == "" {
 			return false
 		}
-		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.TenantInstanceName
+		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.MaasTenantConfigInstanceName
 	})
 	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		if r.AITenantNamespace == "" {
@@ -514,7 +514,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(cfgSingleton),
 		).
 		Watches(
-			&maasv1alpha1.Tenant{},
+			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,

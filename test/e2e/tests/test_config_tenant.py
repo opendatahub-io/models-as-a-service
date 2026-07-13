@@ -72,7 +72,7 @@ def _config_doc():
 
 
 def _tenant_doc():
-    return _oc_json(["get", "tenant", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
 
 
 def _aitenant_doc():
@@ -164,18 +164,18 @@ class TestConfigTenantOwnership:
             f"Config/{CONFIG_NAME} (LifecycleReconciler links the anchor for GC)."
         )
 
-    def test_tenant_lists_config_owner_reference(self):
+    def test_tenant_config_lists_config_owner_reference(self):
         try:
             doc = _tenant_doc()
         except subprocess.CalledProcessError as exc:
             if _oc_not_found(exc):
                 pytest.skip(
-                    f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after Tenant bootstrap."
+                    f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after tenant config bootstrap."
                 )
             raise
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
         assert ref is not None, (
-            f"Tenant {TENANT_NAME}/{TENANT_NAMESPACE} should reference Config/{CONFIG_NAME} "
+            f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} should reference Config/{CONFIG_NAME} "
             "(LifecycleReconciler links the anchor for GC)."
         )
 

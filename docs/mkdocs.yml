@@ -121,7 +121,7 @@ nav:
       - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
       - MaaSSubscription: reference/crds/maas-subscription.md
       - AITenant: reference/crds/ai-tenant.md
-      - Tenant: reference/crds/tenant.md
+      - MaasTenantConfig: reference/crds/tenant.md
 
 extra:
   version:
