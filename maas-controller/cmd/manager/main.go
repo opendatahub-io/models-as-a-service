@@ -625,6 +625,47 @@ func deriveInfraNamespace(controllerNs string) string {
 	}
 }
 
+func validateFlags(gatewayName, gatewayNamespace, controllerNamespace, maasSubscriptionNamespace, aitenantNamespace, infraNamespace, monitoringNamespace string, bootstrapPollInterval time.Duration) {
+	if errs := validation.IsDNS1123Label(monitoringNamespace); len(errs) > 0 {
+		setupLog.Error(stderrors.New("invalid monitoring namespace"),
+			"--monitoring-namespace must be a valid Kubernetes namespace name",
+			"namespace", monitoringNamespace, "errors", errs)
+		os.Exit(1)
+	}
+	if gatewayName == "" || gatewayNamespace == "" {
+		setupLog.Error(stderrors.New("invalid gateway configuration"),
+			"both --gateway-name and --gateway-namespace must be non-empty",
+			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
+		os.Exit(1)
+	}
+	if strings.TrimSpace(controllerNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid controller namespace configuration"),
+			"--controller-namespace must be non-empty")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid MaaS subscription namespace configuration"),
+			"--maas-subscription-namespace must be non-empty")
+		os.Exit(1)
+	}
+	if strings.TrimSpace(aitenantNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid AITenant namespace configuration"),
+			"--aitenant-namespace must be non-empty")
+		os.Exit(1)
+	}
+	if infraNamespace != "" && strings.TrimSpace(infraNamespace) == "" {
+		setupLog.Error(stderrors.New("invalid infrastructure namespace configuration"),
+			"--infra-namespace must not be whitespace-only")
+		os.Exit(1)
+	}
+	if bootstrapPollInterval <= 0 {
+		setupLog.Error(stderrors.New("invalid bootstrap poll interval"),
+			"--bootstrap-poll-interval must be positive",
+			"interval", bootstrapPollInterval)
+		os.Exit(1)
+	}
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -672,46 +713,8 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	if errs := validation.IsDNS1123Label(monitoringNamespace); len(errs) > 0 {
-		setupLog.Error(stderrors.New("invalid monitoring namespace"),
-			"--monitoring-namespace must be a valid Kubernetes namespace name",
-			"namespace", monitoringNamespace, "errors", errs)
-		os.Exit(1)
-	}
-
-	if gatewayName == "" || gatewayNamespace == "" {
-		setupLog.Error(stderrors.New("invalid gateway configuration"),
-			"both --gateway-name and --gateway-namespace must be non-empty",
-			"gatewayName", gatewayName, "gatewayNamespace", gatewayNamespace)
-		os.Exit(1)
-	}
-	if strings.TrimSpace(controllerNamespace) == "" {
-		setupLog.Error(stderrors.New("invalid controller namespace configuration"),
-			"--controller-namespace must be non-empty")
-		os.Exit(1)
-	}
-	if strings.TrimSpace(maasSubscriptionNamespace) == "" {
-		setupLog.Error(stderrors.New("invalid MaaS subscription namespace configuration"),
-			"--maas-subscription-namespace must be non-empty")
-		os.Exit(1)
-	}
-	if strings.TrimSpace(aitenantNamespace) == "" {
-		setupLog.Error(stderrors.New("invalid AITenant namespace configuration"),
-			"--aitenant-namespace must be non-empty")
-		os.Exit(1)
-	}
-	// Validate infraNamespace: empty string and "AUTO" are valid, but whitespace-only is not
-	if infraNamespace != "" && strings.TrimSpace(infraNamespace) == "" {
-		setupLog.Error(stderrors.New("invalid infrastructure namespace configuration"),
-			"--infra-namespace must not be whitespace-only")
-		os.Exit(1)
-	}
-	if bootstrapPollInterval <= 0 {
-		setupLog.Error(stderrors.New("invalid bootstrap poll interval"),
-			"--bootstrap-poll-interval must be positive",
-			"interval", bootstrapPollInterval)
-		os.Exit(1)
-	}
+	validateFlags(gatewayName, gatewayNamespace, controllerNamespace, maasSubscriptionNamespace,
+		aitenantNamespace, infraNamespace, monitoringNamespace, bootstrapPollInterval)
 
 	// Derive infrastructure namespace if needed
 	infraNamespace = resolveInfraNamespace(infraNamespace, controllerNamespace)
