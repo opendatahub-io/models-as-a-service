@@ -1,9 +1,10 @@
 """
-E2E tests for payload-processing NetworkPolicy in the gateway namespace.
+E2E tests for MaaS data-path NetworkPolicies.
 
 Validates that the NetworkPolicy allows ext_proc gRPC traffic from all
-Istio-managed gateway pods (not just data-science-gateway), and that
-MaaS API endpoints are reachable through maas-default-gateway.
+Istio-managed gateway pods (not just data-science-gateway), explicitly permits
+RHOAI Authorino callbacks to maas-api, and that MaaS API endpoints are reachable
+through maas-default-gateway.
 """
 
 import json
@@ -15,12 +16,15 @@ from conftest import TLS_VERIFY
 from multitenancy_helpers import (
     DEFAULT_GATEWAY_NAME,
     GATEWAY_NAMESPACE,
+    INFRA_NAMESPACE,
     _oc_run,
     get_json_or_none,
     list_json,
 )
 
 NETWORKPOLICY_NAME = "payload-processing"
+AUTHORINO_NETWORKPOLICY_NAME = "maas-authorino-allow"
+RHCL_AUTHORINO_NAMESPACE = "rh-connectivity-link"
 EXPECTED_MANAGED_LABEL = "gateway.istio.io/managed"
 EXPECTED_MANAGED_VALUE = "istio.io-gateway-controller"
 EXT_PROC_PORT = 9004
@@ -99,6 +103,49 @@ class TestPayloadProcessingNetworkPolicyExists:
                     "as pod selector — this restricts traffic to a single gateway. "
                     f"Found: {pod_labels!r}"
                 )
+
+
+class TestMaaSAuthorinoNetworkPolicy:
+    """Verify the shipped policy permits RHOAI RHCL Authorino callbacks."""
+
+    def test_rhcl_authorino_namespace_is_allowed(self):
+        np = get_json_or_none(
+            "networkpolicy",
+            AUTHORINO_NETWORKPOLICY_NAME,
+            INFRA_NAMESPACE,
+        )
+        assert np is not None, (
+            f"NetworkPolicy {AUTHORINO_NETWORKPOLICY_NAME} must exist in "
+            f"{INFRA_NAMESPACE}"
+        )
+
+        allowed_namespaces = set()
+        authorino_peer_found = False
+        for rule in np.get("spec", {}).get("ingress") or []:
+            for peer in rule.get("from") or []:
+                pod_labels = (
+                    (peer.get("podSelector") or {}).get("matchLabels") or {}
+                )
+                if pod_labels.get("authorino-resource") != "authorino":
+                    continue
+                authorino_peer_found = True
+                ns_selector = peer.get("namespaceSelector") or {}
+                for expression in ns_selector.get("matchExpressions") or []:
+                    if (
+                        expression.get("key") == "kubernetes.io/metadata.name"
+                        and expression.get("operator") == "In"
+                    ):
+                        allowed_namespaces.update(expression.get("values") or [])
+
+        assert authorino_peer_found, (
+            "maas-authorino-allow must select pods labeled "
+            "authorino-resource=authorino"
+        )
+        assert RHCL_AUTHORINO_NAMESPACE in allowed_namespaces, (
+            f"{AUTHORINO_NETWORKPOLICY_NAME} must allow Authorino from "
+            f"{RHCL_AUTHORINO_NAMESPACE}; allowed namespaces: "
+            f"{sorted(allowed_namespaces)!r}"
+        )
 
 
 class TestPayloadProcessingConnectivity:

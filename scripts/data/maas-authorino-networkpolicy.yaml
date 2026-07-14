@@ -1,8 +1,8 @@
 # NetworkPolicy to allow Authorino pods to communicate with MaaS API
 # for AuthPolicy evaluation.
 #
-# This policy allows ingress from Authorino pods in the recommended Kuadrant
-# installation namespaces (kuadrant-system or openshift-operators).
+# This policy allows ingress from Authorino pods in the supported Kuadrant and
+# RHCL installation namespaces.
 #
 # If Kuadrant is installed in a different namespace, users will need to create
 # their own NetworkPolicy to allow traffic from that namespace.
@@ -27,7 +27,7 @@ spec:
   policyTypes:
     - Ingress
   ingress:
-    # Allow traffic from Authorino pods in kuadrant-system or openshift-operators
+    # Allow traffic from Authorino pods in supported Kuadrant/RHCL namespaces
     - from:
         - namespaceSelector:
             matchExpressions:
@@ -36,6 +36,7 @@ spec:
                 values:
                   - kuadrant-system
                   - openshift-operators
+                  - rh-connectivity-link
           podSelector:
             matchLabels:
               authorino-resource: authorino
