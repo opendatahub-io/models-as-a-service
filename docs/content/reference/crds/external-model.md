@@ -24,6 +24,21 @@ Defines an external AI/ML model hosted outside the cluster (e.g., OpenAI, Anthro
 | phase | string | One of: `Pending`, `Ready`, `Failed` |
 | conditions | []Condition | Latest observations of the external model's state |
 
+## Annotations
+
+Optional metadata annotations that control networking behavior for the external model.
+
+| Annotation | Required | Default | Description |
+|------------|----------|---------|-------------|
+| `maas.opendatahub.io/tls` | No | `true` | Controls TLS origination to the external endpoint. When `true`, the Istio sidecar performs TLS handshake with the provider and a DestinationRule is created. Set to `false` for internal or non-TLS endpoints (e.g., a vLLM instance on an internal network). |
+| `maas.opendatahub.io/port` | No | `443` | Overrides the default port used for the external endpoint. |
+
+When `maas.opendatahub.io/tls` is set to `false`:
+
+- The ServiceEntry protocol changes from HTTPS to HTTP
+- The DestinationRule for TLS origination is not created (or deleted if it previously existed)
+- The default port remains 443 but can be overridden with `maas.opendatahub.io/port`
+
 ## Example
 
 ```yaml
@@ -58,6 +73,25 @@ spec:
   modelRef:
     kind: ExternalModel
     name: gpt4
+```
+
+### Non-TLS Internal Endpoint
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: internal-vllm
+  namespace: models
+  annotations:
+    maas.opendatahub.io/tls: "false"
+    maas.opendatahub.io/port: "8000"
+spec:
+  provider: openai
+  endpoint: vllm.internal.example.com
+  targetModel: my-model
+  credentialRef:
+    name: vllm-credentials
 ```
 
 ## Relationship with MaaSModelRef

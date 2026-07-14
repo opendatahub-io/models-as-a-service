@@ -107,6 +107,37 @@ Client → Gateway (TLS termination) → [DestinationRule] → maas-api:8443 (TL
 !!! info "Future consideration"
     Once Gateway API v1.4+ with BackendTLSPolicy is supported by the Istio Gateway provider, the DestinationRule can be replaced with a standard Gateway API resource.
 
+## ExternalModel TLS Origination
+
+By default, the ExternalModel reconciler enables TLS origination for external provider endpoints. The Istio sidecar performs the TLS handshake with the provider, and a DestinationRule with `tls.mode: SIMPLE` is created.
+
+To disable TLS origination for an ExternalModel (e.g., for internal non-TLS endpoints), set the `maas.opendatahub.io/tls` annotation to `"false"`:
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: ExternalModel
+metadata:
+  name: internal-vllm
+  namespace: llm
+  annotations:
+    maas.opendatahub.io/tls: "false"
+    maas.opendatahub.io/port: "8000"
+spec:
+  provider: openai
+  endpoint: vllm.internal.example.com
+  targetModel: my-model
+  credentialRef:
+    name: vllm-api-key
+```
+
+When TLS is disabled:
+
+- The ServiceEntry protocol changes from HTTPS to HTTP
+- No DestinationRule is created (any existing one is deleted)
+- The default port remains 443 unless overridden with `maas.opendatahub.io/port`
+
+For full annotation details, see the [ExternalModel CRD Reference](../reference/crds/external-model.md#annotations).
+
 ## Custom maas-api TLS Configuration
 
 This section covers how `maas-api` is configured to use TLS certificates. These settings are automatically configured by the kustomize overlays; manual configuration is only needed for custom deployments or non-OpenShift environments.
