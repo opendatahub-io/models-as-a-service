@@ -554,12 +554,12 @@ func markDefaultAITenantBootstrapped(ctx context.Context, c client.Client, ct *m
 // owner references; LifecycleReconciler links Config to the default AITenant,
 // Deployment, and default Tenant. It does not create while the maas-controller
 // Deployment is terminating, so bootstrap does not fight teardown.
-func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string) manager.RunnableFunc {
+func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string, pollInterval time.Duration) manager.RunnableFunc {
 	return func(ctx context.Context) error {
 		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
 		c := mgr.GetClient()
 
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 
 		ensure := func() {
@@ -634,6 +634,7 @@ func main() {
 	var metadataCacheTTL int64
 	var authzCacheTTL int64
 	var subscriptionNamespaceMaintainInterval time.Duration
+	var bootstrapPollInterval time.Duration
 	var enableTenantNamespaceDiscovery bool
 	var observabilityManifestsPath string
 	var monitoringNamespace string
@@ -657,6 +658,9 @@ func main() {
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
 		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
+	flag.DurationVar(&bootstrapPollInterval, "bootstrap-poll-interval", 5*time.Second,
+		"How often to poll for Config/default during AITenant bootstrap. "+
+			"Shorter intervals reduce startup latency after CRD re-registration.")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
 
@@ -954,7 +958,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, aitenantNamespace, controllerNamespace, "maas-controller", gatewayName, gatewayNamespace)); err != nil {
+	if err := mgr.Add(ensureClusterBootstrapRunnable(mgr, maasSubscriptionNamespace, aitenantNamespace, controllerNamespace, "maas-controller", gatewayName, gatewayNamespace, bootstrapPollInterval)); err != nil {
 		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
