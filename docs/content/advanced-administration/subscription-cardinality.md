@@ -60,7 +60,7 @@ spec:
 
 ## Telemetry Label Cardinality
 
-The Tenant CR controls which labels the TelemetryPolicy adds to Limitador usage metrics. Each enabled label multiplies cardinality.
+The MaasTenantConfig CR controls which labels the TelemetryPolicy adds to Limitador usage metrics. Each enabled label multiplies cardinality.
 
 | Field | Default | Cardinality impact | Recommendation |
 |-------|---------|-------------------|----------------|
@@ -72,14 +72,14 @@ The Tenant CR controls which labels the TelemetryPolicy adds to Limitador usage 
 To check or change these settings:
 
 ```bash
-kubectl get tenant default-tenant -n models-as-a-service \
+kubectl get maastenantconfig default-tenant -n models-as-a-service \
   -o jsonpath='{.spec.telemetry.metrics}' | jq .
 ```
 
 To disable a high-cardinality label:
 
 ```bash
-kubectl patch tenant default-tenant -n models-as-a-service --type=merge \
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
   -p '{"spec":{"telemetry":{"metrics":{"captureGroup": false}}}}'
 ```
 

@@ -144,7 +144,7 @@ The `tls` base overlay includes:
 maas-api is deployed by the Tenant reconciler in `maas-controller`. The `deploy.sh` script
 installs prerequisites (policy engine, PostgreSQL, Authorino TLS) and then deploys
 `maas-controller`, which creates `AITenant/models-as-a-service`; that AITenant creates or
-adopts `Tenant/default-tenant`, and maas-api is reconciled via SSA.
+adopts `MaasTenantConfig/default-tenant`, and maas-api is reconciled via SSA.
 
 To verify that the overlay builds correctly:
 

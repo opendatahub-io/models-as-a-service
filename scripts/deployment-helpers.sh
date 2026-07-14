@@ -1558,7 +1558,7 @@ verify_gateway_oidc_authpolicy() {
   policy_issuer=$(echo "$json" | jq -r '.spec.rules.authentication["oidc-identities"].jwt.issuerUrl // .spec.defaults.rules.authentication["oidc-identities"].jwt.issuerUrl // empty')
   if [[ -z "$policy_issuer" ]]; then
     echo "verify_gateway_oidc_authpolicy: maas-gateway-auth has no oidc-identities authentication rule" >&2
-    echo "  Ensure Tenant CR has spec.externalOIDC configured and MaaSAuthPolicy controller has reconciled." >&2
+    echo "  Ensure the default AITenant has spec.oidc configured and MaaSAuthPolicy controller has reconciled." >&2
     return 1
   fi
   local exp got
@@ -1568,7 +1568,7 @@ verify_gateway_oidc_authpolicy() {
     echo "verify_gateway_oidc_authpolicy: OIDC issuer mismatch." >&2
     echo "  Expected (OIDC_ISSUER_URL):          $exp" >&2
     echo "  Live maas-gateway-auth issuerUrl:   $got" >&2
-    echo "  Fix: ensure Tenant CR spec.externalOIDC.issuerUrl matches OIDC_ISSUER_URL." >&2
+    echo "  Fix: ensure AITenant spec.oidc.issuerUrl matches OIDC_ISSUER_URL." >&2
     return 1
   fi
   return 0

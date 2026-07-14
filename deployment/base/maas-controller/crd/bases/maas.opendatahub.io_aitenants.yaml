@@ -229,6 +229,7 @@ spec:
                 - Pending
                 - Active
                 - Failed
+                - Terminating
                 type: string
               tenantNamespace:
                 description: TenantNamespace is the reconciled tenant namespace.

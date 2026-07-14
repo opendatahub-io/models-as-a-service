@@ -57,6 +57,17 @@ spec:
                 maxLength: 16
                 pattern: ^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$
                 type: string
+              usageLogging:
+                default: false
+                description: |-
+                  UsageLogging enables cluster-wide per-request structured OTel access logging
+                  for usage tracking (token counts, identity, model). When enabled, the
+                  controller deploys an EnvoyFilter on the shared gateway that emits
+                  structured usage logs via OTel Access Log Service.
+                  Enabling this logs identity attributes (user_id, key_id, key_name,
+                  organization_id, groups, subscription) per request — ensure
+                  GDPR/privacy compliance before enabling.
+                type: boolean
             type: object
           status:
             description: ConfigStatus defines the observed state of Config.

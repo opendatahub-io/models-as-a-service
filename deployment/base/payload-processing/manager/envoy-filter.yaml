@@ -64,6 +64,61 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+    # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
+    # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL 1.4.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.wasm
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.ipp-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: true
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SEND"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.wasm
+      patch:
+        operation: INSERT_AFTER
+        value:
+          name: envoy.filters.http.ext_proc.ipp
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SEND"
+              request_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "FULL_DUPLEX_STREAMED"
+              request_trailer_mode: "SEND"
+              response_trailer_mode: "SEND"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
     # Disable ext_proc on all non-inference maas-api routes.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
     # Rule indices correspond to httproute.yaml rules:

@@ -1,14 +1,16 @@
 // Package tenantreconcile implements the Tenant platform reconcile pipeline
 // (initialize → dependencies → prerequisites → gateway → params → kustomize → post-render → apply → deployment status).
-// The pipeline stages mirror the ODH operator's component deploy pattern; the Tenant CR is the
+// The pipeline stages mirror the ODH operator's component deploy pattern; the MaasTenantConfig CR is the
 // runtime object that drives this lifecycle (DSC.modelsAsService controls enablement only).
 package tenantreconcile
 
 import (
 	"fmt"
+	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -179,56 +181,43 @@ func MaaSAPIServiceName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIServiceName, tenantID)
 }
 
-// TenantIdentifierFor extracts the tenant identifier from a Tenant CR.
+// TenantIdentifierFor extracts the tenant identifier from a tenant config object.
 //
 // Returns:
-//   - Empty string ("") for the default/legacy Tenant, whether unlabeled or managed
+//   - Empty string ("") for the default/legacy config, whether unlabeled or managed
 //     by AITenant/models-as-a-service (preserves legacy resource names)
 //   - Tenant name (e.g., "redteam") for non-default AITenant-managed tenants
-//   - Error if LabelManagedByAITenant is true but LabelTenantName is missing (invalid state)
+//   - Error if LabelManagedByAITenant is true but LabelTenantName is missing
 //
 // The tenant identifier is used to generate unique per-tenant resource names.
-//
-// TODO: When database migration changes default tenant_id from "" to "models-as-a-service",
-// update this function to return "models-as-a-service" for the default tenant
-// instead of empty string, ensuring consistency between resource names and DB tenant_id.
-func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
-	if tenant == nil {
+func TenantIdentifierFor(obj client.Object) (string, error) {
+	if isNilObject(obj) {
 		return "", nil
 	}
 
-	// Check if this Tenant is managed by AITenant controller
-	// AITenant controller sets this label when creating Tenant CRs
-	labels := tenant.GetLabels()
+	labels := obj.GetLabels()
 	log := ctrl.Log.WithName("TenantIdentifierFor").WithValues(
-		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"tenantConfig", obj.GetNamespace()+"/"+obj.GetName(),
 		"labels", labels,
 	)
 
 	if labels != nil && labels[LabelManagedByAITenant] == "true" {
-		// Use the tenant name from the label set by AITenant controller
 		tenantName := labels[LabelTenantName]
 		if tenantName == "" {
-			// Fail closed: AITenant-managed Tenant must have LabelTenantName set.
-			// This should never happen if created by AITenant controller, but if someone
-			// manually creates a Tenant with LabelManagedByAITenant=true and no LabelTenantName,
-			// we must not fall back to default tenant name. Return error instead of panic
-			// to allow graceful degradation - the Tenant reconciler can set a degraded
-			// condition instead of crashing the entire controller.
-			log.Error(nil, "AITenant-managed Tenant is missing LabelTenantName",
+			log.Error(nil, "AITenant-managed tenant config is missing LabelTenantName",
 				"managedByLabel", LabelManagedByAITenant,
 				"tenantNameLabel", LabelTenantName)
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
-				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+				obj.GetNamespace(), obj.GetName(), LabelManagedByAITenant, LabelTenantName)
 		}
 		if tenantName == DefaultAITenantName {
-			if tenant.Name != maasv1alpha1.TenantInstanceName {
-				return "", fmt.Errorf("tenant %s/%s has %s=%q but is not the default Tenant resource %q",
-					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, maasv1alpha1.TenantInstanceName)
+			if obj.GetName() != maasv1alpha1.MaasTenantConfigInstanceName {
+				return "", fmt.Errorf("tenant config %s/%s has %s=%q but is not the default tenant config resource %q",
+					obj.GetNamespace(), obj.GetName(), LabelTenantName, DefaultAITenantName, maasv1alpha1.MaasTenantConfigInstanceName)
 			}
-			if labels[LabelTenantNamespace] == "" || labels[LabelTenantNamespace] != tenant.Namespace {
-				return "", fmt.Errorf("tenant %s/%s has %s=%q but %s must match the Tenant namespace",
-					tenant.Namespace, tenant.Name, LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
+			if labels[LabelTenantNamespace] == "" || labels[LabelTenantNamespace] != obj.GetNamespace() {
+				return "", fmt.Errorf("tenant config %s/%s has %s=%q but %s must match the tenant config namespace",
+					obj.GetNamespace(), obj.GetName(), LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
 			}
 			log.Info("Using default AITenant legacy resource identifier (empty string)",
 				"tenantName", tenantName)
@@ -238,8 +227,6 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 		return tenantName, nil
 	}
 
-	// Legacy/default tenant - return empty string for backward compatibility
-	// TODO: Change to return "models-as-a-service" when DB migration is done
 	log.Info("Using legacy/default tenant identifier (empty string)", "reason", "no AITenant label")
 	return "", nil
 }
@@ -251,22 +238,29 @@ func TenantIdentifierFor(tenant *maasv1alpha1.Tenant) (string, error) {
 // Returns:
 //   - "models-as-a-service" for the default tenant (matches DB default and TENANT_NAME env var)
 //   - The tenant name for AITenant-managed tenants
-func TenantNameFor(tenant *maasv1alpha1.Tenant) (string, error) {
-	if tenant == nil {
+func TenantNameFor(obj client.Object) (string, error) {
+	if isNilObject(obj) {
 		return "models-as-a-service", nil
 	}
 
-	// Check if this Tenant is managed by AITenant controller
-	labels := tenant.GetLabels()
+	labels := obj.GetLabels()
 	if labels != nil && labels[LabelManagedByAITenant] == "true" {
 		tenantName := labels[LabelTenantName]
 		if tenantName == "" {
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
-				tenant.Namespace, tenant.Name, LabelManagedByAITenant, LabelTenantName)
+				obj.GetNamespace(), obj.GetName(), LabelManagedByAITenant, LabelTenantName)
 		}
 		return tenantName, nil
 	}
 
 	// Default tenant uses "models-as-a-service" for database/headers
 	return "models-as-a-service", nil
+}
+
+func isNilObject(obj client.Object) bool {
+	if obj == nil {
+		return true
+	}
+	value := reflect.ValueOf(obj)
+	return value.Kind() == reflect.Pointer && value.IsNil()
 }

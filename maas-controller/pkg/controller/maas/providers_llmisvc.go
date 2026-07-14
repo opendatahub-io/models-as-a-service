@@ -288,6 +288,19 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha1.LLMInferenceServi
 	return ""
 }
 
+func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) string {
+	llmisvc := &kservev1alpha1.LLMInferenceService{}
+	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+	if err := h.r.Get(ctx, key, llmisvc); err != nil {
+		return ""
+	}
+	modelName := llmisvc.Name
+	if llmisvc.Spec.Model.Name != nil && *llmisvc.Spec.Model.Name != "" {
+		modelName = *llmisvc.Spec.Model.Name
+	}
+	return fmt.Sprintf("publishers/%s/models/%s", model.Namespace, modelName)
+}
+
 func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
 	// llmisvc HTTPRoutes are owned by KServe; we do not delete them.
 	return nil

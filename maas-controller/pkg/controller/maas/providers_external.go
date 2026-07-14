@@ -266,6 +266,30 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
 }
 
+// ResolveModelAlias returns the targetModel from the first externalProviderRef, which is the
+// value the client sends in the body model field for BBR requests.
+// Note: assumes at most one ExternalModel per targetModel value per tenant. If multiple
+// ExternalModels share the same targetModel, the subscription reverse-lookup returns the
+// first match non-deterministically.
+func (h *externalModelHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) string {
+	em := &unstructured.Unstructured{}
+	em.SetGroupVersionKind(inferenceExternalModelGVK)
+	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+	if err := h.r.Get(ctx, key, em); err != nil {
+		return ""
+	}
+	refs, found, _ := unstructured.NestedSlice(em.Object, "spec", "externalProviderRefs")
+	if !found || len(refs) == 0 {
+		return ""
+	}
+	ref0, ok := refs[0].(map[string]any)
+	if !ok {
+		return ""
+	}
+	targetModel, _ := ref0["targetModel"].(string)
+	return targetModel
+}
+
 // CleanupOnDelete is called when the MaaSModelRef is deleted.
 // ExternalModel: the ExternalModel reconciler handles cleanup of all resources via finalizer.
 func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {

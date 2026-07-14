@@ -9,6 +9,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -33,9 +34,9 @@ type PlatformParams struct {
 	APIKeyMaxExpirationDays string
 }
 
-// BuildPlatformParams resolves all runtime parameters from the Tenant CR,
+// BuildPlatformParams resolves all runtime parameters from the tenant config object,
 // platform context, cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformContext, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
+func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
@@ -46,7 +47,7 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 		GatewayNamespace:        platformContext.GatewayRef.Namespace,
 		GatewayName:             platformContext.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
-		SubscriptionNamespace:   tenant.Namespace,
+		SubscriptionNamespace:   tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
@@ -56,7 +57,7 @@ func BuildPlatformParams(tenant *maasv1alpha1.Tenant, platformContext PlatformCo
 	}
 
 	log.Info("Built platform params",
-		"tenant", tenant.Namespace+"/"+tenant.Name,
+		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
 		"subscriptionNamespace", params.SubscriptionNamespace,
 		"gatewayName", params.GatewayName)
@@ -73,11 +74,34 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func resolveAPIKeyMaxExpirationDays(tenant *maasv1alpha1.Tenant) string {
-	if tenant.Spec.APIKeys != nil && tenant.Spec.APIKeys.MaxExpirationDays != nil {
-		return strconv.FormatInt(int64(*tenant.Spec.APIKeys.MaxExpirationDays), 10)
+func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil && cfg.MaxExpirationDays != nil {
+		return strconv.FormatInt(int64(*cfg.MaxExpirationDays), 10)
 	}
 	return DefaultAPIKeyMaxExpirationDays
+}
+
+func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.APIKeys
+	case *maasv1alpha1.Tenant:
+		return t.Spec.APIKeys
+	default:
+		return nil
+	}
+}
+
+func telemetryConfigFor(tenant client.Object) *maasv1alpha1.TenantTelemetryConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.Telemetry
+	case *maasv1alpha1.Tenant:
+		return t.Spec.Telemetry
+	default:
+		return nil
+	}
 }
 
 // applyPlatformParams patches all dynamic values into rendered resources.
@@ -366,6 +390,8 @@ func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 	return nil
 }
 
+const rhclWasmFilterName = "envoy.filters.http.wasm"
+
 func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
 	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
 }
@@ -402,41 +428,47 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
-	if !found || len(configPatches) < 6 {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least 6 entries, got %d", len(configPatches))
+	const (
+		filterPatchCount      = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
+		routeDisablePatchBase = filterPatchCount
+		totalConfigPatches    = routeDisablePatchBase + 4
+	)
+	if !found || len(configPatches) < totalConfigPatches {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", totalConfigPatches, len(configPatches))
 	}
 
-	clusterByIndex := []string{beforeCluster, afterCluster}
+	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster}
+	subFilterByIndex := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
 
-	for i, clusterName := range clusterByIndex {
+	for i := 0; i < filterPatchCount; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
 		}
 
 		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
-		if err := unstructured.SetNestedField(patch, anchorName, subFilterPath...); err != nil {
+		if err := unstructured.SetNestedField(patch, subFilterByIndex[i], subFilterPath...); err != nil {
 			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
 		}
 
 		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterName, clusterPath...); err != nil {
+		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
 			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
 		}
 
 		configPatches[i] = patch
 	}
 
-	// Patches 2–5 disable ext_proc on all non-inference maas-api routes.
+	// Patches 4–7 disable ext_proc on all non-inference maas-api routes.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
 	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := 2; i < 6; i++ {
+	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
 		}
 		if err := unstructured.SetNestedField(patch,
-			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2),
+			fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-routeDisablePatchBase),
 			"match", "routeConfiguration", "vhost", "route", "name"); err != nil {
 			return fmt.Errorf("write configPatches[%d] route name: %w", i, err)
 		}
