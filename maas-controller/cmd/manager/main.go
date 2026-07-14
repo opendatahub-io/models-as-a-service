@@ -554,7 +554,11 @@ func markDefaultAITenantBootstrapped(ctx context.Context, c client.Client, ct *m
 // owner references; LifecycleReconciler links Config to the default AITenant,
 // Deployment, and default Tenant. It does not create while the maas-controller
 // Deployment is terminating, so bootstrap does not fight teardown.
-func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string, pollInterval time.Duration) manager.RunnableFunc {
+func ensureClusterBootstrapRunnable(
+	mgr ctrl.Manager,
+	tenantNamespace, aitenantNamespace, controllerDeploymentNS, controllerDeploymentName, gatewayName, gatewayNamespace string,
+	pollInterval time.Duration,
+) manager.RunnableFunc {
 	return func(ctx context.Context) error {
 		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
 		c := mgr.GetClient()
@@ -700,6 +704,12 @@ func main() {
 	if infraNamespace != "" && strings.TrimSpace(infraNamespace) == "" {
 		setupLog.Error(stderrors.New("invalid infrastructure namespace configuration"),
 			"--infra-namespace must not be whitespace-only")
+		os.Exit(1)
+	}
+	if bootstrapPollInterval <= 0 {
+		setupLog.Error(stderrors.New("invalid bootstrap poll interval"),
+			"--bootstrap-poll-interval must be positive",
+			"interval", bootstrapPollInterval)
 		os.Exit(1)
 	}
 
