@@ -8,6 +8,8 @@ metadata:
 
 resources:
   - usage-dashboard.yaml
+  - usage-user-loki-dashboard.yaml
+  - loki-datasource-scoped.yaml
 
 labels:
   - pairs:
