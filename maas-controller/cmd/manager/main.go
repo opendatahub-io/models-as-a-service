@@ -630,7 +630,7 @@ func main() {
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
 			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
-			// so the cluster-wide secrets LIST/WATCH is not required — namespace-scoped RBAC is sufficient.
+			// to avoid caching cluster-wide Secrets.
 			&corev1.Secret{}: {Namespaces: infraNsCfg},
 		},
 	}
