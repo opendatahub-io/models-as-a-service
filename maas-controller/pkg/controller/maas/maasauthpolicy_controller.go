@@ -58,7 +58,7 @@ type MaaSAuthPolicyReconciler struct {
 	// Used to construct the subscription selector endpoint URL.
 	InfraNamespace string
 
-	// TenantNamespace is the namespace where the Tenant CR lives (configurable via flags).
+	// TenantNamespace is the namespace where the default MaasTenantConfig CR lives (configurable via flags).
 	// Defaults to "models-as-a-service".
 	TenantNamespace string
 
@@ -86,7 +86,7 @@ type MaaSAuthPolicyReconciler struct {
 	Recorder record.EventRecorder
 }
 
-// oidcConfig holds OIDC configuration from Tenant CR
+// oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
 type oidcConfig struct {
 	IssuerURL string
 	ClientID  string
@@ -115,34 +115,29 @@ func (r *MaaSAuthPolicyReconciler) authzCacheTTL() int64 {
 	return metadata
 }
 
-// fetchTenantIdentifier fetches the tenant identifier from the Tenant CR in the given namespace.
-// The missing-Tenant fallback preserves legacy default-tenant behavior; malformed
-// AITenant-managed Tenant metadata returns an error so callers do not collide with
+// fetchTenantIdentifier fetches the tenant identifier from the tenant config in the given namespace.
+// The missing-config fallback preserves legacy default-tenant behavior; malformed
+// AITenant-managed metadata returns an error so callers do not collide with
 // the legacy/default resource names.
 func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, log logr.Logger, policyNamespace string) (string, error) {
-	tenant := &maasv1alpha1.Tenant{}
-	tenantKey := client.ObjectKey{
-		Name:      maasv1alpha1.TenantInstanceName,
-		Namespace: policyNamespace,
-	}
-
-	if err := r.Get(ctx, tenantKey, tenant); err != nil {
+	tenant, err := fetchTenantForNamespace(ctx, r.Client, policyNamespace)
+	if err != nil {
 		if apierrors.IsNotFound(err) {
-			log.V(1).Info("Tenant not found, assuming default tenant (empty identifier)",
-				"tenantName", maasv1alpha1.TenantInstanceName,
+			log.V(1).Info("tenant config not found, assuming default tenant (empty identifier)",
+				"tenantConfigName", maasv1alpha1.MaasTenantConfigInstanceName,
 				"tenantNamespace", policyNamespace)
 			// Fallback to default tenant identifier (empty string)
 			return "", nil
 		}
-		log.Error(err, "failed to get Tenant resource",
-			"tenantName", maasv1alpha1.TenantInstanceName,
+		log.Error(err, "failed to get tenant config resource",
+			"tenantConfigName", maasv1alpha1.MaasTenantConfigInstanceName,
 			"tenantNamespace", policyNamespace)
 		return "", err
 	}
 
-	// Use TenantIdentifierFor for resource naming (maas-api service name construction).
+	// Use TenantIdentifierFor semantics for resource naming (maas-api service name construction).
 	// Returns "" for default tenant, tenantID for others.
-	tenantIdentifier, err := tenantreconcile.TenantIdentifierFor(tenant)
+	tenantIdentifier, err := tenant.identifier()
 	if err != nil {
 		log.Error(err, "failed to determine tenant identifier")
 		return "", err
@@ -153,19 +148,15 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantIdentifier(ctx context.Context, lo
 }
 
 func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Context, log logr.Logger, tenantNamespace string) (*tenantreconcile.PlatformContext, error) {
-	tenant := &maasv1alpha1.Tenant{}
-	tenantKey := client.ObjectKey{
-		Name:      maasv1alpha1.TenantInstanceName,
-		Namespace: tenantNamespace,
-	}
 	defaultTenantNamespace := r.TenantNamespace
 	if defaultTenantNamespace == "" {
 		defaultTenantNamespace = tenantreconcile.DefaultAITenantName
 	}
-	if err := r.Get(ctx, tenantKey, tenant); err != nil {
+	tenant, err := fetchTenantForNamespace(ctx, r.Client, tenantNamespace)
+	if err != nil {
 		if apimeta.IsNoMatchError(err) {
-			log.V(1).Info("Tenant CRD not installed, using default platform context",
-				"tenantName", maasv1alpha1.TenantInstanceName,
+			log.V(1).Info("tenant config CRD not installed, using default platform context",
+				"tenantConfigName", maasv1alpha1.MaasTenantConfigInstanceName,
 				"tenantNamespace", tenantNamespace)
 			platformContext := tenantreconcile.PlatformContext{
 				GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
@@ -175,8 +166,8 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Contex
 		}
 		if apierrors.IsNotFound(err) {
 			if !r.TenantNamespaceDiscoveryEnabled || tenantNamespace == defaultTenantNamespace {
-				log.V(1).Info("Tenant not found in default namespace, using default platform context",
-					"tenantName", maasv1alpha1.TenantInstanceName,
+				log.V(1).Info("tenant config not found in default namespace, using default platform context",
+					"tenantConfigName", maasv1alpha1.MaasTenantConfigInstanceName,
 					"tenantNamespace", tenantNamespace)
 				platformContext := tenantreconcile.PlatformContext{
 					GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
@@ -189,7 +180,7 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Contex
 				return nil, allowErr
 			}
 			if allowed {
-				return nil, fmt.Errorf("tenant %s/%s not found; refusing to use default platform context for discovered tenant namespace", tenantNamespace, maasv1alpha1.TenantInstanceName)
+				return nil, fmt.Errorf("MaasTenantConfig %s/%s not found; refusing to use default platform context for discovered tenant namespace", tenantNamespace, maasv1alpha1.MaasTenantConfigInstanceName)
 			}
 			platformContext := tenantreconcile.PlatformContext{
 				GatewayRef: fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
@@ -197,10 +188,14 @@ func (r *MaaSAuthPolicyReconciler) fetchTenantPlatformContext(ctx context.Contex
 			}
 			return &platformContext, nil
 		}
-		return nil, fmt.Errorf("failed to get Tenant CR: %w", err)
+		return nil, fmt.Errorf("failed to get tenant config CR: %w", err)
 	}
 
-	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace))
+	platformContext, err := tenant.platformContext(
+		ctx,
+		r.Client,
+		fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace),
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -346,9 +341,7 @@ const (
 	celModelIdentity          = `(` + celPathModelIdentityAvailable +
 		` ? ` + celPathParts + `[0] + "/" + ` + celPathParts + `[1]` +
 		` : ("x-gateway-model-name" in request.headers` +
-		`   ? (request.headers["x-gateway-model-name"].startsWith("publishers/")` +
-		`     ? request.headers["x-gateway-model-name"].split("/")[1] + "/" + request.headers["x-gateway-model-name"].split("/")[3]` +
-		`     : request.headers["x-gateway-model-name"])` +
+		`   ? request.headers["x-gateway-model-name"]` +
 		`   : ""))`
 )
 
@@ -390,6 +383,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list
@@ -479,12 +473,12 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// In multi-tenant mode: creates AuthPolicy for each tenant's gateway.
 	//
 	// Skip reconciling if this is a non-default tenant using the default gateway.
-	// This happens when a Tenant CR exists without a gatewayRef - it shouldn't
-	// overwrite the default gateway's AuthPolicy with tenant-specific configuration.
+	// This should not overwrite the default gateway's AuthPolicy with
+	// tenant-specific configuration.
 	isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
 	isNonDefaultTenant := tenantID != ""
 	if isNonDefaultTenant && isDefaultGateway {
-		log.Info("skipping gateway AuthPolicy reconciliation: non-default tenant falling back to default gateway (Tenant CR missing gatewayRef)",
+		log.Info("skipping gateway AuthPolicy reconciliation: non-default tenant falling back to default gateway",
 			"tenantID", tenantID,
 			"tenantNamespace", req.Namespace,
 			"gatewayNamespace", gatewayNs,
@@ -737,11 +731,7 @@ path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
 	path_parts[0] != "maas-api"
 }
 
-raw_header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
-
-header_model_identity := sprintf("%%s/%%s", [split(raw_header_model_identity, "/")[1], split(raw_header_model_identity, "/")[3]]) {
-	startswith(raw_header_model_identity, "publishers/")
-} else := raw_header_model_identity
+header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
 
 model_identity := path_model_identity {
 	path_model_identity != ""
@@ -1304,10 +1294,29 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 			entry.Groups = deduplicateAndSort(entry.Groups)
 			entry.Users = deduplicateAndSort(entry.Users)
 			aggregate[key] = entry
+
+			for _, altKey := range r.resolveHeaderModelKeys(ctx, ref) {
+				aggregate[altKey] = entry
+			}
 		}
 	}
 
 	return aggregate, nil
+}
+
+// resolveHeaderModelKeys returns alternate model_access keys that match the value
+// ipp-pre sets in the X-Gateway-Model-Name header for body-based routing.
+// Reads MaaSModelRef.status.resolvedModelAlias, which the modelref controller
+// populates from the backing CRD (publisher ID for LLMISvc, targetModel for ExternalModel).
+func (r *MaaSAuthPolicyReconciler) resolveHeaderModelKeys(ctx context.Context, ref maasv1alpha1.ModelRef) []string {
+	modelRef := &maasv1alpha1.MaaSModelRef{}
+	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, modelRef); err != nil {
+		return nil
+	}
+	if modelRef.Status.ResolvedModelAlias == "" {
+		return nil
+	}
+	return []string{modelRef.Status.ResolvedModelAlias}
 }
 
 func (r *MaaSAuthPolicyReconciler) modelAuthPolicyExists(ctx context.Context, modelNamespace, modelName string) (bool, error) {

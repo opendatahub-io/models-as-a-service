@@ -37,7 +37,7 @@ IPP is required for external models — it injects the provider API key and tran
 MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
 
 !!! note
-    If MaaS was deployed via the Tenant CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
+    If MaaS was deployed via the MaasTenantConfig CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:
 
     ```bash
     kubectl get pods -n openshift-ingress -l app=payload-processing

@@ -174,6 +174,8 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		model.Status.Endpoint = endpoint
 	}
 
+	model.Status.ResolvedModelAlias = handler.ResolveModelAlias(ctx, log, model)
+
 	governed := r.checkGovernanceAttached(ctx, model)
 	r.setGovernanceCondition(model, governed)
 	r.setRuntimeReadyCondition(model, runtimeReady)

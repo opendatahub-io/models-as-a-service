@@ -28,7 +28,7 @@ MaaS uses multiple namespaces to separate concerns and enable flexible deploymen
 
 The **MaaS Controller** is a Kubernetes controller with two main responsibilities:
 
-1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps `AITenant/models-as-a-service` in the `ai-tenants` namespace; the AITenant reconciler creates or adopts `Tenant/default-tenant` in the `models-as-a-service` namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
+1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`MaasTenantConfig`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps `AITenant/models-as-a-service` in the `ai-tenants` namespace; the AITenant reconciler creates or adopts `MaasTenantConfig/default-tenant` in the `models-as-a-service` namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
 
 2. **Subscription reconcilers** — let platform operators define:
     - **Which models** are exposed through MaaS (via **MaaSModelRef**).
@@ -45,7 +45,7 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 flowchart TB
     subgraph Platform["Platform lifecycle"]
         AITenant["AITenant CR\n(models-as-a-service)"]
-        Tenant["Tenant CR\n(default-tenant)"]
+        Tenant["MaasTenantConfig CR\n(default-tenant)"]
     end
 
     subgraph Operator["Platform operator"]
@@ -96,7 +96,7 @@ flowchart TB
     HTTPRoute --> LLMIS
 ```
 
-**Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `Tenant` CR; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
+**Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `MaasTenantConfig` CR and AITenant platform context; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
 
 ---
 

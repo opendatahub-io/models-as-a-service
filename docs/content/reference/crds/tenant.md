@@ -1,28 +1,27 @@
-# Tenant
+# MaasTenantConfig
 
-Configures MaaS-specific tenant settings. The Tenant CRD is a namespace-scoped singleton — the resource name must be `default-tenant` (enforced by CEL validation). For AITenant-managed tenants, platform-derived context such as Gateway and external OIDC is owned by `AITenant`; `Tenant` owns MaaS-specific user configuration such as API key policies and telemetry settings.
+Configures MaaS-specific tenant settings. `MaasTenantConfig` is a namespace-scoped singleton; the resource name must be `default-tenant` (enforced by CEL validation).
+
+Platform context such as Gateway and external OIDC belongs to [`AITenant`](ai-tenant.md). `MaasTenantConfig` owns MaaS runtime configuration such as API key policy and telemetry settings. The legacy `Tenant` CRD remains installed during the migration window so existing `Tenant/default-tenant` objects can be adopted and copied into `MaasTenantConfig/default-tenant`.
 
 ## Multi-Tenant Deployment
 
-In multi-tenant deployments, each tenant has its own Tenant CR in a dedicated namespace:
+In multi-tenant deployments, each tenant has one `MaasTenantConfig` in its tenant namespace:
 
-| Tenant Type | Tenant CR Namespace | Tenant CR Name | maas-api Service (in operator namespace) | Created By |
-|-------------|---------------------|----------------|------------------------------------------|------------|
-| **Default** | `models-as-a-service` | `default-tenant` | `maas-api` | Default AITenant bootstrap |
-| **Additional** | `ai-tenant-{tenantID}` | `default-tenant` | `maas-api-{tenantID}` | AITenant reconciler |
+| Tenant Type | Config Namespace | Config Name | maas-api Service (in operator namespace) | Created By |
+|-------------|------------------|-------------|------------------------------------------|------------|
+| Default | `models-as-a-service` | `default-tenant` | `maas-api` | Default AITenant bootstrap |
+| Additional | `ai-tenant-{tenantID}` | `default-tenant` | `maas-api-{tenantID}` | AITenant reconciler |
 
-**Key points:**
-- All Tenant CRs are named `default-tenant` within their respective namespace
-- The default `Tenant/default-tenant` is created or adopted by `AITenant/models-as-a-service`
-- Additional tenants are created by the AITenant reconciler, which provisions the tenant namespace and Tenant CR
-- All maas-api Services deploy to the operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI), not to tenant namespaces
-- Each tenant has an isolated maas-api instance for API key and subscription management
-- Tenant CRs for additional tenants have the finalizer `maas.opendatahub.io/tenant-cleanup`
-- For AITenant-managed tenants, `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` are ignored. Gateway comes from the owning `AITenant.status.gatewayRef`; OIDC comes from `AITenant.spec.oidc`.
+Key points:
 
-**Naming conventions:**
-- `TenantIdentifier`: Used for Kubernetes resource naming (empty string for default, `{tenantID}` for additional tenants)
-- `TenantName`: Used for database queries and HTTP headers (always `models-as-a-service` for default, `{tenantID}` for additional tenants)
+- All `MaasTenantConfig` resources are named `default-tenant` within their namespace.
+- The default `MaasTenantConfig/default-tenant` is created or adopted by `AITenant/models-as-a-service`.
+- Additional tenant configs are created by the AITenant reconciler, which provisions the tenant namespace and config object.
+- All maas-api Services deploy to the operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI), not to tenant namespaces.
+- Each tenant has an isolated maas-api instance for API key and subscription management.
+- `MaasTenantConfig` resources for additional tenants have the finalizer `maas.opendatahub.io/tenant-cleanup`.
+- For AITenant-managed tenants, Gateway comes from `AITenant.status.gatewayRef`; OIDC comes from `AITenant.spec.oidc`.
 
 See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
@@ -30,25 +29,12 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ## Spec
 
-### TenantSpec
+### MaasTenantConfigSpec
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| gatewayRef | TenantGatewayRef | No | Legacy/unmanaged Tenant reference to the Gateway (Gateway API) used for exposing model endpoints. Ignored for AITenant-managed tenants. |
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
-| externalOIDC | TenantExternalOIDCConfig | No | Legacy/unmanaged Tenant external OIDC identity provider settings for the maas-api AuthPolicy. Ignored for AITenant-managed tenants; use `AITenant.spec.oidc`. |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
-
----
-
-## TenantGatewayRef
-
-`spec.gatewayRef` identifies the Gateway API Gateway resource that the controller uses for model endpoint routing only for legacy/unmanaged Tenant resources. For AITenant-managed tenants, this value comes from the owning `AITenant.status.gatewayRef`.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| namespace | string | No | `openshift-ingress` | Namespace of the Gateway resource. Max length: 63 characters. |
-| name | string | No | `maas-default-gateway` | Name of the Gateway resource. Max length: 63 characters. |
 
 ---
 
@@ -62,18 +48,6 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ---
 
-## TenantExternalOIDCConfig
-
-`spec.externalOIDC` configures an external OIDC identity provider for token-based authentication only for legacy/unmanaged Tenant resources. For AITenant-managed tenants, configure `AITenant.spec.oidc`.
-
-| Field | Type | Required | Default | Description |
-|-------|------|----------|---------|-------------|
-| issuerUrl | string | Yes | — | OIDC issuer URL. Must start with `https://`. Max length: 2048 characters. |
-| clientId | string | Yes | — | OAuth2 client ID. Max length: 256 characters. |
-| ttl | int | No | `300` | JWKS cache duration in seconds. Minimum: 30. |
-
----
-
 ## TenantTelemetryConfig
 
 `spec.telemetry` controls what telemetry data the platform collects.
@@ -81,14 +55,14 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | enabled | bool | No | `true` | Whether telemetry collection is enabled |
-| metrics | TenantMetricsConfig | No | — | Fine-grained control over metric dimensions |
+| metrics | TenantMetricsConfig | No | - | Fine-grained control over metric dimensions |
 
 ### TenantMetricsConfig
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | captureOrganization | bool | No | `true` | Add an "organization" dimension to telemetry metrics |
-| captureUser | bool | No | `false` | Add a "user" dimension containing the authenticated user ID. May have GDPR / privacy implications — ensure compliance before enabling. |
+| captureUser | bool | No | `false` | Add a "user" dimension containing the authenticated user ID. May have privacy implications; ensure compliance before enabling. |
 | captureGroup | bool | No | `false` | Add a "group" dimension to telemetry metrics |
 | captureModelUsage | bool | No | `true` | Capture per-model usage metrics |
 
@@ -96,7 +70,7 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ## Status
 
-### TenantStatus
+### MaasTenantConfigStatus
 
 | Field | Type | Description |
 |-------|------|-------------|
@@ -105,7 +79,7 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ### Print Columns
 
-`kubectl get tenant` displays:
+`kubectl get maastenantconfig` displays:
 
 | Column | Source |
 |--------|--------|
@@ -119,7 +93,7 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
-kind: Tenant
+kind: MaasTenantConfig
 metadata:
   name: default-tenant
   namespace: models-as-a-service
@@ -137,8 +111,17 @@ spec:
 
 ---
 
+## Migration Notes
+
+Existing `Tenant/default-tenant` resources are not deleted immediately. During reconciliation, the controller copies `Tenant.spec.apiKeys` and `Tenant.spec.telemetry` into `MaasTenantConfig/default-tenant` when those fields are not already set. Legacy `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` are migrated to the owning `AITenant` where possible, because Gateway and OIDC are platform context rather than MaaS runtime configuration.
+
+The copy is fill-only: if `MaasTenantConfig/default-tenant` already has `spec.apiKeys` or `spec.telemetry`, the controller does not overwrite those fields from the legacy `Tenant`. Treat `MaasTenantConfig` as the source of truth after it exists.
+
+A namespace that only has the legacy `Tenant/default-tenant` object is unsupported after this migration. Admission compatibility may still allow older tenant-scoped resources during the grace window, but platform workload reconciliation runs from `MaasTenantConfig/default-tenant`; restore the owning `AITenant` bootstrap or create the `MaasTenantConfig` singleton before relying on that namespace.
+
 ## Related Documentation
 
+- [AITenant CRD](ai-tenant.md) - Tenant namespace, Gateway, OIDC, and tenant-admin RBAC
 - [MaaSModelRef CRD](maas-model-ref.md) - Model endpoint references
 - [MaaSAuthPolicy CRD](maas-auth-policy.md) - Access control policies
 - [MaaSSubscription CRD](maas-subscription.md) - Subscription and rate limiting

@@ -21,13 +21,13 @@ const ssaFieldOwner = "maas-controller"
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
 // The cluster-scoped Config is a valid owner for namespaced resources in any namespace
-// and for cluster-scoped operands. Tenant tracking labels are always applied so the Tenant
-// reconciler can correlate resources with the subscription-namespace Tenant CR for status and debugging.
+// and for cluster-scoped operands. Tenant tracking labels are always applied so the
+// reconciler can correlate resources with the namespace-local config object for status and debugging.
 //
 // Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
 // Config controller ownerReference; they still receive tenant tracking labels. Add predicates
 // there for future exceptions (e.g. shared config that must outlive Config GC).
-func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
+func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant client.Object, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
 		return errors.New("config with UID is required for platform apply")
 	}
@@ -121,7 +121,7 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 
 // isOwnedByExternalController returns true when the live cluster copy of the
 // rendered resource has a controller:true ownerReference whose UID differs from
-// the given Config UID. This prevents the Tenant reconciler from SSA-applying
+// the given Config UID. This prevents the tenant config reconciler from SSA-applying
 // over resources the ODH operator's ModelsAsService component already owns,
 // which would fail on immutable fields (spec.selector) and produce conflicting
 // controller ownerReferences.
@@ -143,12 +143,20 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 	return false
 }
 
-func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {
+func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[LabelTenantName] = tenant.Name
-	labels[LabelTenantNamespace] = tenant.Namespace
+	labels[LabelTenantName] = tenantTrackingName(tenant)
+	labels[LabelTenantNamespace] = tenant.GetNamespace()
 	obj.SetLabels(labels)
+}
+
+func tenantTrackingName(tenant client.Object) string {
+	tenantLabels := tenant.GetLabels()
+	if tenantLabels != nil && tenantLabels[LabelTenantName] != "" {
+		return tenantLabels[LabelTenantName]
+	}
+	return tenant.GetName()
 }

@@ -810,46 +810,59 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Wait for the auth policy and subscription to reconcile before creating API key.
-            # The central /v1/models handler probes each model endpoint; a partially propagated
-            # auth policy can otherwise produce HTTP 200 with only one accessible backend.
-            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
-            _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
+            # Wait for auth and subscription reconciliation before creating API key.
+            # Both modelRefs must be governed before /v1/models probes each backend.
+            _wait_for_maas_auth_policy_phase(
+                auth_policy_name,
+                namespace=maas_ns,
+                timeout=120,
+            )
+            _wait_for_maas_subscription_phase(
+                subscription_name,
+                namespace=maas_ns,
+                timeout=120,
+                require_model_statuses=True,
+            )
+            _wait_for_model_ready(MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(PREMIUM_MODEL_REF, namespace=MODEL_NAMESPACE)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-diff-refs-test-key", subscription=subscription_name)
 
             _wait_reconcile()
 
-            # Query /v1/models
+            # Query /v1/models. Gateway policy propagation and backend model probes can
+            # lag behind CR readiness, so wait until both modelRefs appear.
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            headers = {
+            request_headers = {
                 "Authorization": f"Bearer {api_key}",
                 "x-maas-subscription": subscription_name,
             }
+            deadline = time.time() + 120
+            r = None
             models = []
             model_ids = []
-            for attempt in range(1, GATEWAY_PROPAGATION_RETRIES + 1):
-                r = _get_models_with_gateway_retry(headers=headers)
-
-                assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-                data = r.json()
-                models = data.get("data") or []
-
-                assert isinstance(models, list), "Models should be a list"
-
-                model_ids = [m["id"] for m in models]
-                urls = [m.get("url") for m in models if m.get("id") == MODEL_NAME and m.get("url")]
-                if len(models) == 2 and len(set(urls)) == 2:
-                    break
-
-                if attempt < GATEWAY_PROPAGATION_RETRIES:
+            while time.time() < deadline:
+                r = _get_models_with_gateway_retry(headers=request_headers)
+                if r.status_code == 200:
+                    models = r.json().get("data") or []
+                    assert isinstance(models, list), "Models should be a list"
+                    model_ids = [m["id"] for m in models]
+                    urls = [m.get("url") for m in models if m.get("id") == MODEL_NAME and m.get("url")]
+                    if len(models) == 2 and len(set(urls)) == 2:
+                        break
                     log.info(
-                        "Models response not fully propagated yet "
-                        f"(attempt {attempt}/{GATEWAY_PROPAGATION_RETRIES}); "
+                        "Models response not fully propagated yet; "
                         f"got {len(models)} entries: {model_ids}"
                     )
-                    time.sleep(GATEWAY_PROPAGATION_DELAY)
+                else:
+                    log.info(f"Waiting for /v1/models HTTP 200; got {r.status_code}: {r.text[:200]}")
+                time.sleep(5)
+
+            assert r is not None, "Expected /v1/models response, got none"
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
+
+            assert isinstance(models, list), "Models should be a list"
 
             # Get model IDs from response
             unique_ids = set(model_ids)

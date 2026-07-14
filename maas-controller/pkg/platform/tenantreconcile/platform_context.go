@@ -11,7 +11,7 @@ import (
 
 const (
 	// AnnotationAITenantName identifies the AITenant that owns an AITenant-managed
-	// bridge Tenant/default-tenant object.
+	// namespace-local MaasTenantConfig/default-tenant object.
 	AnnotationAITenantName = "maas.opendatahub.io/aitenant-name"
 
 	// AnnotationAITenantNamespace identifies the namespace of the owning AITenant.
@@ -29,55 +29,61 @@ type PlatformContext struct {
 	Source       string
 }
 
-// ResolvePlatformContext resolves the gateway and OIDC values for a Tenant.
+// ResolvePlatformContext resolves gateway and OIDC values for a tenant config object.
 //
-// AITenant-managed Tenants use their owning AITenant as the source of platform
-// context. Legacy/unmanaged Tenants preserve the previous behavior and use
-// Tenant.spec values, falling back to fallbackGatewayRef when gatewayRef is
-// omitted.
-func ResolvePlatformContext(ctx context.Context, c client.Reader, tenant *maasv1alpha1.Tenant, fallbackGatewayRef maasv1alpha1.TenantGatewayRef) (PlatformContext, error) {
+// AITenant-managed configs use their owning AITenant as the source of platform
+// context. Legacy/unmanaged Tenant objects preserve the previous behavior and
+// use Tenant.spec values for migration compatibility.
+func ResolvePlatformContext(ctx context.Context, c client.Reader, tenant client.Object, fallbackGatewayRef maasv1alpha1.TenantGatewayRef) (PlatformContext, error) {
 	if tenant == nil {
 		return PlatformContext{GatewayRef: fallbackGatewayRef, Source: "default"}, nil
 	}
 
-	if isAITenantManagedTenant(tenant) {
+	if isAITenantManagedTenantConfig(tenant) {
 		return resolveAITenantPlatformContext(ctx, c, tenant)
 	}
 
-	ref := tenant.Spec.GatewayRef
-	switch {
-	case ref.Name == "" && ref.Namespace == "":
-		ref = fallbackGatewayRef
-	case ref.Name == "" || ref.Namespace == "":
-		return PlatformContext{}, fmt.Errorf("tenant %s/%s spec.gatewayRef must set both name and namespace", tenant.Namespace, tenant.Name)
+	if legacy, ok := tenant.(*maasv1alpha1.Tenant); ok {
+		ref := legacy.Spec.GatewayRef
+		switch {
+		case ref.Name == "" && ref.Namespace == "":
+			ref = fallbackGatewayRef
+		case ref.Name == "" || ref.Namespace == "":
+			return PlatformContext{}, fmt.Errorf("tenant %s/%s spec.gatewayRef must set both name and namespace", legacy.Namespace, legacy.Name)
+		}
+
+		return PlatformContext{
+			GatewayRef:   ref,
+			ExternalOIDC: legacy.Spec.ExternalOIDC.DeepCopy(),
+			Source:       "legacy-tenant-spec",
+		}, nil
 	}
 
 	return PlatformContext{
-		GatewayRef:   ref,
-		ExternalOIDC: tenant.Spec.ExternalOIDC.DeepCopy(),
-		Source:       "tenant-spec",
+		GatewayRef: fallbackGatewayRef,
+		Source:     "tenant-config",
 	}, nil
 }
 
-func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant *maasv1alpha1.Tenant) (PlatformContext, error) {
+func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant client.Object) (PlatformContext, error) {
 	tenantName := tenant.GetLabels()[LabelTenantName]
 	if tenantName == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant %s/%s is missing %s", tenant.Namespace, tenant.Name, LabelTenantName)
+		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), LabelTenantName)
 	}
 
 	aitenantName := annotationValue(tenant, AnnotationAITenantName)
 	if aitenantName == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant %s/%s is missing %s", tenant.Namespace, tenant.Name, AnnotationAITenantName)
+		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantName)
 	}
 	aitenantNamespace := annotationValue(tenant, AnnotationAITenantNamespace)
 	if aitenantNamespace == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant %s/%s is missing %s", tenant.Namespace, tenant.Name, AnnotationAITenantNamespace)
+		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantNamespace)
 	}
 
 	var aitenant maasv1alpha1.AITenant
 	key := client.ObjectKey{Name: aitenantName, Namespace: aitenantNamespace}
 	if err := c.Get(ctx, key, &aitenant); err != nil {
-		return PlatformContext{}, fmt.Errorf("get owning AITenant %s/%s for tenant %s/%s: %w", key.Namespace, key.Name, tenant.Namespace, tenant.Name, err)
+		return PlatformContext{}, fmt.Errorf("get owning AITenant %s/%s for tenant config %s/%s: %w", key.Namespace, key.Name, tenant.GetNamespace(), tenant.GetName(), err)
 	}
 
 	ref := aitenant.Status.GatewayRef
@@ -92,15 +98,15 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 	}, nil
 }
 
-func isAITenantManagedTenant(tenant *maasv1alpha1.Tenant) bool {
+func isAITenantManagedTenantConfig(tenant client.Object) bool {
 	labels := tenant.GetLabels()
 	return labels != nil && labels[LabelManagedByAITenant] == "true"
 }
 
 // TenantUsesAITenantPlatformContext reports whether gateway/OIDC platform
-// context should be read from the owning AITenant rather than Tenant.spec.
-func TenantUsesAITenantPlatformContext(tenant *maasv1alpha1.Tenant) bool {
-	return isAITenantManagedTenant(tenant)
+// context should be read from the owning AITenant rather than legacy Tenant.spec.
+func TenantUsesAITenantPlatformContext(tenant client.Object) bool {
+	return isAITenantManagedTenantConfig(tenant)
 }
 
 // TenantNamespaceForAITenant returns the tenant admin namespace derived from an

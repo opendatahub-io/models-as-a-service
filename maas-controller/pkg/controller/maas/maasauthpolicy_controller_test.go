@@ -1667,7 +1667,7 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 				WithObjects(tenant).
 				Build()
 
-			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: namespace}
+			r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, TenantNamespace: namespace}
 			log := ctrl.Log.WithName("test")
 			got := r.fetchOIDCConfig(context.Background(), log, namespace)
 
@@ -2000,58 +2000,168 @@ func TestMaaSAuthPolicyReconciler_CanonicalModelIDNormalization(t *testing.T) {
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	t.Run("CEL normalizes canonical publishers/ prefix", func(t *testing.T) {
-		// The CEL celModelIdentity is embedded in auth-valid authorization block.
-		// Check that the gateway AuthPolicy's auth-valid rego or CEL-based expressions
-		// contain the normalization for publishers/ prefix.
-		// celModelIdentity is used in the response and cache-key sections.
-		// It should handle: publishers/{ns}/models/{name} -> {ns}/{name}
-		if !strings.Contains(celModelIdentity, `startsWith("publishers/")`) {
-			t.Errorf("celModelIdentity should normalize canonical model IDs with publishers/ prefix, got: %s", celModelIdentity)
+	t.Run("CEL uses header value as-is for model identity", func(t *testing.T) {
+		if !strings.Contains(celModelIdentity, `request.headers["x-gateway-model-name"]`) {
+			t.Errorf("celModelIdentity should use raw header value as model identity, got: %s", celModelIdentity)
 		}
-		if !strings.Contains(celModelIdentity, `split("/")[1]`) || !strings.Contains(celModelIdentity, `split("/")[3]`) {
-			t.Errorf("celModelIdentity should extract ns (index 1) and name (index 3) from canonical format, got: %s", celModelIdentity)
-		}
-		if !strings.Contains(celModelIdentity, `x-gateway-model-name`) {
-			t.Errorf("celModelIdentity should read from x-gateway-model-name header, got: %s", celModelIdentity)
+		if strings.Contains(celModelIdentity, `request.headers["x-gateway-model-name"].split`) {
+			t.Errorf("celModelIdentity should not split the header value, got: %s", celModelIdentity)
 		}
 	})
 
-	t.Run("OPA Rego normalizes canonical publishers/ prefix", func(t *testing.T) {
+	t.Run("OPA Rego uses header value as-is for model identity", func(t *testing.T) {
 		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
 		if err != nil || !found {
 			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
 		}
 
-		if !strings.Contains(rego, "raw_header_model_identity") {
-			t.Errorf("rego should extract raw header value before normalization, got: %s", rego)
+		if !strings.Contains(rego, `header_model_identity := object.get(request_headers, "x-gateway-model-name", "")`) {
+			t.Errorf("rego should use raw header value directly as model identity, got: %s", rego)
 		}
-		if !strings.Contains(rego, `startswith(raw_header_model_identity, "publishers/")`) {
-			t.Errorf("rego should check for publishers/ prefix, got: %s", rego)
+		if strings.Contains(rego, `startswith(raw_header_model_identity`) {
+			t.Errorf("rego should not split or parse publisher ID format, got: %s", rego)
 		}
-		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[1]`) {
-			t.Errorf("rego should extract namespace at index 1 from canonical format, got: %s", rego)
-		}
-		if !strings.Contains(rego, `split(raw_header_model_identity, "/")[3]`) {
-			t.Errorf("rego should extract model name at index 3 from canonical format, got: %s", rego)
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_PublisherIDModelAccess verifies that the gateway AuthPolicy's
+// model_access map contains publisher-ID-keyed entries for LLMInferenceService-backed models,
+// allowing BBR requests with publisher ID format to pass auth.
+func TestMaaSAuthPolicyReconciler_PublisherIDModelAccess(t *testing.T) {
+	const (
+		modelRefName   = "facebook-opt-125m-simulated"
+		llmisvcName    = "facebook-opt-125m"
+		namespace      = "llm"
+		gatewayNS      = "gateway-ns"
+		maasPolicyName = "policy-bbr"
+	)
+	publisherID := "publishers/" + namespace + "/models/facebook/opt-125m"
+
+	modelRef := newMaaSModelRef(modelRefName, namespace, "LLMInferenceService", llmisvcName)
+	modelRef.Status.ResolvedModelAlias = publisherID
+	route := newHTTPRoute(modelRefName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "system:authenticated",
+		maasv1alpha1.ModelRef{Name: modelRefName, Namespace: namespace},
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelRef, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+	}
+
+	standardKey := namespace + "/" + modelRefName
+
+	t.Run("model_access contains standard namespace/name key", func(t *testing.T) {
+		if !strings.Contains(rego, standardKey) {
+			t.Errorf("model_access should contain standard key %q, rego:\n%s", standardKey, rego)
 		}
 	})
 
-	t.Run("CEL passes through short model names unchanged", func(t *testing.T) {
-		// When the header doesn't start with "publishers/", the raw value should be used as-is
-		if !strings.Contains(celModelIdentity, `: request.headers["x-gateway-model-name"])`) {
-			t.Errorf("celModelIdentity should pass through non-canonical model names as-is, got: %s", celModelIdentity)
+	t.Run("model_access contains publisher ID key for LLMInferenceService", func(t *testing.T) {
+		if !strings.Contains(rego, publisherID) {
+			t.Errorf("model_access should contain publisher ID key %q, rego:\n%s", publisherID, rego)
+		}
+	})
+}
+
+// TestMaaSAuthPolicyReconciler_TargetModelAccess_ExternalModel verifies that the gateway
+// AuthPolicy's model_access map contains a targetModel-keyed entry for ExternalModel-backed
+// models, allowing BBR requests with the upstream model name to pass auth.
+func TestMaaSAuthPolicyReconciler_TargetModelAccess_ExternalModel(t *testing.T) {
+	const (
+		modelRefName   = "my-gpt4o"
+		emName         = "my-gpt4o"
+		targetModel    = "gpt-4o"
+		namespace      = "default"
+		gatewayNS      = "gateway-ns"
+		maasPolicyName = "policy-ext"
+	)
+
+	modelRef := newMaaSModelRef(modelRefName, namespace, "ExternalModel", emName)
+	modelRef.Status.ResolvedModelAlias = targetModel
+	route := newHTTPRoute(modelRefName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelRefName, Namespace: namespace},
+	)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(modelRef, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayName:      "maas-default-gateway",
+		GatewayNamespace: gatewayNS,
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    60,
+	}
+
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	gwPolicy := &unstructured.Unstructured{}
+	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gwPolicy); err != nil {
+		t.Fatalf("Get gateway AuthPolicy: %v", err)
+	}
+
+	rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
+	if err != nil || !found {
+		t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+	}
+
+	standardKey := namespace + "/" + modelRefName
+
+	t.Run("model_access contains standard namespace/name key", func(t *testing.T) {
+		if !strings.Contains(rego, standardKey) {
+			t.Errorf("model_access should contain standard key %q, rego:\n%s", standardKey, rego)
 		}
 	})
 
-	t.Run("OPA Rego passes through short model names unchanged", func(t *testing.T) {
-		rego, found, err := unstructured.NestedString(gwPolicy.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
-		if err != nil || !found {
-			t.Fatalf("require-group-membership rego missing: found=%v err=%v", found, err)
+	t.Run("model_access contains targetModel key for ExternalModel", func(t *testing.T) {
+		if !strings.Contains(rego, `"`+targetModel+`"`) {
+			t.Errorf("model_access should contain targetModel key %q, rego:\n%s", targetModel, rego)
 		}
-		// The else clause should assign the raw value when not canonical
-		if !strings.Contains(rego, "else := raw_header_model_identity") {
-			t.Errorf("rego should fall back to raw header value for non-canonical names, got: %s", rego)
+	})
+
+	t.Run("model_access does NOT contain publishers/ for ExternalModel", func(t *testing.T) {
+		if strings.Contains(rego, "publishers/") {
+			t.Errorf("model_access should not contain publisher ID for ExternalModel, rego:\n%s", rego)
 		}
 	})
 }
