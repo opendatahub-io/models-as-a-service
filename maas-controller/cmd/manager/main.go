@@ -834,14 +834,15 @@ func main() {
 		os.Exit(1)
 	}
 	if err := (&maas.AITenantReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		APIReader:         mgr.GetAPIReader(),
-		AppNamespace:      infraNamespace,
-		TenantNamespace:   maasSubscriptionNamespace,
-		AITenantNamespace: aitenantNamespace,
-		GatewayName:       gatewayName,
-		GatewayNamespace:  gatewayNamespace,
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		APIReader:           mgr.GetAPIReader(),
+		AppNamespace:        infraNamespace,
+		TenantNamespace:     maasSubscriptionNamespace,
+		AITenantNamespace:   aitenantNamespace,
+		GatewayName:         gatewayName,
+		GatewayNamespace:    gatewayNamespace,
+		MonitoringNamespace: monitoringNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
 		os.Exit(1)

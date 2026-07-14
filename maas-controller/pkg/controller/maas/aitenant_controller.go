@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -37,12 +38,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	yamlserializer "k8s.io/apimachinery/pkg/runtime/serializer/yaml"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -68,6 +74,13 @@ const (
 	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
 	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
 	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
+
+	// envoyFilterManifestPath is the default path to the EnvoyFilter manifest inside the container.
+	envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
+
+	// legacyGlobalEnvoyFilterName is the old singleton EnvoyFilter name from LifecycleReconciler.
+	// Used for migration cleanup only.
+	legacyGlobalEnvoyFilterName = "maas-model-access-logs"
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -91,6 +104,10 @@ type AITenantReconciler struct {
 	GatewayName string
 	// GatewayNamespace is where tenant Gateway resources are expected to exist.
 	GatewayNamespace string
+	// MonitoringNamespace is where the OTel Collector is deployed (for EnvoyFilter cluster address).
+	MonitoringNamespace string
+	// EnvoyFilterManifestPath overrides the default path to the usage-logs EnvoyFilter YAML.
+	EnvoyFilterManifestPath string
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -104,6 +121,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -188,6 +206,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	if err := r.ensureUsageLogsEnvoyFilter(ctx, &aitenant); err != nil {
+		setAITenantPhase(&aitenant, "Failed", "EnvoyFilterReconcileFailed", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
@@ -196,12 +222,44 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // SetupWithManager registers the AITenant controller.
+// Config is watched so that changes to usageLogging trigger per-tenant EnvoyFilter reconciliation.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	cfgSpecChanged := predicate.And(
+		predicate.NewPredicateFuncs(func(o client.Object) bool {
+			return o.GetName() == maasv1alpha1.ConfigInstanceName
+		}),
+		predicate.GenerationChangedPredicate{},
+	)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
 		)).
+		Watches(
+			&maasv1alpha1.Config{},
+			handler.EnqueueRequestsFromMapFunc(r.mapConfigToAITenants),
+			builder.WithPredicates(cfgSpecChanged),
+		).
 		Complete(r)
+}
+
+// mapConfigToAITenants lists all AITenants and enqueues each for reconciliation.
+// Called when the Config CR changes (e.g. usageLogging toggled).
+func (r *AITenantReconciler) mapConfigToAITenants(ctx context.Context, _ client.Object) []reconcile.Request {
+	var aitenants maasv1alpha1.AITenantList
+	if err := r.List(ctx, &aitenants); err != nil {
+		ctrl.Log.WithName("aitenant-config-watch").Error(err, "failed to list AITenants for Config change")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(aitenants.Items))
+	for i := range aitenants.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{
+				Namespace: aitenants.Items[i].Namespace,
+				Name:      aitenants.Items[i].Name,
+			},
+		})
+	}
+	return requests
 }
 
 func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AITenant) error {
@@ -500,6 +558,202 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 	})
 }
 
+// ensureUsageLogsEnvoyFilter creates or deletes the per-tenant usage-logs EnvoyFilter
+// based on the cluster-wide usageLogging flag from the Config CR. Each tenant gets its
+// own EnvoyFilter targeting its specific gateway via targetRefs.
+func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	log := ctrl.LoggerFrom(ctx).WithName("usage-logs-envoyfilter")
+
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.deleteUsageLogsEnvoyFilter(ctx, aitenant)
+		}
+		return err
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		return r.deleteUsageLogsEnvoyFilter(ctx, aitenant)
+	}
+
+	if aitenant.Status.GatewayRef.Name == "" {
+		log.V(1).Info("skipping EnvoyFilter — gateway ref not yet populated")
+		return nil
+	}
+
+	r.deleteLegacyGlobalEnvoyFilter(ctx, log)
+	return r.applyUsageLogsEnvoyFilter(ctx, log, aitenant)
+}
+
+// deleteLegacyGlobalEnvoyFilter removes the old singleton "maas-model-access-logs"
+// EnvoyFilter that was managed by LifecycleReconciler. Best-effort: errors are logged
+// but do not block reconciliation.
+func (r *AITenantReconciler) deleteLegacyGlobalEnvoyFilter(ctx context.Context, log logr.Logger) {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName(legacyGlobalEnvoyFilterName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, ef); err != nil {
+		if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			log.V(1).Info("failed to delete legacy global EnvoyFilter (best-effort)", "error", err)
+		}
+		return
+	}
+	log.Info("deleted legacy global EnvoyFilter", "name", legacyGlobalEnvoyFilterName)
+}
+
+func (r *AITenantReconciler) deleteUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	log := ctrl.LoggerFrom(ctx).WithName("usage-logs-envoyfilter")
+	efName := tenantreconcile.UsageLogsEnvoyFilterName(aitenant.Name)
+
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName(efName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, ef); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete usage-logs EnvoyFilter %s: %w", efName, err)
+	}
+	log.Info("deleted per-tenant usage-logs EnvoyFilter", "name", efName)
+	return nil
+}
+
+func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, aitenant *maasv1alpha1.AITenant) error {
+	manifestPath := r.EnvoyFilterManifestPath
+	if manifestPath == "" {
+		manifestPath = envoyFilterManifestPath
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
+			return nil
+		}
+		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
+	}
+
+	ef := &unstructured.Unstructured{}
+	dec := yamlserializer.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	_, _, err = dec.Decode(raw, nil, ef)
+	if err != nil {
+		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+	if err := patchClusterAddress(ef, collectorAddress); err != nil {
+		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+
+	efName := tenantreconcile.UsageLogsEnvoyFilterName(aitenant.Name)
+	ef.SetName(efName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	gatewayName := aitenant.Status.GatewayRef.Name
+	if err := patchEnvoyFilterTargetGateway(ef, gatewayName); err != nil {
+		return fmt.Errorf("patch gateway targetRef in EnvoyFilter: %w", err)
+	}
+
+	labels := ef.GetLabels()
+	if labels == nil {
+		labels = map[string]string{}
+	}
+	labels[tenantreconcile.LabelTenantName] = aitenant.Name
+	labels[tenantreconcile.LabelTenantNamespace] = aitenant.Namespace
+	ef.SetLabels(labels)
+
+	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
+			return nil
+		}
+		return fmt.Errorf("apply per-tenant usage-logs EnvoyFilter %s: %w", efName, err)
+	}
+
+	log.V(1).Info("applied per-tenant usage-logs EnvoyFilter",
+		"name", efName,
+		"gateway", gatewayName,
+		"collector", collectorAddress)
+	return nil
+}
+
+// patchEnvoyFilterTargetGateway replaces the gateway name in spec.targetRefs[0].name.
+func patchEnvoyFilterTargetGateway(ef *unstructured.Unstructured, gatewayName string) error {
+	targetRefs, found, err := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+	if err != nil {
+		return fmt.Errorf("read targetRefs: %w", err)
+	}
+	if !found || len(targetRefs) == 0 {
+		return errors.New("spec.targetRefs not found or empty")
+	}
+
+	ref0, ok := targetRefs[0].(map[string]any)
+	if !ok {
+		return errors.New("targetRefs[0] is not an object")
+	}
+	ref0["name"] = gatewayName
+	targetRefs[0] = ref0
+
+	if err := unstructured.SetNestedSlice(ef.Object, targetRefs, "spec", "targetRefs"); err != nil {
+		return fmt.Errorf("set targetRefs: %w", err)
+	}
+	return nil
+}
+
+// patchClusterAddress sets the collector address in the CLUSTER configPatch
+// (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
+// Manual traversal is needed because unstructured.SetNestedField cannot handle
+// numeric slice indices — we must extract each []any level explicitly.
+func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	if !found || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patch, ok := configPatches[0].(map[string]any)
+	if !ok {
+		return errors.New("configPatches[0] is not an object")
+	}
+
+	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
+	if err != nil || !found || len(endpoints) == 0 {
+		return fmt.Errorf("load_assignment.endpoints not found: %w", err)
+	}
+	ep0, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("endpoints[0] is not an object")
+	}
+	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
+	if err != nil || !found || len(lbEndpoints) == 0 {
+		return fmt.Errorf("lb_endpoints not found: %w", err)
+	}
+	lbe0, ok := lbEndpoints[0].(map[string]any)
+	if !ok {
+		return errors.New("lb_endpoints[0] is not an object")
+	}
+
+	if err := unstructured.SetNestedField(lbe0, address,
+		"endpoint", "address", "socket_address", "address"); err != nil {
+		return fmt.Errorf("set socket_address.address: %w", err)
+	}
+
+	lbEndpoints[0] = lbe0
+	ep0["lb_endpoints"] = lbEndpoints
+	endpoints[0] = ep0
+	if err := unstructured.SetNestedSlice(patch, endpoints,
+		"patch", "value", "load_assignment", "endpoints"); err != nil {
+		return fmt.Errorf("write back endpoints: %w", err)
+	}
+	configPatches[0] = patch
+	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+}
+
 func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
 	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
 		return ctrl.Result{}, nil
@@ -618,6 +872,9 @@ func (r *AITenantReconciler) deleteAITenantScopedChildren(ctx context.Context, a
 		return err
 	}
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
+		return err
+	}
+	if err := r.deleteUsageLogsEnvoyFilter(ctx, aitenant); err != nil {
 		return err
 	}
 	return nil

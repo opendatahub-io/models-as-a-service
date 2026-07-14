@@ -4,6 +4,8 @@ package maas
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -2482,3 +2484,177 @@ func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) 
 	}, &remaining)
 	g.Expect(err).NotTo(HaveOccurred(), "spoofed stale claim should survive cleanupStaleClaims")
 }
+
+func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
+	const gwNS = "openshift-ingress"
+	const monitoringNS = "opendatahub"
+
+	t.Run("disabled — no EnvoyFilter created", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "team-ef",
+				Namespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+			Status: maasv1alpha1.AITenantStatus{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "team-ef", Namespace: gwNS},
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:             cl,
+			Scheme:             s,
+			APIReader:          cl,
+			GatewayNamespace:   gwNS,
+			MonitoringNamespace: monitoringNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("team-ef")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter when usageLogging disabled")
+	})
+
+	t.Run("enabled — creates per-tenant EnvoyFilter targeting tenant gateway", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "team-ef",
+				Namespace: tenantreconcile.DefaultAITenantNamespace,
+				UID:       types.UID("at-uid"),
+			},
+			Status: maasv1alpha1.AITenantStatus{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "team-ef-gw", Namespace: gwNS},
+			},
+		}
+
+		_, testFile, _, _ := goruntime.Caller(0)
+		efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("team-ef")
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)).To(Succeed())
+		g.Expect(ef.GetNamespace()).To(Equal(gwNS))
+
+		targetRefs, _, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefs).NotTo(BeEmpty())
+		ref0, _ := targetRefs[0].(map[string]any)
+		g.Expect(ref0["name"]).To(Equal("team-ef-gw"), "targetRef should point to tenant's gateway")
+
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, "team-ef"))
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantNamespace, tenantreconcile.DefaultAITenantNamespace))
+
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		g.Expect(configPatches).NotTo(BeEmpty())
+		clusterPatch, _ := configPatches[0].(map[string]any)
+		endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
+		g.Expect(endpoints).NotTo(BeEmpty())
+		ep0, _ := endpoints[0].(map[string]any)
+		lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
+		g.Expect(lbEndpoints).NotTo(BeEmpty())
+		lbe0, _ := lbEndpoints[0].(map[string]any)
+		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"))
+	})
+
+	t.Run("deletes per-tenant EnvoyFilter when disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(false)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "team-ef",
+				Namespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+			Status: maasv1alpha1.AITenantStatus{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "team-ef-gw", Namespace: gwNS},
+			},
+		}
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("team-ef")
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(efName)
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant, existingEF).Build()
+		r := &AITenantReconciler{
+			Client:             cl,
+			Scheme:             s,
+			APIReader:          cl,
+			GatewayNamespace:   gwNS,
+			MonitoringNamespace: monitoringNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
+	})
+
+	t.Run("skips when gateway ref not yet populated", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "team-nogateway",
+				Namespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:             cl,
+			Scheme:             s,
+			APIReader:          cl,
+			GatewayNamespace:   gwNS,
+			MonitoringNamespace: monitoringNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred(), "should not error when gatewayRef is nil")
+	})
+}
+
+func ptrTo[T any](v T) *T { return &v }
