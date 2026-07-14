@@ -11,12 +11,19 @@
 #   authorino-debug.log        - Authorino pod logs (token-redacted)
 #   cluster-state.log          - Cluster snapshot (nodes, namespaces, policies, CRs)
 #   maas-debug-report.log      - Full MaaS debug report
-#   maas-crs/                  - Full YAML of MaaS custom resources:
-#     maasmodelrefs.yaml         - MaaSModelRef definitions
+#   maas-crs/                  - Full YAML of custom resources:
+#     aitenants.yaml             - AITenant definitions
+#     configs.yaml               - Config (cluster-scoped) definitions
+#     externalmodels.yaml        - ExternalModel (maas group) definitions
 #     maasauthpolicies.yaml      - MaaSAuthPolicy definitions
+#     maasmodelrefs.yaml         - MaaSModelRef definitions
 #     maassubscriptions.yaml     - MaaSSubscription definitions
-#     externalmodels.yaml        - ExternalModel definitions
 #     maastenantconfigs.yaml     - MaasTenantConfig definitions
+#     tenants.yaml               - Tenant definitions
+#     inference-externalmodels.yaml  - ExternalModel (inference group)
+#     inference-externalproviders.yaml - ExternalProvider (inference group)
+#     aigateways.yaml            - AIGateway (cluster-scoped) definitions
+#     llmbatchgateways.yaml      - LLMBatchGateway definitions
 #   pod-logs/                  - Per-pod logs from the deployment namespace
 #
 # Usage:
@@ -166,54 +173,69 @@ collect_authorino_logs_redacted() {
 #   gather_models_as_a_service
 # -----------------------------------------------------------------------------
 MAAS_CRDS=(
-  "maasmodelrefs.maas.opendatahub.io"
-  "maasauthpolicies.maas.opendatahub.io"
-  "maassubscriptions.maas.opendatahub.io"
+  "aitenants.maas.opendatahub.io"
+  "configs.maas.opendatahub.io"
   "externalmodels.maas.opendatahub.io"
+  "maasauthpolicies.maas.opendatahub.io"
+  "maasmodelrefs.maas.opendatahub.io"
+  "maassubscriptions.maas.opendatahub.io"
   "maastenantconfigs.maas.opendatahub.io"
+  "tenants.maas.opendatahub.io"
 )
+INFERENCE_CRDS=(
+  "externalmodels.inference.opendatahub.io"
+  "externalproviders.inference.opendatahub.io"
+)
+AIGATEWAY_CRDS=(
+  "aigateways.components.platform.opendatahub.io"
+  "llmbatchgateways.batch.llm-d.ai"
+)
+ALL_CRDS=("${MAAS_CRDS[@]}" "${INFERENCE_CRDS[@]}" "${AIGATEWAY_CRDS[@]}")
+
+_crd_artifact_name() {
+  local crd="$1"
+  local group="${crd#*.}"
+  local resource="${crd%%.*}"
+  case "$group" in
+    maas.opendatahub.io)          echo "$resource" ;;
+    inference.opendatahub.io)     echo "inference-${resource}" ;;
+    components.platform.opendatahub.io) echo "$resource" ;;
+    batch.llm-d.ai)               echo "$resource" ;;
+    *)                            echo "${resource}-${group%%.*}" ;;
+  esac
+}
 
 collect_maas_crs() {
   local outdir="${1:-$ARTIFACTS_DIR/maas-crs}"
   mkdir -p "$outdir"
   echo "Collecting MaaS CR definitions to $outdir"
 
-  local ns_list=""
-  for crd in "${MAAS_CRDS[@]}"; do
-    local nss
-    nss=$(kubectl get "$crd" --all-namespaces -o jsonpath='{range .items[*]}{.metadata.namespace}{" "}{end}' 2>/dev/null || true)
-    ns_list+=" $nss"
-  done
-  ns_list=$(echo "$ns_list" | tr ' ' '\n' | sort -u | grep -v '^$' || true)
-
-  if [[ -z "$ns_list" ]]; then
-    echo "  No MaaS CRs found in any namespace"
-    echo "No MaaS CRs found at $(date -Iseconds 2>/dev/null || date)" > "$outdir/no-crs-found.log"
-    return 0
-  fi
-
   local total=0
-  for crd in "${MAAS_CRDS[@]}"; do
-    local short_name="${crd%%.*}"
-    local outfile="$outdir/${short_name}.yaml"
+  for crd in "${ALL_CRDS[@]}"; do
+    local artifact_name
+    artifact_name=$(_crd_artifact_name "$crd")
+    local outfile="$outdir/${artifact_name}.yaml"
     : > "$outfile"
-    for ns in $ns_list; do
-      local yaml
-      yaml=$(kubectl get "$crd" -n "$ns" -o yaml 2>/dev/null || true)
-      if [[ -n "$yaml" ]] && ! echo "$yaml" | grep -q 'items: \[\]'; then
-        {
-          echo "# --- namespace: $ns ---"
-          echo "$yaml"
-          echo ""
-        } | redact_tokens >> "$outfile"
-        total=$((total + 1))
-      fi
-    done
+
+    # -A works for both namespaced (all namespaces) and cluster-scoped resources
+    local yaml
+    yaml=$(kubectl get "$crd" -A -o yaml 2>/dev/null || true)
+    if [[ -n "$yaml" ]] && ! echo "$yaml" | grep -q 'items: \[\]'; then
+      echo "$yaml" | redact_tokens >> "$outfile"
+      total=$((total + 1))
+    fi
+
     if [[ ! -s "$outfile" ]]; then
       rm -f "$outfile"
     fi
   done
-  echo "  Saved CRs from $(echo "$ns_list" | wc -w | tr -d ' ') namespace(s) to $outdir ($total resource group(s))"
+
+  if [[ "$total" -eq 0 ]]; then
+    echo "  No MaaS CRs found on the cluster"
+    echo "No MaaS CRs found at $(date -Iseconds 2>/dev/null || date)" > "$outdir/no-crs-found.log"
+  else
+    echo "  Saved $total resource type(s) to $outdir"
+  fi
 }
 
 # -----------------------------------------------------------------------------
@@ -252,11 +274,22 @@ collect_cluster_state() {
     echo "--- TokenRateLimitPolicies ---"
     kubectl get tokenratelimitpolicies -A 2>/dev/null || true
     echo ""
-    echo "--- MaaS CRs ---"
+    echo "--- MaaS CRs (maas.opendatahub.io) ---"
     kubectl get configs.maas.opendatahub.io -o wide 2>/dev/null || true
+    kubectl get aitenants.maas.opendatahub.io -A -o wide 2>/dev/null || true
+    kubectl get tenants.maas.opendatahub.io -A -o wide 2>/dev/null || true
     kubectl get maasmodelrefs -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
     kubectl get maasauthpolicies,maassubscriptions -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
     kubectl get maastenantconfigs -n "$MAAS_SUBSCRIPTION_NAMESPACE" 2>/dev/null || true
+    kubectl get externalmodels.maas.opendatahub.io -A -o wide 2>/dev/null || true
+    echo ""
+    echo "--- Inference CRs (inference.opendatahub.io) ---"
+    kubectl get externalmodels.inference.opendatahub.io -A -o wide 2>/dev/null || true
+    kubectl get externalproviders.inference.opendatahub.io -A -o wide 2>/dev/null || true
+    echo ""
+    echo "--- AI Gateway CRs ---"
+    kubectl get aigateways.components.platform.opendatahub.io -o wide 2>/dev/null || true
+    kubectl get llmbatchgateways.batch.llm-d.ai -A -o wide 2>/dev/null || true
     echo ""
     echo "--- HTTPRoutes ---"
     kubectl get httproutes -A 2>/dev/null | head -30 || true
@@ -370,13 +403,27 @@ run_auth_debug_report() {
   _run "TokenRateLimitPolicies (all namespaces)" "kubectl get tokenratelimitpolicies -A -o wide 2>/dev/null || true"
   _append ""
 
-  _section "MaaS CRs"
+  _section "MaaS CRs (maas.opendatahub.io)"
+  _run "Configs (cluster-scoped)" "kubectl get configs.maas.opendatahub.io -o wide 2>/dev/null || true"
+  _run "AITenants (all namespaces)" "kubectl get aitenants.maas.opendatahub.io -A -o wide 2>/dev/null || true"
+  _run "Tenants (all namespaces)" "kubectl get tenants.maas.opendatahub.io -A -o wide 2>/dev/null || true"
   _run "MaaSAuthPolicies" "kubectl get maasauthpolicies -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
   _run "MaaSSubscriptions" "kubectl get maassubscriptions -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
   _run "MaaSSubscription status details" "kubectl get maassubscriptions -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.phase} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
   _run "MaaSModelRefs (all namespaces)" "kubectl get maasmodelrefs -A -o wide 2>/dev/null || true"
   _run "MaasTenantConfigs" "kubectl get maastenantconfigs -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o wide 2>/dev/null || true"
   _run "MaasTenantConfig status details" "kubectl get maastenantconfigs -n \"\$MAAS_SUBSCRIPTION_NAMESPACE\" -o jsonpath='{range .items[*]}{.metadata.name}: {.status.conditions[?(@.type==\"Ready\")].status} - {.status.conditions[?(@.type==\"Ready\")].message}{\"\\n\"}{end}' 2>/dev/null || true"
+  _run "ExternalModels (maas group)" "kubectl get externalmodels.maas.opendatahub.io -A -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "Inference CRs (inference.opendatahub.io)"
+  _run "ExternalModels (inference group)" "kubectl get externalmodels.inference.opendatahub.io -A -o wide 2>/dev/null || true"
+  _run "ExternalProviders (inference group)" "kubectl get externalproviders.inference.opendatahub.io -A -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "AI Gateway CRs"
+  _run "AIGateways (cluster-scoped)" "kubectl get aigateways.components.platform.opendatahub.io -o wide 2>/dev/null || true"
+  _run "LLMBatchGateways (all namespaces)" "kubectl get llmbatchgateways.batch.llm-d.ai -A -o wide 2>/dev/null || true"
   _append ""
 
   _section "Test User Information"
@@ -537,15 +584,22 @@ EOF
   _append "This summary helps compare local vs CI runs:"
   _append ""
   local total_models total_subs total_authpolicies total_kuadrant_authpolicies
+  local total_aitenants total_inference_models total_inference_providers
   total_models=$(echo "$models_json" | jq '. | length' 2>/dev/null || echo "0")
   total_subs=$(echo "$subscriptions_json" | jq '. | length' 2>/dev/null || echo "0")
   total_authpolicies=$(kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
   total_kuadrant_authpolicies=$(kubectl get authpolicies -A -l 'app.kubernetes.io/managed-by=maas-controller' -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_aitenants=$(kubectl get aitenants.maas.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_inference_models=$(kubectl get externalmodels.inference.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_inference_providers=$(kubectl get externalproviders.inference.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
 
+  _append "  AITenants (all namespaces): $total_aitenants"
   _append "  MaaSModelRefs (all namespaces): $total_models"
   _append "  MaaSSubscriptions ($MAAS_SUBSCRIPTION_NAMESPACE): $total_subs"
   _append "  MaaSAuthPolicies ($MAAS_SUBSCRIPTION_NAMESPACE): $total_authpolicies"
   _append "  Generated Kuadrant AuthPolicies: $total_kuadrant_authpolicies"
+  _append "  ExternalModels - inference (all namespaces): $total_inference_models"
+  _append "  ExternalProviders - inference (all namespaces): $total_inference_providers"
   _append ""
   _append "  Subscription selector URL: $sub_select_url"
   _append "  Test user: $(oc whoami 2>/dev/null || echo 'N/A')"
