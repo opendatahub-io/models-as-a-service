@@ -173,20 +173,22 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
 
-	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER,
-	// plus per-route disable patches: configPatches[2] and [3]=MERGE on maas-api-route rules.
+	// Verify dual-stage filter chain with dual anchors:
+	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
+	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 4, "expected four configPatches (INSERT_BEFORE + INSERT_AFTER + 2x MERGE)")
+	require.Len(t, configPatches, 8, "expected eight configPatches (4x filter insert + 4x MERGE)")
 
-	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster}
+	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
+	wantAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
+	wantClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
 
-	for i, raw := range configPatches[:2] {
+	for i, raw := range configPatches[:4] {
 		cp, ok := raw.(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -194,14 +196,14 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
 
 		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-		assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
+		assert.Equal(t, wantAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
 
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
 		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
-	// Verify per-route ext_proc disable on maas-api-route rules 0 and 1.
-	for i := 2; i < 4; i++ {
+	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
+	for i := 4; i < 8; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -209,13 +211,18 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, "MERGE", op, "configPatches[%d] operation", i)
 
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
-		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2)
+		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-4)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
 		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
 		require.NoError(t, err, "configPatches[%d] ipp-pre disabled field", i)
 		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
 		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
+
+		ippDisabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp", "disabled")
+		require.NoError(t, err, "configPatches[%d] ipp disabled field", i)
+		require.True(t, found, "configPatches[%d] ipp disabled field should exist", i)
+		assert.True(t, ippDisabled, "configPatches[%d] ipp should be disabled", i)
 	}
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.

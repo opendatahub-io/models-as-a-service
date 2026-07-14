@@ -649,7 +649,8 @@ EOF
   log_info "  Controller ready."
 
   # Wait for the Tenant reconciler to deploy maas-api.
-  # The controller creates a default-tenant CR on startup, and the Tenant
+  # The controller creates AITenant/models-as-a-service on startup; the AITenant
+  # reconciler then creates/adopts MaasTenantConfig/default-tenant, and the Tenant
   # reconciler renders and SSA-applies maas-api manifests + gateway policies.
   # All maas-api instances deploy to infrastructure namespace (controlled by INFRA_NAMESPACE).
   # Infrastructure namespace is configurable via deployment overlays (params.env).
@@ -687,8 +688,8 @@ EOF
   fi
 
   # External OIDC: Patch the default AITenant (source of truth for tenant OIDC)
-  # and the mirrored Tenant CR so the MaaSAuthPolicy controller can add
-  # oidc-identities authentication to the gateway-level AuthPolicy.
+  # so the MaaSAuthPolicy controller can add oidc-identities authentication
+  # to the gateway-level AuthPolicy.
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
     if ! configure_tenant_external_oidc; then
@@ -792,9 +793,9 @@ deploy_via_kustomize() {
   fi
 
   # maas-api, gateway policies, and AuthPolicy configuration are now handled
-  # by the Tenant reconciler in maas-controller. After the controller starts
-  # it creates the default-tenant CR, which triggers the reconciler to apply
-  # maas-api manifests and gateway policies via SSA.
+  # by the Tenant reconciler in maas-controller. After the controller starts it creates
+  # AITenant/models-as-a-service, whose reconciler creates/adopts MaasTenantConfig/default-tenant,
+  # which triggers the Tenant reconciler to apply maas-api manifests and gateway policies via SSA.
 
   log_info "Kustomize prerequisite deployment completed"
 }
@@ -1502,13 +1503,10 @@ MANIFEST_EOF
   return $rc
 }
 # configure_tenant_external_oidc
-#   Patches the default AITenant with spec.oidc and, when present, the
-#   mirrored default-tenant Tenant CR with spec.externalOIDC.
+#   Patches the default AITenant with spec.oidc.
 configure_tenant_external_oidc() {
   local aitenant_name="${DEFAULT_AITENANT_NAME:-models-as-a-service}"
   local aitenant_ns="${AITENANT_NAMESPACE:-ai-tenants}"
-  local tenant_name="default-tenant"
-  local tenant_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
   log_info "Configuring default tenant with external OIDC..."
 
@@ -1524,41 +1522,20 @@ configure_tenant_external_oidc() {
     return 1
   }
 
-  local aitenant_patch tenant_patch
+  local aitenant_patch
   aitenant_patch=$(jq -nc \
     --arg issuerUrl "$oidc_issuer_url" \
     --arg clientId "$oidc_client_id" \
     '{spec:{oidc:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
-  tenant_patch=$(jq -nc \
-    --arg issuerUrl "$oidc_issuer_url" \
-    --arg clientId "$oidc_client_id" \
-    '{spec:{externalOIDC:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
 
-  local patched_any="false"
   if kubectl get aitenant "$aitenant_name" -n "$aitenant_ns" &>/dev/null; then
     log_info "  Patching AITenant '$aitenant_name' with external OIDC"
     if ! kubectl patch aitenant "$aitenant_name" -n "$aitenant_ns" --type=merge -p "$aitenant_patch"; then
       log_error "  Failed to patch AITenant with external OIDC"
       return 1
     fi
-    patched_any="true"
   else
-    log_warn "AITenant '$aitenant_name' not found in namespace '$aitenant_ns', skipping AITenant OIDC patch"
-  fi
-
-  if kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
-    log_info "  Patching Tenant '$tenant_name' with external OIDC"
-    if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p "$tenant_patch"; then
-      log_error "  Failed to patch Tenant CR with external OIDC"
-      return 1
-    fi
-    patched_any="true"
-  else
-    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping Tenant OIDC patch"
-  fi
-
-  if [[ "$patched_any" != "true" ]]; then
-    log_error "No default tenant resources were found to patch with external OIDC"
+    log_error "AITenant '$aitenant_name' not found in namespace '$aitenant_ns'; cannot configure external OIDC"
     return 1
   fi
 

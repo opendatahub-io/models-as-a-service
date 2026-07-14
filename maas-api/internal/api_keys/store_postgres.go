@@ -84,7 +84,7 @@ func (s *PostgresStore) AddKey(
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
 
-	s.logger.Debug("Stored API key", "id", keyID, "user", username, "ephemeral", ephemeral)
+	s.logger.Debug("Stored API key", "id", keyID, "user", logger.RedactValue(username), "ephemeral", ephemeral)
 	return nil
 }
 
@@ -464,7 +464,31 @@ func (s *PostgresStore) InvalidateAll(ctx context.Context, username string, tena
 	}
 
 	count := int(rows)
-	s.logger.Info("Revoked all keys for user", "count", count, "user", username)
+	s.logger.Info("Revoked all keys for user", "count", count, "user", logger.RedactValue(username))
+	return count, nil
+}
+
+// InvalidateTenant revokes all active keys within this tenant.
+// Returns the count of keys that were revoked.
+func (s *PostgresStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
+	if tenant != s.tenantName {
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+
+	query := `UPDATE api_keys SET status = 'revoked' WHERE tenant = $1 AND status = 'active'`
+
+	result, err := s.db.ExecContext(ctx, query, s.tenantName)
+	if err != nil {
+		return 0, fmt.Errorf("failed to revoke tenant keys: %w", err)
+	}
+
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Revoked all keys for tenant", "count", count, "tenant", s.tenantName)
 	return count, nil
 }
 

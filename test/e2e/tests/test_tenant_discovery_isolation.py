@@ -16,13 +16,14 @@ import json
 import os
 
 from conftest import TLS_VERIFY
-from test_helper import _get_cluster_token, MAAS_API_DEPLOYMENT_NAMESPACE
+from test_helper import E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token
 
 log = logging.getLogger(__name__)
 
 
-def _kubectl_curl(url: str, headers: dict = None, namespace: str = "opendatahub") -> tuple[int, str]:
+def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
     """Execute curl from inside cluster. Returns (status_code, response_body)"""
+    namespace = namespace or os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
     curl_args = ["-sk", "-m", "10"]
     if headers:
         for key, value in headers.items():
@@ -72,7 +73,7 @@ def tenant_service_urls(shared_test_tenants):
 
     # Construct internal service URLs
     # Format: https://{service-name}.{namespace}.svc.cluster.local:{port}
-    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE (opendatahub),
+    # AITenant maas-api services are deployed in MAAS_API_DEPLOYMENT_NAMESPACE,
     # NOT in the tenant-specific namespace (ai-tenant-xxx)
     def service_url(tenant):
         # Service name follows pattern: maas-api-{tenant-name}
@@ -143,7 +144,7 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
         log.info(f"[isolation] Testing {tenant['name']} can access own endpoint")
 
-        status_code, body = _kubectl_curl(url, headers=headers, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+        status_code, body = _kubectl_curl(url, headers=headers)
 
         # Should succeed (200) with system:authenticated authorization
         assert status_code == 200, \
@@ -190,7 +191,7 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     url_a = f"{tenant_a['service_url']}/v1/tenants"
     headers = {"Authorization": f"Bearer {cluster_token}"}
 
-    status_a, body_a = _kubectl_curl(url_a, headers=headers, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+    status_a, body_a = _kubectl_curl(url_a, headers=headers)
 
     assert status_a == 200, f"Tenant A endpoint should return 200 (system:authenticated), got {status_a}"
     data_a = json.loads(body_a)
@@ -199,7 +200,7 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     # Test: Call tenant B's endpoint (same token - should also work)
     url_b = f"{tenant_b['service_url']}/v1/tenants"
 
-    status_b, body_b = _kubectl_curl(url_b, headers=headers, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+    status_b, body_b = _kubectl_curl(url_b, headers=headers)
 
     assert status_b == 200, f"Tenant B endpoint should return 200 (system:authenticated), got {status_b}"
     data_b = json.loads(body_b)
@@ -239,13 +240,13 @@ def test_tenant_discovery_unauthorized_access(tenant_service_urls):
         url = f"{tenant['service_url']}/v1/tenants"
 
         # Test 1: No auth header
-        status_code, _ = _kubectl_curl(url, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+        status_code, _ = _kubectl_curl(url)
         assert status_code == 401, \
             f"{tenant['name']} should reject no-auth request with 401, got {status_code}"
 
         # Test 2: Invalid token
         headers = {"Authorization": "Bearer invalid-token-12345"}
-        status_code, _ = _kubectl_curl(url, headers=headers, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+        status_code, _ = _kubectl_curl(url, headers=headers)
         assert status_code == 401, \
             f"{tenant['name']} should reject invalid token with 401, got {status_code}"
 
@@ -276,7 +277,7 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
         url = f"{tenant['service_url']}/v1/tenants"
         headers = {"Authorization": f"Bearer {cluster_token}"}
 
-        status_code, body = _kubectl_curl(url, headers=headers, namespace=MAAS_API_DEPLOYMENT_NAMESPACE)
+        status_code, body = _kubectl_curl(url, headers=headers)
 
         # With system:authenticated authorization, 403 indicates auth/RBAC regression
         assert status_code == 200, \

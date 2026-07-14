@@ -29,10 +29,10 @@ jobs:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
     - name: Install kustomize
-      uses: imranismail/setup-kustomize@v2
+      uses: imranismail/setup-kustomize@2ba527d4d055ab63514ba50a99456fc35684947f # v2
       with:
         kustomize-version: '5.7.1'
 
@@ -50,9 +50,9 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v5
+    - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
 
-    - uses: actions/setup-go@v6
+    - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
       with:
         go-version-file: maas-controller/go.mod
         cache: true

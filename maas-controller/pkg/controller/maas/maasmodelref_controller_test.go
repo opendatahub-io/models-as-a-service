@@ -62,6 +62,9 @@ func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.M
 func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
 	return f.endpoint, nil
 }
+func (f *fakeHandler) ResolveModelAlias(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) string {
+	return ""
+}
 func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }

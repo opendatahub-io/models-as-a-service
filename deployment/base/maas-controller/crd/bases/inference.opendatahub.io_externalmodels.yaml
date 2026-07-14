@@ -105,6 +105,16 @@ spec:
                         Config holds model-specific configuration as key-value pairs.
                         Overrides the ExternalProvider config for this model-provider binding.
                       type: object
+                    path:
+                      description: |-
+                        Path sets the outgoing request `:path` pseudo-header for this model-provider binding.
+                        Must be a valid absolute path (e.g. "/v1/chat/completions" or
+                        "/maas-default-gateway/v1/chat/completions").
+                        Supports {key} placeholders resolved from the merged Config map.
+                      maxLength: 512
+                      minLength: 1
+                      pattern: ^/.*
+                      type: string
                     ref:
                       description: Ref identifies the ExternalProvider CR (must be
                         in the same namespace).
@@ -135,6 +145,7 @@ spec:
                       type: integer
                   required:
                   - apiFormat
+                  - path
                   - ref
                   - targetModel
                   type: object
@@ -214,6 +225,12 @@ spec:
                   - type
                   type: object
                 type: array
+              httpRouteName:
+                description: |-
+                  HTTPRouteName is the name of the HTTPRoute created by the controller
+                  for this ExternalModel. Consumers (e.g., maas-controller) can read this
+                  to attach policies without assuming naming conventions.
+                type: string
               phase:
                 description: |-
                   Phase represents the current reconciliation phase.

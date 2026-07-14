@@ -28,6 +28,7 @@ from multitenancy_helpers import (
     MODEL_NAMESPACE,
     MODEL_REF,
     TENANT_CR_NAME,
+    TENANT_CONFIG_KIND,
     apply_discovery_labels,
     apply_maas_auth_policy,
     apply_maas_subscription,
@@ -45,6 +46,8 @@ from multitenancy_helpers import (
     remove_discovery_labels,
     require_aitenant_crd,
     require_tenant_namespace_discovery,
+    wait_for_aitenant_cleanup_resources,
+    wait_for_aitenant_cleanup_resources_deleted,
     wait_for_annotation_contains,
     wait_for_finalizer,
     wait_for_json,
@@ -71,7 +74,7 @@ class TestMultiTenantIntegration:
         try:
             bootstrap_aitenant_tenant(case)
 
-            tenant = wait_for_json("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
+            tenant = wait_for_json(TENANT_CONFIG_KIND, TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             tenant_labels = tenant["metadata"].get("labels") or {}
             tenant_annotations = tenant["metadata"].get("annotations") or {}
             assert tenant_labels[LABEL_MANAGED_BY_AITENANT] == "true"
@@ -105,16 +108,13 @@ class TestMultiTenantIntegration:
                 case["tenant_ns"],
                 expected_phase="Active",
             )
+            wait_for_aitenant_cleanup_resources(case)
 
-            delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
-            wait_for_not_found("tenant", TENANT_CR_NAME, case["tenant_ns"], timeout=180)
+            delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
+            wait_for_not_found(TENANT_CONFIG_KIND, TENANT_CR_NAME, case["tenant_ns"], timeout=180)
             wait_for_not_found("role", role_name, case["tenant_ns"], timeout=180)
-
-            namespace = get_json_or_none("namespace", case["tenant_ns"])
-            assert namespace is not None
-            labels = namespace.get("metadata", {}).get("labels") or {}
-            assert labels.get("ai-gateway.opendatahub.io/tenant") is None
-            assert labels.get("maas.opendatahub.io/managed-by-aitenant") is None
+            wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
+            wait_for_aitenant_cleanup_resources_deleted(case)
         finally:
             cleanup_discovery_case(case)
 

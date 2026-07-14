@@ -119,6 +119,13 @@ type MaaSModelStatus struct {
 	// +optional
 	HTTPRouteHostnames []string `json:"httpRouteHostnames,omitempty"`
 
+	// ResolvedModelAlias is the model identity used in body-based routing headers.
+	// For LLMInferenceService: publishers/{namespace}/models/{spec.model.name}.
+	// For ExternalModel: the targetModel from spec.externalProviderRefs[0].targetModel.
+	// The maas-api uses this for reverse-lookup when matching subscription model refs.
+	// +optional
+	ResolvedModelAlias string `json:"resolvedModelAlias,omitempty"`
+
 	// Conditions represent the latest available observations of the model's state.
 	// Condition types include:
 	//   - Ready: overall readiness (governance + runtime).

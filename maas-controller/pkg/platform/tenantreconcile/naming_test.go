@@ -115,10 +115,10 @@ func TestTenantIdentifierFor(t *testing.T) {
 		}
 		_, err := TenantIdentifierFor(tenant)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "maas.opendatahub.io/tenant-namespace must match the Tenant namespace")
+		assert.Contains(t, err.Error(), "maas.opendatahub.io/tenant-namespace must match the tenant config namespace")
 	})
 
-	t.Run("default AITenant label on non-default Tenant resource returns error", func(t *testing.T) {
+	t.Run("default AITenant label on non-default tenant config resource returns error", func(t *testing.T) {
 		tenant := &maasv1alpha1.Tenant{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "spoofed",
@@ -132,7 +132,7 @@ func TestTenantIdentifierFor(t *testing.T) {
 		}
 		_, err := TenantIdentifierFor(tenant)
 		assert.Error(t, err)
-		assert.Contains(t, err.Error(), "is not the default Tenant resource")
+		assert.Contains(t, err.Error(), "is not the default tenant config resource")
 	})
 }
 
