@@ -30,13 +30,13 @@ Optional metadata annotations that control networking behavior for the external 
 
 | Annotation | Required | Default | Description |
 |------------|----------|---------|-------------|
-| `maas.opendatahub.io/tls` | No | `true` | Controls TLS origination to the external endpoint. When `true`, the Istio sidecar performs TLS handshake with the provider and a DestinationRule is created. Set to `false` for internal or non-TLS endpoints (e.g., a vLLM instance on an internal network). |
-| `maas.opendatahub.io/port` | No | `443` | Overrides the default port used for the external endpoint. |
+| `maas.opendatahub.io/tls` | No | `true` | Controls TLS origination to the external endpoint. When `true`, the Istio sidecar performs TLS handshake with the provider and a DestinationRule is created. Set to `false` for internal or non-TLS endpoints (e.g., a vLLM instance on an internal network). TLS should remain enabled when `credentialRef` is set, unless the network path is trusted and isolated, to avoid sending API keys in cleartext. |
+| `maas.opendatahub.io/port` | No | `443` | Overrides the default port used for the external endpoint. Valid range: 1–65535; values outside this range are rejected during reconciliation. |
 
 When `maas.opendatahub.io/tls` is set to `false`:
 
 - The ServiceEntry protocol changes from HTTPS to HTTP
-- The DestinationRule for TLS origination is not created (or deleted if it previously existed)
+- The DestinationRule for TLS origination is not created. Any existing controller-managed DestinationRule is deleted; DestinationRules annotated with `opendatahub.io/managed: "false"` are preserved.
 - The default port remains 443 but can be overridden with `maas.opendatahub.io/port`
 
 ## Example
@@ -76,6 +76,9 @@ spec:
 ```
 
 ### Non-TLS Internal Endpoint
+
+!!! warning "Cleartext credential traffic"
+    Disabling TLS while `credentialRef` is set means the provider API key is sent in cleartext. Only use non-TLS mode on a trusted, isolated network.
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1

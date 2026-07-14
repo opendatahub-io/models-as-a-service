@@ -113,6 +113,9 @@ By default, the ExternalModel reconciler enables TLS origination for external pr
 
 To disable TLS origination for an ExternalModel (e.g., for internal non-TLS endpoints), set the `maas.opendatahub.io/tls` annotation to `"false"`:
 
+!!! warning "Cleartext credential traffic"
+    Disabling TLS while `credentialRef` is set means the provider API key is sent in cleartext between the gateway and the endpoint. Only disable TLS on a trusted, isolated network where credential exposure is not a concern.
+
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: ExternalModel
@@ -133,8 +136,8 @@ spec:
 When TLS is disabled:
 
 - The ServiceEntry protocol changes from HTTPS to HTTP
-- No DestinationRule is created (any existing one is deleted)
-- The default port remains 443 unless overridden with `maas.opendatahub.io/port`
+- No DestinationRule is created; any existing controller-managed DestinationRule is deleted. DestinationRules annotated with `opendatahub.io/managed: "false"` are preserved.
+- The default port remains 443 unless overridden with `maas.opendatahub.io/port` (valid range: 1–65535)
 
 For full annotation details, see the [ExternalModel CRD Reference](../reference/crds/external-model.md#annotations).
 

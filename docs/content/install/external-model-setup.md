@@ -151,11 +151,14 @@ ExternalModel supports optional annotations to control networking behavior:
 | Annotation | Required | Default | Description |
 |------------|----------|---------|-------------|
 | `maas.opendatahub.io/tls` | No | `true` | Controls TLS origination to the external endpoint. Set to `false` for non-TLS endpoints. |
-| `maas.opendatahub.io/port` | No | `443` | Overrides the default port for the external endpoint. |
+| `maas.opendatahub.io/port` | No | `443` | Overrides the default port for the external endpoint. Valid range: 1–65535; values outside this range are rejected during reconciliation. |
 
 By default, the ExternalModel reconciler enables TLS origination — the Istio sidecar performs the TLS handshake with the external provider. This is the correct setting for public providers like OpenAI and Anthropic.
 
 For internal endpoints that do not use TLS (e.g., a self-hosted vLLM instance), disable TLS origination and set the appropriate port:
+
+!!! warning "Cleartext credential traffic"
+    Disabling TLS while `credentialRef` is set means the provider API key is sent in cleartext between the gateway and the endpoint. Only use non-TLS mode on a trusted, isolated network.
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
@@ -174,7 +177,7 @@ spec:
     name: vllm-api-key
 ```
 
-When TLS is disabled, the reconciler creates the ServiceEntry with HTTP protocol instead of HTTPS and does not create a DestinationRule.
+When TLS is disabled, the reconciler creates the ServiceEntry with HTTP protocol instead of HTTPS and does not create a DestinationRule. Any existing controller-managed DestinationRule is deleted; DestinationRules annotated with `opendatahub.io/managed: "false"` are preserved.
 
 For full annotation details, see the [ExternalModel CRD Reference](../reference/crds/external-model.md#annotations).
 
