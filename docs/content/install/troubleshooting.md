@@ -98,9 +98,48 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.
 
-12. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+12. **GatewayClass stuck in `Accepted: Unknown` ("Waiting for controller")**: A conflicting OSSM subscription prevents the `openshift-ingress` operator from managing Gateway API on OCP versions where the ingress operator uses OLM for OSSM management (4.19, 4.20, 4.21 before 4.21.22). On OCP 4.21.22+, 4.22+, the ingress operator uses the Sail Library directly and manual OSSM subscriptions do not cause this conflict.
 
-13. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
+      On affected versions, the `openshift-ingress` ClusterOperator manages OSSM 3 via OLM and
+      pins it to a version compatible with the cluster. Two scenarios cause this failure:
+
+      - An **OSSM v2.x** subscription (`servicemeshoperator`) blocks OSSM v3 installation —
+        v2 and v3 cannot coexist, and the ingress operator reports `GatewayAPIOSSMConflict`.
+      - A **manually installed OSSM v3** subscription (`servicemeshoperator3`, e.g. from the
+        stable channel via OperatorHub) pins a version the ingress operator cannot manage.
+
+      - [ ] Check for a conflicting OSSM subscription (v2 or v3):
+
+      ```bash
+      kubectl get subscription -A -o custom-columns='NAMESPACE:.metadata.namespace,NAME:.metadata.name' | grep -i servicemesh
+      ```
+
+      - [ ] Delete the conflicting subscription and its CSV (replace `<namespace>` and `<operator-name>` with the values from the previous step, e.g. `openshift-operators` and `servicemeshoperator3` or `servicemeshoperator`):
+
+      ```bash
+      kubectl delete subscription <operator-name> -n <namespace>
+      kubectl delete csv -n <namespace> -l operators.coreos.com/<operator-name>.<namespace>
+      ```
+
+      - [ ] Wait for the `openshift-ingress` operator to reinstall OSSM at the pinned version:
+
+      ```bash
+      kubectl wait --for=condition=Available clusteroperator/ingress --timeout=300s
+      ```
+
+      - [ ] Do **not** approve the OSSM upgrade InstallPlan that may appear in `openshift-operators` — approving it re-breaks the gateway
+
+      - [ ] Verify the GatewayClass is now accepted (`Accepted` must be `True`):
+
+      ```bash
+      kubectl get gatewayclass openshift-default -o jsonpath='{.metadata.name}{"\t"}{range .status.conditions[?(@.type=="Accepted")]}{.status}{"\t"}{.message}{end}{"\n"}'
+      ```
+
+      See [Install Gateway API Controller](platform-setup.md#install-gateway-api-controller) for the full warning and context.
+
+13. **TLS certificate errors (`curl: (60) SSL certificate problem`)**: Your cluster uses self-signed or internal CA certificates that are not in your system trust store. See [TLS Certificate Validation](#tls-certificate-validation) below.
+
+14. **Cannot create MaaSSubscription or MaaSAuthPolicy (`no endpoints available for service "maas-controller-webhook-service"`)**: The maas-controller pods are not running or not ready.
 
       MaaS uses admission webhooks to validate resource creation. When the controller is unavailable (pod crash, upgrade, or scaled to 0), the webhook endpoint becomes unreachable and creates are rejected.
 
@@ -124,7 +163,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       Creates succeed once controller pods are healthy. Model inference requests are unaffected during controller downtime (data plane continues operating normally).
 
-14. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
+15. **Cannot create `AITenant` (`must be created in the configured AITenant infrastructure namespace`)**: The object is being created outside the namespace configured by `--aitenant-namespace` (default `ai-tenants`).
 
       - [ ] Check which namespace the controller is configured to accept:
 
@@ -138,7 +177,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get namespace ai-tenants
       ```
 
-      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 12 above.
+      - [ ] If the error is `no endpoints available for service "maas-controller-webhook-service"`, follow the same webhook health checks as issue 14 above.
 
 ## Conflicting AuthPolicy Detection
 

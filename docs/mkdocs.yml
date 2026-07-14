@@ -60,6 +60,7 @@ nav:
       - Upgrade to 3.5: migration/upgrade-to-3.5.md
   - Concepts:
     - Architecture: concepts/architecture.md
+    - Multi-Tenancy: concepts/multi-tenancy.md
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
     - Model Reference: concepts/model-reference.md
@@ -122,7 +123,7 @@ nav:
       - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
       - MaaSSubscription: reference/crds/maas-subscription.md
       - AITenant: reference/crds/ai-tenant.md
-      - MaasTenantConfig: reference/crds/tenant.md
+      - MaasTenantConfig: reference/crds/tenant.md  # Legacy filename, documents MaasTenantConfig CRD
 
 extra:
   version:

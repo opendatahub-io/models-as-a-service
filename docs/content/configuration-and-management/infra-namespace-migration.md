@@ -29,12 +29,12 @@ This provides better security isolation and simpler upgrades.
 - CRDs and RBAC
 - Webhook
 
-## Disabling Namespace Separation (ROSA Only)
+## Disabling Namespace Separation
 
-!!! warning "ROSA Clusters Only"
-    **ODH on ROSA does not support namespace separation** due to OpenShift webhook restrictions that block namespace creation.
+!!! warning "Clusters with Namespace Creation Restrictions"
+    Some clusters (including ROSA) have webhook restrictions that block namespace creation.
     
-    On ROSA clusters, you **must disable** namespace separation by setting `INFRA_NAMESPACE=""` (empty string).
+    On such clusters, you **must disable** namespace separation by setting `INFRA_NAMESPACE=""` (empty string).
 
 ### Disable via Script
 

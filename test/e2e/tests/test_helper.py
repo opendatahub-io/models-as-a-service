@@ -91,9 +91,9 @@ def _resolve_maas_api_deployment_namespace() -> str:
 # Infrastructure namespace where maas-api workloads run.
 MAAS_API_DEPLOYMENT_NAMESPACE = _resolve_maas_api_deployment_namespace()
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
-# Ephemeral curl probes must run in a namespace allowed by maas-api NetworkPolicy
-# (openshift-ingress gateway namespace), not in the maas-api infra namespace.
-E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", GATEWAY_NAMESPACE)
+# Ephemeral curl probes run from the deployment namespace (where the UI runs),
+# matching the real traffic path for internal endpoints like /v1/tenants.
+E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")

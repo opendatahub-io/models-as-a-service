@@ -31,3 +31,13 @@ replacements:
           name: maas-controller
         fieldPaths:
           - spec.template.spec.containers.[name=manager].image
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.infrastructure-namespace
+    targets:
+      - select:
+          kind: Deployment
+          name: maas-controller
+        fieldPaths:
+          - spec.template.spec.containers.[name=manager].env.[name=INFRA_NAMESPACE].value

@@ -21,6 +21,7 @@ import (
 	stderrors "errors"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -250,6 +251,115 @@ func resolveNamespaceAfterTerminationWait(namespace string, finalNs *corev1.Name
 	}
 	return fmt.Errorf("namespace %q exists in unexpected state after termination wait (phase=%q)",
 		namespace, finalNs.Status.Phase), false
+}
+
+// migrateMaaSDBSecretToInfraNamespace copies the maas-db-config secret from the controller
+// namespace to the infrastructure namespace during upgrades when namespace separation is enabled.
+// This maintains backward compatibility for deployments that don't run setup-database.sh.
+func migrateMaaSDBSecretToInfraNamespace(ctx context.Context, controllerNs, infraNs string, clientset kubernetes.Interface) error {
+	secretName := tenantreconcile.MaaSDBSecretName
+	secretKey := tenantreconcile.MaaSDBSecretKey
+
+	if infraNs == controllerNs || infraNs == "" {
+		return nil
+	}
+
+	log := setupLog.WithValues("controllerNamespace", controllerNs, "infraNamespace", infraNs)
+
+	if _, err := clientset.CoreV1().Secrets(infraNs).Get(ctx, secretName, metav1.GetOptions{}); err == nil {
+		log.V(1).Info("maas-db-config secret already exists in infrastructure namespace, no migration needed")
+		return nil
+	} else if !errors.IsNotFound(err) {
+		return fmt.Errorf("failed to check for existing secret in infrastructure namespace: %w", err)
+	}
+
+	sourceSecret, err := clientset.CoreV1().Secrets(controllerNs).Get(ctx, secretName, metav1.GetOptions{})
+	if errors.IsNotFound(err) {
+		log.Info("maas-db-config secret not found in controller namespace, assuming fresh install")
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("failed to read secret from controller namespace: %w", err)
+	}
+
+	log.Info("detected upgrade scenario: copying maas-db-config secret to infrastructure namespace with FQDN connection string")
+
+	existingURL, ok := sourceSecret.Data[secretKey]
+	if !ok || len(existingURL) == 0 {
+		return fmt.Errorf("key %q not found or empty in secret %s/%s", secretKey, controllerNs, secretName)
+	}
+
+	fqdnURL := convertToFQDNConnectionURL(string(existingURL), controllerNs)
+
+	targetSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      secretName,
+			Namespace: infraNs,
+			Labels: map[string]string{
+				"app.kubernetes.io/part-of":    "maas-controller",
+				"app.kubernetes.io/managed-by": "maas-controller",
+			},
+			Annotations: map[string]string{
+				"maas.opendatahub.io/migrated-from": controllerNs,
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			secretKey: []byte(fqdnURL),
+		},
+	}
+
+	if _, err := clientset.CoreV1().Secrets(infraNs).Create(ctx, targetSecret, metav1.CreateOptions{}); err != nil {
+		if errors.IsAlreadyExists(err) {
+			log.Info("maas-db-config secret was created concurrently in infrastructure namespace")
+			return nil
+		}
+		return fmt.Errorf("failed to create secret in infrastructure namespace: %w", err)
+	}
+
+	log.Info("successfully copied maas-db-config secret to infrastructure namespace",
+		"sourceNamespace", controllerNs,
+		"targetNamespace", infraNs,
+		"connectionURL", maskConnectionURL(fqdnURL))
+
+	return nil
+}
+
+// convertToFQDNConnectionURL updates a PostgreSQL connection URL to use FQDN for cross-namespace access.
+func convertToFQDNConnectionURL(rawURL, namespace string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		setupLog.V(1).Info("failed to parse connection URL for FQDN conversion, using as-is", "error", err)
+		return rawURL
+	}
+
+	hostname := u.Hostname()
+	if hostname == "" {
+		return rawURL
+	}
+
+	if strings.Contains(hostname, ".") {
+		return rawURL
+	}
+
+	fqdn := hostname + "." + namespace + ".svc.cluster.local"
+
+	if u.Port() != "" {
+		u.Host = fqdn + ":" + u.Port()
+	} else {
+		u.Host = fqdn
+	}
+
+	return u.String()
+}
+
+// maskConnectionURL masks the password in a connection URL for logging.
+func maskConnectionURL(rawURL string) string {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return "<invalid-url>"
+	}
+	return u.Redacted()
 }
 
 // managedNamespaceMonitor periodically re-runs ensureManagedNamespaceWithClient so a namespace
@@ -610,6 +720,22 @@ func main() {
 		if err := ensureInfraNamespaceWithClient(context.Background(), infraNamespace, clientset); err != nil {
 			setupLog.Error(err, "unable to ensure infrastructure namespace exists", "namespace", infraNamespace)
 			os.Exit(1)
+		}
+
+		// Migrate maas-db-config secret from controller namespace to infrastructure namespace
+		if err := migrateMaaSDBSecretToInfraNamespace(context.Background(), controllerNamespace, infraNamespace, clientset); err != nil {
+			if errors.IsForbidden(err) {
+				setupLog.Info("insufficient RBAC to migrate maas-db-config secret — "+
+					"ensure secret-migrate Roles and RoleBindings are applied; skipping migration for now",
+					"controllerNamespace", controllerNamespace,
+					"infraNamespace", infraNamespace,
+					"error", err)
+			} else {
+				setupLog.Error(err, "failed to migrate maas-db-config secret to infrastructure namespace",
+					"controllerNamespace", controllerNamespace,
+					"infraNamespace", infraNamespace)
+				os.Exit(1)
+			}
 		}
 	}
 

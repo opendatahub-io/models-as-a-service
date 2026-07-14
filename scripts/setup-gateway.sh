@@ -329,7 +329,7 @@ setup_route_mode() {
   # the Route can be created in the next step (see wait_gateway_programmed).
   log_info "  Waiting for Gateway to be Programmed (timeout: ${GATEWAY_TIMEOUT}s)..."
   if ! kubectl wait --for=condition=Programmed gateway/"$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" --timeout="${GATEWAY_TIMEOUT}s" 2>/dev/null; then
-    log_warn "Gateway not Programmed after ${GATEWAY_TIMEOUT}s - check Service Mesh installation"
+    log_warn "Gateway not Programmed after ${GATEWAY_TIMEOUT}s - on OCP versions where the ingress operator uses OLM for OSSM (4.19, 4.20, 4.21 before 4.21.22), check for a conflicting OSSM subscription (servicemeshoperator v2 or manually installed servicemeshoperator3). On 4.21.22+ / 4.22+ the ingress operator uses the Sail Library and manual OSSM subscriptions do not conflict. Run: kubectl get subscription -A | grep servicemesh"
   else
     log_info "  Gateway is Programmed"
   fi

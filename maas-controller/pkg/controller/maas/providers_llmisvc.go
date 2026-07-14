@@ -199,7 +199,9 @@ const (
 )
 
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
-// Prefers model-routing addresses (body-based /v1/chat/completions) over path-based addresses.
+// Prefers path-based addresses (gateway-external) over model-routing (body-based) addresses.
+// status.endpoint is used by the maas-api discovery probe (GET /v1/models); model-routing
+// base URLs lack a model path, so the probe cannot route to the correct backend.
 // When expectedHostnames is non-empty, only addresses whose hostname matches
 // (case-insensitive per RFC 4343) are considered; this prevents selecting the wrong gateway
 // when multiple gateways exist.
@@ -213,8 +215,8 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	}
 	filtering := len(hostSet) > 0
 
-	// Prefer model-routing addresses (body-based routing), fall back to path-based.
-	for _, targetName := range []string{addressNameGatewayExternalModelRouting, addressNameGatewayExternal} {
+	// Prefer path-based addresses for discovery; fall back to model-routing.
+	for _, targetName := range []string{addressNameGatewayExternal, addressNameGatewayExternalModelRouting} {
 		if u := h.selectAddress(llmisvc, targetName, hostSet, filtering); u != "" {
 			return u
 		}

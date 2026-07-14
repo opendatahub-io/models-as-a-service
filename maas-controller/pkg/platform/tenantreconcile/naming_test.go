@@ -239,7 +239,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "maas-default-gateway",
 		}}
-		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "", params.TenantIdentifier)
@@ -268,7 +268,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "maas-default-gateway",
 		}}
-		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "", params.TenantIdentifier)
@@ -296,7 +296,7 @@ func TestBuildPlatformParamsIncludesTenantIdentifier(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "redteam-gateway",
 		}}
-		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		params, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "redteam", params.TenantIdentifier)

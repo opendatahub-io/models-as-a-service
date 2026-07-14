@@ -17,6 +17,7 @@ import (
 // PlatformParams holds resolved runtime values for PostRender patching.
 type PlatformParams struct {
 	AppNamespace          string
+	ControllerNamespace   string
 	GatewayNamespace      string
 	GatewayName           string
 	ClusterAudience       string
@@ -36,7 +37,7 @@ type PlatformParams struct {
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
 // platform context, cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
+func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, controllerNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
@@ -44,6 +45,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 
 	params := PlatformParams{
 		AppNamespace:            appNamespace,
+		ControllerNamespace:     controllerNamespace,
 		GatewayNamespace:        platformContext.GatewayRef.Namespace,
 		GatewayName:             platformContext.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
@@ -155,10 +157,44 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
 		r.SetNamespace(params.GatewayNamespace)
+	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
+		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 		return patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace)
 	}
 	return nil
+}
+
+// patchDeploymentNSNetworkPolicy rewrites the namespaceSelector in the
+// deployment-ns NetworkPolicy to use the actual controller namespace.
+func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerNamespace string) error {
+	if controllerNamespace == "" {
+		return nil
+	}
+	ingress, found, err := unstructured.NestedSlice(r.Object, "spec", "ingress")
+	if err != nil || !found || len(ingress) == 0 {
+		return err
+	}
+	rule, ok := ingress[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	from, ok := rule["from"].([]any)
+	if !ok || len(from) == 0 {
+		return nil
+	}
+	peer, ok := from[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	nsSelector["matchLabels"] = map[string]any{
+		"kubernetes.io/metadata.name": controllerNamespace,
+	}
+	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
 }
 
 func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {

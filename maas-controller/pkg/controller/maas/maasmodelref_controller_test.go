@@ -19,14 +19,17 @@ package maas
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
 	corev1 "k8s.io/api/core/v1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -1261,5 +1264,187 @@ func TestGovernance_MapAuthPolicyToModels(t *testing.T) {
 	}
 	if !names["ns-b/model-b"] {
 		t.Errorf("expected ns-b/model-b in requests")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// crdExists unit tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestCrdExists_Found(t *testing.T) {
+	crd := &apiextensionsv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "authpolicies.kuadrant.io"},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(newSchemeWithCRDs()).
+		WithObjects(crd).
+		Build()
+	if !crdExists(context.Background(), c, "authpolicies.kuadrant.io") {
+		t.Error("expected crdExists to return true for installed CRD")
+	}
+}
+
+func TestCrdExists_NotFound(t *testing.T) {
+	c := fake.NewClientBuilder().
+		WithScheme(newSchemeWithCRDs()).
+		Build()
+	if crdExists(context.Background(), c, "authpolicies.kuadrant.io") {
+		t.Error("expected crdExists to return false for absent CRD")
+	}
+}
+
+func TestCrdExists_OtherError(t *testing.T) {
+	// Interceptor that returns a non-NotFound error — crdExists should log and return false.
+	c := fake.NewClientBuilder().
+		WithScheme(newSchemeWithCRDs()).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(_ context.Context, _ client.WithWatch, _ types.NamespacedName, _ client.Object, _ ...client.GetOption) error {
+				return errors.New("unexpected server error")
+			},
+		}).
+		Build()
+	if crdExists(context.Background(), c, "authpolicies.kuadrant.io") {
+		t.Error("expected crdExists to return false on non-NotFound error")
+	}
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// registerWatchWhenCRDAppears / sync.Once unit tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+func TestRegisterWatchWhenCRDAppears_SyncOnce(t *testing.T) {
+	// Verify that makeSource is called exactly once even when the CRD-watcher
+	// handler fires multiple times for the same CRD.
+	callCount := 0
+	makeSource := func() int {
+		callCount++
+		return callCount
+	}
+
+	var once sync.Once
+	fire := func(crdName string) {
+		once.Do(func() { makeSource() })
+	}
+
+	// Simulate 5 CRD events for the same CRD.
+	for i := 0; i < 5; i++ {
+		fire("authpolicies.kuadrant.io")
+	}
+
+	if callCount != 1 {
+		t.Errorf("makeSource called %d times, expected exactly 1", callCount)
+	}
+}
+
+func TestRegisterWatchWhenCRDAppears_FiltersByName(t *testing.T) {
+	// Verify that the handler only fires for the target CRD, not for others.
+	callCount := 0
+	var once sync.Once
+	targetCRD := "authpolicies.kuadrant.io"
+
+	fire := func(crdName string) {
+		if crdName != targetCRD {
+			return
+		}
+		once.Do(func() { callCount++ })
+	}
+
+	fire("other.crd.io")             // should be ignored
+	fire("authpolicies.kuadrant.io") // should fire
+	fire("authpolicies.kuadrant.io") // should be no-op (once)
+
+	if callCount != 1 {
+		t.Errorf("callCount = %d, expected 1", callCount)
+	}
+}
+
+// newSchemeWithCRDs returns a scheme that includes apiextensionsv1 for fake client use.
+func newSchemeWithCRDs() *runtime.Scheme {
+	s := runtime.NewScheme()
+	_ = apiextensionsv1.AddToScheme(s)
+	return s
+}
+
+// TestMapLLMISvcToMaaSModelRefs_UnstructuredObject locks in the fix for the
+// critical bug where the dynamic watch passed *unstructured.Unstructured but
+// mapLLMISvcToMaaSModelRefs type-asserted to *kservev1alpha1.LLMInferenceService.
+// Verifies that an unstructured object with the correct name and namespace
+// returns reconcile requests (not nil).
+func TestMapLLMISvcToMaaSModelRefs_UnstructuredObject(t *testing.T) {
+	const (
+		llmisvcName      = "my-llmisvc"
+		llmisvcNamespace = "test-ns"
+		modelRefName     = "my-model"
+	)
+
+	// Build a fake client with a MaaSModelRef that references the LLMInferenceService by name.
+	modelRef := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: modelRefName, Namespace: llmisvcNamespace},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{
+				Kind: "LLMInferenceService",
+				Name: llmisvcName,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelRef).
+		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
+		Build()
+
+	r := &MaaSModelRefReconciler{Client: c, DefaultTenantNamespace: llmisvcNamespace}
+
+	// Use an unstructured object — mimics the dynamic watch path after KServe CRD appears.
+	obj := &unstructured.Unstructured{}
+	obj.SetName(llmisvcName)
+	obj.SetNamespace(llmisvcNamespace)
+	obj.SetGroupVersionKind(schema.GroupVersionKind{
+		Group: "serving.kserve.io", Version: "v1alpha1", Kind: "LLMInferenceService",
+	})
+
+	reqs := r.mapLLMISvcToMaaSModelRefs(context.Background(), obj)
+	if len(reqs) == 0 {
+		t.Fatal("expected reconcile requests for unstructured LLMInferenceService, got none — " +
+			"dynamic watch would silently drop all LLMInferenceService events")
+	}
+	if reqs[0].Name != modelRefName || reqs[0].Namespace != llmisvcNamespace {
+		t.Errorf("unexpected request: got %v", reqs[0])
+	}
+}
+
+// TestRegisterWatchWhenCRDAppears_OnlyFiredForMatchingCRD verifies the name
+// filter in registerWatchWhenCRDAppears: make source must not be called when a
+// CRD with a different name arrives, even before the target CRD appears.
+func TestRegisterWatchWhenCRDAppears_OnlyFiredForMatchingCRD(t *testing.T) {
+	called := 0
+	var once sync.Once
+
+	fire := func(arrivedCRDName, targetCRDName string) {
+		if arrivedCRDName != targetCRDName {
+			return // filter: wrong CRD
+		}
+		once.Do(func() { called++ })
+	}
+
+	const target = "authpolicies.kuadrant.io"
+
+	// Unrelated CRDs must be ignored
+	fire("tokenratelimitpolicies.kuadrant.io", target)
+	fire("llminferenceservices.serving.kserve.io", target)
+	fire("some.other.crd", target)
+
+	if called != 0 {
+		t.Errorf("makeSource called %d times by unrelated CRDs — filter broken", called)
+	}
+
+	// Correct CRD must fire exactly once
+	fire(target, target)
+	fire(target, target) // second call — sync.Once must block
+	fire(target, target) // third call — sync.Once must block
+
+	if called != 1 {
+		t.Errorf("makeSource called %d times, want 1", called)
 	}
 }

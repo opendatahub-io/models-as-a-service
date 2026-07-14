@@ -34,10 +34,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "maas-default-gateway",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
+		assert.Equal(t, "opendatahub", got.ControllerNamespace)
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
@@ -69,7 +70,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "gateway-ns",
 			Name:      "gateway-name",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "cluster-audience", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
@@ -87,6 +88,7 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	params := PlatformParams{
 		AppNamespace:            "tenant-ns",
+		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
 		GatewayName:             "custom-gateway",
 		ClusterAudience:         "openshift-custom",
@@ -241,6 +243,24 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	firstSubject, ok := subjects[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
+
+	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
+	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, ingress)
+	rule, ok := ingress[0].(map[string]any)
+	require.True(t, ok)
+	from, ok := rule["from"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, from)
+	peer, ok := from[0].(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.ControllerNamespace, matchLabels["kubernetes.io/metadata.name"])
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

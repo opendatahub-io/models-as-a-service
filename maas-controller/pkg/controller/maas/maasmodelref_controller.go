@@ -21,9 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sync"
 
 	"github.com/go-logr/logr"
 	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -32,15 +34,18 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -412,14 +417,81 @@ func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
 	return ""
 }
 
-// SetupWithManager sets up the controller with the Manager.
+// crdExists checks whether a CRD is installed by a targeted Get using the CRD name
+// (format: <plural-lowercase-kind>.<group>, e.g. "authpolicies.kuadrant.io").
+// Uses the API reader directly — not the REST mapper (scheme-registered types cause
+// false positives) and not the cached client (cache not started at SetupWithManager time).
+func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
+	crd := &apiextensionsv1.CustomResourceDefinition{}
+	err := reader.Get(ctx, types.NamespacedName{Name: crdName}, crd)
+	if err == nil {
+		return true
+	}
+	if !apierrors.IsNotFound(err) {
+		ctrl.Log.Error(err, "failed to check for CRD", "crdName", crdName)
+	}
+	return false
+}
+
+// registerWatchWhenCRDAppears dynamically registers a resource watch the first time
+// the target CRD becomes available. It watches CRD objects (always available) and
+// calls makeSource() exactly once via sync.Once when the named CRD is detected —
+// so multiple CRD update events never produce duplicate watchers. No pod restart needed.
+func registerWatchWhenCRDAppears(
+	c controller.Controller,
+	mgr ctrl.Manager,
+	crdName string,
+	makeSource func() source.Source,
+) error {
+	log := ctrl.Log.WithName("crd-watcher").WithValues("crdName", crdName)
+	log.Info("CRD not yet registered at startup; will register watch dynamically when it appears")
+	var once sync.Once
+	return c.Watch(source.Kind(
+		mgr.GetCache(),
+		&apiextensionsv1.CustomResourceDefinition{},
+		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
+			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
+				if crd.Name != crdName {
+					return nil
+				}
+				once.Do(func() {
+					if err := c.Watch(makeSource()); err != nil {
+						log.Error(err, "failed to register watch after CRD appeared")
+					} else {
+						log.Info("CRD appeared; watch registered dynamically")
+					}
+				})
+				return nil
+			},
+		),
+	))
+}
+
+// unstructuredLLMIsvcReadyStatus extracts the Ready condition status from an
+// unstructured LLMInferenceService — mirrors llmisvcReadyStatus for typed objects.
+func unstructuredLLMIsvcReadyStatus(obj *unstructured.Unstructured) string {
+	conditions, _, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Ready" {
+			if status, ok := cond["status"].(string); ok {
+				return status
+			}
+		}
+	}
+	return ""
+}
+
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
 		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
 	}
 
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSModelRef{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},
@@ -428,13 +500,23 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSModelRefs,
-		)).
-		// Watch LLMInferenceServices so we re-reconcile when the backing service's Ready status changes
-		// (automatically updates MaaSModelRef status from Pending -> Ready and vice versa).
-		Watches(&kservev1alpha1.LLMInferenceService{},
+		))
+
+	const llmisvcCRD = "llminferenceservices.serving.kserve.io"
+	llmisvcExists := crdExists(ctx, mgr.GetAPIReader(), llmisvcCRD)
+
+	// Watch LLMInferenceServices — KServe CRD must be present for this watch to succeed.
+	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
+	if llmisvcExists {
+		b = b.Watches(&kservev1alpha1.LLMInferenceService{},
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
-		).
+		)
+	} else {
+		ctrl.Log.Info("LLMInferenceService CRD not yet registered; watch will be added dynamically when KServe is ready")
+	}
+
+	c, err := b.
 		// Watch MaaSSubscriptions so we re-reconcile when governance state changes
 		// (spec, status/phase, or deletion). No predicate filter — the reconciler's
 		// equality.Semantic.DeepEqual check gates unnecessary status writes.
@@ -445,7 +527,54 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSAuthPolicyToMaaSModelRefs,
 		)).
-		Complete(r)
+		Build(r)
+	if err != nil {
+		return err
+	}
+
+	if !llmisvcExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
+			// Use unstructured to bypass the REST mapper — typed watches require the REST
+			// mapper to know the GVK, which may be stale when the CRD is installed after startup.
+			llmisvc := &unstructured.Unstructured{}
+			llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "serving.kserve.io", Version: "v1alpha1", Kind: "LLMInferenceService",
+			})
+			return source.Kind(mgr.GetCache(), llmisvc,
+				// Mirror the static-path predicates (GenerationChangedPredicate +
+				// llmisvcReadyChangedPredicate) using handler.TypedFuncs so we have
+				// access to both old and new objects on Update events.
+				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
+					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
+							q.Add(req)
+						}
+					},
+					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						if e.ObjectOld == nil || e.ObjectNew == nil {
+							return
+						}
+						// Mirrors GenerationChangedPredicate + llmisvcReadyChangedPredicate.
+						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
+							unstructuredLLMIsvcReadyStatus(e.ObjectOld) == unstructuredLLMIsvcReadyStatus(e.ObjectNew) {
+							return
+						}
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.ObjectNew) {
+							q.Add(req)
+						}
+					},
+					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapLLMISvcToMaaSModelRefs(ctx, e.Object) {
+							q.Add(req)
+						}
+					},
+				},
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
+		}
+	}
+	return nil
 }
 
 // mapHTTPRouteToMaaSModelRefs returns reconcile requests for all MaaSModelRefs in the HTTPRoute's namespace.
@@ -516,13 +645,12 @@ func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(ctx context.Co
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
-	llmisvc, ok := obj.(*kservev1alpha1.LLMInferenceService)
-	if !ok {
-		return nil
-	}
+	// Use GetName/GetNamespace — works for both typed *kservev1alpha1.LLMInferenceService
+	// (static watch at startup) and *unstructured.Unstructured (dynamic watch registered
+	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: llmisvc.Name}); err != nil {
-		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", llmisvc.Name)
+	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: obj.GetName()}); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", obj.GetName())
 		return nil
 	}
 	var requests []reconcile.Request
@@ -532,7 +660,7 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, 
 			continue
 		}
 		// MaaSModelRef references models in the same namespace
-		if m.Namespace == llmisvc.Namespace {
+		if m.Namespace == obj.GetNamespace() {
 			requests = append(requests, reconcile.Request{
 				NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 			})
