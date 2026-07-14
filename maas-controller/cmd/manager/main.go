@@ -619,8 +619,7 @@ func main() {
 		os.Exit(1)
 	}
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
-	// maas-db-config lives in the infrastructure namespace (where maas-api runs),
-	// not the subscription namespace — scope the Secret informer there.
+	// maas-db-config lives in the infrastructure namespace (where maas-api runs).
 	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
