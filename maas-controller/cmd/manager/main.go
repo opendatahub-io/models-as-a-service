@@ -73,7 +73,7 @@ func init() {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 }
 
-//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;update
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -133,8 +133,9 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 				return nil
 			}
 		} else {
-			setupLog.Info("managed namespace already exists",
-				"namespace", namespace, "purpose", purpose, "phase", ns.Status.Phase)
+			if labelErr := reconcileManagedNamespaceLabels(ctx, ns, namespace, purpose, clientset); labelErr != nil {
+				return labelErr
+			}
 			return nil
 		}
 	}
@@ -155,14 +156,14 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 		Duration: 1 * time.Second,
 		Factor:   2.0,
 	}, func(ctx context.Context) (bool, error) {
+		labels := make(map[string]string, len(managedNamespaceLabels))
+		for k, v := range managedNamespaceLabels {
+			labels[k] = v
+		}
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-				Labels: map[string]string{
-					"opendatahub.io/generated-namespace": "true",
-					"app.kubernetes.io/managed-by":       "maas-controller",
-					"app.kubernetes.io/part-of":          "maas-controller",
-				},
+				Name:   namespace,
+				Labels: labels,
 			},
 		}
 
@@ -220,6 +221,41 @@ func ensureAITenantNamespaceWithClient(ctx context.Context, namespace string, cl
 
 func ensureInfraNamespaceWithClient(ctx context.Context, namespace string, clientset kubernetes.Interface) error {
 	return ensureManagedNamespaceWithClient(ctx, namespace, "infra", clientset)
+}
+
+var managedNamespaceLabels = map[string]string{
+	"opendatahub.io/generated-namespace": "true",
+	"app.kubernetes.io/managed-by":       "maas-controller",
+	"app.kubernetes.io/part-of":          "maas-controller",
+}
+
+func reconcileManagedNamespaceLabels(ctx context.Context, ns *corev1.Namespace, namespace, purpose string, clientset kubernetes.Interface) error {
+	needsUpdate := false
+	if ns.Labels == nil {
+		ns.Labels = make(map[string]string)
+	}
+	for k, v := range managedNamespaceLabels {
+		if ns.Labels[k] != v {
+			ns.Labels[k] = v
+			needsUpdate = true
+		}
+	}
+	if !needsUpdate {
+		setupLog.Info("managed namespace already exists",
+			"namespace", namespace, "purpose", purpose, "phase", ns.Status.Phase)
+		return nil
+	}
+	if _, err := clientset.CoreV1().Namespaces().Update(ctx, ns, metav1.UpdateOptions{}); err != nil {
+		if errors.IsForbidden(err) {
+			setupLog.Info("insufficient permissions to update namespace labels, skipping label reconciliation",
+				"namespace", namespace, "purpose", purpose, "error", err)
+			return nil
+		}
+		return fmt.Errorf("unable to update labels on namespace %q: %w", namespace, err)
+	}
+	setupLog.Info("reconciled managed namespace labels",
+		"namespace", namespace, "purpose", purpose)
+	return nil
 }
 
 // resolveNamespaceAfterTerminationWait interprets the namespace GET after a successful termination poll.

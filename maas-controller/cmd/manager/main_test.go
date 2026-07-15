@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -34,6 +35,65 @@ func TestEnsureAITenantNamespaceWithClientCreatesNamespace(t *testing.T) {
 	}
 	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "maas-controller" {
 		t.Fatalf("managed-by label = %q, want maas-controller", got)
+	}
+}
+
+func TestEnsureManagedNamespaceReconcilesMissingLabels(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"kubernetes.io/metadata.name": tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureAITenantNamespaceWithClient(context.Background(), tenantreconcile.DefaultAITenantNamespace, clientset); err != nil {
+		t.Fatalf("ensure AITenant namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), tenantreconcile.DefaultAITenantNamespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get AITenant namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated namespace label = %q, want true", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "maas-controller" {
+		t.Fatalf("managed-by label = %q, want maas-controller", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/part-of"]; got != "maas-controller" {
+		t.Fatalf("part-of label = %q, want maas-controller", got)
+	}
+	if got := ns.Labels["kubernetes.io/metadata.name"]; got != tenantreconcile.DefaultAITenantNamespace {
+		t.Fatalf("pre-existing label was removed, got %q", got)
+	}
+}
+
+func TestEnsureManagedNamespaceSkipsUpdateWhenLabelsPresent(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantreconcile.DefaultAITenantNamespace,
+			Labels: map[string]string{
+				"opendatahub.io/generated-namespace": "true",
+				"app.kubernetes.io/managed-by":       "maas-controller",
+				"app.kubernetes.io/part-of":          "maas-controller",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureAITenantNamespaceWithClient(context.Background(), tenantreconcile.DefaultAITenantNamespace, clientset); err != nil {
+		t.Fatalf("ensure AITenant namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), tenantreconcile.DefaultAITenantNamespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get AITenant namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated namespace label = %q, want true", got)
 	}
 }
 
