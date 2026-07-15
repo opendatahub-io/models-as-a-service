@@ -336,6 +336,17 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - opentelemetry.io
+  resources:
+  - opentelemetrycollectors
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
   - operator.authorino.kuadrant.io
   resources:
   - authorinos
