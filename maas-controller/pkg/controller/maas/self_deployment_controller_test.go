@@ -357,5 +357,3 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(endpoint["interval"]).To(Equal("1m"))
 }
-
-// EnvoyFilter lifecycle tests moved to aitenant_controller_test.go (per-tenant EnvoyFilter).

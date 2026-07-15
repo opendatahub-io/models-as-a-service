@@ -23,6 +23,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2531,7 +2532,7 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cfg := &maasv1alpha1.Config{
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(true)},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 		}
 		aitenant := &maasv1alpha1.AITenant{
 			ObjectMeta: metav1.ObjectMeta{
@@ -2593,7 +2594,7 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cfg := &maasv1alpha1.Config{
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(false)},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
 		}
 		aitenant := &maasv1alpha1.AITenant{
 			ObjectMeta: metav1.ObjectMeta{
@@ -2634,7 +2635,7 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cfg := &maasv1alpha1.Config{
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptrTo(true)},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 		}
 		aitenant := &maasv1alpha1.AITenant{
 			ObjectMeta: metav1.ObjectMeta{
@@ -2656,5 +2657,3 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(err).NotTo(HaveOccurred(), "should not error when gatewayRef is nil")
 	})
 }
-
-func ptrTo[T any](v T) *T { return &v }

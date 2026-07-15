@@ -77,10 +77,6 @@ const (
 
 	// envoyFilterManifestPath is the default path to the EnvoyFilter manifest inside the container.
 	envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
-
-	// legacyGlobalEnvoyFilterName is the old singleton EnvoyFilter name from LifecycleReconciler.
-	// Used for migration cleanup only.
-	legacyGlobalEnvoyFilterName = "maas-model-access-logs"
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -121,7 +117,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
-// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=create;patch;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -222,14 +218,8 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 }
 
 // SetupWithManager registers the AITenant controller.
-// Config is watched so that changes to usageLogging trigger per-tenant EnvoyFilter reconciliation.
+// Config is watched so that spec changes (e.g. usageLogging toggled) fan out to all AITenants.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	cfgSpecChanged := predicate.And(
-		predicate.NewPredicateFuncs(func(o client.Object) bool {
-			return o.GetName() == maasv1alpha1.ConfigInstanceName
-		}),
-		predicate.GenerationChangedPredicate{},
-	)
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
@@ -237,13 +227,13 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(r.mapConfigToAITenants),
-			builder.WithPredicates(cfgSpecChanged),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Complete(r)
 }
 
-// mapConfigToAITenants lists all AITenants and enqueues each for reconciliation.
-// Called when the Config CR changes (e.g. usageLogging toggled).
+// mapConfigToAITenants enqueues every AITenant for reconciliation so each
+// can re-evaluate its EnvoyFilter against the updated Config spec.
 func (r *AITenantReconciler) mapConfigToAITenants(ctx context.Context, _ client.Object) []reconcile.Request {
 	var aitenants maasv1alpha1.AITenantList
 	if err := r.List(ctx, &aitenants); err != nil {
@@ -567,7 +557,7 @@ func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, ait
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {
-			return r.deleteUsageLogsEnvoyFilter(ctx, aitenant)
+			return nil
 		}
 		return err
 	}
@@ -577,30 +567,11 @@ func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, ait
 	}
 
 	if aitenant.Status.GatewayRef.Name == "" {
-		log.V(1).Info("skipping EnvoyFilter — gateway ref not yet populated")
+		log.V(1).Info("skipping EnvoyFilter — gateway ref not yet populated, will retry on next reconcile")
 		return nil
 	}
 
-	r.deleteLegacyGlobalEnvoyFilter(ctx, log)
 	return r.applyUsageLogsEnvoyFilter(ctx, log, aitenant)
-}
-
-// deleteLegacyGlobalEnvoyFilter removes the old singleton "maas-model-access-logs"
-// EnvoyFilter that was managed by LifecycleReconciler. Best-effort: errors are logged
-// but do not block reconciliation.
-func (r *AITenantReconciler) deleteLegacyGlobalEnvoyFilter(ctx context.Context, log logr.Logger) {
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName(legacyGlobalEnvoyFilterName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := r.Delete(ctx, ef); err != nil {
-		if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
-			log.V(1).Info("failed to delete legacy global EnvoyFilter (best-effort)", "error", err)
-		}
-		return
-	}
-	log.Info("deleted legacy global EnvoyFilter", "name", legacyGlobalEnvoyFilterName)
 }
 
 func (r *AITenantReconciler) deleteUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
