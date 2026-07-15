@@ -232,8 +232,8 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Complete(r)
 }
 
-// mapConfigToAITenants enqueues every AITenant for reconciliation so each
-// can re-evaluate its EnvoyFilter against the updated Config spec.
+// mapConfigToAITenants enqueues every AITenant when the Config CR changes.
+// Each AITenant reconcile fetches the Config directly to re-evaluate its EnvoyFilter.
 func (r *AITenantReconciler) mapConfigToAITenants(ctx context.Context, _ client.Object) []reconcile.Request {
 	var aitenants maasv1alpha1.AITenantList
 	if err := r.List(ctx, &aitenants); err != nil {
@@ -549,51 +549,16 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 }
 
 // ensureUsageLogsEnvoyFilter creates or deletes the per-tenant usage-logs EnvoyFilter
-// based on the cluster-wide usageLogging flag from the Config CR. Each tenant gets its
-// own EnvoyFilter targeting its specific gateway via targetRefs.
+// based on the cluster-wide usageLogging flag from the Config CR. Follows the
+// load-then-delete-or-patch pattern: the manifest is always loaded first, then
+// either deleted or applied based on the feature gate.
+//
+// Cross-namespace OwnerReference is not possible (AITenant lives in ai-tenants,
+// EnvoyFilter in the gateway namespace), so cleanup relies on explicit deletion
+// in deleteAITenantScopedChildren and the usageLogging toggle.
 func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	log := ctrl.LoggerFrom(ctx).WithName("usage-logs-envoyfilter")
 
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return err
-	}
-
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteUsageLogsEnvoyFilter(ctx, aitenant)
-	}
-
-	if aitenant.Status.GatewayRef.Name == "" {
-		log.V(1).Info("skipping EnvoyFilter — gateway ref not yet populated, will retry on next reconcile")
-		return nil
-	}
-
-	return r.applyUsageLogsEnvoyFilter(ctx, log, aitenant)
-}
-
-func (r *AITenantReconciler) deleteUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	log := ctrl.LoggerFrom(ctx).WithName("usage-logs-envoyfilter")
-	efName := tenantreconcile.UsageLogsEnvoyFilterName(aitenant.Name)
-
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName(efName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := r.Delete(ctx, ef); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to delete usage-logs EnvoyFilter %s: %w", efName, err)
-	}
-	log.Info("deleted per-tenant usage-logs EnvoyFilter", "name", efName)
-	return nil
-}
-
-func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, aitenant *maasv1alpha1.AITenant) error {
 	manifestPath := r.EnvoyFilterManifestPath
 	if manifestPath == "" {
 		manifestPath = envoyFilterManifestPath
@@ -609,22 +574,36 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 
 	ef := &unstructured.Unstructured{}
 	dec := yamlserializer.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-	_, _, err = dec.Decode(raw, nil, ef)
-	if err != nil {
+	if _, _, err := dec.Decode(raw, nil, ef); err != nil {
 		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
-	}
-
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
-	if err := patchClusterAddress(ef, collectorAddress); err != nil {
-		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}
 
 	efName := tenantreconcile.UsageLogsEnvoyFilterName(aitenant.Name)
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 
-	gatewayName := aitenant.Status.GatewayRef.Name
-	if err := patchEnvoyFilterTargetGateway(ef, gatewayName); err != nil {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return r.deleteEnvoyFilterIfExists(ctx, log, ef)
+		}
+		return err
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		return r.deleteEnvoyFilterIfExists(ctx, log, ef)
+	}
+
+	if aitenant.Status.GatewayRef.Name == "" {
+		log.V(1).Info("skipping EnvoyFilter — gateway ref not yet populated, will retry on next reconcile")
+		return nil
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+	if err := patchClusterAddress(ef, collectorAddress); err != nil {
+		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+	if err := patchEnvoyFilterTargetGateway(ef, aitenant.Status.GatewayRef.Name); err != nil {
 		return fmt.Errorf("patch gateway targetRef in EnvoyFilter: %w", err)
 	}
 
@@ -646,8 +625,20 @@ func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log 
 
 	log.V(1).Info("applied per-tenant usage-logs EnvoyFilter",
 		"name", efName,
-		"gateway", gatewayName,
+		"gateway", aitenant.Status.GatewayRef.Name,
 		"collector", collectorAddress)
+	return nil
+}
+
+// deleteEnvoyFilterIfExists deletes the given EnvoyFilter, ignoring NotFound/NoMatch.
+func (r *AITenantReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger, ef *unstructured.Unstructured) error {
+	if err := r.Delete(ctx, ef); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("delete usage-logs EnvoyFilter %s: %w", ef.GetName(), err)
+	}
+	log.Info("deleted per-tenant usage-logs EnvoyFilter", "name", ef.GetName())
 	return nil
 }
 
@@ -845,8 +836,15 @@ func (r *AITenantReconciler) deleteAITenantScopedChildren(ctx context.Context, a
 	if err := r.deleteOwned(ctx, aitenant, &rbacv1.Role{}, client.ObjectKey{Namespace: aitenant.Namespace, Name: aitenantAccessRoleName(aitenant)}); err != nil {
 		return err
 	}
-	if err := r.deleteUsageLogsEnvoyFilter(ctx, aitenant); err != nil {
-		return err
+	efName := tenantreconcile.UsageLogsEnvoyFilterName(aitenant.Name)
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName(efName)
+	ef.SetNamespace(r.GatewayNamespace)
+	if err := r.Delete(ctx, ef); err != nil {
+		if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
+			return fmt.Errorf("delete usage-logs EnvoyFilter %s: %w", efName, err)
+		}
 	}
 	return nil
 }

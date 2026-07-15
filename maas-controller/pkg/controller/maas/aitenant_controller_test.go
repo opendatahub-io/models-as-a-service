@@ -2490,6 +2490,9 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 	const gwNS = "openshift-ingress"
 	const monitoringNS = "opendatahub"
 
+	_, testFile, _, _ := goruntime.Caller(0)
+	efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
+
 	t.Run("disabled — no EnvoyFilter created", func(t *testing.T) {
 		g := NewWithT(t)
 		s := aitenantTestScheme(t)
@@ -2509,11 +2512,12 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
 		r := &AITenantReconciler{
-			Client:             cl,
-			Scheme:             s,
-			APIReader:          cl,
-			GatewayNamespace:   gwNS,
-			MonitoringNamespace: monitoringNS,
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
 		}
 
 		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
@@ -2524,6 +2528,44 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		efName := tenantreconcile.UsageLogsEnvoyFilterName("team-ef")
 		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter when usageLogging disabled")
+	})
+
+	t.Run("Config not found — deletes existing EnvoyFilter", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "team-ef",
+				Namespace: tenantreconcile.DefaultAITenantNamespace,
+			},
+			Status: maasv1alpha1.AITenantStatus{
+				GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "team-ef-gw", Namespace: gwNS},
+			},
+		}
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("team-ef")
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(efName)
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(aitenant, existingEF).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when Config is absent")
 	})
 
 	t.Run("enabled — creates per-tenant EnvoyFilter targeting tenant gateway", func(t *testing.T) {
@@ -2544,9 +2586,6 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 				GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "team-ef-gw", Namespace: gwNS},
 			},
 		}
-
-		_, testFile, _, _ := goruntime.Caller(0)
-		efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
 		r := &AITenantReconciler{
@@ -2613,11 +2652,12 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant, existingEF).Build()
 		r := &AITenantReconciler{
-			Client:             cl,
-			Scheme:             s,
-			APIReader:          cl,
-			GatewayNamespace:   gwNS,
-			MonitoringNamespace: monitoringNS,
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
 		}
 
 		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
@@ -2646,11 +2686,12 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
 		r := &AITenantReconciler{
-			Client:             cl,
-			Scheme:             s,
-			APIReader:          cl,
-			GatewayNamespace:   gwNS,
-			MonitoringNamespace: monitoringNS,
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			EnvoyFilterManifestPath: efManifest,
 		}
 
 		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
