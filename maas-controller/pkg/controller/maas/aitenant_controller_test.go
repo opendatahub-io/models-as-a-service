@@ -1695,10 +1695,20 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 			Finalizers: []string{aitenantFinalizer},
 		},
 	}
+	tenantNS := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, "models-as-a-service")
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantNS,
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant).
+		WithObjects(aitenant, ns).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -2142,7 +2152,7 @@ func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceMissing(t *testin
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
-func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceDeleting(t *testing.T) {
+func TestAITenantReconcile_DeletionSkipsAPIKeysWhenTenantNamespaceDeleting(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -2165,6 +2175,10 @@ func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceDeleting(t *testi
 			Name:              "models-as-a-service",
 			DeletionTimestamp: &now,
 			Finalizers:        []string{"kubernetes"},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
 		},
 		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
 	}
@@ -2187,14 +2201,15 @@ func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceDeleting(t *testi
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
-	var remaining maasv1alpha1.AITenant
-	err = cl.Get(ctx, key, &remaining)
-	if !apierrors.IsNotFound(err) {
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
-	}
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Terminating"))
+	g.Expect(updated.Finalizers).To(ContainElement(aitenantFinalizer))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("DeletionInProgress"))
 
 	var job batcv1.Job
 	err = cl.Get(ctx, client.ObjectKey{
