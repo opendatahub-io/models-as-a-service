@@ -88,6 +88,12 @@ func TestEnsureManagedNamespaceSkipsUpdateWhenLabelsPresent(t *testing.T) {
 		t.Fatalf("ensure AITenant namespace: %v", err)
 	}
 
+	for _, action := range clientset.Actions() {
+		if action.GetVerb() == "update" && action.GetResource().Resource == "namespaces" {
+			t.Fatalf("unexpected namespace update action when all labels are already present")
+		}
+	}
+
 	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), tenantreconcile.DefaultAITenantNamespace, metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get AITenant namespace: %v", err)
