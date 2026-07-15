@@ -1328,10 +1328,13 @@ class TestAPIKeySubscriptionPhases:
             log.info("✅ API key created successfully for Pending subscription")
 
         finally:
-            _scale_controller_up()
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            try:
+                _scale_controller_up()
+            except Exception:
+                log.exception("Best-effort controller scale-up failed")
             _wait_reconcile()
 
     def test_reject_key_for_unreconciled_subscription(self):
