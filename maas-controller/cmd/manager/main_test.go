@@ -16,6 +16,7 @@ import (
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -321,6 +322,120 @@ func TestEnsureDefaultAITenantBootstrapWaitsForConfigUID(t *testing.T) {
 		Namespace: tenantreconcile.DefaultAITenantNamespace,
 	}, &maasv1alpha1.AITenant{}); err == nil {
 		t.Fatalf("default AITenant was created before Config had a UID")
+	}
+}
+
+func TestEnsureDefaultAITenantBootstrapSkipsWhenTeardownRequested(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantreconcile.MaaSControllerDeploymentName,
+					Namespace: "opendatahub",
+					Annotations: map[string]string{
+						maas.TeardownRequestedAnnotation: "true",
+					},
+				},
+			},
+			&maasv1alpha1.Config{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: maasv1alpha1.ConfigInstanceName,
+					UID:  types.UID("cfg-default"),
+				},
+			},
+		).
+		Build()
+
+	created, err := ensureDefaultAITenantBootstrap(
+		ctx,
+		cl,
+		"models-as-a-service",
+		tenantreconcile.DefaultAITenantNamespace,
+		"opendatahub",
+		tenantreconcile.MaaSControllerDeploymentName,
+		"maas-default-gateway",
+		"openshift-ingress",
+	)
+	if err != nil {
+		t.Fatalf("ensure default AITenant: %v", err)
+	}
+	if created {
+		t.Fatalf("created = true, want false")
+	}
+
+	var aitenant maasv1alpha1.AITenant
+	if err := cl.Get(ctx, client.ObjectKey{
+		Name:      tenantreconcile.DefaultAITenantName,
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+	}, &aitenant); err == nil {
+		t.Fatalf("default AITenant was created during teardown: %#v", aitenant)
+	}
+}
+
+func TestAitenantTeardownPauseConditionPausesWhenDeploymentMissing(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	cl := controllerfake.NewClientBuilder().WithScheme(s).Build()
+
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if !pause {
+		t.Fatalf("pause = false, want true when Deployment is missing during teardown")
+	}
+}
+
+func TestAitenantTeardownPauseConditionPausesWhenTeardownRequested(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      deploymentKey.Name,
+				Namespace: deploymentKey.Namespace,
+				Annotations: map[string]string{
+					maas.TeardownRequestedAnnotation: "true",
+				},
+			},
+		}).
+		Build()
+
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if !pause {
+		t.Fatalf("pause = false, want true when Deployment advertises teardown")
+	}
+}
+
+func TestAitenantTeardownPauseConditionRunsWhenDeploymentIsHealthy(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      deploymentKey.Name,
+				Namespace: deploymentKey.Namespace,
+			},
+		}).
+		Build()
+
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if pause {
+		t.Fatalf("pause = true, want false when Deployment does not advertise teardown")
 	}
 }
 

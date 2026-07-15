@@ -411,6 +411,72 @@ func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
 		Name:      "old-gateway",
 	}))
 	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
+	g.Expect(tenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
+}
+
+func TestAITenantReconcile_StripsStaleFinalizerFromLegacyTenantOnMigration(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-stalefinalizer",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ai-tenant-team-stalefinalizer"}}
+	// Simulates an install upgraded from a pre-MaasTenantConfig version, where a
+	// reconciler used to add tenantFinalizer directly to Tenant objects. No reconciler
+	// for the Tenant kind exists anymore, so nothing else would ever remove this.
+	preExistingTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       maasv1alpha1.TenantInstanceName,
+			Namespace:  "ai-tenant-team-stalefinalizer",
+			Finalizers: []string{tenantFinalizer},
+		},
+		Spec: maasv1alpha1.TenantSpec{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "old-gateway",
+			},
+		},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns, preExistingTenant, existingAITenantGateway("old-gateway")).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	for i := 0; i < 3; i++ {
+		_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
+		g.Expect(err).NotTo(HaveOccurred())
+	}
+
+	var tenant maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: "ai-tenant-team-stalefinalizer",
+	}, &tenant)).To(Succeed())
+	g.Expect(tenant.Finalizers).NotTo(ContainElement(tenantFinalizer),
+		"stale finalizer must be stripped so the legacy Tenant can actually terminate when deleted")
+	g.Expect(tenant.Annotations).To(HaveKeyWithValue("maas.opendatahub.io/deprecated-by", maasv1alpha1.MaasTenantConfigKind))
+
+	// With the finalizer gone, deleting the legacy Tenant (e.g. via tenant namespace
+	// teardown) must actually remove it instead of hanging forever.
+	g.Expect(cl.Delete(context.Background(), &tenant)).To(Succeed())
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: "ai-tenant-team-stalefinalizer",
+	}, &maasv1alpha1.Tenant{}))).To(BeTrue())
 }
 
 func TestAITenantReconcile_IgnoresLegacyDefaultGatewayForNonDefaultTenant(t *testing.T) {

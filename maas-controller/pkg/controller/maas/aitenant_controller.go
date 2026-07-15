@@ -422,6 +422,7 @@ func (r *AITenantReconciler) markLegacyTenantDeprecated(ctx context.Context, ten
 	annotations["maas.opendatahub.io/deprecated-by"] = maasv1alpha1.MaasTenantConfigKind
 	annotations["maas.opendatahub.io/migrated-to"] = maasv1alpha1.MaasTenantConfigInstanceName
 	legacy.SetAnnotations(annotations)
+	controllerutil.RemoveFinalizer(&legacy, tenantFinalizer)
 	if equality.Semantic.DeepEqual(base, &legacy) {
 		return nil
 	}
