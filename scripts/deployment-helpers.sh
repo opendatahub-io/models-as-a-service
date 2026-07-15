@@ -1374,7 +1374,8 @@ cleanup_custom_catalogsource() {
 }
 
 # wait_datasciencecluster_ready [name] [timeout]
-#   Waits for a DataScienceCluster's KServe and ModelsAsService components to be ready.
+#   Waits for a DataScienceCluster's MaaS-related components to be ready.
+#   Supports both 3.4 (kserve.modelsAsService) and 3.5+ (aigateway.modelsAsAService) DSC schemas.
 #
 # Arguments:
 #   name    - Name of the DataScienceCluster (default: default-dsc)
@@ -1402,34 +1403,41 @@ wait_datasciencecluster_ready() {
       continue
     fi
 
-    local kserve_state kserve_ready maas_ready model_controller_ready
+    local kserve_state kserve_ready maas_ready model_controller_ready aigateway_state
     kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
+    aigateway_state=$(echo "$dsc_json" | jq -r '.status.components.aigateway.managementState // ""')
     kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
     maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
     model_controller_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelControllerReady") | .status' | tail -n1)
 
-    # v2 API: ModelsAsServiceReady doesn't exist, use ModelControllerReady instead
-    # v1 API: ModelsAsServiceReady exists but may stay False
-    # Use ModelControllerReady as fallback if ModelsAsServiceReady is not True
-    # This handles both v2 API (no ModelsAsServiceReady condition) and v1 API (condition exists but may stay False)
+    # 3.5+ API: aigateway.modelsAsAService replaces kserve.modelsAsService.
+    # Status condition may be ModelsAsServiceReady, ModelControllerReady, or a new AIGateway condition.
+    # Use ModelControllerReady as fallback if ModelsAsServiceReady is not True.
     local maas_check="$maas_ready"
     if [[ "$maas_ready" != "True" && "$model_controller_ready" == "True" ]]; then
       maas_check="$model_controller_ready"
     fi
 
-    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_check" == "True" ]]; then
-      echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
+    # For 3.5+ (aigateway), check aigateway_state instead of kserve_state.
+    # For kustomize mode (kserve still in DSC), kserve_state is populated.
+    local primary_state="$kserve_state"
+    if [[ -n "$aigateway_state" ]]; then
+      primary_state="$aigateway_state"
+    fi
+
+    if [[ "$primary_state" == "Managed" && ("$kserve_ready" == "True" || -z "$kserve_state") && "$maas_check" == "True" ]]; then
+      echo "  * MaaS components are ready in DataScienceCluster '$name'"
       return 0
     else
-      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready, ModelControllerReady: $model_controller_ready"
+      echo "  - KServe state: ${kserve_state:-N/A}, AIGateway state: ${aigateway_state:-N/A}, KserveReady: ${kserve_ready:-N/A}, ModelsAsServiceReady: ${maas_ready:-N/A}, ModelControllerReady: ${model_controller_ready:-N/A}"
     fi
 
     sleep $interval
     elapsed=$((elapsed + interval))
   done
 
-  echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
-  echo "  Final status: KServe=$kserve_state, KserveReady=$kserve_ready, ModelsAsServiceReady=$maas_ready, ModelControllerReady=$model_controller_ready"
+  echo "  ERROR: MaaS components did not become ready in DataScienceCluster/$name within $timeout seconds."
+  echo "  Final status: KServe=${kserve_state:-N/A}, AIGateway=${aigateway_state:-N/A}, KserveReady=${kserve_ready:-N/A}, ModelsAsServiceReady=${maas_ready:-N/A}, ModelControllerReady=${model_controller_ready:-N/A}"
   echo "  Tip: Check 'kubectl describe datasciencecluster $name' for more details"
   return 1
 }

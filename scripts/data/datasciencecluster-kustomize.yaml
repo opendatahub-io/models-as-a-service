@@ -1,13 +1,12 @@
 ---
-# DataScienceCluster requirements for kustomize deployment mode.
+# DataScienceCluster requirements for kustomize deployment mode (ODH/RHOAI 3.5+).
 # In kustomize mode, MaaS components are deployed directly via manifests,
-# NOT via the operator's modelsAsService controller. Enabling modelsAsService
-# in the DSC would cause server-side apply conflicts between the operator
-# and kustomize manifests.
+# NOT via the operator's aigateway.modelsAsAService controller. Enabling
+# modelsAsAService in the DSC would cause server-side apply conflicts between
+# the operator and kustomize manifests.
 #
-# Only rawDeploymentServiceConfig is required: KServe must use "Headed"
-# services (with ClusterIP) so the Gateway/HTTPRoutes can route traffic
-# to model endpoints.
+# KServe rawDeploymentServiceConfig: Headed is still required so model endpoints
+# get ClusterIP services that the Gateway/HTTPRoutes can route traffic to.
 apiVersion: datasciencecluster.opendatahub.io/v2
 kind: DataScienceCluster
 metadata:
@@ -17,5 +16,7 @@ spec:
     kserve:
       managementState: Managed
       rawDeploymentServiceConfig: Headed
-      modelsAsService:
+    aigateway:
+      managementState: Managed
+      modelsAsAService:
         managementState: Removed

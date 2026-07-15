@@ -931,8 +931,8 @@ deploy_via_kustomize() {
   fi
 
   # Validate DSC if it exists
-  # In kustomize mode, use a reduced manifest that does NOT enable modelsAsService.
-  # Enabling modelsAsService causes the operator to manage the same resources
+  # In kustomize mode, use a reduced manifest that does NOT enable modelsAsAService.
+  # Enabling modelsAsAService causes the operator to manage the same resources
   # that kustomize deploys, resulting in server-side apply conflicts.
   local dsc_manifest="${project_root}/scripts/data/datasciencecluster-kustomize.yaml"
   if [[ -n "$detected_dsc" ]]; then

@@ -60,6 +60,25 @@ else
   INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
 fi
 
+# Auto-detect policy engine namespace
+detected_engine=$(detect_policy_engine 2>/dev/null || echo "")
+case "$detected_engine" in
+    rhcl)
+        POLICY_ENGINE_NAMESPACE="rh-connectivity-link"
+        ;;
+    kuadrant)
+        POLICY_ENGINE_NAMESPACE="kuadrant-system"
+        ;;
+    *)
+        # Fall back: check both namespaces
+        if kubectl get namespace rh-connectivity-link &>/dev/null; then
+            POLICY_ENGINE_NAMESPACE="rh-connectivity-link"
+        else
+            POLICY_ENGINE_NAMESPACE="kuadrant-system"
+        fi
+        ;;
+esac
+
 # Show help if requested
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ]; then
     echo "MaaS Platform Deployment Validation Script"
@@ -324,17 +343,17 @@ else
     print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $INFRA_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
-# Check Kuadrant pods
-print_check "Kuadrant system pods"
-if kubectl get namespace kuadrant-system &>/dev/null; then
-    KUADRANT_PODS=$(kubectl get pods -n kuadrant-system --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+# Check Kuadrant/RHCL pods
+print_check "Policy engine pods ($POLICY_ENGINE_NAMESPACE)"
+if kubectl get namespace "$POLICY_ENGINE_NAMESPACE" &>/dev/null; then
+    KUADRANT_PODS=$(kubectl get pods -n "$POLICY_ENGINE_NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || echo "0")
     if [ "$KUADRANT_PODS" -gt 0 ]; then
-        print_success "Kuadrant has $KUADRANT_PODS running pod(s)"
+        print_success "Policy engine has $KUADRANT_PODS running pod(s) in $POLICY_ENGINE_NAMESPACE"
     else
-        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
+        print_fail "No policy engine pods running" "Operators may not be installed" "Check: kubectl get pods -n $POLICY_ENGINE_NAMESPACE"
     fi
 else
-    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/install-dependencies.sh --kuadrant"
+    print_fail "Policy engine namespace '$POLICY_ENGINE_NAMESPACE' not found" "Policy engine may not be installed" "Run: ./scripts/deploy.sh --deployment-mode kustomize"
 fi
 
 # Check OpenDataHub/KServe pods
@@ -459,7 +478,7 @@ if [ "$AUTHPOLICY_COUNT" -gt 0 ]; then
     if [ "$AUTHPOLICY_STATUS" = "True" ]; then
         print_success "AuthPolicy is configured and accepted"
     else
-        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "AuthPolicy found but status: $AUTHPOLICY_STATUS" "Policy may still be reconciling. Try deleting the operator pod:" "kubectl delete pod -n $POLICY_ENGINE_NAMESPACE -l control-plane=controller-manager"
     fi
 else
     print_fail "No AuthPolicy found" "Authentication may not be enforced" "Check: kubectl get authpolicy -A"
@@ -484,7 +503,7 @@ if [ "$RATELIMIT_COUNT" -gt 0 ]; then
     if [ "$RATELIMIT_STATUS" = "True" ]; then
         print_success "TokenRateLimitPolicy is configured and accepted"
     else
-        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the kuadrant operator pod:" "kubectl delete pod -n kuadrant-system -l control-plane=controller-manager"
+        print_warning "TokenRateLimitPolicy found but status: $RATELIMIT_STATUS" "Policy may still be reconciling. Try deleting the operator pod:" "kubectl delete pod -n $POLICY_ENGINE_NAMESPACE -l control-plane=controller-manager"
     fi
 else
     print_fail "No TokenRateLimitPolicy found" "Rate limiting may not be enforced" "Check: kubectl get tokenratelimitpolicy -A"
@@ -874,7 +893,7 @@ else
     echo ""
     echo "Common fixes:"
     echo "  - Wait for pods to start: kubectl get pods -A | grep -v Running"
-    echo "  - Check operator logs: kubectl logs -n kuadrant-system -l app.kubernetes.io/name=kuadrant-operator"
+    echo "  - Check operator logs: kubectl logs -n $POLICY_ENGINE_NAMESPACE -l app.kubernetes.io/name=kuadrant-operator"
     echo "  - Re-run deployment: ./scripts/deploy.sh"
     echo ""
     echo "Usage: ./scripts/validate-deployment.sh [MODEL_NAME]"

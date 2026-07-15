@@ -153,11 +153,11 @@ maas_api_status=$(echo "$maas_status" | jq -r '.api' 2>/dev/null || echo "missin
 maas_controller_status=$(echo "$maas_status" | jq -r '.controller' 2>/dev/null || echo "missing")
 
 # Resolve deployment mode for DSC validation
-# If not explicitly set, auto-detect: if MaaS components exist but modelsAsService is Removed,
+# If not explicitly set, auto-detect: if MaaS components exist but modelsAsAService is Removed,
 # it's likely kustomize mode. Otherwise assume operator mode.
 if [[ -z "$DEPLOYMENT_MODE" ]]; then
   if [[ -n "$dsc_name" ]]; then
-    local_maas_state=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
+    local_maas_state=$(kubectl get datasciencecluster "$dsc_name" -o jsonpath='{.spec.components.aigateway.modelsAsAService.managementState}' 2>/dev/null || echo "")
     if [[ "$local_maas_state" == "Removed" ]] && [[ "$maas_api_status" != "missing" || "$maas_controller_status" != "missing" ]]; then
       DEPLOYMENT_MODE="kustomize"
     else
