@@ -1451,14 +1451,32 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			}
 		}
 		if liveCount == 0 {
-			if err := r.deleteGatewayAuthPolicy(ctx, log, policy.Namespace); err != nil {
-				log.Error(err, "failed to delete gateway AuthPolicy")
+			tenantID, err := r.fetchTenantIdentifier(ctx, log, policy.Namespace)
+			if err != nil {
 				return ctrl.Result{}, err
 			}
-			if r.TenantNamespace == "" || policy.Namespace == r.TenantNamespace {
-				if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
-					log.Error(err, "failed to restore gateway-default-auth")
+			gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, policy.Namespace)
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
+			isNonDefaultTenant := tenantID != ""
+			if isNonDefaultTenant && isDefaultGateway {
+				log.Info("skipping gateway AuthPolicy cleanup: non-default tenant falling back to default gateway",
+					"tenantID", tenantID,
+					"tenantNamespace", policy.Namespace,
+					"gatewayNamespace", gatewayNs,
+					"gatewayName", gatewayName)
+			} else {
+				if err := r.deleteGatewayAuthPolicy(ctx, log, policy.Namespace, gatewayNs, gatewayName); err != nil {
+					log.Error(err, "failed to delete gateway AuthPolicy")
 					return ctrl.Result{}, err
+				}
+				if r.TenantNamespace == "" || policy.Namespace == r.TenantNamespace {
+					if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
+						log.Error(err, "failed to restore gateway-default-auth")
+						return ctrl.Result{}, err
+					}
 				}
 			}
 		}
@@ -1473,13 +1491,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 
 // deleteGatewayAuthPolicy removes the tenant's Gateway-level AuthPolicy when no
 // MaaSAuthPolicy CRs remain in that tenant namespace.
-func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger, tenantNamespace string) error {
-	// Get tenant's gateway info
-	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, tenantNamespace)
-	if err != nil {
-		return fmt.Errorf("failed to fetch gateway info for deletion: %w", err)
-	}
-
+func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger, tenantNamespace, gatewayNs, gatewayName string) error {
 	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
 	authPolicyName := maasGatewayAuthPolicyName
 	if gatewayNs != r.GatewayNamespace || gatewayName != r.GatewayName {
