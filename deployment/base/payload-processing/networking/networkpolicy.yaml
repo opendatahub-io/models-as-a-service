@@ -7,8 +7,7 @@
 # Security constraints:
 # - podSelector: covers payload-processing and payload-pre-processing pods
 # - ingress: gateway ext_proc traffic (port 9004), monitoring scrape (9005, 9090)
-# - egress: DNS + Kubernetes API server only (this container is a pure
-#   Kubernetes controller with no external HTTP/gRPC calls)
+# - egress: not restricted (ingress-only policy)
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -27,17 +26,12 @@ spec:
           - payload-pre-processing
   policyTypes:
     - Ingress
-    - Egress
   ingress:
-    # Allow ext_proc traffic from any Istio-managed gateway pod in the
-    # ingress namespace. Uses the common label applied by the Istio gateway
-    # controller to all provisioned gateway pods, covering both
-    # data-science-gateway and maas-default-gateway.
+    # Allow ext_proc traffic from any pod in the gateway namespace.
+    # Using namespaceSelector only (no podSelector) matches the pattern in
+    # maas-api-allow-gateway and avoids label mismatches across Istio versions.
     - from:
-        - podSelector:
-            matchLabels:
-              gateway.istio.io/managed: istio.io-gateway-controller
-          namespaceSelector:
+        - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: openshift-ingress
       ports:
@@ -56,20 +50,3 @@ spec:
           port: 9005
         - protocol: TCP
           port: 9090
-  egress:
-    # Allow DNS resolution (CoreDNS on OCP uses port 5353)
-    - ports:
-        - protocol: UDP
-          port: 53
-        - protocol: TCP
-          port: 53
-        - protocol: UDP
-          port: 5353
-        - protocol: TCP
-          port: 5353
-    # Allow Kubernetes API server access (controller-runtime client)
-    - ports:
-        - protocol: TCP
-          port: 443
-        - protocol: TCP
-          port: 6443

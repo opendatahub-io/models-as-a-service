@@ -745,6 +745,8 @@ func main() {
 		os.Exit(1)
 	}
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
+	// maas-db-config lives in the infrastructure namespace (where maas-api runs).
+	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
 			// MaasTenantConfig CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
@@ -753,6 +755,9 @@ func main() {
 			&maasv1alpha1.Tenant{}:           {},
 			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
 			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
+			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
+			// to avoid caching cluster-wide Secrets.
+			&corev1.Secret{}: {Namespaces: infraNsCfg},
 		},
 	}
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
@@ -764,6 +769,9 @@ func main() {
 				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
 				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
+				// Keep Secret informer scoped to the infra namespace even in multi-tenant mode —
+				// maas-db-config always lives in the infra namespace regardless of tenant count.
+				&corev1.Secret{}: {Namespaces: infraNsCfg},
 			},
 		}
 		setupLog.Info("watching MaaS CRs across all namespaces",

@@ -330,6 +330,29 @@ func TestMaaSAuthPolicyReconciler_WaitsForTargetBeforeUpgradeCutover(t *testing.
 	}
 }
 
+func TestMaaSAuthPolicyReconciler_TargetMaaSAPIReadyTreatsUnknownAsReady(t *testing.T) {
+	const infraNS = "redhat-ai-gateway-infra"
+
+	endpointSlice := newMaaSAPIEndpointSlice(infraNS, "maas-api", false)
+	endpointSlice.Endpoints[0].Conditions.Ready = nil
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(endpointSlice).
+		Build()
+	r := &MaaSAuthPolicyReconciler{
+		Client:         c,
+		InfraNamespace: infraNS,
+	}
+
+	ready, err := r.targetMaaSAPIReady(context.Background(), "")
+	if err != nil {
+		t.Fatalf("targetMaaSAPIReady: %v", err)
+	}
+	if !ready {
+		t.Fatal("an EndpointSlice endpoint with unknown readiness must be treated as ready")
+	}
+}
+
 func TestMaaSAuthPolicyReconciler_UnmanagedGatewayPolicyDoesNotAuthorizeCutover(t *testing.T) {
 	const (
 		gatewayNS   = "openshift-ingress"

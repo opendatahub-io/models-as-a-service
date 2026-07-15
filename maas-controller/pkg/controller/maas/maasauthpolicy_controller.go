@@ -308,7 +308,7 @@ func (r *MaaSAuthPolicyReconciler) targetMaaSAPIReady(ctx context.Context, tenan
 			continue
 		}
 		for _, endpoint := range endpointSlice.Endpoints {
-			if endpoint.Conditions.Ready != nil && *endpoint.Conditions.Ready {
+			if endpoint.Conditions.Ready == nil || *endpoint.Conditions.Ready {
 				return true, nil
 			}
 		}
