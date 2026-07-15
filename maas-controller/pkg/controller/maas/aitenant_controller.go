@@ -99,7 +99,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
@@ -541,22 +541,16 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
-	namespaceDeleted, reason, message, err := r.deleteTenantNamespace(ctx, aitenant)
-	if err != nil {
+	// Keep the tenant namespace so user-created objects (Secrets, RoleBindings, etc.)
+	// survive. Only strip AITenant ownership metadata so discovery no longer treats
+	// it as an active MaaS tenant namespace.
+	if err := r.releaseTenantNamespace(ctx, aitenant); err != nil {
 		statusSnapshot = aitenant.Status.DeepCopy()
 		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
 		return ctrl.Result{}, err
-	}
-	if !namespaceDeleted {
-		statusSnapshot = aitenant.Status.DeepCopy()
-		setAITenantPhase(aitenant, "Terminating", reason, message)
-		if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
@@ -623,33 +617,43 @@ func (r *AITenantReconciler) deleteAITenantScopedChildren(ctx context.Context, a
 	return nil
 }
 
-func (r *AITenantReconciler) deleteTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, string, string, error) {
+// releaseTenantNamespace clears AITenant ownership labels/annotations from the
+// tenant namespace without deleting it. User-created content in the namespace is
+// preserved. If the namespace is missing, already terminating, or not owned by
+// this AITenant, release is a no-op.
+func (r *AITenantReconciler) releaseTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	var ns corev1.Namespace
 	key := client.ObjectKey{Name: r.tenantNamespaceName(aitenant)}
 	if err := r.get(ctx, key, &ns); err != nil {
 		if isNotFoundError(err) {
-			return true, "Deleted", fmt.Sprintf("tenant namespace %q has been deleted", key.Name), nil
+			return nil
 		}
-		return false, "DeletionBlocked", "", fmt.Errorf("get tenant namespace %q during deletion: %w", key.Name, err)
+		return fmt.Errorf("get tenant namespace %q during AITenant deletion: %w", key.Name, err)
 	}
 	if !ownedByAITenant(&ns, aitenant) {
-		return false, "DeletionBlocked", "", fmt.Errorf("tenant namespace %q is not owned by AITenant %s/%s", key.Name, aitenant.Namespace, aitenant.Name)
+		return nil
 	}
-	if ns.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, &ns); client.IgnoreNotFound(err) != nil {
-			return false, "DeletionBlocked", "", fmt.Errorf("delete tenant namespace %q: %w", key.Name, err)
-		}
-		return false, "DeletionInProgress", fmt.Sprintf("tenant namespace %q deletion has been requested", key.Name), nil
-	}
-	reason, message := namespaceDeletionStatus(&ns)
-	return false, reason, message, nil
-}
-
-func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+	if !ns.DeletionTimestamp.IsZero() {
+		// Namespace is already terminating (e.g. admin-deleted). Do not block
+		// AITenant cleanup on namespace finalizers.
 		return nil
 	}
 
+	base := ns.DeepCopy()
+	removeAITenantMetadata(&ns, aitenant, key.Name)
+	labels := ns.GetLabels()
+	removeMapValueIfEqual(&labels, "opendatahub.io/generated-namespace", "true")
+	ns.SetLabels(labels)
+	if equality.Semantic.DeepEqual(base, &ns) {
+		return nil
+	}
+	if err := r.Patch(ctx, &ns, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("release tenant namespace %q during AITenant deletion: %w", key.Name, err)
+	}
+	return nil
+}
+
+func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	gatewayRef := aitenant.Status.GatewayRef
 	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
 		gatewayRef = r.gatewayRefFor(aitenant)
@@ -660,7 +664,11 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 
 	authPolicy := &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
-	authPolicy.SetName(fmt.Sprintf("%s-maas-auth", gatewayRef.Name))
+	authPolicyName := fmt.Sprintf("%s-maas-auth", gatewayRef.Name)
+	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+		authPolicyName = maasGatewayAuthPolicyName
+	}
+	authPolicy.SetName(authPolicyName)
 	authPolicy.SetNamespace(gatewayRef.Namespace)
 
 	if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
@@ -676,27 +684,6 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 		return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
 	}
 	return nil
-}
-
-func namespaceDeletionStatus(ns *corev1.Namespace) (string, string) {
-	for _, condition := range ns.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case corev1.NamespaceContentRemaining,
-			corev1.NamespaceFinalizersRemaining,
-			corev1.NamespaceDeletionContentFailure,
-			corev1.NamespaceDeletionDiscoveryFailure,
-			corev1.NamespaceDeletionGVParsingFailure:
-			message := condition.Message
-			if message == "" {
-				message = fmt.Sprintf("tenant namespace %q deletion is blocked by %s", ns.Name, condition.Type)
-			}
-			return "DeletionBlocked", message
-		}
-	}
-	return "DeletionInProgress", fmt.Sprintf("tenant namespace %q is terminating", ns.Name)
 }
 
 func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {

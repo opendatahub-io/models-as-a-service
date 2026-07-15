@@ -22,6 +22,7 @@ CONFIG_NAME = "default"
 DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION = "maas.opendatahub.io/default-aitenant-bootstrapped"
 ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
+ANNOTATION_CREATED_BY_AITENANT = "maas.opendatahub.io/created-by-aitenant"
 DEPRECATED_BY_ANNOTATION = "maas.opendatahub.io/deprecated-by"
 MIGRATED_TO_ANNOTATION = "maas.opendatahub.io/migrated-to"
 TENANT_NAME = "default-tenant"
@@ -162,6 +163,8 @@ def _new_aitenant_case():
         "gateway_name": aitenant_name,
         "tenant_admin_role": f"aitenant-{aitenant_name}-tenant-admin",
         "object_admin_role": f"aitenant-{aitenant_name}-object-admin",
+        "user_secret": f"{aitenant_name}-user-secret",
+        "user_rolebinding": f"{aitenant_name}-user-binding",
     }
 
 
@@ -249,6 +252,31 @@ def _assert_aitenant_bootstrap_resources(case):
 def _delete_aitenant(case):
     _delete(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
     _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout=180)
+
+
+def _namespace_released_from_aitenant(obj):
+    metadata = obj.get("metadata") or {}
+    labels = metadata.get("labels") or {}
+    annotations = metadata.get("annotations") or {}
+    return all(
+        key not in labels
+        for key in (
+            "app.kubernetes.io/managed-by",
+            "app.kubernetes.io/part-of",
+            "maas.opendatahub.io/managed-by-aitenant",
+            "ai-gateway.opendatahub.io/tenant",
+            "maas.opendatahub.io/tenant-name",
+            "maas.opendatahub.io/tenant-namespace",
+            "opendatahub.io/generated-namespace",
+        )
+    ) and all(
+        key not in annotations
+        for key in (
+            ANNOTATION_AITENANT_NAME,
+            ANNOTATION_AITENANT_NAMESPACE,
+            ANNOTATION_CREATED_BY_AITENANT,
+        )
+    )
 
 
 class TestAITenantLifecycle:
@@ -502,7 +530,7 @@ class TestAITenantLifecycle:
             _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", tenant_ns, timeout="90s")
 
-    def test_aitenant_delete_cleans_up_bootstrap_resources(self):
+    def test_aitenant_delete_cleans_maas_resources_and_preserves_user_objects(self):
         case = _new_aitenant_case()
 
         try:
@@ -510,11 +538,47 @@ class TestAITenantLifecycle:
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
 
+            _apply(
+                {
+                    "apiVersion": "v1",
+                    "kind": "Secret",
+                    "metadata": {"name": case["user_secret"], "namespace": case["tenant_ns"]},
+                    "type": "Opaque",
+                    "stringData": {"purpose": "unrelated-user-content"},
+                }
+            )
+            _apply(
+                {
+                    "apiVersion": "rbac.authorization.k8s.io/v1",
+                    "kind": "RoleBinding",
+                    "metadata": {"name": case["user_rolebinding"], "namespace": case["tenant_ns"]},
+                    "roleRef": {
+                        "apiGroup": "rbac.authorization.k8s.io",
+                        "kind": "Role",
+                        "name": case["tenant_admin_role"],
+                    },
+                    "subjects": [
+                        {
+                            "apiGroup": "rbac.authorization.k8s.io",
+                            "kind": "User",
+                            "name": "e2e-preserved-user",
+                        }
+                    ],
+                }
+            )
+
             _delete_aitenant(case)
             _wait_for_not_found(TENANT_CONFIG_KIND, TENANT_NAME, case["tenant_ns"])
             _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
             _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
-            _wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
+            _wait_for_json(
+                "namespace",
+                case["tenant_ns"],
+                predicate=_namespace_released_from_aitenant,
+                timeout=180,
+            )
+            assert _get_json_or_none("secret", case["user_secret"], case["tenant_ns"]) is not None
+            assert _get_json_or_none("rolebinding", case["user_rolebinding"], case["tenant_ns"]) is not None
 
             gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
             assert gateway is not None

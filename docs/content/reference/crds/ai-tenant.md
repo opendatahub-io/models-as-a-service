@@ -28,9 +28,9 @@ The controller automatically creates `AITenant/models-as-a-service` for the defa
 
 For non-default tenants, the controller derives the tenant namespace from the `AITenant` name as `ai-tenant-<aitenant-name>`. `AITenant` names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default `AITenant/models-as-a-service` keeps the configured MaaS tenant namespace, usually `models-as-a-service`, for migration compatibility.
 
-Deleting an `AITenant` performs a hard cleanup of the tenant's MaaS state. The controller revokes active API keys through the tenant maas-api instance, deletes the bridge `MaasTenantConfig/default-tenant`, deletes tenant-scoped MaaS resources such as `MaaSSubscription` and `MaaSAuthPolicy`, removes per-tenant maas-api platform resources, and deletes the tenant namespace. The shared Gateway object is never deleted or modified by `AITenant` reconciliation; tenant-scoped gateway and claim resources are cleaned up during deletion.
+Deleting an `AITenant` performs a cleanup of the tenant's MaaS state. The controller revokes active API keys through the tenant maas-api instance, deletes the bridge `MaasTenantConfig/default-tenant`, deletes tenant-scoped MaaS resources such as `MaaSSubscription` and `MaaSAuthPolicy`, removes per-tenant maas-api platform resources and AITenant-owned RBAC, and releases ownership metadata from the tenant namespace. The tenant namespace itself is not deleted, so non-MaaS user objects in that namespace remain. The shared Gateway object is never deleted or modified by `AITenant` reconciliation; tenant-scoped gateway AuthPolicy and claim resources are cleaned up during deletion.
 
-If namespace deletion is blocked by remaining content or finalizers, the `AITenant` stays in `Terminating` phase with `Ready=False` and reason `DeletionBlocked` until the namespace can finish deleting.
+The `AITenant` stays in `Terminating` phase while MaaS resource finalizers run. If a cleanup step fails, it reports `Ready=False` with reason `DeletionBlocked`. A tenant namespace that is already terminating does not block AITenant cleanup.
 
 ---
 

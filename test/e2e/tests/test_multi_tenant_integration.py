@@ -22,6 +22,7 @@ from multitenancy_helpers import (
     DEFAULT_GATEWAY_NAME,
     FINALIZER_AUTHPOLICY,
     FINALIZER_SUBSCRIPTION,
+    LABEL_AI_GATEWAY_TENANT,
     LABEL_MANAGED_BY_AITENANT,
     LABEL_TENANT_NAME,
     LABEL_TENANT_NAMESPACE,
@@ -32,6 +33,7 @@ from multitenancy_helpers import (
     apply_discovery_labels,
     apply_maas_auth_policy,
     apply_maas_subscription,
+    apply_unrelated_tenant_objects,
     apply_tenant_cr,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
@@ -109,11 +111,41 @@ class TestMultiTenantIntegration:
                 expected_phase="Active",
             )
             wait_for_aitenant_cleanup_resources(case)
+            user_objects = apply_unrelated_tenant_objects(case)
 
             delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
             wait_for_not_found(TENANT_CONFIG_KIND, TENANT_CR_NAME, case["tenant_ns"], timeout=180)
+            wait_for_not_found("maasauthpolicy", case["policy_name"], case["tenant_ns"], timeout=180)
+            wait_for_not_found("maassubscription", case["subscription_name"], case["tenant_ns"], timeout=180)
             wait_for_not_found("role", role_name, case["tenant_ns"], timeout=180)
-            wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
+            namespace = wait_for_json(
+                "namespace",
+                case["tenant_ns"],
+                predicate=lambda obj: LABEL_MANAGED_BY_AITENANT
+                not in ((obj.get("metadata") or {}).get("labels") or {}),
+                timeout=180,
+            )
+            namespace_metadata = namespace.get("metadata") or {}
+            namespace_labels = namespace_metadata.get("labels") or {}
+            namespace_annotations = namespace_metadata.get("annotations") or {}
+            for key in (
+                "app.kubernetes.io/managed-by",
+                "app.kubernetes.io/part-of",
+                LABEL_AI_GATEWAY_TENANT,
+                LABEL_MANAGED_BY_AITENANT,
+                LABEL_TENANT_NAME,
+                LABEL_TENANT_NAMESPACE,
+                "opendatahub.io/generated-namespace",
+            ):
+                assert key not in namespace_labels
+            for key in (
+                ANNOTATION_AITENANT_NAME,
+                ANNOTATION_AITENANT_NAMESPACE,
+                "maas.opendatahub.io/created-by-aitenant",
+            ):
+                assert key not in namespace_annotations
+            assert get_json_or_none("secret", user_objects["secret"], case["tenant_ns"]) is not None
+            assert get_json_or_none("rolebinding", user_objects["rolebinding"], case["tenant_ns"]) is not None
             wait_for_aitenant_cleanup_resources_deleted(case)
         finally:
             cleanup_discovery_case(case)

@@ -173,14 +173,19 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
-		if err := r.cleanupMaaSSubscriptions(ctx, log, tenant); err != nil {
+		subscriptionsDeleted, err := r.cleanupMaaSSubscriptions(ctx, log, tenant)
+		if err != nil {
 			log.Error(err, "failed to cleanup MaaSSubscriptions")
 			return ctrl.Result{}, err
 		}
 
-		if err := r.cleanupMaaSAuthPolicies(ctx, log, tenant); err != nil {
+		authPoliciesDeleted, err := r.cleanupMaaSAuthPolicies(ctx, log, tenant)
+		if err != nil {
 			log.Error(err, "failed to cleanup MaaSAuthPolicies")
 			return ctrl.Result{}, err
+		}
+		if !subscriptionsDeleted || !authPoliciesDeleted {
+			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
 		if err := r.cleanupTenantResources(ctx, log, tenant); err != nil {
@@ -637,46 +642,39 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 
 // cleanupMaaSSubscriptions deletes all MaaSSubscription CRs in the tenant namespace.
 // MaaSSubscription finalizers clean up generated TokenRateLimitPolicies.
-func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
+func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	log.Info("Cleaning up MaaSSubscription CRs", "namespace", tenant.Namespace)
 
 	subscriptionList := &maasv1alpha1.MaaSSubscriptionList{}
 	if err := r.List(ctx, subscriptionList, client.InNamespace(tenant.Namespace)); err != nil {
-		return fmt.Errorf("failed to list MaaSSubscriptions: %w", err)
+		return false, fmt.Errorf("failed to list MaaSSubscriptions: %w", err)
 	}
 
 	for i := range subscriptionList.Items {
 		subscription := &subscriptionList.Items[i]
 		log.Info("Deleting MaaSSubscription", "name", subscription.Name, "namespace", subscription.Namespace)
 		if err := r.Delete(ctx, subscription); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+			return false, fmt.Errorf("failed to delete MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
 		}
 	}
 
-	log.Info("Cleaned up MaaSSubscription CRs", "count", len(subscriptionList.Items))
-	return nil
+	if len(subscriptionList.Items) > 0 {
+		log.Info("Waiting for MaaSSubscription finalizer cleanup", "count", len(subscriptionList.Items))
+		return false, nil
+	}
+	return true, nil
 }
 
 // cleanupMaaSAuthPolicies deletes all MaaSAuthPolicy CRs in the tenant namespace.
 // MaaSAuthPolicyReconciler's handleDeletion will clean up the gateway AuthPolicy
 // when the last MaaSAuthPolicy is deleted.
-func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
-	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
-	if err != nil {
-		return err
-	}
-
-	// Skip cleanup for default tenant - Config lifecycle handles it
-	if tenantID == "" {
-		return nil
-	}
-
+func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	log.Info("Cleaning up MaaSAuthPolicy CRs", "namespace", tenant.Namespace)
 
 	// List all MaaSAuthPolicy CRs in this namespace
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(tenant.Namespace)); err != nil {
-		return fmt.Errorf("failed to list MaaSAuthPolicies: %w", err)
+		return false, fmt.Errorf("failed to list MaaSAuthPolicies: %w", err)
 	}
 
 	// Delete each MaaSAuthPolicy
@@ -684,10 +682,13 @@ func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr
 		policy := &policyList.Items[i]
 		log.Info("Deleting MaaSAuthPolicy", "name", policy.Name, "namespace", policy.Namespace)
 		if err := r.Delete(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
-			return fmt.Errorf("failed to delete MaaSAuthPolicy %s/%s: %w", policy.Namespace, policy.Name, err)
+			return false, fmt.Errorf("failed to delete MaaSAuthPolicy %s/%s: %w", policy.Namespace, policy.Name, err)
 		}
 	}
 
-	log.Info("Cleaned up MaaSAuthPolicy CRs", "count", len(policyList.Items))
-	return nil
+	if len(policyList.Items) > 0 {
+		log.Info("Waiting for MaaSAuthPolicy finalizer cleanup", "count", len(policyList.Items))
+		return false, nil
+	}
+	return true, nil
 }

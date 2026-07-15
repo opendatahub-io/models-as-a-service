@@ -1436,7 +1436,7 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 
 		// If this is the last MaaSAuthPolicy, also delete the singleton gateway-level AuthPolicy.
 		remaining := &maasv1alpha1.MaaSAuthPolicyList{}
-		if err := r.List(ctx, remaining); err != nil {
+		if err := r.List(ctx, remaining, client.InNamespace(policy.Namespace)); err != nil {
 			log.Error(err, "failed to list remaining MaaSAuthPolicies for gateway cleanup check")
 			return ctrl.Result{}, err
 		}
@@ -1455,9 +1455,11 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 				log.Error(err, "failed to delete gateway AuthPolicy")
 				return ctrl.Result{}, err
 			}
-			if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
-				log.Error(err, "failed to restore gateway-default-auth")
-				return ctrl.Result{}, err
+			if r.TenantNamespace == "" || policy.Namespace == r.TenantNamespace {
+				if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
+					log.Error(err, "failed to restore gateway-default-auth")
+					return ctrl.Result{}, err
+				}
 			}
 		}
 

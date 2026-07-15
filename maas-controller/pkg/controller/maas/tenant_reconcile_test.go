@@ -359,6 +359,93 @@ func TestTenantReconcile_AITenantManagedDefaultDeletionCleansPlatformResources(t
 	}
 }
 
+func TestTenantReconcile_AITenantManagedDefaultDeletionWaitsForMaaSCRFinalizers(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+	ctx := context.Background()
+	now := metav1.NewTime(time.Now())
+
+	const tenantNS = "models-as-a-service"
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   tenantNS,
+			},
+		},
+	}
+	subscription := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "default-subscription",
+			Namespace:  tenantNS,
+			Finalizers: []string{maasSubscriptionFinalizer},
+		},
+	}
+	policy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "default-auth-policy",
+			Namespace:  tenantNS,
+			Finalizers: []string{maasAuthPolicyFinalizer},
+		},
+	}
+	deployment := tenantTestUnstructured(
+		tenantreconcile.GVKDeployment,
+		"odh-ai-gateway-infra",
+		tenantreconcile.MaaSAPIDeploymentName(""),
+	)
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(tenant, subscription, policy, deployment).
+		Build()
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  tenantNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+	key := types.NamespacedName{Name: tenant.Name, Namespace: tenant.Namespace}
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+
+	var deletingSubscription maasv1alpha1.MaaSSubscription
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(subscription), &deletingSubscription)).To(Succeed())
+	g.Expect(deletingSubscription.DeletionTimestamp.IsZero()).To(BeFalse())
+	var deletingPolicy maasv1alpha1.MaaSAuthPolicy
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(policy), &deletingPolicy)).To(Succeed())
+	g.Expect(deletingPolicy.DeletionTimestamp.IsZero()).To(BeFalse())
+	var deletingTenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, key, &deletingTenant)).To(Succeed())
+	g.Expect(deletingTenant.Finalizers).To(ContainElement(tenantFinalizer))
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(deployment), deployment)).To(Succeed())
+
+	deletingSubscription.Finalizers = nil
+	g.Expect(cl.Update(ctx, &deletingSubscription)).To(Succeed())
+	deletingPolicy.Finalizers = nil
+	g.Expect(cl.Update(ctx, &deletingPolicy)).To(Succeed())
+
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(deployment), deployment))).To(BeTrue())
+	err = cl.Get(ctx, key, &deletingTenant)
+	if err == nil {
+		g.Expect(deletingTenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
+	} else {
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	}
+}
+
 func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
