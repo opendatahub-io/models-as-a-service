@@ -409,21 +409,12 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 
 		// Distinguish between "no subscription system" and "user has zero subscriptions"
 		if len(subscriptionsToUse) == 0 {
-			switch {
-			case h.subscriptionSelector == nil:
+			if h.subscriptionSelector == nil {
 				// Legacy case: no subscription system configured
 				h.logger.Debug("No subscription system configured, filtering models without subscription header")
 				modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
-			case returnAllModels:
-				h.logger.Debug("User token with no accessible subscriptions, returning guidance to use API key")
-				c.JSON(http.StatusForbidden, gin.H{
-					"error": gin.H{
-						"message": "No models available. To access models, create an API key using POST /v1/api-keys " +
-							"and use it as 'Authorization: Bearer sk-oai-...' in your requests.",
-						"type": "permission_error",
-					}})
-				return
-			default:
+			} else {
+				// User has zero accessible subscriptions - return empty list
 				h.logger.Debug("User has zero accessible subscriptions, returning empty model list")
 			}
 		} else {
