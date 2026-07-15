@@ -2142,6 +2142,68 @@ func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceMissing(t *testin
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
+func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceDeleting(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       tenantreconcile.DefaultAITenantName,
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "maas-default-gateway"},
+		},
+	}
+	// Namespace exists but has DeletionTimestamp set while Status.Phase is
+	// still Active (TOCTOU race — phase lags behind deletion signal).
+	now := metav1.Now()
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "models-as-a-service",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"kubernetes"},
+		},
+		Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+	}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if !apierrors.IsNotFound(err) {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
+	}
+
+	var job batcv1.Job
+	err = cl.Get(ctx, client.ObjectKey{
+		Name:      "maas-api-revoke-keys-" + tenantreconcile.DefaultAITenantName,
+		Namespace: "odh-ai-gateway-infra",
+	}, &job)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
 func TestAITenantReconcile_DefaultTenantDeletionCompletesInZeroTenantState(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

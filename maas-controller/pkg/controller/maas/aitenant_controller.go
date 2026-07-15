@@ -590,7 +590,7 @@ func (r *AITenantReconciler) tenantNamespaceExists(ctx context.Context, aitenant
 		}
 		return false, fmt.Errorf("check tenant namespace %q existence: %w", key.Name, err)
 	}
-	return ns.Status.Phase != corev1.NamespaceTerminating, nil
+	return ns.DeletionTimestamp.IsZero() && ns.Status.Phase != corev1.NamespaceTerminating, nil
 }
 
 func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
