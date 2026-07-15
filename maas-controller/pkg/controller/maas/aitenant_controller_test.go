@@ -2087,6 +2087,61 @@ func TestAITenantReconcile_NamespaceFinalizersSetDeletionBlocked(t *testing.T) {
 	g.Expect(remainingNS.Finalizers).To(ContainElement("example.com/stuck"))
 }
 
+func TestAITenantReconcile_DeletionCompletesWhenTenantNamespaceMissing(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       tenantreconcile.DefaultAITenantName,
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+		Spec: maasv1alpha1.AITenantSpec{
+			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "maas-default-gateway"},
+		},
+	}
+	// No tenant namespace, no MaasTenantConfig — simulates the scenario where
+	// the namespace was already deleted before the AITenant controller runs cleanup.
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "odh-ai-gateway-infra",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	// Finalizer must be removed — the AITenant should not be stuck.
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if !apierrors.IsNotFound(err) {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
+	}
+
+	// No API key revocation Job should be created since the namespace is missing.
+	var job batcv1.Job
+	err = cl.Get(ctx, client.ObjectKey{
+		Name:      "maas-api-revoke-keys-" + tenantreconcile.DefaultAITenantName,
+		Namespace: "odh-ai-gateway-infra",
+	}, &job)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
+
 func TestAITenantReconcile_DefaultTenantDeletionCompletesInZeroTenantState(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

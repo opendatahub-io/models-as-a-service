@@ -323,6 +323,63 @@ func TestEnsureDefaultAITenantBootstrapWaitsForConfigUID(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultAITenantBootstrapSkipsTerminatingAITenant(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+
+	now := metav1.Now()
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantreconcile.MaaSControllerDeploymentName,
+					Namespace: "opendatahub",
+				},
+			},
+			&maasv1alpha1.Config{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: maasv1alpha1.ConfigInstanceName,
+					UID:  types.UID("cfg-default"),
+				},
+			},
+			&maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              tenantreconcile.DefaultAITenantName,
+					Namespace:         tenantreconcile.DefaultAITenantNamespace,
+					DeletionTimestamp: &now,
+					Finalizers:        []string{"maas.opendatahub.io/aitenant-cleanup"},
+				},
+			},
+		).
+		Build()
+
+	created, err := ensureDefaultAITenantBootstrap(
+		ctx,
+		cl,
+		"models-as-a-service",
+		tenantreconcile.DefaultAITenantNamespace,
+		"opendatahub",
+		tenantreconcile.MaaSControllerDeploymentName,
+		"maas-default-gateway",
+		"openshift-ingress",
+	)
+	if err != nil {
+		t.Fatalf("ensure default AITenant: %v", err)
+	}
+	if created {
+		t.Fatalf("created = true, want false")
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		t.Fatalf("get Config: %v", err)
+	}
+	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got == "true" {
+		t.Fatalf("Config bootstrap annotation = %q, want empty (must not mark bootstrapped for Terminating AITenant)", got)
+	}
+}
+
 func TestEnsureDefaultAITenantBootstrapDoesNotRecreateAfterBootstrapMarker(t *testing.T) {
 	ctx := context.Background()
 	s := managerTestScheme(t)

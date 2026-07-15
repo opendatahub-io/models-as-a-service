@@ -469,6 +469,9 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 			return false, fmt.Errorf("get default AITenant: %w", err)
 		}
 	} else {
+		if !existing.DeletionTimestamp.IsZero() {
+			return false, nil
+		}
 		if err := markDefaultAITenantBootstrapped(ctx, c, &ct); err != nil {
 			return false, err
 		}

@@ -513,20 +513,26 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
-	apiKeysRevoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+	tenantNSExists, err := r.tenantNamespaceExists(ctx, aitenant)
 	if err != nil {
-		statusSnapshot = aitenant.Status.DeepCopy()
-		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
-		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
-			return ctrl.Result{}, err2
-		}
-		if errors.Is(err, errTenantAPIKeyRevocationJobFailed) {
-			return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-		}
 		return ctrl.Result{}, err
 	}
-	if !apiKeysRevoked {
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	if tenantNSExists {
+		apiKeysRevoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
+		if err != nil {
+			statusSnapshot = aitenant.Status.DeepCopy()
+			setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
+			if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
+				return ctrl.Result{}, err2
+			}
+			if errors.Is(err, errTenantAPIKeyRevocationJobFailed) {
+				return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+			}
+			return ctrl.Result{}, err
+		}
+		if !apiKeysRevoked {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
 	}
 
 	tenantDeleted, err := r.deleteTenantConfig(ctx, aitenant)
@@ -573,6 +579,18 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *AITenantReconciler) tenantNamespaceExists(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	var ns corev1.Namespace
+	key := client.ObjectKey{Name: r.tenantNamespaceName(aitenant)}
+	if err := r.get(ctx, key, &ns); err != nil {
+		if isNotFoundError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("check tenant namespace %q existence: %w", key.Name, err)
+	}
+	return ns.Status.Phase != corev1.NamespaceTerminating, nil
 }
 
 func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
