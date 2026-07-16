@@ -586,7 +586,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 				return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
 
-			if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+			if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 				if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
 					log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
 						"group", res.GroupVersionKind().Group, "kind", res.GetKind(),

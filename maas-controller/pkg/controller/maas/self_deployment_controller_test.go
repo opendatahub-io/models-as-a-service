@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
@@ -34,6 +35,15 @@ func lifecycleTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func usageLogsManifestPathForTest(t *testing.T) string {
+	t.Helper()
+	_, testFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("failed to get test file path")
+	}
+	return filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
 }
 
 func lifecycleTestUnstructured(gvk schema.GroupVersionKind, namespace, name string, finalizers ...string) *unstructured.Unstructured {
@@ -312,6 +322,7 @@ func TestLifecycleReconciler_NormalReconcileDoesNotSetDeploymentOwnerReference(t
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: "",
+		UsageLogsManifestPath:       usageLogsManifestPathForTest(t),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -368,10 +379,11 @@ func TestLifecycleReconciler_StripsLegacyDeploymentConfigOwnerReferenceOnNormalR
 
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
-		Client:         cl,
-		Scheme:         s,
-		DeploymentName: "maas-controller",
-		DeploymentNS:   depNS,
+		Client:                cl,
+		Scheme:                s,
+		DeploymentName:        "maas-controller",
+		DeploymentNS:          depNS,
+		UsageLogsManifestPath: usageLogsManifestPathForTest(t),
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -917,7 +929,14 @@ func TestEnsureUsageLogs(t *testing.T) {
 			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		// Rendered resources are applied dynamically as unstructured objects. Use the
+		// fake client's deduced converter so its SSA tracker does not select typed
+		// Kubernetes schemas for those unstructured apply configurations.
+		cl := fake.NewClientBuilder().
+			WithScheme(s).
+			WithTypeConverters(managedfields.NewDeducedTypeConverter()).
+			WithObjects(cfg).
+			Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
