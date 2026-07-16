@@ -169,7 +169,7 @@ func TestTenantReconcile_DefaultTenantDoesNotAddCleanupFinalizer(t *testing.T) {
 	g.Expect(updated.Finalizers).To(BeEmpty(), "default-tenant teardown is Config-driven; no tenant-cleanup finalizer")
 }
 
-func TestTenantReconcile_AITenantManagedDefaultDoesNotAddCleanupFinalizer(t *testing.T) {
+func TestTenantReconcile_AITenantManagedDefaultAddsCleanupFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -208,7 +208,7 @@ func TestTenantReconcile_AITenantManagedDefaultDoesNotAddCleanupFinalizer(t *tes
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(BeEmpty(), "AITenant owns cleanup; MaasTenantConfig must not add a second finalizer")
+	g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
 }
 
 func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T) {
@@ -248,7 +248,7 @@ func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T)
 	g.Expect(updated.Finalizers).To(BeEmpty())
 }
 
-func TestTenantReconcile_AITenantManagedDoesNotAddCleanupFinalizer(t *testing.T) {
+func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
 
@@ -287,71 +287,7 @@ func TestTenantReconcile_AITenantManagedDoesNotAddCleanupFinalizer(t *testing.T)
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(BeEmpty(), "AITenant owns cleanup; MaasTenantConfig must not add a second finalizer")
-}
-
-func TestTenantReconcile_SkipsAITenantManagedConfigWhileParentTerminating(t *testing.T) {
-	g := NewWithT(t)
-	s := tenantTestScheme(t)
-	ctx := context.Background()
-	now := metav1.NewTime(time.Now())
-
-	const (
-		tenantName      = "redteam"
-		tenantNamespace = "ai-tenant-redteam"
-	)
-	tenant := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-			Namespace: tenantNamespace,
-			Labels: map[string]string{
-				tenantreconcile.LabelManagedByAITenant: "true",
-				tenantreconcile.LabelTenantName:        tenantName,
-				tenantreconcile.LabelTenantNamespace:   tenantNamespace,
-			},
-			Annotations: map[string]string{
-				tenantreconcile.AnnotationAITenantName:      tenantName,
-				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
-			},
-		},
-		Status: maasv1alpha1.MaasTenantConfigStatus{Phase: "Active"},
-	}
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:              tenantName,
-			Namespace:         tenantreconcile.DefaultAITenantNamespace,
-			DeletionTimestamp: &now,
-			Finalizers:        []string{aitenantFinalizer},
-		},
-		Status: maasv1alpha1.AITenantStatus{Phase: "Terminating"},
-	}
-
-	cl := fake.NewClientBuilder().
-		WithScheme(s).
-		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
-		WithObjects(tenant, aitenant).
-		Build()
-	r := &TenantReconciler{
-		Client:                          cl,
-		Scheme:                          s,
-		AppNamespace:                    "odh-ai-gateway-infra",
-		TenantNamespace:                 "models-as-a-service",
-		TenantNamespaceDiscoveryEnabled: true,
-		GatewayName:                     testTenantGatewayName,
-		GatewayNamespace:                testTenantGatewayNamespace,
-	}
-
-	g.Expect(r.enqueueTenantForAITenant(ctx, aitenant)).To(BeEmpty(),
-		"AITenant status/deletion updates must not enqueue platform reconciliation during teardown")
-
-	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
-
-	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
-	g.Expect(updated.Status.Phase).To(Equal("Active"),
-		"parent termination guard must return before tenant status or platform state is reconciled")
+	g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
 }
 
 func TestTenantReconcile_AITenantManagedDefaultDeletionCleansPlatformResources(t *testing.T) {

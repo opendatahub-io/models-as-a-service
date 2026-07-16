@@ -20,7 +20,7 @@ Key points:
 - Additional tenant configs are created by the AITenant reconciler, which provisions the tenant namespace and config object.
 - maas-api Deployments are created in the infrastructure namespace (AUTO-derived by default: `odh-ai-gateway-infra` for ODH or `redhat-ai-gateway-infra` for RHOAI). See [Infrastructure Namespace Migration](../../configuration-and-management/infra-namespace-migration.md) for details.
 - Each tenant has an isolated maas-api instance for API key and subscription management.
-- `AITenant` owns tenant deletion cleanup. New `MaasTenantConfig` resources do not add a separate cleanup finalizer; upgraded configs that already carry `maas.opendatahub.io/tenant-cleanup` are still allowed to finish their legacy cleanup path.
+- `MaasTenantConfig` resources for additional tenants have the finalizer `maas.opendatahub.io/tenant-cleanup`.
 - For AITenant-managed tenants, Gateway comes from `AITenant.status.gatewayRef`; OIDC comes from `AITenant.spec.oidc`.
 
 See [AITenant CRD](ai-tenant.md) for creating additional tenants.

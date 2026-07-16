@@ -969,9 +969,10 @@ func TestAITenantReconcile_DeletionCleansOwnedResourcesButPreservesNamespaceAndU
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "ai-tenant-team-del",
 			Annotations: map[string]string{
-				aitenantNameAnnotation:      "team-del",
-				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
-				aitenantCreatedAnnotation:   "true",
+				aitenantNameAnnotation:       "team-del",
+				aitenantNamespaceAnnotation:  tenantreconcile.DefaultAITenantNamespace,
+				aitenantCreatedAnnotation:    "true",
+				"customer.example.com/owner": "alice",
 			},
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":         "maas-controller",
@@ -981,6 +982,7 @@ func TestAITenantReconcile_DeletionCleansOwnedResourcesButPreservesNamespaceAndU
 				"opendatahub.io/generated-namespace":   "true",
 				"maas.opendatahub.io/tenant-name":      "team-del",
 				"maas.opendatahub.io/tenant-namespace": "ai-tenant-team-del",
+				"customer.example.com/purpose":         "other-work",
 			},
 		},
 	}
@@ -1099,6 +1101,8 @@ func TestAITenantReconcile_DeletionCleansOwnedResourcesButPreservesNamespaceAndU
 	g.Expect(survivingNS.Labels).NotTo(HaveKey(tenantreconcile.LabelTenantName))
 	g.Expect(survivingNS.Labels).NotTo(HaveKey(tenantreconcile.LabelTenantNamespace))
 	g.Expect(survivingNS.Labels).NotTo(HaveKey("opendatahub.io/generated-namespace"))
+	g.Expect(survivingNS.Labels).To(HaveKeyWithValue("customer.example.com/purpose", "other-work"))
+	g.Expect(survivingNS.Annotations).To(HaveKeyWithValue("customer.example.com/owner", "alice"))
 
 	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: "team-del-manual-admin"}, &rbacv1.RoleBinding{})).To(Succeed())
 	g.Expect(cl.Get(ctx, client.ObjectKey{Namespace: "ai-tenant-team-del", Name: "user-extra-secret"}, &corev1.Secret{})).To(Succeed())
@@ -2052,14 +2056,14 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 	g.Expect(remainingNS.DeletionTimestamp.IsZero()).To(BeTrue())
 }
 
-func TestAITenantReconcile_DeletionWaitsForMaaSCRFinalizersBeforeDeletingTenantResources(t *testing.T) {
+func TestAITenantReconcile_DeletionAddsTenantFinalizerBeforeDelete(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "team-cleanup",
+			Name:      tenantreconcile.DefaultAITenantName,
 			Namespace: tenantreconcile.DefaultAITenantNamespace,
 			Annotations: map[string]string{
 				aitenantAPIKeysRevokedAnnotation: "true",
@@ -2067,60 +2071,34 @@ func TestAITenantReconcile_DeletionWaitsForMaaSCRFinalizersBeforeDeletingTenantR
 			Finalizers: []string{aitenantFinalizer},
 		},
 	}
-	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, "models-as-a-service")
 	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-			Namespace: tenantNamespace,
+			Namespace: "models-as-a-service",
 			Labels: map[string]string{
 				tenantreconcile.LabelManagedByAITenant: "true",
-				tenantreconcile.LabelTenantName:        aitenant.Name,
-				tenantreconcile.LabelTenantNamespace:   tenantNamespace,
+				tenantreconcile.LabelTenantName:        tenantreconcile.DefaultAITenantName,
+				tenantreconcile.LabelTenantNamespace:   "models-as-a-service",
 			},
 			Annotations: map[string]string{
-				aitenantNameAnnotation:      aitenant.Name,
-				aitenantNamespaceAnnotation: aitenant.Namespace,
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
 			},
 		},
 	}
 	ns := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: tenantNamespace,
+			Name: "models-as-a-service",
 			Annotations: map[string]string{
-				aitenantNameAnnotation:      aitenant.Name,
-				aitenantNamespaceAnnotation: aitenant.Namespace,
+				aitenantNameAnnotation:      tenantreconcile.DefaultAITenantName,
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
 			},
-		},
-	}
-	subscription := &maasv1alpha1.MaaSSubscription{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "subscription",
-			Namespace:  tenantNamespace,
-			Finalizers: []string{maasSubscriptionFinalizer},
-		},
-	}
-	policy := &maasv1alpha1.MaaSAuthPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:       "policy",
-			Namespace:  tenantNamespace,
-			Finalizers: []string{maasAuthPolicyFinalizer},
-		},
-	}
-	maasAPI := tenantTestUnstructured(
-		tenantreconcile.GVKDeployment,
-		"odh-ai-gateway-infra",
-		tenantreconcile.MaaSAPIDeploymentName(aitenant.Name),
-	)
-	userSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "user-preserved",
-			Namespace: tenantNamespace,
 		},
 	}
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, tenant, ns, subscription, policy, maasAPI, userSecret).
+		WithObjects(aitenant, tenant, ns).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -2138,35 +2116,13 @@ func TestAITenantReconcile_DeletionWaitsForMaaSCRFinalizersBeforeDeletingTenantR
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
 
-	var deletingSubscription maasv1alpha1.MaaSSubscription
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(subscription), &deletingSubscription)).To(Succeed())
-	g.Expect(deletingSubscription.DeletionTimestamp.IsZero()).To(BeFalse())
-	var deletingPolicy maasv1alpha1.MaaSAuthPolicy
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(policy), &deletingPolicy)).To(Succeed())
-	g.Expect(deletingPolicy.DeletionTimestamp.IsZero()).To(BeFalse())
-
-	var remainingTenant maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant)).To(Succeed())
-	g.Expect(remainingTenant.DeletionTimestamp.IsZero()).To(BeTrue())
-	g.Expect(remainingTenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(maasAPI), maasAPI)).To(Succeed())
-
-	deletingSubscription.Finalizers = nil
-	g.Expect(cl.Update(ctx, &deletingSubscription)).To(Succeed())
-	deletingPolicy.Finalizers = nil
-	g.Expect(cl.Update(ctx, &deletingPolicy)).To(Succeed())
-
-	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(maasAPI), maasAPI))).To(BeTrue())
-
-	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res).To(Equal(ctrl.Result{}))
-	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant))).To(BeTrue())
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: tenantNamespace}, &corev1.Namespace{})).To(Succeed())
-	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(userSecret), &corev1.Secret{})).To(Succeed())
+	var updatedTenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKey{
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+		Namespace: "models-as-a-service",
+	}, &updatedTenant)).To(Succeed())
+	g.Expect(updatedTenant.Finalizers).To(ContainElement(tenantFinalizer))
+	g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeTrue())
 }
 
 func TestAITenantReconcile_TerminatingNamespaceDoesNotBlockDeletion(t *testing.T) {

@@ -131,10 +131,6 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 				if doneErr != nil {
 					return doneErr
 				}
-				if finalNs != nil &&
-					(finalNs.Status.Phase == corev1.NamespaceActive || finalNs.Status.Phase == "") {
-					return ensureManagedNamespaceLabels(ctx, finalNs, namespace, purpose, clientset)
-				}
 				return nil
 			}
 		} else {
@@ -998,9 +994,8 @@ func main() {
 	}
 
 	// LifecycleReconciler creates Config/default when maas-controller is running, links the
-	// default tenant objects to Config, and coordinates annotation-driven self-teardown while
-	// keeping the controller Deployment independent from Config garbage collection.
-	// controllerNamespace is where maas-controller is deployed.
+	// Deployment and default-tenant to Config (non-controller owner refs), and strips the legacy
+	// cleanup finalizer if present. controllerNamespace is where maas-controller is deployed.
 	if err := (&maas.LifecycleReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),

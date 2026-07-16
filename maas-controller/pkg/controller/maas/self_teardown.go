@@ -19,9 +19,8 @@ import (
 
 // TeardownRequestedAnnotation on the maas-controller Deployment tells LifecycleReconciler
 // to start teardown: bootstrap/self-heal behaviors stay disabled, the default AITenant
-// and remaining MaaS CRs are deleted in order, the AITenant infrastructure namespace is
-// removed, then Config/default is deleted as a plain step, and finally
-// TeardownCompletedAnnotation is set once nothing is pending.
+// and the AITenant namespace are deleted in order, then Config/default is deleted as a
+// plain step, and finally TeardownCompletedAnnotation is set once nothing is pending.
 const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
 
 // TeardownCompletedAnnotation is set on the maas-controller Deployment by LifecycleReconciler
@@ -49,25 +48,14 @@ func TeardownRequestedOnDeployment(dep *appsv1.Deployment) bool {
 	return dep.GetAnnotations()[TeardownRequestedAnnotation] == "true"
 }
 
-var (
-	aitenantResourceTypesToRemove = []schema.GroupVersionKind{
-		{Group: maasv1alpha1.GroupVersion.Group, Version: maasv1alpha1.GroupVersion.Version, Kind: maasv1alpha1.AITenantKind},
-	}
-	finalizerBearingMaaSResourceTypesToRemove = []schema.GroupVersionKind{
-		{Group: maasv1alpha1.GroupVersion.Group, Version: maasv1alpha1.GroupVersion.Version, Kind: "MaaSSubscription"},
-		{Group: maasv1alpha1.GroupVersion.Group, Version: maasv1alpha1.GroupVersion.Version, Kind: "MaaSAuthPolicy"},
-		{Group: maasv1alpha1.GroupVersion.Group, Version: maasv1alpha1.GroupVersion.Version, Kind: "MaaSModelRef"},
-	}
-	tenantConfigResourceTypesToRemove = []schema.GroupVersionKind{
-		{Group: maasv1alpha1.GroupVersion.Group, Version: maasv1alpha1.GroupVersion.Version, Kind: maasv1alpha1.MaasTenantConfigKind},
-	}
-)
+var resourceTypesToRemove = []schema.GroupVersionKind{
+	{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
+}
 
 // handleRequestedTeardown runs on every reconcile while TeardownRequestedAnnotation is
-// present on the maas-controller Deployment. It deletes AITenants, remaining MaaS CRs,
-// and the AITenant infrastructure namespace, requeueing until nothing is pending; once
-// clean, it deletes Config/default and then marks TeardownCompletedAnnotation on the
-// Deployment.
+// present on the maas-controller Deployment. It deletes the default AITenant and the
+// AITenant namespace, requeueing until nothing is pending; once clean, it deletes
+// Config/default and then marks TeardownCompletedAnnotation on the Deployment.
 //
 // Config deletion is a plain, unguarded step (no finalizer): this reconciler is the only
 // actor that deletes Config while teardown is requested, so ordering is enforced here in
@@ -123,38 +111,8 @@ func (r *LifecycleReconciler) markTeardownCompleted(ctx context.Context, dep *ap
 }
 
 func (r *LifecycleReconciler) cleanupTeardownResources(ctx context.Context) (bool, error) {
-	// Preserve tenant namespaces during AITenant deletion, but do not declare
-	// component teardown complete while MaaS CRs remain inside those namespaces.
-	// Keep the same ordering as per-tenant cleanup: AITenants first, then CRs
-	// whose finalizers need the controller, and tenant configs last.
-	for _, resourceTypes := range [][]schema.GroupVersionKind{
-		aitenantResourceTypesToRemove,
-		finalizerBearingMaaSResourceTypesToRemove,
-		tenantConfigResourceTypesToRemove,
-	} {
-		resourcesPending, err := r.deleteTeardownResourceTypes(ctx, resourceTypes)
-		if err != nil {
-			return false, err
-		}
-		if resourcesPending {
-			return true, nil
-		}
-	}
-
-	namespacePending, err := r.ensureAITenantNamespaceDeleted(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	return namespacePending, nil
-}
-
-func (r *LifecycleReconciler) deleteTeardownResourceTypes(
-	ctx context.Context,
-	resourceTypes []schema.GroupVersionKind,
-) (bool, error) {
 	resourcesPending := false
-	for _, resourceGVK := range resourceTypes {
+	for _, resourceGVK := range resourceTypesToRemove {
 		items, err := listUnstructuredByGVK(ctx, r.Client, resourceGVK)
 		if err != nil {
 			return false, err
@@ -175,7 +133,16 @@ func (r *LifecycleReconciler) deleteTeardownResourceTypes(
 			}
 		}
 	}
-	return resourcesPending, nil
+	if resourcesPending {
+		return true, nil
+	}
+
+	namespacePending, err := r.ensureAITenantNamespaceDeleted(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return namespacePending, nil
 }
 
 func (r *LifecycleReconciler) ensureAITenantNamespaceDeleted(ctx context.Context) (bool, error) {

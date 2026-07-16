@@ -51,10 +51,9 @@ const (
 	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
 )
 
-// tenantUsesCleanupFinalizer reports whether an existing tenant-cleanup finalizer
-// belongs to an AITenant-managed config. New cleanup ownership lives on AITenant,
-// but upgraded managed configs may still carry this finalizer and must be allowed
-// to finish their legacy deletion path.
+// tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
+// The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
+// only AITenant-managed tenants need explicit per-tenant resource cleanup on delete.
 func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
@@ -122,21 +121,15 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.handleDeletion(ctx, log, &tenant)
 	}
 
-	parentTerminating, err := r.parentAITenantTerminating(ctx, &tenant)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	if parentTerminating {
-		log.V(1).Info("skipping tenant reconcile while parent AITenant is terminating",
-			"tenantNamespace", tenant.Namespace)
-		return ctrl.Result{}, nil
-	}
-
-	// Do not add a second cleanup owner to new MaasTenantConfig objects. AITenant
-	// coordinates child CR and platform cleanup before deleting this config.
-	if !usesCleanupFinalizer && controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		// Converge upgraded clusters that carried the finalizer on the legacy
-		// unowned default tenant config.
+	if usesCleanupFinalizer {
+		if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+			controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+			if err := r.Update(ctx, &tenant); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+	} else if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+		// Converge upgraded clusters: default-tenant teardown is owned by Config GC.
 		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
 		if err := r.Update(ctx, &tenant); err != nil {
 			return ctrl.Result{}, err
@@ -179,31 +172,6 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Set final status
 	return r.setFinalStatus(ctx, &tenant)
-}
-
-func (r *TenantReconciler) parentAITenantTerminating(
-	ctx context.Context,
-	tenant *maasv1alpha1.MaasTenantConfig,
-) (bool, error) {
-	if !tenantreconcile.TenantUsesAITenantPlatformContext(tenant) {
-		return false, nil
-	}
-	annotations := tenant.GetAnnotations()
-	aitenantName := annotations[tenantreconcile.AnnotationAITenantName]
-	aitenantNamespace := annotations[tenantreconcile.AnnotationAITenantNamespace]
-	if aitenantName == "" || aitenantNamespace == "" {
-		return false, nil
-	}
-
-	var aitenant maasv1alpha1.AITenant
-	if err := r.Get(ctx, client.ObjectKey{Name: aitenantName, Namespace: aitenantNamespace}, &aitenant); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
-		}
-		return false, fmt.Errorf("get parent AITenant %s/%s before tenant reconcile: %w",
-			aitenantNamespace, aitenantName, err)
-	}
-	return !aitenant.DeletionTimestamp.IsZero(), nil
 }
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
