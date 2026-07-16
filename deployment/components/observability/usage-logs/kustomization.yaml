@@ -7,3 +7,5 @@ resources:
   - tenancy-proxy-code.yaml
   - tenancy-proxy-rbac.yaml
   - tenancy-proxy.yaml
+  - usage-logs-admin-dashboard.yaml
+  - usage-logs-dashboard.yaml
