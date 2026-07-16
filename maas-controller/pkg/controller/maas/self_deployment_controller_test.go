@@ -85,6 +85,7 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).To(Succeed())
 	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
+	g.Expect(cfg.Finalizers).To(ContainElement(configCleanupFinalizer))
 }
 
 func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
@@ -129,6 +130,156 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 	})
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+
+	var updatedDep appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(dep), &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.Annotations).To(HaveKeyWithValue(configTeardownObservedAnnotation, "true"))
+}
+
+func TestLifecycleReconciler_ConfigDeletionWaitsForAITenantCleanup(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+	ctx := context.Background()
+
+	const (
+		depNS = "opendatahub"
+		appNS = "odh-ai-gateway-infra"
+	)
+	now := metav1.NewTime(time.Now())
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.ConfigInstanceName,
+			UID:               types.UID("cfg-teardown"),
+			DeletionTimestamp: &now,
+			Finalizers:        []string{configCleanupFinalizer},
+		},
+	}
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tenantreconcile.MaaSControllerDeploymentName,
+			Namespace: depNS,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       cfg.Name,
+					UID:        cfg.UID,
+				},
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-cleanup",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+	}
+	unprovisionedAITenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-never-provisioned",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	modelRef := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "model-cleanup",
+			Namespace:  "model-namespace",
+			Finalizers: []string{maasModelFinalizer},
+		},
+	}
+	tenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-team-cleanup",
+		},
+	}
+	maasAPI := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      tenantreconcile.MaaSAPIDeploymentName("team-cleanup"),
+			Namespace: appNS,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       cfg.Name,
+					UID:        cfg.UID,
+					Controller: ptr.To(true),
+				},
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(
+		dep,
+		cfg,
+		aitenant,
+		unprovisionedAITenant,
+		modelRef,
+		tenantConfig,
+		maasAPI,
+	).Build()
+	r := &LifecycleReconciler{
+		Client:            cl,
+		Scheme:            s,
+		DeploymentName:    dep.Name,
+		DeploymentNS:      dep.Namespace,
+		AITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+	}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(dep)}
+
+	res, err := r.Reconcile(ctx, req)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(configTeardownRequeueAfter))
+
+	var deletingAITenant maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(aitenant), &deletingAITenant)).To(Succeed())
+	g.Expect(deletingAITenant.DeletionTimestamp.IsZero()).To(BeFalse())
+	g.Expect(deletingAITenant.Finalizers).To(ContainElement(aitenantFinalizer))
+	g.Expect(apierrors.IsNotFound(cl.Get(
+		ctx,
+		client.ObjectKeyFromObject(unprovisionedAITenant),
+		&maasv1alpha1.AITenant{},
+	))).To(BeTrue(), "an AITenant without the provisioning finalizer should delete directly")
+	var deletingModelRef maasv1alpha1.MaaSModelRef
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(modelRef), &deletingModelRef)).To(Succeed())
+	g.Expect(deletingModelRef.DeletionTimestamp.IsZero()).To(BeFalse())
+	g.Expect(deletingModelRef.Finalizers).To(ContainElement(maasModelFinalizer))
+
+	var heldConfig maasv1alpha1.Config
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(cfg), &heldConfig)).To(Succeed())
+	g.Expect(heldConfig.Finalizers).To(ContainElement(configCleanupFinalizer))
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(maasAPI), &appsv1.Deployment{})).To(Succeed())
+
+	deletingAITenant.Finalizers = nil
+	g.Expect(cl.Update(ctx, &deletingAITenant)).To(Succeed())
+	deletingModelRef.Finalizers = nil
+	g.Expect(cl.Update(ctx, &deletingModelRef)).To(Succeed())
+
+	res, err = r.Reconcile(ctx, req)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(configTeardownRequeueAfter))
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(tenantConfig), &maasv1alpha1.MaasTenantConfig{}))).To(BeTrue())
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(cfg), &heldConfig)).To(Succeed())
+	g.Expect(heldConfig.Finalizers).To(ContainElement(configCleanupFinalizer))
+
+	res, err = r.Reconcile(ctx, req)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(cfg), &maasv1alpha1.Config{}))).To(BeTrue())
+
+	// The fake client does not run garbage collection, so the Deployment remains
+	// long enough to verify that a stale Config owner reference also prevents
+	// recreation if an external reconciler removes the teardown annotation.
+	var survivingDep appsv1.Deployment
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(dep), &survivingDep)).To(Succeed())
+	delete(survivingDep.Annotations, configTeardownObservedAnnotation)
+	g.Expect(cl.Update(ctx, &survivingDep)).To(Succeed())
+
+	res, err = r.Reconcile(ctx, req)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+	g.Expect(apierrors.IsNotFound(cl.Get(ctx, client.ObjectKeyFromObject(cfg), &maasv1alpha1.Config{}))).To(BeTrue())
 }
 
 func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {

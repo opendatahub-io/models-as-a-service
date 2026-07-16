@@ -943,8 +943,9 @@ func main() {
 	}
 
 	// LifecycleReconciler creates Config/default when maas-controller is running, links the
-	// Deployment and default-tenant to Config (non-controller owner refs), and strips the legacy
-	// cleanup finalizer if present. controllerNamespace is where maas-controller is deployed.
+	// Deployment and default tenant objects to Config, and coordinates Config teardown so
+	// AITenant cleanup finishes before shared MaaS services are garbage-collected.
+	// controllerNamespace is where maas-controller is deployed.
 	if err := (&maas.LifecycleReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),

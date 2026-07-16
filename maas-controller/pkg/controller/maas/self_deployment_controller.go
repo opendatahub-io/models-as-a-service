@@ -52,6 +52,14 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
+const (
+	configCleanupFinalizer               = "maas.opendatahub.io/config-cleanup"
+	configTeardownObservedAnnotation     = "maas.opendatahub.io/config-teardown-observed"
+	configTeardownRequeueAfter           = 5 * time.Second
+	configNotReadyRequeueAfter           = 2 * time.Second
+	configAlreadyTerminatingRequeueAfter = 10 * time.Second
+)
+
 // envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
 const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
 
@@ -62,7 +70,9 @@ const envoyFilterName = "maas-model-access-logs"
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
 // It links the Deployment, default AITenant, and default MaasTenantConfig to Config via non-controller
-// ownerReferences (same relationship shape for all). Legacy CleanupFinalizer entries are removed when present.
+// ownerReferences (same relationship shape for all). During Config deletion it keeps the Config anchor
+// alive until AITenant and MaaS CR cleanup finishes, so controller-owned services remain available.
+// Legacy CleanupFinalizer entries are removed when present.
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
@@ -78,9 +88,11 @@ type LifecycleReconciler struct {
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
-//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch;create;update;patch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch;delete
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies;maasmodelrefs;maassubscriptions,verbs=get;list;watch;delete
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 
@@ -93,6 +105,11 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if dep.DeletionTimestamp.IsZero() {
+		if handled, res, err := r.reconcileConfigTeardown(ctx, log, &dep); err != nil {
+			return ctrl.Result{}, err
+		} else if handled {
+			return res, nil
+		}
 		if res, err := r.ensureSingletonConfig(ctx, &dep); err != nil {
 			return ctrl.Result{}, err
 		} else if res != nil {
@@ -127,6 +144,179 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
+}
+
+func (r *LifecycleReconciler) reconcileConfigTeardown(
+	ctx context.Context,
+	log logr.Logger,
+	dep *appsv1.Deployment,
+) (bool, ctrl.Result, error) {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			if dep.GetAnnotations()[configTeardownObservedAnnotation] == "true" || deploymentReferencesConfig(dep) {
+				// Config deletion is intentional and has completed. Do not race garbage
+				// collection by recreating the anchor from its still-running dependent.
+				return true, ctrl.Result{}, nil
+			}
+			return false, ctrl.Result{}, nil
+		}
+		return true, ctrl.Result{}, err
+	}
+	if cfg.DeletionTimestamp.IsZero() {
+		return false, ctrl.Result{}, nil
+	}
+
+	if err := r.markConfigTeardownObserved(ctx, dep); err != nil {
+		return true, ctrl.Result{}, err
+	}
+	if !controllerutil.ContainsFinalizer(&cfg, configCleanupFinalizer) {
+		// Finalizers cannot be added after deletion starts. This is possible only
+		// during an upgrade window; avoid recreating Config after it disappears.
+		log.Info("Config is terminating without the coordinated cleanup finalizer")
+		return true, ctrl.Result{RequeueAfter: configAlreadyTerminatingRequeueAfter}, nil
+	}
+	res, err := r.reconcileConfigDeletion(ctx, log, &cfg)
+	return true, res, err
+}
+
+func (r *LifecycleReconciler) markConfigTeardownObserved(ctx context.Context, dep *appsv1.Deployment) error {
+	if dep.GetAnnotations()[configTeardownObservedAnnotation] == "true" {
+		return nil
+	}
+	base := dep.DeepCopy()
+	annotations := dep.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[configTeardownObservedAnnotation] = "true"
+	dep.SetAnnotations(annotations)
+	if err := r.Patch(ctx, dep, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("mark Config teardown on maas-controller Deployment: %w", err)
+	}
+	return nil
+}
+
+func (r *LifecycleReconciler) reconcileConfigDeletion(
+	ctx context.Context,
+	log logr.Logger,
+	cfg *maasv1alpha1.Config,
+) (ctrl.Result, error) {
+	var aitenants maasv1alpha1.AITenantList
+	listOptions := []client.ListOption{}
+	if r.AITenantNamespace != "" {
+		listOptions = append(listOptions, client.InNamespace(r.AITenantNamespace))
+	}
+	if err := r.List(ctx, &aitenants, listOptions...); err != nil {
+		return ctrl.Result{}, fmt.Errorf("list AITenants during Config teardown: %w", err)
+	}
+
+	for i := range aitenants.Items {
+		aitenant := &aitenants.Items[i]
+		if aitenant.DeletionTimestamp.IsZero() {
+			if err := r.Delete(ctx, aitenant); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("delete AITenant %s/%s during Config teardown: %w",
+					aitenant.Namespace, aitenant.Name, err)
+			}
+			log.Info("requested AITenant deletion before Config teardown",
+				"namespace", aitenant.Namespace,
+				"name", aitenant.Name)
+		}
+	}
+
+	maasCRsDeleted, err := r.cleanupFinalizerBearingMaaSCRs(ctx, log)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if len(aitenants.Items) > 0 || !maasCRsDeleted {
+		return ctrl.Result{RequeueAfter: configTeardownRequeueAfter}, nil
+	}
+
+	tenantConfigsDeleted, err := r.cleanupRemainingTenantConfigs(ctx, log)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !tenantConfigsDeleted {
+		return ctrl.Result{RequeueAfter: configTeardownRequeueAfter}, nil
+	}
+
+	base := cfg.DeepCopy()
+	controllerutil.RemoveFinalizer(cfg, configCleanupFinalizer)
+	if err := r.Patch(ctx, cfg, client.MergeFrom(base)); err != nil && !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("remove coordinated cleanup finalizer from Config/default: %w", err)
+	}
+	log.Info("all MaaS cleanup finished; released Config/default")
+	return ctrl.Result{}, nil
+}
+
+func deploymentReferencesConfig(dep *appsv1.Deployment) bool {
+	for _, ref := range dep.GetOwnerReferences() {
+		if ref.APIVersion == maasv1alpha1.GroupVersion.String() &&
+			ref.Kind == maasv1alpha1.ConfigKind &&
+			ref.Name == maasv1alpha1.ConfigInstanceName {
+			return true
+		}
+	}
+	return false
+}
+
+func (r *LifecycleReconciler) cleanupFinalizerBearingMaaSCRs(ctx context.Context, log logr.Logger) (bool, error) {
+	resources := []struct {
+		kind string
+		list client.ObjectList
+	}{
+		{kind: "MaaSSubscription", list: &maasv1alpha1.MaaSSubscriptionList{}},
+		{kind: "MaaSAuthPolicy", list: &maasv1alpha1.MaaSAuthPolicyList{}},
+		{kind: "MaaSModelRef", list: &maasv1alpha1.MaaSModelRefList{}},
+	}
+
+	pending := 0
+	for _, resource := range resources {
+		count, err := r.deleteAllListed(ctx, log, resource.kind, resource.list)
+		if err != nil {
+			return false, err
+		}
+		pending += count
+	}
+	return pending == 0, nil
+}
+
+func (r *LifecycleReconciler) cleanupRemainingTenantConfigs(ctx context.Context, log logr.Logger) (bool, error) {
+	count, err := r.deleteAllListed(ctx, log, maasv1alpha1.MaasTenantConfigKind, &maasv1alpha1.MaasTenantConfigList{})
+	if err != nil {
+		return false, err
+	}
+	return count == 0, nil
+}
+
+func (r *LifecycleReconciler) deleteAllListed(
+	ctx context.Context,
+	log logr.Logger,
+	kind string,
+	list client.ObjectList,
+) (int, error) {
+	if err := r.List(ctx, list); err != nil {
+		return 0, fmt.Errorf("list %s resources during Config teardown: %w", kind, err)
+	}
+	objects, err := apimeta.ExtractList(list)
+	if err != nil {
+		return 0, fmt.Errorf("extract %s resources during Config teardown: %w", kind, err)
+	}
+	for _, object := range objects {
+		resource, ok := object.(client.Object)
+		if !ok {
+			return 0, fmt.Errorf("listed %s object %T does not implement client.Object", kind, object)
+		}
+		if err := r.Delete(ctx, resource); err != nil && !apierrors.IsNotFound(err) {
+			return 0, fmt.Errorf("delete %s %s/%s during Config teardown: %w",
+				kind, resource.GetNamespace(), resource.GetName(), err)
+		}
+		log.Info("requested MaaS resource deletion before Config teardown",
+			"kind", kind,
+			"namespace", resource.GetNamespace(),
+			"name", resource.GetName())
+	}
+	return len(objects), nil
 }
 
 // ensureDefaultAITenantReferencesConfig links the automatically bootstrapped
@@ -212,10 +402,17 @@ func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *ap
 	switch err := r.Get(ctx, key, &cfg); {
 	case err == nil:
 		if !cfg.DeletionTimestamp.IsZero() {
-			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: configAlreadyTerminatingRequeueAfter}, nil
+		}
+		if !controllerutil.ContainsFinalizer(&cfg, configCleanupFinalizer) {
+			base := cfg.DeepCopy()
+			controllerutil.AddFinalizer(&cfg, configCleanupFinalizer)
+			if err := r.Patch(ctx, &cfg, client.MergeFrom(base)); err != nil {
+				return nil, fmt.Errorf("add coordinated cleanup finalizer to Config/default: %w", err)
+			}
 		}
 		if cfg.UID == "" {
-			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: configNotReadyRequeueAfter}, nil
 		}
 		return nil, nil
 	case apierrors.IsNotFound(err):
@@ -224,19 +421,22 @@ func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *ap
 				APIVersion: maasv1alpha1.GroupVersion.String(),
 				Kind:       maasv1alpha1.ConfigKind,
 			},
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:       maasv1alpha1.ConfigInstanceName,
+				Finalizers: []string{configCleanupFinalizer},
+			},
 		}
 		if err := r.Create(ctx, toCreate); err != nil && !apierrors.IsAlreadyExists(err) {
 			return nil, err
 		}
 		if err := r.Get(ctx, key, &cfg); err != nil {
 			if apierrors.IsNotFound(err) {
-				return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+				return &ctrl.Result{RequeueAfter: configNotReadyRequeueAfter}, nil
 			}
 			return nil, err
 		}
 		if cfg.UID == "" {
-			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			return &ctrl.Result{RequeueAfter: configNotReadyRequeueAfter}, nil
 		}
 		return nil, nil
 	default:
@@ -635,7 +835,8 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }
 
-// SetupWithManager registers the controller to watch only the maas-controller Deployment.
+// SetupWithManager registers the controller for the maas-controller Deployment and
+// lifecycle objects that can advance its reconciliation.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
@@ -649,11 +850,11 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.MaasTenantConfigInstanceName
 	})
-	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
+	aitenantInManagedNamespace := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		if r.AITenantNamespace == "" {
-			return false
+			return true
 		}
-		return o.GetNamespace() == r.AITenantNamespace && o.GetName() == tenantreconcile.DefaultAITenantName
+		return o.GetNamespace() == r.AITenantNamespace
 	})
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
@@ -685,7 +886,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      r.DeploymentName,
 				}}}
 			}),
-			builder.WithPredicates(defaultAITenant),
+			builder.WithPredicates(aitenantInManagedNamespace),
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.

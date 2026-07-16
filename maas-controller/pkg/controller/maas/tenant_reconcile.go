@@ -51,9 +51,10 @@ const (
 	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
 )
 
-// tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
-// The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
-// only AITenant-managed tenants need explicit per-tenant resource cleanup on delete.
+// tenantUsesCleanupFinalizer reports whether an existing tenant-cleanup finalizer
+// belongs to an AITenant-managed config. New cleanup ownership lives on AITenant,
+// but upgraded managed configs may still carry this finalizer and must be allowed
+// to finish their legacy deletion path.
 func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
 	if err != nil {
@@ -121,18 +122,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.handleDeletion(ctx, log, &tenant)
 	}
 
-	// Unblocking UI / Config GC teardown
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if usesCleanupFinalizer {
-	// 	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-	// 		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-	// 		if err := r.Update(ctx, &tenant); err != nil {
-	// 			return ctrl.Result{}, err
-	// 		}
-	// 	}
-	// } else if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+	// Do not add a second cleanup owner to new MaasTenantConfig objects. AITenant
+	// coordinates child CR and platform cleanup before deleting this config.
 	if !usesCleanupFinalizer && controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		// Converge upgraded clusters: default-tenant teardown is owned by Config GC.
+		// Converge upgraded clusters that carried the finalizer on the legacy
+		// unowned default tenant config.
 		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
 		if err := r.Update(ctx, &tenant); err != nil {
 			return ctrl.Result{}, err

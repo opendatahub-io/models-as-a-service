@@ -58,6 +58,7 @@ CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"
 CONFIG_KIND = "Config"
 CONFIG_API_PREFIX = "maas.opendatahub.io/"
+CONFIG_CLEANUP_FINALIZER = "maas.opendatahub.io/config-cleanup"
 
 TENANT_NAME = "default-tenant"
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
@@ -153,6 +154,14 @@ class TestConfigAnchorPresence:
         assert not doc.get("metadata", {}).get(
             "deletionTimestamp"
         ), "Config anchor is deleting; platform GC may be in progress."
+
+    def test_cluster_config_has_cleanup_finalizer(self):
+        doc = _config_doc()
+        finalizers = doc.get("metadata", {}).get("finalizers") or []
+        assert CONFIG_CLEANUP_FINALIZER in finalizers, (
+            "Config/default must hold shared MaaS services until AITenant and "
+            "other MaaS cleanup finalizers finish."
+        )
 
 
 class TestConfigTenantOwnership:

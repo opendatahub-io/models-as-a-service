@@ -97,6 +97,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies;maassubscriptions,verbs=get;list;watch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch
@@ -529,6 +530,14 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
+	tenantResourcesDeleted, err := r.cleanupTenantManagedResources(ctx, aitenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if !tenantResourcesDeleted {
+		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+
 	tenantDeleted, err := r.deleteTenantConfig(ctx, aitenant)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -569,6 +578,57 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	return ctrl.Result{}, nil
 }
 
+// cleanupTenantManagedResources removes MaaS CRs and per-tenant platform resources
+// while MaasTenantConfig and maas-api are still available. This keeps the complete
+// teardown sequence under the AITenant finalizer instead of relying on a nested
+// MaasTenantConfig finalizer.
+func (r *AITenantReconciler) cleanupTenantManagedResources(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	key := client.ObjectKey{
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+		Namespace: tenantNamespace,
+	}
+	// Use AITenant-derived identity even if the tenant config has already disappeared
+	// or its tracking labels are incomplete. Cleanup names must remain deterministic.
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      key.Name,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        aitenant.Name,
+				tenantreconcile.LabelTenantNamespace:   tenantNamespace,
+			},
+		},
+	}
+
+	cleanup := &TenantReconciler{
+		Client:           r.Client,
+		Scheme:           r.Scheme,
+		AppNamespace:     r.AppNamespace,
+		TenantNamespace:  r.TenantNamespace,
+		GatewayName:      r.GatewayName,
+		GatewayNamespace: r.GatewayNamespace,
+	}
+	log := ctrl.LoggerFrom(ctx).WithValues("aitenant", client.ObjectKeyFromObject(aitenant))
+
+	subscriptionsDeleted, err := cleanup.cleanupMaaSSubscriptions(ctx, log, tenant)
+	if err != nil {
+		return false, err
+	}
+	authPoliciesDeleted, err := cleanup.cleanupMaaSAuthPolicies(ctx, log, tenant)
+	if err != nil {
+		return false, err
+	}
+	if !subscriptionsDeleted || !authPoliciesDeleted {
+		return false, nil
+	}
+	if err := cleanup.cleanupTenantResources(ctx, log, tenant); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 
@@ -586,16 +646,6 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 	if !tenant.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	// Unblocking UI / Config GC teardown
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-	// 	base := tenant.DeepCopy()
-	// 	controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-	// 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-	// 		return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
-	// 	}
-	// 	return false, nil
-	// }
 	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("delete MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
 	}
