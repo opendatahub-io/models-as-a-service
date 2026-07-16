@@ -586,14 +586,16 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 	if !tenant.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-		base := tenant.DeepCopy()
-		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-		if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-			return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
-		}
-		return false, nil
-	}
+	// Unblocking UI / Config GC teardown
+	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+	// if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+	// 	base := tenant.DeepCopy()
+	// 	controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+	// 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+	// 		return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
+	// 	}
+	// 	return false, nil
+	// }
 	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("delete MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
 	}

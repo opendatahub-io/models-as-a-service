@@ -18,10 +18,12 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -133,7 +135,29 @@ type TenantReconciler struct {
 // Reconcile drives the MaasTenantConfig platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the MaasTenantConfig CR (no standalone ModelsAsService instance CR exists).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return r.reconcile(ctx, req)
+	result, err := r.reconcile(ctx, req)
+	if apierrors.IsConflict(err) && isMaasTenantConfigConflict(err, req) {
+		// Stale-cache conflict on the MaasTenantConfig itself: the in-memory object's
+		// UID/ResourceVersion diverged from etcd (e.g. deleted and recreated between
+		// Get and Status.Update). Requeue without surfacing an error so controller-runtime
+		// doesn't log "Reconciler error" or apply exponential back-off; the next reconcile
+		// will re-read a fresh copy. Conflicts on child resources are propagated unchanged.
+		ctrl.LoggerFrom(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return result, err
+}
+
+// isMaasTenantConfigConflict returns true when the conflict error originates from
+// the MaasTenantConfig being reconciled (identified by object name in the Status
+// details), as opposed to a conflict on a child resource managed by the reconciler.
+func isMaasTenantConfigConflict(err error, req ctrl.Request) bool {
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	details := statusErr.ErrStatus.Details
+	return details != nil && details.Name == req.Name
 }
 
 const openshiftAuthenticationClusterName = "cluster"

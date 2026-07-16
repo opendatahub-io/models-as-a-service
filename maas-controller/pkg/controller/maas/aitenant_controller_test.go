@@ -2027,9 +2027,18 @@ func TestAITenantReconcile_DeletionAddsTenantFinalizerBeforeDelete(t *testing.T)
 	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
 
 	var updatedTenant maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "models-as-a-service"}, &updatedTenant)).To(Succeed())
-	g.Expect(updatedTenant.Finalizers).To(ContainElement(tenantFinalizer))
-	g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeTrue())
+	err = cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "models-as-a-service"}, &updatedTenant)
+	// Unblocking UI / Config GC teardown
+	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+	// g.Expect(updatedTenant.Finalizers).To(ContainElement(tenantFinalizer))
+	// g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeTrue())
+	// Without tenant-cleanup, Delete proceeds immediately (object may already be gone in the fake client).
+	if err == nil {
+		g.Expect(updatedTenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
+		g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeFalse(), "MaasTenantConfig delete is requested without adding tenant-cleanup")
+	} else {
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	}
 }
 
 func TestAITenantReconcile_TerminatingNamespaceDoesNotBlockDeletion(t *testing.T) {

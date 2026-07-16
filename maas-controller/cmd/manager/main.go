@@ -73,7 +73,7 @@ func init() {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 }
 
-//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -135,7 +135,7 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 		} else {
 			setupLog.Info("managed namespace already exists",
 				"namespace", namespace, "purpose", purpose, "phase", ns.Status.Phase)
-			return nil
+			return ensureManagedNamespaceLabels(ctx, ns, namespace, purpose, clientset)
 		}
 	}
 
@@ -155,14 +155,14 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 		Duration: 1 * time.Second,
 		Factor:   2.0,
 	}, func(ctx context.Context) (bool, error) {
+		labels := make(map[string]string, len(managedNamespaceLabels))
+		for k, v := range managedNamespaceLabels {
+			labels[k] = v
+		}
 		ns := &corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{
-				Name: namespace,
-				Labels: map[string]string{
-					"opendatahub.io/generated-namespace": "true",
-					"app.kubernetes.io/managed-by":       "maas-controller",
-					"app.kubernetes.io/part-of":          "maas-controller",
-				},
+				Name:   namespace,
+				Labels: labels,
 			},
 		}
 
@@ -181,6 +181,9 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 				return false, nil
 			}
 			if existingNs.Status.Phase == corev1.NamespaceActive || existingNs.Status.Phase == "" {
+				if labelErr := ensureManagedNamespaceLabels(ctx, existingNs, namespace, purpose, clientset); labelErr != nil {
+					return false, labelErr
+				}
 				setupLog.Info("managed namespace ready", "namespace", namespace, "purpose", purpose)
 				return true, nil
 			}
@@ -196,6 +199,34 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 		setupLog.Info("retrying namespace creation", "namespace", namespace, "purpose", purpose, "error", err)
 		return false, nil // transient error, retry
 	})
+}
+
+var managedNamespaceLabels = map[string]string{
+	"opendatahub.io/generated-namespace": "true",
+	"app.kubernetes.io/managed-by":       "maas-controller",
+	"app.kubernetes.io/part-of":          "maas-controller",
+}
+
+const networkPolicyRequiredLabel = "opendatahub.io/generated-namespace"
+
+// ensureManagedNamespaceLabels ensures the opendatahub.io/generated-namespace
+// label is present on an existing namespace. This handles the upgrade path
+// where the namespace is pre-created by the operator without the label that
+// the DSCI NetworkPolicy requires for ingress. Only the NetworkPolicy-required
+// label is patched; ownership labels (managed-by, part-of) are left as-is
+// since the namespace may be legitimately managed by another component.
+func ensureManagedNamespaceLabels(ctx context.Context, ns *corev1.Namespace, namespace, purpose string, clientset kubernetes.Interface) error {
+	if ns.Labels != nil && ns.Labels[networkPolicyRequiredLabel] == "true" {
+		return nil
+	}
+	patchData := []byte(`{"metadata":{"labels":{"` + networkPolicyRequiredLabel + `":"true"}}}`)
+	_, err := clientset.CoreV1().Namespaces().Patch(ctx, namespace, types.MergePatchType, patchData, metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to patch %s label on existing namespace %q: %w", networkPolicyRequiredLabel, namespace, err)
+	}
+	setupLog.Info("added NetworkPolicy-required label to existing managed namespace",
+		"namespace", namespace, "purpose", purpose)
+	return nil
 }
 
 func subscriptionNamespaceExists(ctx context.Context, namespace string, clientset kubernetes.Interface) (bool, error) {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -368,5 +369,86 @@ func TestEnsureDefaultAITenantBootstrapDoesNotRecreateAfterBootstrapMarker(t *te
 		Namespace: tenantreconcile.DefaultAITenantNamespace,
 	}, &maasv1alpha1.AITenant{}); err == nil {
 		t.Fatalf("default AITenant was recreated after bootstrap marker")
+	}
+}
+
+func TestEnsureManagedNamespaceAddsNetworkPolicyLabelWithoutOverwritingOwnership(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/part-of":    "ai-gateway",
+				"app.kubernetes.io/managed-by": "ai-gateway-operator",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated-namespace label = %q, want true", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
+		t.Fatalf("managed-by label was overwritten to %q, want ai-gateway-operator preserved", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/part-of"]; got != "ai-gateway" {
+		t.Fatalf("part-of label was overwritten to %q, want ai-gateway preserved", got)
+	}
+}
+
+func TestEnsureManagedNamespaceNoUpdateWhenNetworkPolicyLabelPresent(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+			Labels: map[string]string{
+				"opendatahub.io/generated-namespace": "true",
+				"app.kubernetes.io/managed-by":       "ai-gateway-operator",
+				"app.kubernetes.io/part-of":          "ai-gateway",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
+		t.Fatalf("managed-by label changed to %q, want ai-gateway-operator unchanged", got)
+	}
+}
+
+func TestEnsureManagedNamespacePatchesNilLabels(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated-namespace label = %q, want true", got)
+	}
+	if _, exists := ns.Labels["app.kubernetes.io/managed-by"]; exists {
+		t.Fatalf("managed-by label was added to namespace not created by maas-controller")
 	}
 }

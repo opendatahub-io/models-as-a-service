@@ -1237,43 +1237,19 @@ class TestAPIKeySubscriptionPhases:
         subscription_name = "e2e-apikey-failed-sub"
         auth_name = "e2e-apikey-failed-auth"
         sa_name = "e2e-apikey-failed-sa"
+        nonexistent_model = "nonexistent-model-apikey-failed"
 
         try:
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_reconcile(seconds=10)
-
-            # Patch to Failed phase
-            patch_data = {
-                "status": {
-                    "phase": "Failed",
-                    "conditions": [{
-                        "type": "Ready",
-                        "status": "False",
-                        "reason": "Failed",
-                        "message": "Test scenario",
-                        "lastTransitionTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                    }],
-                    "modelRefStatuses": [{
-                        "name": MODEL_REF,
-                        "namespace": MODEL_NAMESPACE,
-                        "ready": False,
-                        "reason": "ReconcileFailed",
-                        "message": "Test failure"
-                    }]
-                }
-            }
-
-            cmd = [
-                "kubectl", "patch", "maassubscription", subscription_name,
-                "-n", ns, "--type=merge", "--subresource=status",
-                "-p", json.dumps(patch_data)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            assert result.returncode == 0, f"Failed to patch: {result.stderr}"
+            # Reference only a nonexistent model so the controller naturally
+            # computes Failed (all model refs invalid in deriveFinalPhase).
+            _create_test_subscription(subscription_name, nonexistent_model, users=[sa_user])
+            _wait_for_maas_subscription_phase(
+                subscription_name, expected_phase="Failed", namespace=ns
+            )
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase")
@@ -1308,9 +1284,14 @@ class TestAPIKeySubscriptionPhases:
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_reconcile(seconds=10)
+            _wait_for_maas_subscription_phase(subscription_name, namespace=ns)
 
-            # Patch to Pending phase
+            # The controller never naturally produces Pending for
+            # subscriptions (deriveFinalPhase returns Active/Degraded/Failed),
+            # so a status patch is still necessary.  Scale the controller down
+            # first to eliminate the race that caused flakiness.
+            _scale_controller_down()
+
             patch_data = {
                 "status": {
                     "phase": "Pending",
@@ -1350,6 +1331,10 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            try:
+                _scale_controller_up()
+            except Exception:
+                log.exception("Best-effort controller scale-up failed")
             _wait_reconcile()
 
     def test_reject_key_for_unreconciled_subscription(self):
