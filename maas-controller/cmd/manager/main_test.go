@@ -12,6 +12,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	k8stesting "k8s.io/client-go/testing"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -400,6 +401,50 @@ func TestEnsureManagedNamespaceAddsNetworkPolicyLabelWithoutOverwritingOwnership
 	}
 	if got := ns.Labels["app.kubernetes.io/part-of"]; got != "ai-gateway" {
 		t.Fatalf("part-of label was overwritten to %q, want ai-gateway preserved", got)
+	}
+}
+
+func TestEnsureManagedNamespaceLabelsExternallyRecreatedNamespaceDuringTerminationWait(t *testing.T) {
+	const namespace = "test-infra-ns"
+	terminating := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: namespace},
+		Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceTerminating},
+	}
+	clientset := clientsetfake.NewSimpleClientset(terminating)
+	getCalls := 0
+	clientset.PrependReactor("get", "namespaces", func(_ k8stesting.Action) (bool, runtime.Object, error) {
+		getCalls++
+		if getCalls != 2 {
+			return false, nil, nil
+		}
+		recreated := &corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: namespace,
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by": "external-operator",
+				},
+			},
+			Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		}
+		if err := clientset.Tracker().Update(corev1.SchemeGroupVersion.WithResource("namespaces"), recreated, ""); err != nil {
+			return true, nil, err
+		}
+		return true, recreated, nil
+	})
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), namespace, "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get recreated namespace: %v", err)
+	}
+	if got := ns.Labels[networkPolicyRequiredLabel]; got != "true" {
+		t.Fatalf("%s label = %q, want true", networkPolicyRequiredLabel, got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "external-operator" {
+		t.Fatalf("managed-by label was overwritten to %q, want external-operator preserved", got)
 	}
 }
 

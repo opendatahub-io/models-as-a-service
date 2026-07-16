@@ -122,6 +122,16 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.handleDeletion(ctx, log, &tenant)
 	}
 
+	parentTerminating, err := r.parentAITenantTerminating(ctx, &tenant)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	if parentTerminating {
+		log.V(1).Info("skipping tenant reconcile while parent AITenant is terminating",
+			"tenantNamespace", tenant.Namespace)
+		return ctrl.Result{}, nil
+	}
+
 	// Do not add a second cleanup owner to new MaasTenantConfig objects. AITenant
 	// coordinates child CR and platform cleanup before deleting this config.
 	if !usesCleanupFinalizer && controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
@@ -166,6 +176,31 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Set final status
 	return r.setFinalStatus(ctx, &tenant)
+}
+
+func (r *TenantReconciler) parentAITenantTerminating(
+	ctx context.Context,
+	tenant *maasv1alpha1.MaasTenantConfig,
+) (bool, error) {
+	if !tenantreconcile.TenantUsesAITenantPlatformContext(tenant) {
+		return false, nil
+	}
+	annotations := tenant.GetAnnotations()
+	aitenantName := annotations[tenantreconcile.AnnotationAITenantName]
+	aitenantNamespace := annotations[tenantreconcile.AnnotationAITenantNamespace]
+	if aitenantName == "" || aitenantNamespace == "" {
+		return false, nil
+	}
+
+	var aitenant maasv1alpha1.AITenant
+	if err := r.Get(ctx, client.ObjectKey{Name: aitenantName, Namespace: aitenantNamespace}, &aitenant); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get parent AITenant %s/%s before tenant reconcile: %w",
+			aitenantNamespace, aitenantName, err)
+	}
+	return !aitenant.DeletionTimestamp.IsZero(), nil
 }
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {

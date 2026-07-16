@@ -81,6 +81,7 @@ type TenantReconciler struct {
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
@@ -172,6 +173,9 @@ func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Obje
 func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj client.Object) []reconcile.Request {
 	aitenant, ok := obj.(*maasv1alpha1.AITenant)
 	if !ok {
+		return nil
+	}
+	if !aitenant.DeletionTimestamp.IsZero() {
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{

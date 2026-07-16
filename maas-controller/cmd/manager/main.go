@@ -130,6 +130,10 @@ func ensureManagedNamespaceWithClient(ctx context.Context, namespace, purpose st
 				if doneErr != nil {
 					return doneErr
 				}
+				if finalNs != nil &&
+					(finalNs.Status.Phase == corev1.NamespaceActive || finalNs.Status.Phase == "") {
+					return ensureManagedNamespaceLabels(ctx, finalNs, namespace, purpose, clientset)
+				}
 				return nil
 			}
 		} else {
