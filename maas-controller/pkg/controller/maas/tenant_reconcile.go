@@ -168,7 +168,17 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.attemptLegacyCleanup(ctx, log)
 
 	// Set final status
-	return r.setFinalStatus(ctx, &tenant)
+	finalResult, finalErr := r.setFinalStatus(ctx, &tenant)
+	if finalErr != nil {
+		return finalResult, finalErr
+	}
+
+	// Sync Config status for the platform version handshake.
+	if syncErr := r.syncConfigStatus(ctx, mcfg, &tenant); syncErr != nil {
+		return ctrl.Result{}, syncErr
+	}
+
+	return finalResult, nil
 }
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {

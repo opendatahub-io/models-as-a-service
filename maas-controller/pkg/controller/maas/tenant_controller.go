@@ -80,6 +80,7 @@ type TenantReconciler struct {
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;patch;delete
@@ -192,6 +193,12 @@ func configResourceDefault() predicate.Predicate {
 	})
 }
 
+func platformConfigMap(appNamespace string) predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return o.GetName() == tenantreconcile.PlatformConfigMapName && o.GetNamespace() == appNamespace
+	})
+}
+
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	authMeta := &metav1.PartialObjectMetadata{}
@@ -243,6 +250,11 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			dsci,
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
+		).
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
+			builder.WithPredicates(platformConfigMap(r.AppNamespace)),
 		).
 		Complete(r)
 }

@@ -31,6 +31,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=maasconfig
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'default'",message="Config name must be default"
+// +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Config is a cluster-scoped anchor for MaaS platform resources. Namespaced and
@@ -68,7 +69,23 @@ type ConfigSpec struct {
 }
 
 // ConfigStatus defines the observed state of Config.
-type ConfigStatus struct{}
+// The platform reads these fields to determine module health and complete the version handshake.
+type ConfigStatus struct {
+	// Phase is the top-level lifecycle phase: "Ready" or "Not Ready".
+	// +optional
+	Phase string `json:"phase,omitempty"`
+	// ObservedGeneration is the last .metadata.generation the controller reconciled.
+	// +optional
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	// Conditions represent the latest available observations of the Config's state.
+	// Required conditions: Ready, ProvisioningSucceeded, Degraded.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+	// Releases tracks installed component versions. The entry with name "platform"
+	// participates in the platform version handshake.
+	// +optional
+	Releases []ComponentRelease `json:"releases,omitempty"`
+}
 
 // +kubebuilder:object:root=true
 

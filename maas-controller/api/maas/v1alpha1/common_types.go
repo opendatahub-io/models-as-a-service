@@ -112,6 +112,18 @@ const (
 	ReasonRuntimeHealthFailure ConditionReason = "RuntimeHealthFailure"
 )
 
+// ComponentRelease identifies a versioned component managed by the module.
+// The platform reads the entry with Name "platform" to complete the version handshake.
+type ComponentRelease struct {
+	// Name identifies the component (e.g. "platform", "maas-controller").
+	Name string `json:"name"`
+	// RepoURL is the source repository for this component.
+	// +optional
+	RepoURL string `json:"repoUrl,omitempty"`
+	// Version is the semantic version of the component.
+	Version string `json:"version"`
+}
+
 // ResourceRefStatus is the common status for any referenced Kubernetes resource.
 // Embedded by specific status types for type safety (follows metav1.Condition pattern).
 type ResourceRefStatus struct {

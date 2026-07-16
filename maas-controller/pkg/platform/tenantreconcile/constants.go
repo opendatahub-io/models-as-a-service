@@ -26,6 +26,12 @@ const (
 	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
 
+	// PlatformConfigMapName is the ConfigMap the platform operator creates per module
+	// to publish its version for the upgrade handshake.
+	PlatformConfigMapName = "odh-modelsasservice-config"
+	// PlatformVersionKey is the data key inside PlatformConfigMapName.
+	PlatformVersionKey = "platformVersion"
+
 	LabelODHAppPrefix    = "app.opendatahub.io"
 	LabelK8sPartOf       = "app.kubernetes.io/part-of"
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
