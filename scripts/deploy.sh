@@ -91,6 +91,22 @@ derive_infra_namespace() {
   esac
 }
 
+apply_infra_secret_migration_rbac() {
+  local infra_ns="$1"
+  local controller_ns="$2"
+  local rbac_dir="${SCRIPT_DIR}/../deployment/base/maas-controller/infra-rbac"
+
+  if [ ! -d "$rbac_dir" ]; then
+    log_warn "Infra RBAC directory not found at $rbac_dir, skipping"
+    return 0
+  fi
+
+  log_info "Applying secret migration RBAC to namespace $infra_ns..."
+  kustomize build "$rbac_dir" \
+    | sed "s|namespace: opendatahub|namespace: $controller_ns|g" \
+    | kubectl apply -n "$infra_ns" -f -
+}
+
 # Set log level from environment variable if provided
 case "${LOG_LEVEL:-}" in
   DEBUG)
@@ -663,6 +679,12 @@ EOF
   else
     infra_namespace="$infra_namespace_raw"
   fi
+
+  # Apply infra RBAC for secret migration when namespace separation is active
+  if [ "$infra_namespace" != "$NAMESPACE" ] && [ -n "$infra_namespace" ]; then
+    apply_infra_secret_migration_rbac "$infra_namespace" "$NAMESPACE"
+  fi
+
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do

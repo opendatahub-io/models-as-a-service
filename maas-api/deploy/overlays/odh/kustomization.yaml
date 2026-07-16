@@ -14,6 +14,22 @@ resources:
 
 namespace: opendatahub
 
+# Strip app.kubernetes.io labels that kustomize includeSelectors injects
+# into the NP's from[].podSelector. The inner kustomization (default/)
+# uses includeSelectors: true for Deployment/Service selectors, but this
+# also pollutes NetworkPolicy ingress selectors, making the ext_proc
+# rule unmatchable (gateway pods don't have payload-processing labels).
+patches:
+- target:
+    kind: NetworkPolicy
+    name: payload-processing
+  patch: |-
+    - op: replace
+      path: /spec/ingress/0/from/0/podSelector
+      value:
+        matchLabels:
+          gateway.istio.io/managed: istio.io-gateway-controller
+
 labels:
 - pairs:
     app.kubernetes.io/component: api

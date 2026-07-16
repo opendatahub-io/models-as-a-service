@@ -208,7 +208,10 @@ func TestTenantReconcile_AITenantManagedDefaultAddsCleanupFinalizer(t *testing.T
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
+	// Unblocking UI / Config GC teardown
+	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+	// g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
+	g.Expect(updated.Finalizers).To(BeEmpty(), "tenant-cleanup finalizer temporarily disabled")
 }
 
 func TestTenantReconcile_DefaultTenantStripsLegacyCleanupFinalizer(t *testing.T) {
@@ -287,7 +290,10 @@ func TestTenantReconcile_AITenantManagedAddsCleanupFinalizer(t *testing.T) {
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
-	g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
+	// Unblocking UI / Config GC teardown
+	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+	// g.Expect(updated.Finalizers).To(ContainElement("maas.opendatahub.io/tenant-cleanup"))
+	g.Expect(updated.Finalizers).To(BeEmpty(), "tenant-cleanup finalizer temporarily disabled")
 }
 
 func TestTenantReconcile_AITenantManagedDefaultDeletionCleansPlatformResources(t *testing.T) {

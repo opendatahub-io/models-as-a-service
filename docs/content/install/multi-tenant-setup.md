@@ -125,7 +125,7 @@ The controller bootstraps the following resources:
 | Resource | Location | Name |
 |----------|----------|------|
 | Namespace | Cluster | `ai-tenant-${TENANT_NAME}` |
-| Tenant CR | `ai-tenant-${TENANT_NAME}` | `default-tenant` |
+| MaasTenantConfig CR | `ai-tenant-${TENANT_NAME}` | `default-tenant` |
 | maas-api Deployment | Infrastructure namespace | `maas-api-${TENANT_NAME}` |
 | AuthPolicy | Gateway namespace | `${TENANT_NAME}-maas-auth` |
 | tenant-admin Role | `ai-tenant-${TENANT_NAME}` | `aitenant-${TENANT_NAME}-tenant-admin` |
@@ -269,10 +269,11 @@ When `--enable-tenant-namespace-discovery=true` is set, the controller watches f
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--aitenant-namespace` | `ai-tenants` | Infrastructure namespace for AITenant CRs |
+| `--aitenant-namespace` | `ai-tenants` | Namespace for AITenant CRs |
 | `--enable-tenant-namespace-discovery` | `false` | Watch namespaces for tenant label changes |
 | `--gateway-namespace` | `openshift-ingress` | Namespace where Gateways are deployed |
 | `--gateway-name` | `maas-default-gateway` | Default Gateway name for the default tenant |
+| `--infra-namespace` | `AUTO` | Infrastructure namespace for maas-api and maas-db-config. See [Infrastructure Namespace Migration](../configuration-and-management/infra-namespace-migration.md) |
 
 ## Delete a Tenant
 

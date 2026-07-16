@@ -8,17 +8,17 @@ Platform context such as Gateway and external OIDC belongs to [`AITenant`](ai-te
 
 In multi-tenant deployments, each tenant has one `MaasTenantConfig` in its tenant namespace:
 
-| Tenant Type | Config Namespace | Config Name | maas-api Service (in operator namespace) | Created By |
-|-------------|------------------|-------------|------------------------------------------|------------|
-| Default | `models-as-a-service` | `default-tenant` | `maas-api` | Default AITenant bootstrap |
-| Additional | `ai-tenant-{tenantID}` | `default-tenant` | `maas-api-{tenantID}` | AITenant reconciler |
+| Tenant Type | Config Namespace | Config Name | maas-api Deployment | Created By |
+|-------------|------------------|-------------|---------------------|------------|
+| Default | `models-as-a-service` | `default-tenant` | `maas-api` (infra namespace) | Default AITenant bootstrap |
+| Additional | `ai-tenant-{tenantID}` | `default-tenant` | `maas-api-{tenantID}` (infra namespace) | AITenant reconciler |
 
 Key points:
 
 - All `MaasTenantConfig` resources are named `default-tenant` within their namespace.
 - The default `MaasTenantConfig/default-tenant` is created or adopted by `AITenant/models-as-a-service`.
 - Additional tenant configs are created by the AITenant reconciler, which provisions the tenant namespace and config object.
-- All maas-api Services deploy to the operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI), not to tenant namespaces.
+- maas-api Deployments are created in the infrastructure namespace (AUTO-derived by default: `odh-ai-gateway-infra` for ODH or `redhat-ai-gateway-infra` for RHOAI). See [Infrastructure Namespace Migration](../../configuration-and-management/infra-namespace-migration.md) for details.
 - Each tenant has an isolated maas-api instance for API key and subscription management.
 - `MaasTenantConfig` resources for additional tenants have the finalizer `maas.opendatahub.io/tenant-cleanup`.
 - For AITenant-managed tenants, Gateway comes from `AITenant.status.gatewayRef`; OIDC comes from `AITenant.spec.oidc`.

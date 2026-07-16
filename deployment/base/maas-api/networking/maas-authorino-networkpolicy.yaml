@@ -3,7 +3,7 @@
 #
 # Security constraints:
 # - podSelector: Restricted to maas-api pods only (not all namespace pods)
-# - from: Only Authorino pods in kuadrant-system or openshift-operators
+# - from: Only Authorino pods in supported Kuadrant/RHCL namespaces
 #
 # If Kuadrant is installed in a different namespace, users will need to create
 # their own NetworkPolicy to allow traffic from that namespace.
@@ -37,8 +37,9 @@ spec:
               - key: kubernetes.io/metadata.name
                 operator: In
                 values:
-                  - kuadrant-system      # Recommended Kuadrant namespace
-                  - openshift-operators  # Default Kuadrant namespace
+                  - kuadrant-system       # Recommended Kuadrant namespace
+                  - openshift-operators   # Default Kuadrant namespace
+                  - rh-connectivity-link  # RHOAI RHCL namespace
           podSelector:
             matchLabels:
               authorino-resource: authorino

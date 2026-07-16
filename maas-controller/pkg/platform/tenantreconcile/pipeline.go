@@ -8,10 +8,12 @@ import (
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -45,6 +47,7 @@ func RunPlatform(
 	platformContext PlatformContext,
 	manifestPath string,
 	appNs string,
+	controllerNs string,
 	clusterAudience string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
@@ -68,7 +71,7 @@ func RunPlatform(
 		return nil, fmt.Errorf("gateway lookup: %w", err)
 	}
 
-	params, err := BuildPlatformParams(tenant, platformContext, appNs, clusterAudience, log)
+	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, log)
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
@@ -85,6 +88,10 @@ func RunPlatform(
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
+	}
+
+	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
+		return nil, fmt.Errorf("sync maas-parameters ConfigMap: %w", err)
 	}
 
 	tenantID, err := TenantIdentifierFor(tenant)
@@ -111,6 +118,7 @@ func Run(
 	tenant client.Object,
 	fallbackGatewayRef maasv1alpha1.TenantGatewayRef,
 	manifestPath string,
+	controllerNs string,
 	clusterAudience string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
@@ -137,7 +145,43 @@ func Run(
 		return nil, err
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, clusterAudience, mcfg)
+	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, mcfg)
+}
+
+const maasParametersConfigMapName = "maas-parameters"
+
+// syncMaaSParametersConfigMap patches the maas-parameters ConfigMap with
+// tenant-specific values. The RHOAI operator creates this ConfigMap with
+// defaults from params.env; the maas-controller updates keys that the
+// Tenant CR overrides (e.g., api-key-max-expiration-days).
+func syncMaaSParametersConfigMap(ctx context.Context, c client.Client, namespace string, params PlatformParams, log logr.Logger) error {
+	key := types.NamespacedName{Namespace: namespace, Name: maasParametersConfigMapName}
+
+	// Quick check: skip if already correct (avoids unnecessary writes).
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(ctx, key, cm); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.V(4).Info("maas-parameters ConfigMap not found, skipping sync")
+			return nil
+		}
+		return fmt.Errorf("get maas-parameters ConfigMap: %w", err)
+	}
+	if cm.Data["api-key-max-expiration-days"] == params.APIKeyMaxExpirationDays {
+		return nil
+	}
+
+	log.Info("Updating maas-parameters ConfigMap", "api-key-max-expiration-days", params.APIKeyMaxExpirationDays)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest := &corev1.ConfigMap{}
+		if err := c.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		if latest.Data == nil {
+			latest.Data = make(map[string]string)
+		}
+		latest.Data["api-key-max-expiration-days"] = params.APIKeyMaxExpirationDays
+		return c.Update(ctx, latest)
+	})
 }
 
 // MaasAPIDeploymentReady mirrors ODH deployments action for maas-api.

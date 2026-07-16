@@ -121,14 +121,17 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return r.handleDeletion(ctx, log, &tenant)
 	}
 
-	if usesCleanupFinalizer {
-		if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-			controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-			if err := r.Update(ctx, &tenant); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-	} else if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+	// Unblocking UI / Config GC teardown
+	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+	// if usesCleanupFinalizer {
+	// 	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+	// 		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+	// 		if err := r.Update(ctx, &tenant); err != nil {
+	// 			return ctrl.Result{}, err
+	// 		}
+	// 	}
+	// } else if controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+	if !usesCleanupFinalizer && controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
 		// Converge upgraded clusters: default-tenant teardown is owned by Config GC.
 		controllerutil.RemoveFinalizer(&tenant, tenantFinalizer)
 		if err := r.Update(ctx, &tenant); err != nil {
@@ -311,7 +314,7 @@ func (r *TenantReconciler) reconcilePlatform(
 	mcfg *maasv1alpha1.Config,
 ) (*ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ClusterAudience, mcfg)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())

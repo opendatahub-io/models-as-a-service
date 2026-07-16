@@ -53,6 +53,11 @@ type BackendHandler interface {
 	// GetModelEndpoint returns the endpoint URL for the model. Kind-specific: e.g. llmisvc uses gateway/HTTPRoute
 	// hostname + path; ExternalModel (when implemented) would use its own logic and need not follow the same path assumptions.
 	GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error)
+	// ResolveModelAlias returns the model identity used in body-based routing headers.
+	// LLMInferenceService: publishers/{namespace}/models/{spec.model.name}.
+	// ExternalModel: spec.externalProviderRefs[0].targetModel.
+	// Returns "" if the alias cannot be resolved (backing resource missing or field unset).
+	ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) string
 	// CleanupOnDelete is called when the MaaSModelRef is deleted (e.g. delete HTTPRoute for ExternalModel).
 	CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error
 }

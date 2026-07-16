@@ -51,7 +51,7 @@ spec:
         display:
           collapse:
             open: true
-          title: Token Consumption
+          title: Token consumption
         items:
           - content:
               $ref: '#/spec/panels/tokenConsumptionOverTime'
@@ -71,7 +71,7 @@ spec:
       spec:
         display:
           description: Distinct users with API activity over the selected time window.
-          name: Active Users
+          name: Active users
         plugin:
           kind: StatChart
           spec:
@@ -116,7 +116,7 @@ spec:
       spec:
         display:
           description: Percentage of authorized vs total requests over the selected time window.
-          name: Success Rate
+          name: Success rate
         plugin:
           kind: StatChart
           spec:
@@ -173,7 +173,7 @@ spec:
       kind: Panel
       spec:
         display:
-          name: Token consumption
+          name: Token consumption chart
           description: >-
             Tokens over time by model or subscription.
             View by drives chart sum by (${view_by:raw}).
@@ -215,7 +215,7 @@ spec:
       spec:
         display:
           description: Per-user totals over the Range dropdown window.
-          name: Token Consumption
+          name: Token consumption table
         plugin:
           kind: Table
           spec:
@@ -321,7 +321,7 @@ spec:
       spec:
         display:
           description: Total rate-limited requests over the selected time window.
-          name: Total Rate Limited
+          name: Total rate limited
         plugin:
           kind: StatChart
           spec:
@@ -354,7 +354,7 @@ spec:
       spec:
         display:
           description: Total API requests (authorized + rate-limited) over the selected time window.
-          name: Total Requests
+          name: Total requests
         plugin:
           kind: StatChart
           spec:
@@ -400,7 +400,7 @@ spec:
       spec:
         display:
           description: Total tokens consumed over the selected time window.
-          name: Total Tokens
+          name: Total tokens
         plugin:
           kind: StatChart
           spec:

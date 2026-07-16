@@ -76,6 +76,26 @@ func (s *Selector) buildModelIndex() map[string]*unstructured.Unstructured {
 	return index
 }
 
+// resolveModelAlias maps a body-based-routing model identity (e.g. publisher ID
+// or targetModel) back to canonical "namespace/name" using MaaSModelRef
+// status.resolvedModelAlias. Returns the input unchanged when no alias matches.
+func (s *Selector) resolveModelAlias(requestedModel string) string {
+	if s.modelLister == nil || requestedModel == "" {
+		return requestedModel
+	}
+	items, err := s.modelLister.List()
+	if err != nil {
+		return requestedModel
+	}
+	for _, u := range items {
+		alias, found, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias")
+		if found && alias == requestedModel {
+			return u.GetNamespace() + "/" + u.GetName()
+		}
+	}
+	return requestedModel
+}
+
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
 	Name                   string
@@ -165,6 +185,8 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
 	}
+
+	requestedModel = s.resolveModelAlias(requestedModel)
 
 	subscriptions, err := s.loadSubscriptions()
 	if err != nil {

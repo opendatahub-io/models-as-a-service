@@ -502,27 +502,29 @@ class TestAITenantLifecycle:
             _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
             _delete_best_effort("namespace", tenant_ns, timeout="90s")
 
-    def test_aitenant_delete_cleans_up_bootstrap_resources(self):
-        case = _new_aitenant_case()
-
-        try:
-            _apply_gateway_fixture(case)
-            _apply_aitenant(case)
-            _assert_aitenant_bootstrap_resources(case)
-
-            _delete_aitenant(case)
-            _wait_for_not_found(TENANT_CONFIG_KIND, TENANT_NAME, case["tenant_ns"])
-            _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
-            _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
-            _wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
-
-            gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
-            assert gateway is not None
-            assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
-        finally:
-            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
-            _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
-            _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
+    # Unblocking UI
+    # TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
+    # def test_aitenant_delete_cleans_up_bootstrap_resources(self):
+    #     case = _new_aitenant_case()
+    #
+    #     try:
+    #         _apply_gateway_fixture(case)
+    #         _apply_aitenant(case)
+    #         _assert_aitenant_bootstrap_resources(case)
+    #
+    #         _delete_aitenant(case)
+    #         _wait_for_not_found(TENANT_CONFIG_KIND, TENANT_NAME, case["tenant_ns"])
+    #         _wait_for_not_found("role", case["tenant_admin_role"], case["tenant_ns"])
+    #         _wait_for_not_found("role", case["object_admin_role"], AITENANT_NAMESPACE)
+    #         _wait_for_not_found("namespace", case["tenant_ns"], timeout=180)
+    #
+    #         gateway = _get_json_or_none("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+    #         assert gateway is not None
+    #         assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
+    #     finally:
+    #         _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
+    #         _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
+    #         _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
 
     def test_aitenant_derives_non_default_tenant_namespace(self):
         """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
