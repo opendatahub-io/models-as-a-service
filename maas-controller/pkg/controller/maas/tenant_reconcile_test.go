@@ -694,6 +694,7 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal("Failed"))
+	g.Expect(updated.Status.InfraNamespace).To(Equal(testNS), "infraNamespace should be set even on error paths")
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(readyCond).NotTo(BeNil())
 	g.Expect(readyCond.Reason).To(Equal("UnexpectedManagementState"))
@@ -736,6 +737,44 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("ConfigMissing"))
+	g.Expect(updated.Status.InfraNamespace).To(Equal(testNS))
+}
+
+func TestTenantReconcile_InfraNamespaceSetInStatus(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const tenantNS = "models-as-a-service"
+	const infraNS = "odh-ai-gateway-infra"
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(tenant, tenantTestNamespace(tenantNS)).
+		Build()
+
+	r := &TenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		AppNamespace:     infraNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS}, &updated)).To(Succeed())
+	g.Expect(updated.Status.InfraNamespace).To(Equal(infraNS), "status.infraNamespace should reflect the separated infrastructure namespace")
 }
 
 func TestTenantReconcile_ConfigEmptyUIDPatchesWaitingForConfigUID(t *testing.T) {

@@ -143,6 +143,9 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Surface the infrastructure namespace so operators know where maas-db-config lives.
+	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
+
 	// Handle management states
 	if result, err := r.handleManagementState(ctx, log, &tenant); result != nil {
 		return *result, err

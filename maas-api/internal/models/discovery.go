@@ -66,7 +66,7 @@ type Manager struct {
 // gatewayInternalHost, when non-empty, routes all probe TCP connections to this
 // cluster-internal address while preserving the original URL hostname for TLS SNI
 // and the Host header, so gateway routing and Authorino auth work identically.
-func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string) (*Manager, error) {
+func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string, enableHTTP2 bool) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -75,7 +75,7 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
 	}
 
-	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath)
+	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, enableHTTP2)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build TLS config: %w", err)
 	}
@@ -115,7 +115,7 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 // the default Kubernetes service account CA path. It is a convenience wrapper around
 // BuildClusterTLSConfigFromPath.
 func BuildClusterTLSConfig(log *logger.Logger) (*tls.Config, error) {
-	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath)
+	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, false)
 }
 
 // BuildClusterTLSConfigFromPath creates a TLS config for cluster-internal communication.
@@ -125,7 +125,7 @@ func BuildClusterTLSConfig(log *logger.Logger) (*tls.Config, error) {
 //
 // If caPath does not exist, system root CAs are used alone (development/out-of-cluster mode).
 // If caPath exists but cannot be read or parsed, an error is returned to prevent insecure fallback.
-func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string) (*tls.Config, error) {
+func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP2 bool) (*tls.Config, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -140,22 +140,25 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string) (*tls.Conf
 		if os.IsNotExist(err) {
 			log.Debug("Kubernetes service account CA not found, using system root CAs only",
 				"path", caPath)
-			return &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: caCertPool}, nil
+		} else {
+			return nil, fmt.Errorf("failed to read CA certificate: %w", err)
 		}
-		return nil, fmt.Errorf("failed to read CA certificate: %w", err)
+	} else {
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, errors.New("failed to parse Kubernetes service account CA certificate")
+		}
+		log.Debug("Using system root CAs with Kubernetes service account CA appended",
+			"path", caPath)
 	}
 
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, errors.New("failed to parse Kubernetes service account CA certificate")
-	}
-
-	log.Debug("Using system root CAs with Kubernetes service account CA appended",
-		"path", caPath)
-
-	return &tls.Config{
+	tlsCfg := &tls.Config{
 		RootCAs:    caCertPool,
 		MinVersion: tls.VersionTLS12,
-	}, nil
+	}
+	if enableHTTP2 {
+		tlsCfg.NextProtos = []string{"h2", "http/1.1"}
+	}
+	return tlsCfg, nil
 }
 
 // FilterModelsByAccess returns only models the user can access by probing each model's

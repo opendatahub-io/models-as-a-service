@@ -58,7 +58,6 @@ CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"
 CONFIG_KIND = "Config"
 CONFIG_API_PREFIX = "maas.opendatahub.io/"
-CONFIG_CLEANUP_FINALIZER = "maas.opendatahub.io/config-cleanup"
 
 TENANT_NAME = "default-tenant"
 TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
@@ -155,14 +154,6 @@ class TestConfigAnchorPresence:
             "deletionTimestamp"
         ), "Config anchor is deleting; platform GC may be in progress."
 
-    def test_cluster_config_has_cleanup_finalizer(self):
-        doc = _config_doc()
-        finalizers = doc.get("metadata", {}).get("finalizers") or []
-        assert CONFIG_CLEANUP_FINALIZER in finalizers, (
-            "Config/default must hold shared MaaS services until AITenant and "
-            "other MaaS cleanup finalizers finish."
-        )
-
 
 class TestConfigTenantOwnership:
     def test_default_aitenant_lists_config_owner_reference(self):
@@ -188,7 +179,7 @@ class TestConfigTenantOwnership:
             "(LifecycleReconciler links the anchor for GC)."
         )
 
-    def test_maas_controller_deployment_lists_config_owner_reference(self):
+    def test_maas_controller_deployment_does_not_list_config_owner_reference(self):
         result = _oc_run(
             [
                 "get",
@@ -213,7 +204,9 @@ class TestConfigTenantOwnership:
             )
         doc = json.loads(result.stdout)
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
-        assert ref is not None, (
-            f"Deployment {CONTROLLER_DEPLOYMENT}/{CONTROLLER_DEPLOY_NS} should list an owner "
-            f"reference to Config/{CONFIG_NAME}."
+        assert ref is None, (
+            f"Deployment {CONTROLLER_DEPLOYMENT}/{CONTROLLER_DEPLOY_NS} should not reference "
+            f"Config/{CONFIG_NAME}: the controller's own workload must keep running independent "
+            "of Config's lifecycle (self-heal, TeardownCompletedAnnotation reporting), so it must "
+            "not be a GC dependent of the resource it manages."
         )

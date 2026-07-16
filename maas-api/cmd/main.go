@@ -233,7 +233,7 @@ func registerHandlers(
 		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 	}
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
