@@ -97,7 +97,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
@@ -116,16 +116,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.reconcileAITenantDelete(ctx, &aitenant)
 	}
 
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(&aitenant, aitenantFinalizer) {
-	// 	base := aitenant.DeepCopy()
-	// 	controllerutil.AddFinalizer(&aitenant, aitenantFinalizer)
-	// 	if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
-	// 		return ctrl.Result{}, err
-	// 	}
-	// 	return ctrl.Result{RequeueAfter: time.Second}, nil
-	// }
+	if !controllerutil.ContainsFinalizer(&aitenant, aitenantFinalizer) {
+		base := aitenant.DeepCopy()
+		controllerutil.AddFinalizer(&aitenant, aitenantFinalizer)
+		if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
 
@@ -422,6 +420,7 @@ func (r *AITenantReconciler) markLegacyTenantDeprecated(ctx context.Context, ten
 	annotations["maas.opendatahub.io/deprecated-by"] = maasv1alpha1.MaasTenantConfigKind
 	annotations["maas.opendatahub.io/migrated-to"] = maasv1alpha1.MaasTenantConfigInstanceName
 	legacy.SetAnnotations(annotations)
+	controllerutil.RemoveFinalizer(&legacy, tenantFinalizer)
 	if equality.Semantic.DeepEqual(base, &legacy) {
 		return nil
 	}
@@ -503,11 +502,9 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 }
 
 func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
-	// 	return ctrl.Result{}, nil
-	// }
+	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
+		return ctrl.Result{}, nil
+	}
 
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	statusSnapshot := aitenant.Status.DeepCopy()
@@ -571,13 +568,11 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// base := aitenant.DeepCopy()
-	// controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
-	// if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
-	// 	return ctrl.Result{}, err
-	// }
+	base := aitenant.DeepCopy()
+	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
+	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+		return ctrl.Result{}, err
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -598,16 +593,14 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 	if !tenant.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	// Unblocking UI / Config GC teardown
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-	// 	base := tenant.DeepCopy()
-	// 	controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-	// 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-	// 		return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
-	// 	}
-	// 	return false, nil
-	// }
+	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+		base := tenant.DeepCopy()
+		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+		if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+			return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
+		}
+		return false, nil
+	}
 	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("delete MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
 	}

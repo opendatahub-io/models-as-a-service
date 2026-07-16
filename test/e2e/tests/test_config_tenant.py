@@ -179,7 +179,7 @@ class TestConfigTenantOwnership:
             "(LifecycleReconciler links the anchor for GC)."
         )
 
-    def test_maas_controller_deployment_lists_config_owner_reference(self):
+    def test_maas_controller_deployment_does_not_list_config_owner_reference(self):
         result = _oc_run(
             [
                 "get",
@@ -204,7 +204,9 @@ class TestConfigTenantOwnership:
             )
         doc = json.loads(result.stdout)
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
-        assert ref is not None, (
-            f"Deployment {CONTROLLER_DEPLOYMENT}/{CONTROLLER_DEPLOY_NS} should list an owner "
-            f"reference to Config/{CONFIG_NAME}."
+        assert ref is None, (
+            f"Deployment {CONTROLLER_DEPLOYMENT}/{CONTROLLER_DEPLOY_NS} should not reference "
+            f"Config/{CONFIG_NAME}: the controller's own workload must keep running independent "
+            "of Config's lifecycle (self-heal, TeardownCompletedAnnotation reporting), so it must "
+            "not be a GC dependent of the resource it manages."
         )

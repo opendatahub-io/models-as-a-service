@@ -61,8 +61,13 @@ const envoyFilterName = "maas-model-access-logs"
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
 // standalone installs do not race applying a Config manifest before the Config CRD is ready).
-// It links the Deployment, default AITenant, and default MaasTenantConfig to Config via non-controller
-// ownerReferences (same relationship shape for all). Legacy CleanupFinalizer entries are removed when present.
+// It links the default AITenant and default MaasTenantConfig to Config via non-controller
+// ownerReferences. The Deployment itself deliberately does NOT get an ownerReference to
+// Config: this reconciler's own workload must keep running independent of Config's lifecycle
+// (self-heal after an accidental Config deletion, and reporting TeardownCompletedAnnotation
+// once Config is deleted during teardown), so it must not be a GC dependent of the resource
+// it manages. Legacy CleanupFinalizer entries and any legacy Deployment->Config
+// ownerReference (set by older maas-controller versions) are removed when present.
 type LifecycleReconciler struct {
 	client.Client
 	Scheme                      *runtime.Scheme
@@ -93,15 +98,25 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 	}
 
 	if dep.DeletionTimestamp.IsZero() {
-		if res, err := r.ensureSingletonConfig(ctx, &dep); err != nil {
+		// Strip before anything else so that, if teardown is requested below, Config
+		// deletion can never cascade-delete the Deployment via a stale ownerReference
+		// from a pre-self-teardown install.
+		if err := r.stripLegacyDeploymentConfigOwnerReference(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
-		} else if res != nil {
+		}
+		teardownRequested := TeardownRequestedOnDeployment(&dep)
+		cfg, res, err := r.ensureSingletonConfig(ctx, &dep)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if res != nil {
 			return *res, nil
 		}
-		if res, err := r.ensureDeploymentReferencesConfig(ctx, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		} else if res != nil {
-			return *res, nil
+		if teardownRequested {
+			if cfg == nil {
+				log.Info("teardown requested on maas-controller Deployment; running best-effort cleanup without Config/default")
+			}
+			return r.handleRequestedTeardown(ctx, &dep, cfg)
 		}
 		if res, err := r.ensureDefaultAITenantReferencesConfig(ctx); err != nil {
 			return ctrl.Result{}, err
@@ -199,26 +214,72 @@ func (r *LifecycleReconciler) stripLegacyCleanupFinalizer(ctx context.Context, l
 	return nil
 }
 
+// stripLegacyDeploymentConfigOwnerReference removes an ownerReference from the Deployment
+// to Config/default if present. Pre-self-teardown maas-controller versions set this
+// non-controller ownerReference (see the removed ensureDeploymentReferencesConfig); it must
+// not survive an upgrade, or deleting Config could cascade-delete the Deployment itself
+// before this reconciler can report TeardownCompletedAnnotation. New installs never set
+// this ownerReference, so this is a no-op for them.
+func (r *LifecycleReconciler) stripLegacyDeploymentConfigOwnerReference(ctx context.Context, log logr.Logger, key types.NamespacedName) error {
+	var dep appsv1.Deployment
+	if err := r.Get(ctx, key, &dep); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+
+	filtered := make([]metav1.OwnerReference, 0, len(dep.OwnerReferences))
+	changed := false
+	for _, ref := range dep.OwnerReferences {
+		if isConfigOwnerReference(ref) {
+			changed = true
+			continue
+		}
+		filtered = append(filtered, ref)
+	}
+	if !changed {
+		return nil
+	}
+
+	base := dep.DeepCopy()
+	dep.OwnerReferences = filtered
+	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("remove legacy Config owner reference from Deployment: %w", err)
+	}
+	log.Info("removed legacy Config owner reference from Deployment")
+	return nil
+}
+
+// isConfigOwnerReference reports whether ref points at the singleton Config/default
+// resource. Config is cluster-scoped and singleton, so matching by name (in addition to
+// kind and API version) is precise without needing to fetch Config to compare UIDs.
+func isConfigOwnerReference(ref metav1.OwnerReference) bool {
+	return ref.Kind == maasv1alpha1.ConfigKind &&
+		ref.APIVersion == maasv1alpha1.GroupVersion.String() &&
+		ref.Name == maasv1alpha1.ConfigInstanceName
+}
+
 // ensureSingletonConfig creates Config/default when it is missing and the watched Deployment
 // is still running. If Config is terminating, requeues until teardown completes (avoids racing
 // intentional anchor deletion). After accidental deletion while the Deployment remains, the
 // anchor is recreated on a later reconcile.
-func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *appsv1.Deployment) (*ctrl.Result, error) {
+func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *appsv1.Deployment) (*maasv1alpha1.Config, *ctrl.Result, error) {
 	if dep == nil || !dep.DeletionTimestamp.IsZero() {
-		return nil, nil
+		return nil, nil, nil
 	}
 	key := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 	var cfg maasv1alpha1.Config
 	switch err := r.Get(ctx, key, &cfg); {
 	case err == nil:
 		if !cfg.DeletionTimestamp.IsZero() {
-			return &ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return &cfg, nil, nil
 		}
 		if cfg.UID == "" {
-			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			return nil, &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
-		return nil, nil
+		return &cfg, nil, nil
 	case apierrors.IsNotFound(err):
+		if TeardownRequestedOnDeployment(dep) {
+			return nil, nil, nil
+		}
 		toCreate := &maasv1alpha1.Config{
 			TypeMeta: metav1.TypeMeta{
 				APIVersion: maasv1alpha1.GroupVersion.String(),
@@ -227,72 +288,21 @@ func (r *LifecycleReconciler) ensureSingletonConfig(ctx context.Context, dep *ap
 			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
 		}
 		if err := r.Create(ctx, toCreate); err != nil && !apierrors.IsAlreadyExists(err) {
-			return nil, err
+			return nil, nil, err
 		}
 		if err := r.Get(ctx, key, &cfg); err != nil {
 			if apierrors.IsNotFound(err) {
-				return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+				return nil, &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 			}
-			return nil, err
+			return nil, nil, err
 		}
 		if cfg.UID == "" {
-			return &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+			return nil, &ctrl.Result{RequeueAfter: 2 * time.Second}, nil
 		}
-		return nil, nil
+		return &cfg, nil, nil
 	default:
-		return nil, err
+		return nil, nil, err
 	}
-}
-
-// ensureDeploymentReferencesConfig links the controller Deployment to Config/default
-// via a non-controller ownerReference so the workload participates in the same GC graph as other
-// operands without competing with the ODH operator's controller owner (when present).
-//
-// Call after ensureSingletonConfig in the same reconcile: Config should exist with a UID and
-// not be terminating. If this function still observes a missing, terminating, or UID-less anchor
-// (cache lag or races), it logs and returns a short requeue instead of succeeding with no work.
-func (r *LifecycleReconciler) ensureDeploymentReferencesConfig(ctx context.Context, key types.NamespacedName) (*ctrl.Result, error) {
-	log := ctrl.LoggerFrom(ctx).WithValues("deployment", key)
-	if r.Scheme == nil {
-		return nil, nil
-	}
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.Info("Config anchor not found when linking Deployment; requeueing (singleton reconcile should create it)")
-			res := ctrl.Result{RequeueAfter: 2 * time.Second}
-			return &res, nil
-		}
-		return nil, err
-	}
-	if !cfg.DeletionTimestamp.IsZero() {
-		log.Info("Config anchor is terminating when linking Deployment; requeueing until teardown completes")
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return &res, nil
-	}
-	if cfg.UID == "" {
-		log.Info("Config anchor has no UID yet when linking Deployment; requeueing")
-		res := ctrl.Result{RequeueAfter: 2 * time.Second}
-		return &res, nil
-	}
-	var dep appsv1.Deployment
-	if err := r.Get(ctx, key, &dep); err != nil {
-		return nil, client.IgnoreNotFound(err)
-	}
-	for _, ref := range dep.OwnerReferences {
-		if ref.UID == cfg.UID && ref.Kind == maasv1alpha1.ConfigKind && ref.APIVersion == maasv1alpha1.GroupVersion.String() {
-			return nil, nil
-		}
-	}
-	base := dep.DeepCopy()
-	if err := controllerutil.SetOwnerReference(&cfg, &dep, r.Scheme); err != nil {
-		return nil, fmt.Errorf("set Config owner reference on deployment: %w", err)
-	}
-	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
-		return nil, fmt.Errorf("patch deployment ownerReferences: %w", err)
-	}
-	log.Info("set Config owner reference on maas-controller Deployment")
-	return nil, nil
 }
 
 // ensureTenantReferencesConfig links MaasTenantConfig/default-tenant to Config/default via the same non-controller

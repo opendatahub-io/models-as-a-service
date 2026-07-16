@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"testing"
-	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +13,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -34,6 +34,17 @@ func lifecycleTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+func lifecycleTestUnstructured(gvk schema.GroupVersionKind, namespace, name string, finalizers ...string) *unstructured.Unstructured {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(gvk)
+	obj.SetNamespace(namespace)
+	obj.SetName(name)
+	if len(finalizers) > 0 {
+		obj.SetFinalizers(finalizers)
+	}
+	return obj
 }
 
 func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
@@ -87,12 +98,187 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 	g.Expect(cfg.Name).To(Equal(maasv1alpha1.ConfigInstanceName))
 }
 
-func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
+func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
 
 	const depNS = "opendatahub"
-	now := metav1.NewTime(time.Now())
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	r := &LifecycleReconciler{
+		Client:                      cl,
+		Scheme:                      s,
+		DeploymentName:              "maas-controller",
+		DeploymentNS:                depNS,
+		TenantSubscriptionNamespace: "",
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var cfg maasv1alpha1.Config
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg)).ToNot(Succeed())
+}
+
+func TestLifecycleReconciler_TeardownRequestedDeletesConfigAndMarksCompleted(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-delete-request"),
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:         cl,
+		Scheme:         s,
+		DeploymentName: "maas-controller",
+		DeploymentNS:   depNS,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	// Config/default is deleted as a plain step, no finalizer involved.
+	var updatedCfg maasv1alpha1.Config
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updatedCfg))).To(BeTrue())
+
+	// The completion signal must be observable on the Deployment regardless of Config's fate.
+	var updatedDep appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.Annotations[TeardownCompletedAnnotation]).To(Equal("true"))
+}
+
+func TestLifecycleReconciler_MarkTeardownCompletedIsIdempotent(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownCompletedAnnotation: "true",
+			},
+			ResourceVersion: "1",
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+
+	g.Expect(r.markTeardownCompleted(context.Background(), dep)).To(Succeed())
+
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updated)).To(Succeed())
+	g.Expect(updated.ResourceVersion).To(Equal("1"), "already-annotated Deployment should not be patched again")
+}
+
+func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	aitenant := lifecycleTestUnstructured(
+		schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
+		tenantreconcile.DefaultAITenantNamespace,
+		tenantreconcile.DefaultAITenantName,
+		aitenantFinalizer,
+	)
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(dep, aitenant).Build()
+	r := &LifecycleReconciler{
+		Client:            cl,
+		Scheme:            s,
+		DeploymentName:    "maas-controller",
+		DeploymentNS:      depNS,
+		AITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(teardownRequeueAfter))
+
+	updated := &unstructured.Unstructured{}
+	updated.SetGroupVersionKind(aitenant.GroupVersionKind())
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+		Name:      tenantreconcile.DefaultAITenantName,
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+	}, updated)).To(Succeed())
+	g.Expect(updated.GetDeletionTimestamp()).NotTo(BeNil())
+
+	// The completion annotation must not be set yet: AITenant deletion is still pending.
+	var updatedDep appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.Annotations[TeardownCompletedAnnotation]).To(BeEmpty())
+}
+
+func TestLifecycleReconciler_NormalReconcileDoesNotSetDeploymentOwnerReference(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "maas-controller",
@@ -108,10 +294,8 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 	}
 	cfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:              maasv1alpha1.ConfigInstanceName,
-			UID:               types.UID("cfg-1"),
-			DeletionTimestamp: &now,
-			Finalizers:        []string{"test.finalizer"},
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-1"),
 		},
 	}
 
@@ -124,11 +308,134 @@ func TestLifecycleReconciler_ConfigTerminatingRequeues(t *testing.T) {
 		TenantSubscriptionNamespace: "",
 	}
 
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Config must never own the Deployment: the Deployment carries the teardown
+	// annotations and must survive Config being deleted (accidentally, or during
+	// teardown), so it cannot be a GC dependent of Config.
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).To(BeEmpty())
+}
+
+func TestLifecycleReconciler_StripsLegacyDeploymentConfigOwnerReferenceOnNormalReconcile(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       maasv1alpha1.ConfigInstanceName,
+					UID:        types.UID("cfg-1"),
+				},
+				{
+					APIVersion: "v1",
+					Kind:       "Secret",
+					Name:       "unrelated",
+					UID:        types.UID("secret-1"),
+				},
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-1"),
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:         cl,
+		Scheme:         s,
+		DeploymentName: "maas-controller",
+		DeploymentNS:   depNS,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+
+	var updated appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updated)).To(Succeed())
+	g.Expect(updated.OwnerReferences).To(HaveLen(1), "only the legacy Config ownerReference should be removed")
+	g.Expect(updated.OwnerReferences[0].Name).To(Equal("unrelated"))
+}
+
+func TestLifecycleReconciler_TeardownStripsLegacyOwnerReferenceBeforeDeletingConfig(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+			OwnerReferences: []metav1.OwnerReference{
+				{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       maasv1alpha1.ConfigInstanceName,
+					UID:        types.UID("cfg-legacy"),
+				},
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-legacy"),
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	r := &LifecycleReconciler{
+		Client:         cl,
+		Scheme:         s,
+		DeploymentName: "maas-controller",
+		DeploymentNS:   depNS,
+	}
+
 	res, err := r.Reconcile(context.Background(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updatedDep appsv1.Deployment
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updatedDep)).To(Succeed())
+	g.Expect(updatedDep.OwnerReferences).To(BeEmpty(), "legacy Config ownerReference must be gone before Config is deleted")
+	g.Expect(updatedDep.Annotations[TeardownCompletedAnnotation]).To(Equal("true"))
+
+	var updatedCfg maasv1alpha1.Config
+	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updatedCfg))).To(BeTrue())
 }
 
 func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {

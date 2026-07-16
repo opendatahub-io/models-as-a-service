@@ -26,6 +26,10 @@ spec:
     - jsonPath: .metadata.creationTimestamp
       name: Age
       type: date
+    - jsonPath: .status.infraNamespace
+      name: InfraNamespace
+      priority: 1
+      type: string
     name: v1alpha1
     schema:
       openAPIV3Schema:
@@ -154,6 +158,15 @@ spec:
                   - type
                   type: object
                 type: array
+              infraNamespace:
+                description: |-
+                  InfraNamespace is the infrastructure namespace where maas-api and the
+                  maas-db-config secret are deployed for this tenant.
+                  When credential rotation is needed, update the maas-db-config secret
+                  in this namespace.
+                maxLength: 63
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
               phase:
                 description: Phase is a high-level lifecycle phase for the platform
                   reconcile.

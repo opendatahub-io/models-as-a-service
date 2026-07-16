@@ -14,6 +14,14 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 `maas-api` uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before `maas-api` starts; the pod will crash-loop until the connection succeeds and the schema migration completes.
 
+!!! warning "Namespace Separation"
+    When infrastructure namespace separation is enabled (the default), create `maas-db-config`
+    in the **infrastructure namespace** (e.g., `odh-ai-gateway-infra` for ODH or
+    `redhat-ai-gateway-infra` for RHOAI), not the controller namespace. The infrastructure
+    namespace is the source of truth for database credentials. See
+    [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md)
+    for details.
+
 Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
 
 ```bash
