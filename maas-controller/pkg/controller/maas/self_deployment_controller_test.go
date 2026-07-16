@@ -66,6 +66,11 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 		},
 	}
 
+	// Compute absolute path to the usage-logs manifest from this test file's location.
+	_, testFile, _, ok := goruntime.Caller(0)
+	g.Expect(ok).To(BeTrue())
+	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
+
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
@@ -73,6 +78,7 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                depNS,
 		TenantSubscriptionNamespace: "",
+		UsageLogsManifestPath:       usageLogsPath,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -480,6 +486,11 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 		"deployment", "components", "observability", "observability", "dashboards",
 	))
 
+	// Compute absolute path to the usage-logs manifest from this test file's location.
+	_, testFile, _, ok := goruntime.Caller(0)
+	g.Expect(ok).To(BeTrue())
+	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
+
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
@@ -489,6 +500,7 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 		TenantSubscriptionNamespace: tenantNS,
 		ObservabilityManifestsPath:  observabilityPath,
 		MonitoringNamespace:         depNS,
+		UsageLogsManifestPath:       usageLogsPath,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -537,13 +549,19 @@ func TestLifecycleReconciler_LinksDefaultAITenantToConfig(t *testing.T) {
 		},
 	}
 
+	// Compute absolute path to the usage-logs manifest from this test file's location.
+	_, testFile, _, ok := goruntime.Caller(0)
+	g.Expect(ok).To(BeTrue())
+	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
+
 	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, aitenant).Build()
 	r := &LifecycleReconciler{
-		Client:            cl,
-		Scheme:            s,
-		DeploymentName:    tenantreconcile.MaaSControllerDeploymentName,
-		DeploymentNS:      depNS,
-		AITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+		Client:                cl,
+		Scheme:                s,
+		DeploymentName:        tenantreconcile.MaaSControllerDeploymentName,
+		DeploymentNS:          depNS,
+		AITenantNamespace:     tenantreconcile.DefaultAITenantNamespace,
+		UsageLogsManifestPath: usageLogsPath,
 	}
 
 	_, err := r.Reconcile(context.Background(), ctrl.Request{
@@ -774,5 +792,165 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 			Name: envoyFilterName, Namespace: gwNS,
 		}, ef)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
+	})
+}
+
+func TestEnsureUsageLogs(t *testing.T) {
+	const monitoringNS = "redhat-ods-monitoring"
+
+	gvkOpenTelemetryCollector := schema.GroupVersionKind{
+		Group: "opentelemetry.io", Version: "v1beta1", Kind: "OpenTelemetryCollector",
+	}
+	gvkClusterRoleBinding := schema.GroupVersionKind{
+		Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding",
+	}
+
+	// Compute absolute path to the usage-logs manifest from this test file's location.
+	_, testFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("failed to get test file path")
+	}
+	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
+
+	t.Run("disabled deletes controller-managed resources", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+
+		otelCR := &unstructured.Unstructured{}
+		otelCR.SetGroupVersionKind(gvkOpenTelemetryCollector)
+		otelCR.SetName("usage-logs")
+		otelCR.SetNamespace(monitoringNS)
+		otelCR.SetLabels(map[string]string{
+			"app.kubernetes.io/managed-by": "maas-controller",
+		})
+
+		crb := &unstructured.Unstructured{}
+		crb.SetGroupVersionKind(gvkClusterRoleBinding)
+		crb.SetName("usage-logs-writer")
+		crb.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "maas.opendatahub.io/v1alpha1",
+			Kind:       "Config",
+			Name:       maasv1alpha1.ConfigInstanceName,
+			UID:        cfg.UID,
+			Controller: ptr.To(true),
+		}})
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, otelCR, crb).Build()
+		r := &LifecycleReconciler{
+			Client:                cl,
+			Scheme:                s,
+			MonitoringNamespace:   monitoringNS,
+			UsageLogsManifestPath: usageLogsPath,
+		}
+
+		err := r.ensureUsageLogs(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkOpenTelemetryCollector)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs", Namespace: monitoringNS}, got)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-managed OpenTelemetryCollector should be deleted")
+
+		got.SetGroupVersionKind(gvkClusterRoleBinding)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-owned ClusterRoleBinding should be deleted")
+	})
+
+	t.Run("disabled preserves unowned resources", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+
+		// Pre-existing foreign OpenTelemetryCollector with same name but no ownership
+		foreignOtelCR := &unstructured.Unstructured{}
+		foreignOtelCR.SetGroupVersionKind(gvkOpenTelemetryCollector)
+		foreignOtelCR.SetName("usage-logs")
+		foreignOtelCR.SetNamespace(monitoringNS)
+		// No managed-by label, no OwnerReferences
+
+		// Pre-existing foreign ClusterRoleBinding with same name
+		foreignCRB := &unstructured.Unstructured{}
+		foreignCRB.SetGroupVersionKind(gvkClusterRoleBinding)
+		foreignCRB.SetName("usage-logs-writer")
+		// No ownership metadata
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, foreignOtelCR, foreignCRB).Build()
+		r := &LifecycleReconciler{
+			Client:                cl,
+			Scheme:                s,
+			MonitoringNamespace:   monitoringNS,
+			UsageLogsManifestPath: usageLogsPath,
+		}
+
+		err := r.ensureUsageLogs(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkOpenTelemetryCollector)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs", Namespace: monitoringNS}, got)
+		g.Expect(err).NotTo(HaveOccurred(), "foreign OpenTelemetryCollector should be preserved (CWE-284)")
+		g.Expect(got.GetLabels()).NotTo(HaveKey("app.kubernetes.io/managed-by"),
+			"foreign resource should not have managed-by label")
+
+		got.SetGroupVersionKind(gvkClusterRoleBinding)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)
+		g.Expect(err).NotTo(HaveOccurred(), "foreign ClusterRoleBinding should be preserved (CWE-284)")
+		g.Expect(got.GetOwnerReferences()).To(BeEmpty(),
+			"foreign resource should not have OwnerReferences")
+	})
+
+	t.Run("enabled applies resources with monitoring namespace", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                cl,
+			Scheme:                s,
+			MonitoringNamespace:   monitoringNS,
+			UsageLogsManifestPath: usageLogsPath,
+		}
+
+		err := r.ensureUsageLogs(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkOpenTelemetryCollector)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs", Namespace: monitoringNS}, got)).
+			To(Succeed(), "OpenTelemetryCollector should exist when usageLogging is enabled")
+
+		endpoint, found, err := unstructured.NestedString(got.Object,
+			"spec", "config", "exporters", "otlp_http/loki", "endpoint")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(endpoint).To(Equal(lokiGatewayEndpoint(monitoringNS)),
+			"Loki exporter endpoint should target MonitoringNamespace")
+
+		got = &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkClusterRoleBinding)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)).
+			To(Succeed(), "ClusterRoleBinding should exist when usageLogging is enabled")
+
+		subjects, found, err := unstructured.NestedSlice(got.Object, "subjects")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(subjects).NotTo(BeEmpty())
+		subj, ok := subjects[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(subj["namespace"]).To(Equal(monitoringNS))
 	})
 }

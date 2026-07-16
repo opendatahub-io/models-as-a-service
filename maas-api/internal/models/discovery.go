@@ -209,6 +209,11 @@ func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, auth
 			m.logger.Debug("FilterModelsByAccess: skipping model with no URL", "id", model.ID)
 			continue
 		}
+		if model.URL.Scheme != "https" && model.URL.Scheme != "http" {
+			m.logger.Warn("FilterModelsByAccess: rejecting model with unsupported URL scheme",
+				"id", model.ID, "scheme", model.URL.Scheme)
+			continue
+		}
 		modelsEndpoint, err := url.JoinPath(model.URL.String(), "v1", "models")
 		if err != nil {
 			m.logger.Debug("FilterModelsByAccess: failed to build endpoint", "id", model.ID, "error", err)

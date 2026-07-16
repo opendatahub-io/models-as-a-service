@@ -26,12 +26,16 @@ import (
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -54,6 +58,14 @@ const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
 // envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
 const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
+
+// usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
+const usageLogsCollectorName = "usage-logs"
+
+// lokiGatewayHTTPService is the Loki gateway Service fronting the application logs OTLP endpoint.
+const lokiGatewayHTTPService = "maas-loki-gateway-http"
+
+const lokiGatewayOTLPEndpointPath = "/api/logs/v1/application/otlp"
 
 // envoyFilterName is the name of the usage-logs EnvoyFilter resource.
 const envoyFilterName = "maas-model-access-logs"
@@ -79,6 +91,7 @@ type LifecycleReconciler struct {
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	EnvoyFilterManifestPath     string
+	UsageLogsManifestPath       string
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -88,6 +101,8 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
+//+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
+//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
@@ -389,6 +404,9 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
 		return err
 	}
+	if err := r.ensureUsageLogs(ctx, log); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -504,6 +522,148 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 		}
 	}
 
+	return nil
+}
+
+// ensureUsageLogs deploys or removes OTel collector and RBAC for usage logging based on
+// the Config's usageLogging feature gate.
+func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logger) error {
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return err
+	}
+
+	resources, err := tenantreconcile.RenderKustomize(r.UsageLogsManifestPath, r.MonitoringNamespace)
+	if err != nil {
+		return fmt.Errorf("render usage logs: %w", err)
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		for _, resource := range resources {
+			res := resource.DeepCopy()
+			key := client.ObjectKeyFromObject(res)
+			existing := &unstructured.Unstructured{}
+			existing.SetGroupVersionKind(res.GroupVersionKind())
+
+			if err := r.Get(ctx, key, existing); err != nil {
+				if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+					continue
+				}
+				return fmt.Errorf("get %s %s/%s before delete: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+			}
+
+			if !isOwnedByConfigOrController(existing, cfg.UID) {
+				log.V(1).Info("skipping deletion of unowned usage-logs resource",
+					"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+				continue
+			}
+
+			if err := r.Delete(ctx, existing); err != nil {
+				if apierrors.IsNotFound(err) {
+					continue
+				}
+				return fmt.Errorf("delete %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+			}
+			log.V(1).Info("deleted usage-logs resource (usageLogging disabled)",
+				"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+		}
+	} else {
+		// Track if the collector is skipped due to missing CRD (CWE-863).
+		// If the OpenTelemetryCollector CRD is unavailable, we must skip the entire
+		// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
+		// permissions to a ServiceAccount (usage-logs-collector) that anyone could then create and exploit.
+		collectorSkipped := false
+
+		for _, resource := range resources {
+			res := resource // avoid loop variable aliasing
+			if err := patchUsageLogsOpenTelemetryCollector(&res, r.MonitoringNamespace); err != nil {
+				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
+			if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
+				return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
+
+			if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+				if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+					log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
+						"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+						"name", res.GetName(), "namespace", res.GetNamespace())
+					if res.GetKind() == "OpenTelemetryCollector" {
+						collectorSkipped = true
+					}
+					continue
+				}
+				return fmt.Errorf("apply %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+			}
+		}
+
+		// If the collector was skipped, delete any orphaned RBAC resources that may have
+		// been created in a prior reconcile when the CRD was available (CWE-863).
+		if collectorSkipped {
+			gvkClusterRoleBinding := schema.GroupVersionKind{
+				Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding",
+			}
+			crb := &unstructured.Unstructured{}
+			crb.SetGroupVersionKind(gvkClusterRoleBinding)
+			crb.SetName("usage-logs-writer")
+
+			if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err == nil {
+				if isOwnedByConfigOrController(crb, cfg.UID) {
+					if err := r.Delete(ctx, crb); err != nil && !apierrors.IsNotFound(err) {
+						return fmt.Errorf("delete orphaned ClusterRoleBinding after collector skip: %w", err)
+					}
+					log.Info("deleted orphaned usage-logs ClusterRoleBinding (collector CRD unavailable)")
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
+// isOwnedByConfigOrController verifies whether a resource is owned by the Config controller
+// or has the trusted managed-by label. This prevents accidental deletion of pre-existing
+// foreign resources with the same name (CWE-284).
+func isOwnedByConfigOrController(obj client.Object, configUID types.UID) bool {
+	// Check if owned by Config via OwnerReferences
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.UID == configUID && ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+
+	// Check for trusted managed-by label
+	labels := obj.GetLabels()
+	if labels != nil && labels["app.kubernetes.io/managed-by"] == "maas-controller" {
+		return true
+	}
+
+	return false
+}
+
+func lokiGatewayEndpoint(monitoringNamespace string) string {
+	return fmt.Sprintf(
+		"https://%s.%s.svc.cluster.local:8080%s",
+		lokiGatewayHTTPService,
+		monitoringNamespace,
+		lokiGatewayOTLPEndpointPath,
+	)
+}
+
+// patchUsageLogsOpenTelemetryCollector rewrites the Loki OTLP exporter endpoint to target the
+// monitoring namespace. The manifest keeps the overlay default namespace as a build-time placeholder.
+func patchUsageLogsOpenTelemetryCollector(res *unstructured.Unstructured, monitoringNamespace string) error {
+	if res.GetKind() != "OpenTelemetryCollector" || res.GetName() != usageLogsCollectorName {
+		return nil
+	}
+	endpoint := lokiGatewayEndpoint(monitoringNamespace)
+	if err := unstructured.SetNestedField(res.Object, endpoint,
+		"spec", "config", "exporters", "otlp_http/loki", "endpoint"); err != nil {
+		return fmt.Errorf("set loki exporter endpoint: %w", err)
+	}
 	return nil
 }
 
@@ -708,6 +868,45 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 				}}}
 			}),
 			builder.WithPredicates(crdInOptionalAPIGroup()),
+		).
+		// Watch managed usage-log resources so deletions/modifications trigger reconciliation
+		Watches(
+			&corev1.ConfigMap{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetNamespace() == r.MonitoringNamespace &&
+					o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
+			})),
+		).
+		Watches(
+			&rbacv1.ClusterRoleBinding{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
+			})),
+		).
+		Watches(
+			&netwv1.NetworkPolicy{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				return o.GetNamespace() == r.MonitoringNamespace &&
+					o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
+			})),
 		).
 		Complete(r)
 }

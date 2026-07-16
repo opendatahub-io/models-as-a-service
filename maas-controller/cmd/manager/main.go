@@ -803,6 +803,7 @@ func main() {
 	var enableTenantNamespaceDiscovery bool
 	var observabilityManifestsPath string
 	var monitoringNamespace string
+	var usageLogsManifestPath string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
@@ -815,6 +816,7 @@ func main() {
 		"Infrastructure namespace for maas-api, postgres, and maas-db-config. "+
 			"Defaults to 'AUTO' (namespace separation enabled). Set to empty string to disable for ROSA.")
 	flag.StringVar(&observabilityManifestsPath, "observability-manifests-path", "/deployment/components/observability/observability/dashboards", "Path to observability dashboard kustomize manifests.")
+	flag.StringVar(&usageLogsManifestPath, "usage-logs-manifest-path", "/deployment/components/observability/usage-logs", "Path to usage logs kustomize manifests.")
 	flag.StringVar(&monitoringNamespace, "monitoring-namespace", "opendatahub", "The namespace where the monitoring stack is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", tenantreconcile.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
@@ -1092,6 +1094,7 @@ func main() {
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
 		AITenantNamespace:           aitenantNamespace,
 		ObservabilityManifestsPath:  observabilityManifestsPath,
+		UsageLogsManifestPath:       usageLogsManifestPath,
 		MonitoringNamespace:         monitoringNamespace,
 		GatewayNamespace:            gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
