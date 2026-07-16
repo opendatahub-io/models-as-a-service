@@ -176,7 +176,6 @@ rules:
   - externalproviders
   verbs:
   - create
-  - delete
   - get
   - list
   - update
@@ -263,16 +262,8 @@ rules:
   - maas.opendatahub.io
   resources:
   - configs
-  verbs:
-  - get
-  - list
-  - watch
-- apiGroups:
-  - maas.opendatahub.io
-  resources:
   - externalmodels
   verbs:
-  - delete
   - get
   - list
   - watch
@@ -281,7 +272,6 @@ rules:
   resources:
   - tenants
   verbs:
-  - delete
   - get
   - list
   - patch

@@ -18,7 +18,7 @@ import (
 )
 
 // TeardownRequestedAnnotation on the maas-controller Deployment tells LifecycleReconciler
-// to start teardown: bootstrap/self-heal behaviors stay disabled, dependent MaaS resources
+// to start teardown: bootstrap/self-heal behaviors stay disabled, the default AITenant
 // and the AITenant namespace are deleted in order, then Config/default is deleted as a
 // plain step, and finally TeardownCompletedAnnotation is set once nothing is pending.
 const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
@@ -48,16 +48,12 @@ func TeardownRequestedOnDeployment(dep *appsv1.Deployment) bool {
 	return dep.GetAnnotations()[TeardownRequestedAnnotation] == "true"
 }
 
-var configCleanupResourceTypes = []schema.GroupVersionKind{
+var resourceTypesToRemove = []schema.GroupVersionKind{
 	{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
-	{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModelRef"},
-	{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"},
-	{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"},
-	{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalProvider"},
 }
 
 // handleRequestedTeardown runs on every reconcile while TeardownRequestedAnnotation is
-// present on the maas-controller Deployment. It deletes dependent MaaS resources and the
+// present on the maas-controller Deployment. It deletes the default AITenant and the
 // AITenant namespace, requeueing until nothing is pending; once clean, it deletes
 // Config/default and then marks TeardownCompletedAnnotation on the Deployment.
 //
@@ -115,25 +111,8 @@ func (r *LifecycleReconciler) markTeardownCompleted(ctx context.Context, dep *ap
 }
 
 func (r *LifecycleReconciler) cleanupTeardownResources(ctx context.Context) (bool, error) {
-	resourcesPending, err := r.requestConfigCleanupResourceDeletion(ctx)
-	if err != nil {
-		return false, err
-	}
-	if resourcesPending {
-		return true, nil
-	}
-
-	namespacePending, err := r.ensureAITenantNamespaceDeleted(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	return namespacePending, nil
-}
-
-func (r *LifecycleReconciler) requestConfigCleanupResourceDeletion(ctx context.Context) (bool, error) {
-	pending := false
-	for _, resourceGVK := range configCleanupResourceTypes {
+	resourcesPending := false
+	for _, resourceGVK := range resourceTypesToRemove {
 		items, err := listUnstructuredByGVK(ctx, r.Client, resourceGVK)
 		if err != nil {
 			return false, err
@@ -141,7 +120,7 @@ func (r *LifecycleReconciler) requestConfigCleanupResourceDeletion(ctx context.C
 		if len(items) == 0 {
 			continue
 		}
-		pending = true
+		resourcesPending = true
 
 		for i := range items {
 			obj := items[i].DeepCopy()
@@ -154,8 +133,16 @@ func (r *LifecycleReconciler) requestConfigCleanupResourceDeletion(ctx context.C
 			}
 		}
 	}
+	if resourcesPending {
+		return true, nil
+	}
 
-	return pending, nil
+	namespacePending, err := r.ensureAITenantNamespaceDeleted(ctx)
+	if err != nil {
+		return false, err
+	}
+
+	return namespacePending, nil
 }
 
 func (r *LifecycleReconciler) ensureAITenantNamespaceDeleted(ctx context.Context) (bool, error) {
