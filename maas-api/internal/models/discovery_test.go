@@ -171,7 +171,7 @@ func TestFilterModelsByAccess_URLSchemeValidation(t *testing.T) {
 	serverURL, err := apis.ParseURL(server.URL)
 	require.NoError(t, err)
 
-	mgr, err := models.NewManager(log, 5, "")
+	mgr, err := models.NewManager(log, 5, "", false)
 	require.NoError(t, err)
 
 	tests := []struct {
