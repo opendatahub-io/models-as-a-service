@@ -58,16 +58,19 @@ const (
 	aitenantNameAnnotation      = tenantreconcile.AnnotationAITenantName
 	aitenantNamespaceAnnotation = tenantreconcile.AnnotationAITenantNamespace
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
+	aitenantUIDAnnotation       = "maas.opendatahub.io/aitenant-uid"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
 	legacyDefaultGatewayName      = "maas-default-gateway"
 
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked" //nolint:gosec // Annotation name, not a credential.
+	aitenantAPIKeysRevokedCondition  = "APIKeysRevoked"
 
 	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
 	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
 	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
+	aitenantAPIKeyCleanupTTLSeconds         = int32(300)
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -567,6 +570,15 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
 	}
+	// Keep the completed Job as durable proof of revocation until every other
+	// cleanup step and the AITenant finalizer removal have succeeded. Deleting it
+	// earlier can cause a later reconciliation to run revocation again after the
+	// per-tenant maas-api workload has already been removed.
+	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
+		// The AITenant is already unblocked. The Job TTL is a fallback for this
+		// narrow failure window, so report the error without making deletion fail.
+		ctrl.LoggerFrom(ctx).Error(err, "failed to delete completed API key revocation Job")
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -697,7 +709,7 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 }
 
 func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
-	if aitenant.Annotations != nil && aitenant.Annotations[aitenantAPIKeysRevokedAnnotation] == "true" {
+	if tenantAPIKeysRevoked(aitenant) {
 		return true, nil
 	}
 	if strings.TrimSpace(r.AppNamespace) == "" {
@@ -717,13 +729,16 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		}
 		return false, nil
 	}
+	if !tenantAPIKeyRevocationJobMatchesAITenant(&existing, aitenant) {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete stale API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return false, nil
+	}
 
 	if jobComplete(&existing) {
 		if err := r.markTenantAPIKeysRevoked(ctx, aitenant); err != nil {
 			return false, err
-		}
-		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
-			return false, fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
 		}
 		return true, nil
 	}
@@ -736,13 +751,47 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 	return false, nil
 }
 
+func (r *AITenantReconciler) deleteTenantAPIKeyRevocationJob(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
+	var existing batcv1.Job
+	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("get completed API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
+	}
+	if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+	}
+	return nil
+}
+
 func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	base := aitenant.DeepCopy()
-	setMapValue(&aitenant.Annotations, aitenantAPIKeysRevokedAnnotation, "true")
-	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+	statusSnapshot := aitenant.Status.DeepCopy()
+	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+		Type:               aitenantAPIKeysRevokedCondition,
+		Status:             metav1.ConditionTrue,
+		Reason:             "RevocationJobCompleted",
+		Message:            "Tenant API keys were revoked",
+		ObservedGeneration: aitenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
 		return fmt.Errorf("mark tenant API keys revoked on AITenant %s/%s: %w", aitenant.Namespace, aitenant.Name, err)
 	}
 	return nil
+}
+
+func tenantAPIKeysRevoked(aitenant *maasv1alpha1.AITenant) bool {
+	if aitenant.Annotations != nil && aitenant.Annotations[aitenantAPIKeysRevokedAnnotation] == "true" {
+		return true
+	}
+	condition := apimeta.FindStatusCondition(aitenant.Status.Conditions, aitenantAPIKeysRevokedCondition)
+	return condition != nil && condition.Status == metav1.ConditionTrue
+}
+
+func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1alpha1.AITenant) bool {
+	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
 }
 
 func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
@@ -758,6 +807,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	}
 	backoffLimit := int32(2)
 	activeDeadlineSeconds := int64(120)
+	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
 	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
@@ -777,11 +827,13 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      aitenant.Name,
 				aitenantNamespaceAnnotation: aitenant.Namespace,
+				aitenantUIDAnnotation:       string(aitenant.UID),
 			},
 		},
 		Spec: batcv1.JobSpec{
-			BackoffLimit:          &backoffLimit,
-			ActiveDeadlineSeconds: &activeDeadlineSeconds,
+			BackoffLimit:            &backoffLimit,
+			ActiveDeadlineSeconds:   &activeDeadlineSeconds,
+			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
