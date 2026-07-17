@@ -2145,10 +2145,20 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 			LastTransitionTime: metav1.Now(),
 		},
 	}
+	var failedJobDeletePropagation *metav1.DeletionPropagation
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
 		WithObjects(aitenant, tenant, ns, job).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if _, ok := obj.(*batcv1.Job); ok {
+					deleteOptions := (&client.DeleteOptions{}).ApplyOptions(opts)
+					failedJobDeletePropagation = deleteOptions.PropagationPolicy
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		}).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -2177,6 +2187,8 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 
 	err = cl.Get(ctx, client.ObjectKeyFromObject(job), &batcv1.Job{})
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+	g.Expect(failedJobDeletePropagation).NotTo(BeNil())
+	g.Expect(*failedJobDeletePropagation).To(Equal(metav1.DeletePropagationBackground))
 
 	var remainingTenant maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant)).To(Succeed())

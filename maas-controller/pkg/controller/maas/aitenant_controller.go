@@ -743,7 +743,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		return true, nil
 	}
 	if jobFailed(&existing) {
-		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
 			return false, fmt.Errorf("delete failed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
 		}
 		return false, fmt.Errorf("%w: %s/%s", errTenantAPIKeyRevocationJobFailed, existing.Namespace, existing.Name)

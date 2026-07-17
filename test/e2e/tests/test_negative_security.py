@@ -88,7 +88,9 @@ class TestHeaderSpoofing:
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 
-        r = _inference(api_key, extra_headers=spoofed_headers)
+        # Shared gateway authorization state settles asynchronously between E2E cases.
+        # Require the secure steady state without failing on a brief propagation window.
+        r = _poll_status(api_key, 200, extra_headers=spoofed_headers, timeout=30)
 
         # Request succeeds with the REAL identity (API key owner), not the spoofed one.
         # If spoofed headers were honored, the test user would gain cluster-admin access.
@@ -110,23 +112,8 @@ class TestHeaderSpoofing:
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
         # The requests library uses a dict for headers, so it cannot send two
         # headers with the same name — the second value overwrites the first.
-        gateway = _gateway_url()
-        parsed = urlparse(gateway)
         path = f"{MODEL_PATH}/v1/completions"
         body = json.dumps({"model": MODEL_NAME, "prompt": "Hello", "max_tokens": 3})
-
-        if parsed.scheme == "https":
-            ctx = ssl.create_default_context()
-            if not TLS_VERIFY:
-                ctx.check_hostname = False
-                ctx.verify_mode = ssl.CERT_NONE
-            conn = http.client.HTTPSConnection(
-                parsed.hostname, parsed.port or 443, timeout=TIMEOUT, context=ctx,
-            )
-        else:
-            conn = http.client.HTTPConnection(
-                parsed.hostname, parsed.port or 80, timeout=TIMEOUT,
-            )
 
         # Two separate X-MaaS-Subscription header lines
         headers = [
@@ -136,16 +123,41 @@ class TestHeaderSpoofing:
             ("X-MaaS-Subscription", "nonexistent-fake-sub"),
         ]
 
-        conn.putrequest("POST", path)
-        for key, value in headers:
-            conn.putheader(key, value)
-        conn.putheader("Content-Length", str(len(body)))
-        conn.endheaders(body.encode())
+        # As above, keep the raw duplicate headers on every retry while waiting
+        # for shared gateway authorization state to settle.
+        deadline = time.time() + 30
+        while True:
+            gateway = _gateway_url()
+            parsed = urlparse(gateway)
+            if parsed.scheme == "https":
+                ctx = ssl.create_default_context()
+                if not TLS_VERIFY:
+                    ctx.check_hostname = False
+                    ctx.verify_mode = ssl.CERT_NONE
+                conn = http.client.HTTPSConnection(
+                    parsed.hostname, parsed.port or 443, timeout=TIMEOUT, context=ctx,
+                )
+            else:
+                conn = http.client.HTTPConnection(
+                    parsed.hostname, parsed.port or 80, timeout=TIMEOUT,
+                )
 
-        resp = conn.getresponse()
-        status = resp.status
-        resp_body = resp.read().decode(errors="replace")
-        conn.close()
+            try:
+                conn.putrequest("POST", path)
+                for key, value in headers:
+                    conn.putheader(key, value)
+                conn.putheader("Content-Length", str(len(body)))
+                conn.endheaders(body.encode())
+
+                resp = conn.getresponse()
+                status = resp.status
+                resp_body = resp.read().decode(errors="replace")
+            finally:
+                conn.close()
+
+            if status == 200 or time.time() >= deadline:
+                break
+            time.sleep(2)
 
         # API key binding wins — request succeeds with key-derived subscription.
         log.info("Duplicate X-MaaS-Subscription headers -> %s", status)

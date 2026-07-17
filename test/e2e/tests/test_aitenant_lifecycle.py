@@ -128,6 +128,13 @@ def _aitenant_ready(obj):
     )
 
 
+def _maas_tenant_config_ready(obj):
+    return any(
+        cond.get("type") == "Ready" and cond.get("status") == "True"
+        for cond in (obj.get("status") or {}).get("conditions") or []
+    )
+
+
 def _crd_exists(crd):
     result = _oc_run(["get", "crd", crd])
     if result.returncode == 0:
@@ -233,7 +240,13 @@ def _assert_aitenant_bootstrap_resources(case):
     assert namespace["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
     assert namespace["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == case["aitenant_name"]
 
-    tenant_config = _wait_for_json(TENANT_CONFIG_KIND, TENANT_NAME, case["tenant_ns"])
+    tenant_config = _wait_for_json(
+        TENANT_CONFIG_KIND,
+        TENANT_NAME,
+        case["tenant_ns"],
+        predicate=_maas_tenant_config_ready,
+        timeout=300,
+    )
     labels = tenant_config["metadata"].get("labels") or {}
     annotations = tenant_config["metadata"].get("annotations") or {}
     assert labels["maas.opendatahub.io/managed-by-aitenant"] == "true"
@@ -252,6 +265,12 @@ def _assert_aitenant_bootstrap_resources(case):
 def _delete_aitenant(case):
     _delete(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
     _wait_for_not_found(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout=180)
+
+
+def _cleanup_aitenant_fixture(aitenant_name, gateway_name):
+    """Delete test CRs while intentionally retaining the tenant namespace."""
+    _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE, timeout="180s")
+    _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
 
 
 def _namespace_released_from_aitenant(obj):
@@ -320,7 +339,13 @@ class TestAITenantLifecycle:
         assert namespace_labels["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
         assert namespace_labels["maas.opendatahub.io/tenant-namespace"] == MAAS_SUBSCRIPTION_NAMESPACE
 
-        tenant_config = _wait_for_json(TENANT_CONFIG_KIND, TENANT_NAME, MAAS_SUBSCRIPTION_NAMESPACE, timeout=180)
+        tenant_config = _wait_for_json(
+            TENANT_CONFIG_KIND,
+            TENANT_NAME,
+            MAAS_SUBSCRIPTION_NAMESPACE,
+            predicate=_maas_tenant_config_ready,
+            timeout=180,
+        )
         assert tenant_config["metadata"]["labels"]["maas.opendatahub.io/managed-by-aitenant"] == "true"
         assert tenant_config["metadata"]["labels"]["ai-gateway.opendatahub.io/tenant"] == DEFAULT_AITENANT_NAME
         assert tenant_config["metadata"]["labels"]["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
@@ -405,9 +430,7 @@ class TestAITenantLifecycle:
             _apply_aitenant(case)
             _assert_aitenant_bootstrap_resources(case)
         finally:
-            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
-            _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
-            _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
+            _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
 
     def test_aitenant_migrates_legacy_tenant_to_maas_tenant_config(self):
         if not _crd_exists(LEGACY_TENANT_CRD):
@@ -485,7 +508,8 @@ class TestAITenantLifecycle:
                 telemetry = spec.get("telemetry") or {}
                 metrics = telemetry.get("metrics") or {}
                 return (
-                    labels.get("maas.opendatahub.io/managed-by-aitenant") == "true"
+                    _maas_tenant_config_ready(obj)
+                    and labels.get("maas.opendatahub.io/managed-by-aitenant") == "true"
                     and labels.get("ai-gateway.opendatahub.io/tenant") == aitenant_name
                     and labels.get("maas.opendatahub.io/tenant-name") == aitenant_name
                     and labels.get("maas.opendatahub.io/tenant-namespace") == tenant_ns
@@ -526,9 +550,7 @@ class TestAITenantLifecycle:
                 "name": gateway_name,
             }
         finally:
-            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE)
-            _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
-            _delete_best_effort("namespace", tenant_ns, timeout="90s")
+            _cleanup_aitenant_fixture(aitenant_name, gateway_name)
 
     def test_aitenant_delete_cleans_maas_resources_and_preserves_user_objects(self):
         case = _new_aitenant_case()
@@ -584,9 +606,7 @@ class TestAITenantLifecycle:
             assert gateway is not None
             assert gateway["metadata"]["labels"]["e2e.maas.opendatahub.io/fixture"] == case["aitenant_name"]
         finally:
-            _delete_best_effort(AITENANT_KIND, case["aitenant_name"], AITENANT_NAMESPACE, timeout="180s")
-            _delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
-            _delete_best_effort("namespace", case["tenant_ns"], timeout="90s")
+            _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
 
     def test_aitenant_derives_non_default_tenant_namespace(self):
         """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
@@ -615,8 +635,12 @@ class TestAITenantLifecycle:
             )
             assert aitenant["status"]["tenantNamespace"] == expected_ns
             assert aitenant["status"]["tenantNamespace"] != reserved_ns
-            assert _get_json_or_none(TENANT_CONFIG_KIND, TENANT_NAME, expected_ns) is not None
+            _wait_for_json(
+                TENANT_CONFIG_KIND,
+                TENANT_NAME,
+                expected_ns,
+                predicate=_maas_tenant_config_ready,
+                timeout=300,
+            )
         finally:
-            _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE, timeout="180s")
-            _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
-            _delete_best_effort("namespace", expected_ns, timeout="90s")
+            _cleanup_aitenant_fixture(aitenant_name, gateway_name)
