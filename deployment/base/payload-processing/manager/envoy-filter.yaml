@@ -36,6 +36,8 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
     # Stage 2: must run AFTER the WasmPlugin (needs auth to have completed).
     - applyTo: HTTP_FILTER
       match:
@@ -64,6 +66,8 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
     # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
     # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL 1.4.
     - applyTo: HTTP_FILTER
@@ -92,6 +96,8 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -119,6 +125,8 @@ spec:
             grpc_service:
               envoy_grpc:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
     # Disable ext_proc on all non-inference maas-api routes.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
     # Rule indices correspond to httproute.yaml rules:
