@@ -6,7 +6,6 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -18,9 +17,9 @@ import (
 )
 
 // TeardownRequestedAnnotation on the maas-controller Deployment tells LifecycleReconciler
-// to start teardown: bootstrap/self-heal behaviors stay disabled, the default AITenant
-// and the AITenant namespace are deleted in order, then Config/default is deleted as a
-// plain step, and finally TeardownCompletedAnnotation is set once nothing is pending.
+// to start teardown: bootstrap/self-heal behaviors stay disabled, AITenant resources are
+// deleted, then Config/default is deleted as a plain step, and finally
+// TeardownCompletedAnnotation is set once nothing is pending. Namespaces are preserved.
 const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
 
 // TeardownCompletedAnnotation is set on the maas-controller Deployment by LifecycleReconciler
@@ -29,13 +28,7 @@ const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
 // instead of depending on Config (or anything cascade-deleted through it) to still exist.
 const TeardownCompletedAnnotation = "maas.opendatahub.io/teardown-completed"
 
-const (
-	teardownRequeueAfter        = 5 * time.Second
-	maasManagedByLabelKey       = "app.kubernetes.io/managed-by"
-	maasManagedByLabelValue     = "maas-controller"
-	maasGeneratedNamespaceLabel = "opendatahub.io/generated-namespace"
-	maasGeneratedNamespaceValue = "true"
-)
+const teardownRequeueAfter = 5 * time.Second
 
 // TeardownRequestedOnDeployment reports whether the maas-controller Deployment has been
 // annotated to start teardown. Callers outside this file (e.g. the Reconcile entrypoint,
@@ -53,9 +46,9 @@ var resourceTypesToRemove = []schema.GroupVersionKind{
 }
 
 // handleRequestedTeardown runs on every reconcile while TeardownRequestedAnnotation is
-// present on the maas-controller Deployment. It deletes the default AITenant and the
-// AITenant namespace, requeueing until nothing is pending; once clean, it deletes
-// Config/default and then marks TeardownCompletedAnnotation on the Deployment.
+// present on the maas-controller Deployment. It deletes AITenant resources, requeueing
+// until nothing is pending; once clean, it deletes Config/default and then marks
+// TeardownCompletedAnnotation on the Deployment. It does not delete namespaces.
 //
 // Config deletion is a plain, unguarded step (no finalizer): this reconciler is the only
 // actor that deletes Config while teardown is requested, so ordering is enforced here in
@@ -133,55 +126,7 @@ func (r *LifecycleReconciler) cleanupTeardownResources(ctx context.Context) (boo
 			}
 		}
 	}
-	if resourcesPending {
-		return true, nil
-	}
-
-	namespacePending, err := r.ensureAITenantNamespaceDeleted(ctx)
-	if err != nil {
-		return false, err
-	}
-
-	return namespacePending, nil
-}
-
-func (r *LifecycleReconciler) ensureAITenantNamespaceDeleted(ctx context.Context) (bool, error) {
-	if r.AITenantNamespace == "" {
-		return false, nil
-	}
-
-	var ns corev1.Namespace
-	err := r.Get(ctx, client.ObjectKey{Name: r.AITenantNamespace}, &ns)
-	switch {
-	case errors.IsNotFound(err):
-		return false, nil
-	case err != nil:
-		return false, fmt.Errorf("get AITenant namespace %q during teardown: %w", r.AITenantNamespace, err)
-	}
-
-	if !shouldDeleteAITenantNamespace(&ns, r.DeploymentNS) {
-		return false, nil
-	}
-
-	if ns.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, &ns); client.IgnoreNotFound(err) != nil {
-			return false, fmt.Errorf("delete AITenant namespace %q during teardown: %w", r.AITenantNamespace, err)
-		}
-	}
-
-	return true, nil
-}
-
-func shouldDeleteAITenantNamespace(ns *corev1.Namespace, protectedNamespace string) bool {
-	if ns == nil || ns.Name == "" || ns.Name == protectedNamespace {
-		return false
-	}
-	labels := ns.GetLabels()
-	if labels == nil {
-		return false
-	}
-	return labels[maasManagedByLabelKey] == maasManagedByLabelValue ||
-		labels[maasGeneratedNamespaceLabel] == maasGeneratedNamespaceValue
+	return resourcesPending, nil
 }
 
 func listUnstructuredByGVK(ctx context.Context, cli client.Client, resourceGVK schema.GroupVersionKind) ([]unstructured.Unstructured, error) {
