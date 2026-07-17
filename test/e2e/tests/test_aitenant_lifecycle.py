@@ -9,6 +9,11 @@ import uuid
 
 import pytest
 
+from multitenancy_helpers import (
+    apply_gateway_fixture as apply_https_gateway_fixture,
+    remove_gateway_access_label,
+    wait_for_gateway_programmed,
+)
 from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -176,29 +181,11 @@ def _new_aitenant_case():
 
 
 def _apply_gateway_fixture(case):
-    _apply(
-        {
-            "apiVersion": "gateway.networking.k8s.io/v1",
-            "kind": "Gateway",
-            "metadata": {
-                "name": case["gateway_name"],
-                "namespace": GATEWAY_NAMESPACE,
-                "labels": {
-                    "e2e.maas.opendatahub.io/fixture": case["aitenant_name"],
-                },
-            },
-            "spec": {
-                "gatewayClassName": AITENANT_GATEWAY_CLASS_NAME,
-                "listeners": [
-                    {
-                        "name": "http",
-                        "port": 80,
-                        "protocol": "HTTP",
-                    }
-                ],
-            },
-        }
+    apply_https_gateway_fixture(
+        case["gateway_name"],
+        fixture_label=case["aitenant_name"],
     )
+    wait_for_gateway_programmed(case["gateway_name"])
 
 
 def _apply_aitenant(case):
@@ -271,6 +258,11 @@ def _cleanup_aitenant_fixture(aitenant_name, gateway_name):
     """Delete test CRs while intentionally retaining the tenant namespace."""
     _delete_best_effort(AITENANT_KIND, aitenant_name, AITENANT_NAMESPACE, timeout="180s")
     _delete_best_effort("gateway", gateway_name, GATEWAY_NAMESPACE)
+    _delete_best_effort("configmap", f"{gateway_name}-gw-options", GATEWAY_NAMESPACE)
+    try:
+        remove_gateway_access_label(INFRA_NAMESPACE, gateway_name)
+    except Exception as exc:  # noqa: BLE001 - cleanup must not mask the test failure
+        print(f"[cleanup] failed to remove gateway access label for {gateway_name}: {exc}")
 
 
 def _namespace_released_from_aitenant(obj):
