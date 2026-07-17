@@ -6,15 +6,21 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/openai/openai-go/v2"
+	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"knative.dev/pkg/apis"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -146,6 +152,90 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 
 		assert.Nil(t, tlsConfig.NextProtos)
 	})
+}
+
+func TestFilterModelsByAccess_URLSchemeValidation(t *testing.T) {
+	log := logger.New(true)
+
+	// Mock model server that returns 200 for all probes
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		resp := pagination.Page[openai.Model]{
+			Object: "list",
+			Data:   []openai.Model{{ID: "test-model", Object: "model"}},
+		}
+		json.NewEncoder(w).Encode(resp) //nolint:errcheck
+	}))
+	defer server.Close()
+
+	serverURL, err := apis.ParseURL(server.URL)
+	require.NoError(t, err)
+
+	mgr, err := models.NewManager(log, 5, "")
+	require.NoError(t, err)
+
+	tests := []struct {
+		name     string
+		model    models.Model
+		included bool
+	}{
+		{
+			name: "http scheme is allowed",
+			model: models.Model{
+				Model: openai.Model{ID: "http-model", Object: "model"},
+				URL:   serverURL,
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "file scheme is rejected",
+			model: models.Model{
+				Model: openai.Model{ID: "file-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "file", Host: "localhost", Path: "/etc/passwd"},
+				Ready: true,
+			},
+			included: false,
+		},
+		{
+			name: "ftp scheme is rejected",
+			model: models.Model{
+				Model: openai.Model{ID: "ftp-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "ftp", Host: "attacker.example.com"},
+				Ready: true,
+			},
+			included: false,
+		},
+		{
+			name: "empty scheme is rejected",
+			model: models.Model{
+				Model: openai.Model{ID: "empty-scheme-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "", Host: "localhost"},
+				Ready: true,
+			},
+			included: false,
+		},
+		{
+			name: "nil URL is skipped",
+			model: models.Model{
+				Model: openai.Model{ID: "nil-url-model", Object: "model"},
+				URL:   nil,
+				Ready: true,
+			},
+			included: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mgr.FilterModelsByAccess(t.Context(), []models.Model{tt.model}, "Bearer test-token", "")
+			if tt.included {
+				assert.Len(t, result, 1, "model with allowed scheme should be included")
+			} else {
+				assert.Empty(t, result, "model with disallowed scheme should be excluded")
+			}
+		})
+	}
 }
 
 // selfSignedCertPEM generates a minimal self-signed CA certificate in PEM format for use in tests.
