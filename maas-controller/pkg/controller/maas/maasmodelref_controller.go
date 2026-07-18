@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -67,6 +68,9 @@ type MaaSModelRefReconciler struct {
 
 	// AITenantNamespace is the infrastructure namespace where AITenant CRs live.
 	AITenantNamespace string
+
+	// Recorder emits Kubernetes events for model identity conflict warnings.
+	Recorder record.EventRecorder
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
@@ -196,6 +200,7 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	governed := r.checkGovernanceAttached(ctx, model)
 	r.setGovernanceCondition(model, governed)
 	r.setRuntimeReadyCondition(model, runtimeReady)
+	r.checkModelIdentityConflict(ctx, log, model)
 
 	phase, message := deriveModelPhase(governed, runtimeReady)
 	if phase != "Ready" {
@@ -499,6 +504,11 @@ func unstructuredLLMIsvcReadyStatus(obj *unstructured.Unstructured) string {
 
 func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
+
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("maas-modelref-controller")
+	}
+
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {
 		return fmt.Errorf("failed to create field index %s: %w", modelRefNameIndex, err)
 	}
@@ -512,7 +522,14 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSModelRef is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSModelRefs,
-		))
+		)).
+		// Watch sibling MaaSModelRefs so model-identity-conflict detection stays
+		// current: a newly created/deleted sibling, or one whose resolved alias
+		// changed, can introduce or resolve a conflict for every other model in
+		// the namespace even though those models' own specs didn't change.
+		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapModelRefSiblings,
+		), builder.WithPredicates(resolvedModelAliasChangedPredicate{}))
 
 	const llmisvcCRD = "llminferenceservices.serving.kserve.io"
 	llmisvcExists := crdExists(ctx, mgr.GetAPIReader(), llmisvcCRD)
@@ -601,6 +618,32 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 	}
 	var requests []reconcile.Request
 	for _, m := range models.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+		})
+	}
+	return requests
+}
+
+// mapModelRefSiblings returns reconcile requests for every other MaaSModelRef
+// in the same namespace as the changed one, so model-identity-conflict
+// detection re-evaluates when a sibling's resolved alias appears, disappears,
+// or changes.
+func (r *MaaSModelRefReconciler) mapModelRefSiblings(ctx context.Context, obj client.Object) []reconcile.Request {
+	changed, ok := obj.(*maasv1alpha1.MaaSModelRef)
+	if !ok {
+		return nil
+	}
+	var siblings maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &siblings, client.InNamespace(changed.Namespace)); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list sibling MaaSModelRefs", "namespace", changed.Namespace)
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range siblings.Items {
+		if m.Name == changed.Name {
+			continue
+		}
 		requests = append(requests, reconcile.Request{
 			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
 		})
