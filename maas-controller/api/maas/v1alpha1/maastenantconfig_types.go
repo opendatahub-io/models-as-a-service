@@ -32,6 +32,7 @@ const (
 // +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`,description="Reason"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+// +kubebuilder:printcolumn:name="InfraNamespace",type=string,JSONPath=`.status.infraNamespace`,priority=1
 
 // MaasTenantConfig is the namespace-scoped singleton for MaaS-specific tenant settings.
 // Platform context such as Gateway and OIDC belongs to AITenant; this object only
@@ -61,6 +62,15 @@ type MaasTenantConfigStatus struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Enum=Pending;Active;Degraded;Failed
 	Phase string `json:"phase,omitempty"`
+
+	// InfraNamespace is the infrastructure namespace where maas-api and the
+	// maas-db-config secret are deployed for this tenant.
+	// When credential rotation is needed, update the maas-db-config secret
+	// in this namespace.
+	// +optional
+	// +kubebuilder:validation:MaxLength=63
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	InfraNamespace string `json:"infraNamespace,omitempty"`
 
 	// Conditions represent the latest available observations.
 	// Types mirror ODH modelsasservice / maas-controller status for DSC aggregation: Ready,

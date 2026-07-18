@@ -86,6 +86,20 @@ Migration happens **automatically** when switching between modes:
 4. **Controller automatically deletes old maas-api** from controller namespace
 5. Services use FQDN for cross-namespace communication
 
+!!! warning "Credential Rotation After Migration"
+    After migration, the `maas-db-config` secret in the **infrastructure namespace** is the
+    source of truth. If you rotate database credentials, you must update the secret in the
+    infrastructure namespace (e.g., `odh-ai-gateway-infra` or `redhat-ai-gateway-infra`).
+
+    The original secret in the controller namespace is **not** synced. Updating only the
+    controller-namespace copy will cause maas-api to crash-loop with authentication failures.
+
+    To check which namespace is active for a tenant:
+
+    ```bash
+    kubectl get maastenantconfig default-tenant -o jsonpath='{.status.infraNamespace}'
+    ```
+
 ## Verification
 
 ### With Namespace Separation (Default)

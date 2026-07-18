@@ -14,6 +14,14 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 
 `maas-api` uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before `maas-api` starts; the pod will crash-loop until the connection succeeds and the schema migration completes.
 
+!!! warning "Namespace Separation"
+    When infrastructure namespace separation is enabled (the default), create `maas-db-config`
+    in the **infrastructure namespace** (e.g., `odh-ai-gateway-infra` for ODH or
+    `redhat-ai-gateway-infra` for RHOAI), not the controller namespace. The infrastructure
+    namespace is the source of truth for database credentials. See
+    [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md)
+    for details.
+
 Create the `maas-db-config` Secret in your ODH/RHOAI namespace (typically `opendatahub` for ODH or `redhat-ods-applications` for RHOAI):
 
 ```bash
@@ -336,7 +344,7 @@ Delete the `AITenant` resource to start tenant cleanup:
 kubectl delete aitenant team-red -n ai-tenants
 ```
 
-Deletion revokes active API keys, removes per-tenant maas-api resources and MaaS CRs, and deletes the tenant namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if namespace content or finalizers block deletion. The shared Gateway object and user model workloads in other namespaces are preserved, but workloads inside the deleted tenant namespace are removed by Kubernetes namespace deletion.
+Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
 
 ## Next steps
 

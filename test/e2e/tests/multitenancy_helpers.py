@@ -817,6 +817,43 @@ def apply_maas_subscription(
     )
 
 
+def apply_unrelated_tenant_objects(case: dict[str, str]) -> dict[str, str]:
+    """Create user-owned objects that must survive AITenant teardown."""
+    names = {
+        "secret": f"{case['tenant_label_name']}-user-secret",
+        "rolebinding": f"{case['tenant_label_name']}-user-binding",
+    }
+    _apply(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": names["secret"], "namespace": case["tenant_ns"]},
+            "type": "Opaque",
+            "stringData": {"purpose": "unrelated-user-content"},
+        }
+    )
+    _apply(
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {"name": names["rolebinding"], "namespace": case["tenant_ns"]},
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "Role",
+                "name": f"aitenant-{case['tenant_label_name']}-tenant-admin",
+            },
+            "subjects": [
+                {
+                    "apiGroup": "rbac.authorization.k8s.io",
+                    "kind": "User",
+                    "name": "e2e-preserved-user",
+                }
+            ],
+        }
+    )
+    return names
+
+
 def provision_tenant_model(
     model_name: str,
     tenant_namespace: str,

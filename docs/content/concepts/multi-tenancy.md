@@ -21,7 +21,7 @@ Multi-tenancy separates **platform context** from **MaaS runtime configuration**
 - Owned by tenant administrators
 - Configures MaaS-specific operational behavior
 
-When you create an AITenant, the controller provisions the tenant namespace and creates the MaasTenantConfig automatically. When you delete an AITenant, the namespace and all tenant resources are cleaned up.
+When you create an AITenant, the controller provisions the tenant namespace and creates the MaasTenantConfig automatically. When you delete an AITenant, tenant-scoped MaaS state and controller-managed platform resources are cleaned up (including `MaasTenantConfig`, MaaS CRs, per-tenant maas-api resources, and AITenant RBAC). The tenant namespace itself is kept so non-MaaS user objects in that namespace are preserved.
 
 ## Isolation Model
 

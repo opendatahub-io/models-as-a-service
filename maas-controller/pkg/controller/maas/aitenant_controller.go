@@ -58,16 +58,19 @@ const (
 	aitenantNameAnnotation      = tenantreconcile.AnnotationAITenantName
 	aitenantNamespaceAnnotation = tenantreconcile.AnnotationAITenantNamespace
 	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
+	aitenantUIDAnnotation       = "maas.opendatahub.io/aitenant-uid"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
 	legacyDefaultGatewayName      = "maas-default-gateway"
 
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked" //nolint:gosec // Annotation name, not a credential.
+	aitenantAPIKeysRevokedCondition  = "APIKeysRevoked"
 
 	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
 	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
 	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
+	aitenantAPIKeyCleanupTTLSeconds         = int32(300)
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -97,9 +100,9 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
-// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
@@ -116,16 +119,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return r.reconcileAITenantDelete(ctx, &aitenant)
 	}
 
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(&aitenant, aitenantFinalizer) {
-	// 	base := aitenant.DeepCopy()
-	// 	controllerutil.AddFinalizer(&aitenant, aitenantFinalizer)
-	// 	if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
-	// 		return ctrl.Result{}, err
-	// 	}
-	// 	return ctrl.Result{RequeueAfter: time.Second}, nil
-	// }
+	if !controllerutil.ContainsFinalizer(&aitenant, aitenantFinalizer) {
+		base := aitenant.DeepCopy()
+		controllerutil.AddFinalizer(&aitenant, aitenantFinalizer)
+		if err := r.Patch(ctx, &aitenant, client.MergeFrom(base)); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{RequeueAfter: time.Second}, nil
+	}
 
 	statusSnapshot := aitenant.Status.DeepCopy()
 
@@ -422,6 +423,7 @@ func (r *AITenantReconciler) markLegacyTenantDeprecated(ctx context.Context, ten
 	annotations["maas.opendatahub.io/deprecated-by"] = maasv1alpha1.MaasTenantConfigKind
 	annotations["maas.opendatahub.io/migrated-to"] = maasv1alpha1.MaasTenantConfigInstanceName
 	legacy.SetAnnotations(annotations)
+	controllerutil.RemoveFinalizer(&legacy, tenantFinalizer)
 	if equality.Semantic.DeepEqual(base, &legacy) {
 		return nil
 	}
@@ -503,11 +505,9 @@ func (r *AITenantReconciler) ensureAITenantObjectRole(ctx context.Context, aiten
 }
 
 func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
-	// 	return ctrl.Result{}, nil
-	// }
+	if !controllerutil.ContainsFinalizer(aitenant, aitenantFinalizer) {
+		return ctrl.Result{}, nil
+	}
 
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	statusSnapshot := aitenant.Status.DeepCopy()
@@ -545,22 +545,16 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
-	namespaceDeleted, reason, message, err := r.deleteTenantNamespace(ctx, aitenant)
-	if err != nil {
+	// Keep the tenant namespace so user-created objects (Secrets, RoleBindings, etc.)
+	// survive. Only strip AITenant ownership metadata so discovery no longer treats
+	// it as an active MaaS tenant namespace.
+	if err := r.releaseTenantNamespace(ctx, aitenant); err != nil {
 		statusSnapshot = aitenant.Status.DeepCopy()
 		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
 		return ctrl.Result{}, err
-	}
-	if !namespaceDeleted {
-		statusSnapshot = aitenant.Status.DeepCopy()
-		setAITenantPhase(aitenant, "Terminating", reason, message)
-		if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
-			return ctrl.Result{}, err
-		}
-		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
 	}
 
 	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
@@ -571,13 +565,20 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
-	// Unblocking UI
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// base := aitenant.DeepCopy()
-	// controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
-	// if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
-	// 	return ctrl.Result{}, err
-	// }
+	base := aitenant.DeepCopy()
+	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
+	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+		return ctrl.Result{}, err
+	}
+	// Keep the completed Job as durable proof of revocation until every other
+	// cleanup step and the AITenant finalizer removal have succeeded. Deleting it
+	// earlier can cause a later reconciliation to run revocation again after the
+	// per-tenant maas-api workload has already been removed.
+	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
+		// The AITenant is already unblocked. The Job TTL is a fallback for this
+		// narrow failure window, so report the error without making deletion fail.
+		ctrl.LoggerFrom(ctx).Error(err, "failed to delete completed API key revocation Job")
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -598,16 +599,14 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 	if !tenant.DeletionTimestamp.IsZero() {
 		return false, nil
 	}
-	// Unblocking UI / Config GC teardown
-	// TODO: Include adding the finalizer back as part of https://github.com/opendatahub-io/models-as-a-service/pull/1159
-	// if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
-	// 	base := tenant.DeepCopy()
-	// 	controllerutil.AddFinalizer(&tenant, tenantFinalizer)
-	// 	if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
-	// 		return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
-	// 	}
-	// 	return false, nil
-	// }
+	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {
+		base := tenant.DeepCopy()
+		controllerutil.AddFinalizer(&tenant, tenantFinalizer)
+		if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
+			return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
+		}
+		return false, nil
+	}
 	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("delete MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
 	}
@@ -631,33 +630,43 @@ func (r *AITenantReconciler) deleteAITenantScopedChildren(ctx context.Context, a
 	return nil
 }
 
-func (r *AITenantReconciler) deleteTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, string, string, error) {
+// releaseTenantNamespace clears AITenant ownership labels/annotations from the
+// tenant namespace without deleting it. User-created content in the namespace is
+// preserved. If the namespace is missing, already terminating, or not owned by
+// this AITenant, release is a no-op.
+func (r *AITenantReconciler) releaseTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	var ns corev1.Namespace
 	key := client.ObjectKey{Name: r.tenantNamespaceName(aitenant)}
 	if err := r.get(ctx, key, &ns); err != nil {
 		if isNotFoundError(err) {
-			return true, "Deleted", fmt.Sprintf("tenant namespace %q has been deleted", key.Name), nil
+			return nil
 		}
-		return false, "DeletionBlocked", "", fmt.Errorf("get tenant namespace %q during deletion: %w", key.Name, err)
+		return fmt.Errorf("get tenant namespace %q during AITenant deletion: %w", key.Name, err)
 	}
 	if !ownedByAITenant(&ns, aitenant) {
-		return false, "DeletionBlocked", "", fmt.Errorf("tenant namespace %q is not owned by AITenant %s/%s", key.Name, aitenant.Namespace, aitenant.Name)
+		return nil
 	}
-	if ns.DeletionTimestamp.IsZero() {
-		if err := r.Delete(ctx, &ns); client.IgnoreNotFound(err) != nil {
-			return false, "DeletionBlocked", "", fmt.Errorf("delete tenant namespace %q: %w", key.Name, err)
-		}
-		return false, "DeletionInProgress", fmt.Sprintf("tenant namespace %q deletion has been requested", key.Name), nil
-	}
-	reason, message := namespaceDeletionStatus(&ns)
-	return false, reason, message, nil
-}
-
-func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+	if !ns.DeletionTimestamp.IsZero() {
+		// Namespace is already terminating (e.g. admin-deleted). Do not block
+		// AITenant cleanup on namespace finalizers.
 		return nil
 	}
 
+	base := ns.DeepCopy()
+	removeAITenantMetadata(&ns, aitenant, key.Name)
+	labels := ns.GetLabels()
+	removeMapValueIfEqual(&labels, "opendatahub.io/generated-namespace", "true")
+	ns.SetLabels(labels)
+	if equality.Semantic.DeepEqual(base, &ns) {
+		return nil
+	}
+	if err := r.Patch(ctx, &ns, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("release tenant namespace %q during AITenant deletion: %w", key.Name, err)
+	}
+	return nil
+}
+
+func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	gatewayRef := aitenant.Status.GatewayRef
 	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
 		gatewayRef = r.gatewayRefFor(aitenant)
@@ -666,49 +675,41 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 		return nil
 	}
 
-	authPolicy := &unstructured.Unstructured{}
-	authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
-	authPolicy.SetName(fmt.Sprintf("%s-maas-auth", gatewayRef.Name))
-	authPolicy.SetNamespace(gatewayRef.Namespace)
+	authPolicyName := fmt.Sprintf("%s-maas-auth", gatewayRef.Name)
+	authPolicyNames := []string{authPolicyName}
+	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+		authPolicyNames = []string{maasGatewayAuthPolicyName, gatewayDefaultAuthPolicyName}
+	}
 
-	if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
-		if isNotFoundError(err) {
-			return nil
+	for _, name := range authPolicyNames {
+		authPolicy := &unstructured.Unstructured{}
+		authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+		authPolicy.SetName(name)
+		authPolicy.SetNamespace(gatewayRef.Namespace)
+
+		if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
+			if isNotFoundError(err) {
+				continue
+			}
+			return fmt.Errorf("get tenant gateway AuthPolicy %s/%s during AITenant deletion: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
 		}
-		return fmt.Errorf("get tenant gateway AuthPolicy %s/%s during AITenant deletion: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
-	}
-	if !isManaged(authPolicy) {
-		return nil
-	}
-	if err := r.Delete(ctx, authPolicy); client.IgnoreNotFound(err) != nil {
-		return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+		if !isManaged(authPolicy) {
+			continue
+		}
+		// gateway-default-auth has a generic name, so only delete the instance
+		// that the MaaS controller created. Preserve a same-named user policy.
+		if name == gatewayDefaultAuthPolicyName && authPolicy.GetLabels()["app.kubernetes.io/managed-by"] != "maas-controller" {
+			continue
+		}
+		if err := r.Delete(ctx, authPolicy); client.IgnoreNotFound(err) != nil {
+			return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+		}
 	}
 	return nil
 }
 
-func namespaceDeletionStatus(ns *corev1.Namespace) (string, string) {
-	for _, condition := range ns.Status.Conditions {
-		if condition.Status != corev1.ConditionTrue {
-			continue
-		}
-		switch condition.Type {
-		case corev1.NamespaceContentRemaining,
-			corev1.NamespaceFinalizersRemaining,
-			corev1.NamespaceDeletionContentFailure,
-			corev1.NamespaceDeletionDiscoveryFailure,
-			corev1.NamespaceDeletionGVParsingFailure:
-			message := condition.Message
-			if message == "" {
-				message = fmt.Sprintf("tenant namespace %q deletion is blocked by %s", ns.Name, condition.Type)
-			}
-			return "DeletionBlocked", message
-		}
-	}
-	return "DeletionInProgress", fmt.Sprintf("tenant namespace %q is terminating", ns.Name)
-}
-
 func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
-	if aitenant.Annotations != nil && aitenant.Annotations[aitenantAPIKeysRevokedAnnotation] == "true" {
+	if tenantAPIKeysRevoked(aitenant) {
 		return true, nil
 	}
 	if strings.TrimSpace(r.AppNamespace) == "" {
@@ -728,18 +729,21 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		}
 		return false, nil
 	}
+	if !tenantAPIKeyRevocationJobMatchesAITenant(&existing, aitenant) {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete stale API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return false, nil
+	}
 
 	if jobComplete(&existing) {
 		if err := r.markTenantAPIKeysRevoked(ctx, aitenant); err != nil {
 			return false, err
 		}
-		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
-			return false, fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
-		}
 		return true, nil
 	}
 	if jobFailed(&existing) {
-		if err := r.Delete(ctx, &existing); client.IgnoreNotFound(err) != nil {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
 			return false, fmt.Errorf("delete failed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
 		}
 		return false, fmt.Errorf("%w: %s/%s", errTenantAPIKeyRevocationJobFailed, existing.Namespace, existing.Name)
@@ -747,13 +751,47 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 	return false, nil
 }
 
+func (r *AITenantReconciler) deleteTenantAPIKeyRevocationJob(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
+	var existing batcv1.Job
+	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("get completed API key revocation Job %s/%s: %w", job.Namespace, job.Name, err)
+	}
+	if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
+	}
+	return nil
+}
+
 func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	base := aitenant.DeepCopy()
-	setMapValue(&aitenant.Annotations, aitenantAPIKeysRevokedAnnotation, "true")
-	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+	statusSnapshot := aitenant.Status.DeepCopy()
+	apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+		Type:               aitenantAPIKeysRevokedCondition,
+		Status:             metav1.ConditionTrue,
+		Reason:             "RevocationJobCompleted",
+		Message:            "Tenant API keys were revoked",
+		ObservedGeneration: aitenant.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
 		return fmt.Errorf("mark tenant API keys revoked on AITenant %s/%s: %w", aitenant.Namespace, aitenant.Name, err)
 	}
 	return nil
+}
+
+func tenantAPIKeysRevoked(aitenant *maasv1alpha1.AITenant) bool {
+	if aitenant.Annotations != nil && aitenant.Annotations[aitenantAPIKeysRevokedAnnotation] == "true" {
+		return true
+	}
+	condition := apimeta.FindStatusCondition(aitenant.Status.Conditions, aitenantAPIKeysRevokedCondition)
+	return condition != nil && condition.Status == metav1.ConditionTrue
+}
+
+func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1alpha1.AITenant) bool {
+	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
 }
 
 func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
@@ -769,6 +807,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	}
 	backoffLimit := int32(2)
 	activeDeadlineSeconds := int64(120)
+	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
 	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
@@ -788,11 +827,13 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 			Annotations: map[string]string{
 				aitenantNameAnnotation:      aitenant.Name,
 				aitenantNamespaceAnnotation: aitenant.Namespace,
+				aitenantUIDAnnotation:       string(aitenant.UID),
 			},
 		},
 		Spec: batcv1.JobSpec{
-			BackoffLimit:          &backoffLimit,
-			ActiveDeadlineSeconds: &activeDeadlineSeconds,
+			BackoffLimit:            &backoffLimit,
+			ActiveDeadlineSeconds:   &activeDeadlineSeconds,
+			TTLSecondsAfterFinished: &ttlSecondsAfterFinished,
 			Template: corev1.PodTemplateSpec{
 				ObjectMeta: metav1.ObjectMeta{
 					Labels: map[string]string{
