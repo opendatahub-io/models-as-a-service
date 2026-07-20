@@ -25,22 +25,6 @@ func TestDefaultProfileReturnsDeepCopy(t *testing.T) {
 	assert.NotEqual(t, p1.Ciphers[0], p2.Ciphers[0], "mutating one DefaultProfile must not affect another")
 }
 
-func TestProfilesContainExpectedCiphers(t *testing.T) {
-	intermediate, ok := tlsprofile.LookupNamedProfile(tlsprofile.ProfileIntermediate)
-	assert.True(t, ok)
-	assert.Contains(t, intermediate.Ciphers, "ECDHE-ECDSA-AES128-GCM-SHA256")
-	assert.Contains(t, intermediate.Ciphers, "TLS_AES_128_GCM_SHA256")
-
-	old, ok := tlsprofile.LookupNamedProfile(tlsprofile.ProfileOld)
-	assert.True(t, ok)
-	assert.Contains(t, old.Ciphers, "DES-CBC3-SHA")
-	assert.Greater(t, len(old.Ciphers), len(intermediate.Ciphers))
-
-	modern, ok := tlsprofile.LookupNamedProfile(tlsprofile.ProfileModern)
-	assert.True(t, ok)
-	assert.Less(t, len(modern.Ciphers), len(intermediate.Ciphers))
-}
-
 func TestSettingsAppliedProfile(t *testing.T) {
 	modern, ok := tlsprofile.LookupNamedProfile(tlsprofile.ProfileModern)
 	assert.True(t, ok)

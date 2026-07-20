@@ -15,7 +15,6 @@ import (
 // Watcher monitors the config.openshift.io/v1 APIServer resource for TLS
 // profile or adherence changes and invokes the callback when either changes.
 type Watcher struct {
-	initial Settings
 	factory configinformers.SharedInformerFactory
 }
 
@@ -44,7 +43,7 @@ func NewWatcher(restConfig *rest.Config, initialSettings Settings, onChange func
 		return nil, fmt.Errorf("adding event handler: %w", err)
 	}
 
-	return &Watcher{initial: initialSettings, factory: factory}, nil
+	return &Watcher{factory: factory}, nil
 }
 
 func settingsEventHandler(initial Settings, onChange func(oldSettings, newSettings Settings)) func(any) {

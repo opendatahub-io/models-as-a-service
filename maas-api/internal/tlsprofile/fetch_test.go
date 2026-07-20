@@ -211,12 +211,6 @@ func TestIsAPIUnavailable(t *testing.T) {
 	}
 }
 
-func TestFetchTLSProfile_NilRestConfig(t *testing.T) {
-	_, err := tlsprofile.FetchTLSProfile(context.Background(), nil)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "must not be nil")
-}
-
 func TestFetchTLSSettings_NilRestConfig(t *testing.T) {
 	_, err := tlsprofile.FetchTLSSettings(context.Background(), nil)
 	require.Error(t, err)

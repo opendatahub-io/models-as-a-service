@@ -33,12 +33,6 @@ func FetchTLSSettings(ctx context.Context, restConfig *rest.Config) (Settings, e
 	return settingsFromAPIServer(apiServer)
 }
 
-// FetchTLSProfile is retained for callers that only need the profile.
-func FetchTLSProfile(ctx context.Context, restConfig *rest.Config) (ProfileSpec, error) {
-	settings, err := FetchTLSSettings(ctx, restConfig)
-	return settings.Profile, err
-}
-
 func settingsFromAPIServer(apiServer *confv1.APIServer) (Settings, error) {
 	profile, err := profileFromAPIServer(apiServer)
 	if err != nil {
