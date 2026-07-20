@@ -887,6 +887,7 @@ func TestLifecycleReconciler_ControllerReplicasNoOpWhenAlreadyMatches(t *testing
 	var updated appsv1.Deployment
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "maas-controller", Namespace: depNS}, &updated)).To(Succeed())
 	g.Expect(*updated.Spec.Replicas).To(Equal(int32(3)))
+	g.Expect(updated.ResourceVersion).To(Equal("1"), "expected no patch when replicas already match")
 }
 
 func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
