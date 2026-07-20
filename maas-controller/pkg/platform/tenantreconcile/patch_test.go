@@ -128,6 +128,133 @@ func TestPatchHTTPRouteBackendRefs(t *testing.T) {
 	}
 }
 
+func TestPatchMaaSAPIDeploymentReplicas(t *testing.T) {
+	makeDeployment := func() *unstructured.Unstructured {
+		return &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"spec": map[string]any{
+					"replicas": int64(1),
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "maas-api",
+									"image": "quay.io/opendatahub/maas-api:latest",
+									"env":   []any{},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("nil replicas leaves default unchanged", func(t *testing.T) {
+		deployment := makeDeployment()
+		params := PlatformParams{
+			MaaSAPIImage:            "test-image",
+			GatewayNamespace:        "openshift-ingress",
+			GatewayName:             "test-gateway",
+			APIKeyMaxExpirationDays: "90",
+			MaaSAPIReplicas:         nil,
+		}
+
+		err := patchMaaSAPIDeployment(logr.Discard(), deployment, params)
+		require.NoError(t, err)
+
+		replicas, found, err := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, int64(1), replicas)
+	})
+
+	t.Run("non-nil replicas overrides default", func(t *testing.T) {
+		deployment := makeDeployment()
+		r := int32(3)
+		params := PlatformParams{
+			MaaSAPIImage:            "test-image",
+			GatewayNamespace:        "openshift-ingress",
+			GatewayName:             "test-gateway",
+			APIKeyMaxExpirationDays: "90",
+			MaaSAPIReplicas:         &r,
+		}
+
+		err := patchMaaSAPIDeployment(logr.Discard(), deployment, params)
+		require.NoError(t, err)
+
+		replicas, found, err := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, int64(3), replicas)
+	})
+}
+
+func TestPatchPayloadProcessingDeploymentReplicas(t *testing.T) {
+	makeDeployment := func() *unstructured.Unstructured {
+		return &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name":      "payload-processing",
+					"namespace": "opendatahub",
+				},
+				"spec": map[string]any{
+					"replicas": int64(1),
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "payload-processing",
+									"image": "quay.io/opendatahub/payload-processing:latest",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
+	t.Run("nil replicas leaves default unchanged", func(t *testing.T) {
+		deployment := makeDeployment()
+		params := PlatformParams{
+			GatewayNamespace:          "gateway-ns",
+			PayloadProcessingImage:    "test-image",
+			PayloadProcessingReplicas: nil,
+		}
+
+		err := patchPayloadProcessingDeployment(logr.Discard(), deployment, params)
+		require.NoError(t, err)
+
+		replicas, found, err := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, int64(1), replicas)
+	})
+
+	t.Run("non-nil replicas overrides default", func(t *testing.T) {
+		deployment := makeDeployment()
+		r := int32(2)
+		params := PlatformParams{
+			GatewayNamespace:          "gateway-ns",
+			PayloadProcessingImage:    "test-image",
+			PayloadProcessingReplicas: &r,
+		}
+
+		err := patchPayloadProcessingDeployment(logr.Discard(), deployment, params)
+		require.NoError(t, err)
+
+		replicas, found, err := unstructured.NestedInt64(deployment.Object, "spec", "replicas")
+		require.NoError(t, err)
+		require.True(t, found)
+		assert.Equal(t, int64(2), replicas)
+	})
+}
+
 func TestPatchMaaSAPIDeploymentTENANT_NAME(t *testing.T) {
 	tests := []struct {
 		name               string
