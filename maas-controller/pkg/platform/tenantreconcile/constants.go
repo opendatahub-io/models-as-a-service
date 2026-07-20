@@ -1,7 +1,7 @@
 // Package tenantreconcile implements the Tenant platform reconcile pipeline
 // (initialize → dependencies → prerequisites → gateway → params → kustomize → post-render → apply → deployment status).
 // The pipeline stages mirror the ODH operator's component deploy pattern; the MaasTenantConfig CR is the
-// runtime object that drives this lifecycle (DSC.modelsAsService controls enablement only).
+// runtime object that drives this lifecycle (DSC aigateway.modelsAsAService controls enablement only).
 package tenantreconcile
 
 import (

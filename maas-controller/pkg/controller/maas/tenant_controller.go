@@ -40,7 +40,7 @@ import (
 
 // TenantReconciler reconciles the MaasTenantConfig CR (platform singleton).
 // Platform manifest logic follows the ODH operator's component deploy pattern (kustomize + post-render + SSA apply).
-// The MaasTenantConfig CR is the runtime object; DSC.modelsAsService controls only enablement.
+// The MaasTenantConfig CR is the runtime object; DSC aigateway.modelsAsAService controls only enablement.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme

@@ -1081,7 +1081,7 @@ install_primary_operator() {
   case "$OPERATOR_TYPE" in
     rhoai)
       # Support custom catalog for RHOAI snapshot/development builds
-      # This allows testing with pre-release RHOAI versions that have modelsAsService support
+      # This allows testing with pre-release RHOAI versions that have modelsAsAService support
       if [[ -n "$OPERATOR_CATALOG" ]]; then
         log_info "Using custom RHOAI catalog: $OPERATOR_CATALOG"
         create_custom_catalogsource "rhoai-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
@@ -1091,7 +1091,7 @@ install_primary_operator() {
       else
         catalog_source="redhat-operators"
         # Use 'stable-3.x' channel for RHOAI v3 (with MaaS support)
-        # RHOAI 2.x (fast channel) does not support modelsAsService
+        # RHOAI 2.x (fast channel) does not support modelsAsAService
         channel="${OPERATOR_CHANNEL:-stable-3.x}"
       fi
 
@@ -1259,7 +1259,7 @@ EOF
 }
 
 apply_dsc() {
-  log_info "Applying DataScienceCluster with ModelsAsService..."
+  log_info "Applying DataScienceCluster with ModelsAsAService..."
 
   local data_dir="${SCRIPT_DIR}/data"
 
@@ -1315,12 +1315,9 @@ apply_dsc() {
     return 1
   fi
 
-  # Apply DSC with modelsAsService - this is REQUIRED for MaaS deployment
-  # Without modelsAsService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
-  # If the operator doesn't support modelsAsService, kubectl will fail with a clear error
-  #
-  # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
-  #       Only ODH currently supports this feature
+  # Apply DSC with aigateway.modelsAsAService - this is REQUIRED for MaaS deployment
+  # Without modelsAsAService, only KServe deploys (no maas-api, no HTTPRoutes, no AuthPolicy)
+  # If the operator doesn't support modelsAsAService, kubectl will fail with a clear error
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
 }
 
@@ -1331,7 +1328,7 @@ apply_dsc() {
 apply_kuadrant_cr() {
   local namespace=$1
 
-  log_info "Initializing Gateway API and ModelsAsService gateway..."
+  log_info "Initializing Gateway API and ModelsAsAService gateway..."
 
   # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
   # The script handles GatewayClass creation, Gateway creation with TLS cert detection,

@@ -1,4 +1,4 @@
-apiVersion: datasciencecluster.opendatahub.io/v1
+apiVersion: datasciencecluster.opendatahub.io/v2
 kind: DataScienceCluster
 metadata:
   name: default-dsc
@@ -8,11 +8,11 @@ spec:
     # Core dashboard component for managing notebooks and models
     dashboard:
       managementState: Managed
-    
+
     # Notebook controller for JupyterLab workbenches
     workbenches:
       managementState: Managed
-    
+
     # Model serving with KServe configured for RawDeployment mode
     # This configuration:
     # - Uses RawDeployment mode instead of Knative/Serverless
@@ -31,9 +31,13 @@ spec:
             type: OpenshiftDefaultIngress  # Use OpenShift's default ingress certificate
         managementState: Removed  # Disable Knative serving (incompatible with RawDeployment)
         name: knative-serving
-      modelsAsService:
+
+    # AI Gateway with MaaS (3.5+)
+    aigateway:
+      managementState: Managed
+      modelsAsAService:
         managementState: Managed
-    
+
     # Other components disabled for MaaS-focused deployment
     modelmeshserving:
       managementState: Removed  # Use KServe instead
