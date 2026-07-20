@@ -169,6 +169,21 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 		require.Len(t, got.Warnings, 1)
 		assert.Contains(t, got.Warnings[0], "must be >= 1")
 	})
+
+	t.Run("replica count exceeding max produces warning", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationMaaSAPIReplicas: "101",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.MaaSAPIReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be <= 100")
+	})
 }
 
 func TestParseReplicaAnnotation(t *testing.T) {
@@ -181,6 +196,8 @@ func TestParseReplicaAnnotation(t *testing.T) {
 		{"valid 1", "1", int32Ptr(1), false},
 		{"valid 3", "3", int32Ptr(3), false},
 		{"valid 100", "100", int32Ptr(100), false},
+		{"exceeds max", "101", nil, true},
+		{"very large", "2000000000", nil, true},
 		{"zero", "0", nil, true},
 		{"negative", "-1", nil, true},
 		{"non-numeric", "abc", nil, true},

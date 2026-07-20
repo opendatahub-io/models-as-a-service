@@ -118,8 +118,8 @@ func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIRe
 	return maasAPIReplicas, payloadProcessingReplicas, w
 }
 
-// parseReplicaAnnotation parses and validates a replica count annotation value.
-// Returns the parsed value and an empty warning on success, or nil and a warning message on failure.
+const maxReplicaCount = 100
+
 func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	n, err := strconv.ParseInt(value, 10, 32)
 	if err != nil {
@@ -127,6 +127,9 @@ func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	}
 	if n < 1 {
 		return nil, fmt.Sprintf("annotation %s has invalid value %q: must be >= 1; remove the annotation to use the default replica count", annotationKey, value)
+	}
+	if n > maxReplicaCount {
+		return nil, fmt.Sprintf("annotation %s has invalid value %q: must be <= %d; remove the annotation to use the default replica count", annotationKey, value, maxReplicaCount)
 	}
 	r := int32(n)
 	return &r, ""
