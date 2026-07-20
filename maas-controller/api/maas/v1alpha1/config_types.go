@@ -65,6 +65,14 @@ type ConfigSpec struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
+
+	// ControllerReplicas sets the replica count for the maas-controller Deployment.
+	// Increasing replicas parallelizes subscription reconciliation across
+	// multiple controller pods. Defaults to 1 if not specified.
+	// +optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	ControllerReplicas *int32 `json:"controllerReplicas,omitempty"`
 }
 
 // ConfigStatus defines the observed state of Config.
