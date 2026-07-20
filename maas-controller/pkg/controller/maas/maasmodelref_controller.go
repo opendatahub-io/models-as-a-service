@@ -24,7 +24,7 @@ import (
 	"sync"
 
 	"github.com/go-logr/logr"
-	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -179,7 +179,15 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		model.Status.Endpoint = endpoint
 	}
 
-	model.Status.ResolvedModelAlias = handler.ResolveModelAlias(ctx, log, model)
+	// Only update ResolvedModelAlias when a non-empty alias is returned.
+	// An empty result with no error means the backing resource is not yet ready
+	// (addresses not yet populated). An error indicates a transient API failure.
+	// In both cases, preserve the existing alias so reverse lookups remain valid.
+	if alias, err := handler.ResolveModelAlias(ctx, log, model); err != nil {
+		log.Error(err, "failed to resolve model alias, keeping existing value")
+	} else if alias != "" {
+		model.Status.ResolvedModelAlias = alias
+	}
 
 	governed := r.checkGovernanceAttached(ctx, model)
 	r.setGovernanceCondition(model, governed)
@@ -397,18 +405,18 @@ type llmisvcReadyChangedPredicate struct {
 }
 
 func (llmisvcReadyChangedPredicate) Update(e event.UpdateEvent) bool {
-	oldObj, ok := e.ObjectOld.(*kservev1alpha1.LLMInferenceService)
+	oldObj, ok := e.ObjectOld.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
-	newObj, ok := e.ObjectNew.(*kservev1alpha1.LLMInferenceService)
+	newObj, ok := e.ObjectNew.(*kservev1alpha2.LLMInferenceService)
 	if !ok {
 		return true
 	}
 	return llmisvcReadyStatus(oldObj) != llmisvcReadyStatus(newObj)
 }
 
-func llmisvcReadyStatus(obj *kservev1alpha1.LLMInferenceService) string {
+func llmisvcReadyStatus(obj *kservev1alpha2.LLMInferenceService) string {
 	for _, c := range obj.Status.Conditions {
 		if c.Type == apis.ConditionReady {
 			return string(c.Status)
@@ -508,7 +516,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// Watch LLMInferenceServices — KServe CRD must be present for this watch to succeed.
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
 	if llmisvcExists {
-		b = b.Watches(&kservev1alpha1.LLMInferenceService{},
+		b = b.Watches(&kservev1alpha2.LLMInferenceService{},
 			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSModelRefs),
 			builder.WithPredicates(predicate.Or(predicate.GenerationChangedPredicate{}, llmisvcReadyChangedPredicate{})),
 		)
@@ -538,7 +546,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			// mapper to know the GVK, which may be stale when the CRD is installed after startup.
 			llmisvc := &unstructured.Unstructured{}
 			llmisvc.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "serving.kserve.io", Version: "v1alpha1", Kind: "LLMInferenceService",
+				Group: "serving.kserve.io", Version: "v1alpha2", Kind: "LLMInferenceService",
 			})
 			return source.Kind(mgr.GetCache(), llmisvc,
 				// Mirror the static-path predicates (GenerationChangedPredicate +
@@ -645,7 +653,7 @@ func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(ctx context.Co
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
-	// Use GetName/GetNamespace — works for both typed *kservev1alpha1.LLMInferenceService
+	// Use GetName/GetNamespace — works for both typed *kservev1alpha2.LLMInferenceService
 	// (static watch at startup) and *unstructured.Unstructured (dynamic watch registered
 	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	var models maasv1alpha1.MaaSModelRefList

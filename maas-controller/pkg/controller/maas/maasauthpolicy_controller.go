@@ -401,12 +401,16 @@ const (
 		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
 )
 
-// celModelIdentity extracts model identity (namespace/name) from the request at gateway level.
+// celModelIdentity extracts model identity from the request at gateway level.
 // For path-routed inference (/<model-namespace>/<model-name>/...), extract from URL.
-// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc).
-// Canonical model IDs (publishers/{ns}/models/{name}) are normalized to {ns}/{name}.
+// For body-routed endpoints (/v1/*), use X-Gateway-Model-Name header (set by ext_proc)
+// which may be a publisher ID (publishers/{ns}/models/{served-id}).
 // For listing endpoints like /v1/models where no model target exists, returns empty string
 // so requestedModel is omitted and the subscription selector returns all accessible subscriptions.
+//
+// Note: TokenRateLimitPolicy matching must NOT use this raw value for body-based
+// routing. selected_subscription_key prefers subscription-info.resolvedModel
+// (MaaSModelRef namespace/name from /subscriptions/select) when present.
 const (
 	celPathParts                  = `request.path.split("/").filter(x, x != "")`
 	celPathModelIdentityAvailable = `size(` + celPathParts + `) >= 2 && ` +
@@ -418,6 +422,12 @@ const (
 		` : ("x-gateway-model-name" in request.headers` +
 		`   ? request.headers["x-gateway-model-name"]` +
 		`   : ""))`
+	// Prefer MaaSModelRef identity resolved by subscription select (handles BBR
+	// publisher IDs). Fall back to path/header identity for path-based routing.
+	celResolvedModelIdentity = `(has(auth.metadata["subscription-info"].resolvedModel) && ` +
+		`auth.metadata["subscription-info"].resolvedModel != "" ` +
+		`? auth.metadata["subscription-info"].resolvedModel ` +
+		`: ` + celModelIdentity + `)`
 )
 
 // maasGatewayAuthPolicyName is the singleton AuthPolicy that targets the Gateway.
@@ -1148,14 +1158,16 @@ allow {
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"].name : ""`,
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
-								// modelIdentity is dynamic (header or path), so this is always current
+								// Prefer resolvedModel from subscription-info (MaaSModelRef
+								// namespace/name after BBR alias resolution) so TRLP when
+								// predicates match for both path and body-based routing.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
 											`has(auth.metadata["subscription-info"].name)) `+
 											`? auth.metadata["subscription-info"].namespace + "/" `+
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
-										celModelIdentity,
+										celResolvedModelIdentity,
 									),
 								},
 								"subscription_info": map[string]any{

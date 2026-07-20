@@ -6,7 +6,5 @@ metadata:
 
 namespace: llm
 
-namePrefix: e2e-unconfigured-
-
 resources:
-  - ../../../../../docs/samples/models/simulator
+  - model.yaml

@@ -13,7 +13,7 @@ Each entry includes an `id`, **`url`** (the model’s endpoint), a `ready` flag,
 !!! note "Model endpoints and routing"
     The returned value includes a **URL** per model; clients use that URL to call the model (e.g. for chat or completions).
 
-    Currently each model is served on a **different endpoint**. **Body Based Routing** is being evaluated to provide a more unified OpenAI API feel (single endpoint with model selection in the request body).
+    By default each model is served on a **different endpoint** (path-based routing). **[Body-Based Routing](../user-guide/inference.md#unified-endpoint-body-based-routing)** provides a unified OpenAI API experience — a single endpoint with model selection in the request body. BBR requires the Inference Payload Processing (IPP) component.
 
 ## MaaSModelRef flow
 

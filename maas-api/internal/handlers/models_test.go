@@ -99,12 +99,18 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return []*unstructured.Unstructured{sub}, nil
 }
 
-// fakeMultiSubscriptionLister returns multiple subscriptions by name -> groups mapping.
-type fakeMultiSubscriptionLister map[string][]string
+// fakeSubDef holds a subscription's owner groups and optional model refs (name/namespace).
+type fakeSubDef struct {
+	groups    []string
+	modelRefs []struct{ name, namespace string }
+}
+
+// fakeMultiSubscriptionLister returns multiple subscriptions keyed by subscription name.
+type fakeMultiSubscriptionLister map[string]fakeSubDef
 
 func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	result := make([]*unstructured.Unstructured, 0, len(f))
-	for subName, groups := range f {
+	for subName, def := range f {
 		sub := &unstructured.Unstructured{}
 		sub.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "maas.opendatahub.io",
@@ -115,11 +121,20 @@ func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error
 		sub.SetNamespace(fixtures.TestNamespace)
 
 		// Set spec.owner.groups
-		groupSlice := make([]any, len(groups))
-		for i, g := range groups {
+		groupSlice := make([]any, len(def.groups))
+		for i, g := range def.groups {
 			groupSlice[i] = map[string]any{"name": g}
 		}
 		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		// Set spec.modelRefs when provided (scopes which models this subscription can see).
+		if len(def.modelRefs) > 0 {
+			refs := make([]any, len(def.modelRefs))
+			for i, r := range def.modelRefs {
+				refs[i] = map[string]any{"name": r.name, "namespace": r.namespace}
+			}
+			_ = unstructured.SetNestedSlice(sub.Object, refs, "spec", "modelRefs")
+		}
 
 		// Set status.phase to Active (required for subscription filtering)
 		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
@@ -394,8 +409,14 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	require.NoError(t, err, "Failed to unmarshal response body")
 
 	assert.Equal(t, "list", response.Object, "Expected object type to be 'list'")
-	// With authorization, we expect 8 models (excluding the one without URL)
-	require.Len(t, response.Data, len(llmTestScenarios)-1, "Mismatched number of models returned")
+	// Count scenarios that are Ready — FilterModelsByAccess includes models based on readiness.
+	readyCount := 0
+	for _, s := range llmTestScenarios {
+		if s.Ready {
+			readyCount++
+		}
+	}
+	require.Len(t, response.Data, readyCount, "Mismatched number of models returned")
 
 	modelsByName := make(map[string]models.Model)
 	for _, model := range response.Data {
@@ -403,8 +424,8 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 
 	for _, scenario := range llmTestScenarios {
-		// Skip the model without URL as it should be filtered out by authorization
-		if scenario.Name == "model-without-url" {
+		// Skip models that are not Ready — they are excluded by FilterModelsByAccess.
+		if !scenario.Ready {
 			continue
 		}
 
@@ -470,10 +491,18 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
-	// Create subscription lister with premium and free subscriptions
+	// Create subscriptions with modelRefs so each subscription only sees its own model.
+	// Since FilterModelsByAccess no longer probes backends, model scoping is done exclusively
+	// via subscription ModelRefs (the primary access boundary).
 	multiSubLister := fakeMultiSubscriptionLister{
-		"premium": []string{"premium-users"},
-		"free":    []string{"free-users"},
+		"premium": {
+			groups:    []string{"premium-users"},
+			modelRefs: []struct{ name, namespace string }{{"premium-model", fixtures.TestNamespace}},
+		},
+		"free": {
+			groups:    []string{"free-users"},
+			modelRefs: []struct{ name, namespace string }{{"free-model", fixtures.TestNamespace}},
+		},
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
 
@@ -1035,9 +1064,10 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		// Should have 2 entries because URLs are different (deduplication by model ID + URL)
 		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
 
-		// Both should have model ID "gpt-4" and subscription "sub-a"
+		// Both should have model ID "gpt-4-ref" (MaaSModelRef metadata.name) and subscription "sub-a".
+		// The backend probe is no longer used; the model ID comes from the MaaSModelRef name.
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID)
+			assert.Equal(t, "gpt-4-ref", model.ID)
 			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
 			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
 		}
@@ -1143,9 +1173,10 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		// even though they have the same URL and model ID
 		assert.Len(t, response.Data, 2, "Different MaaSModelRef resources should remain separate entries")
 
-		// Both should have model ID "gpt-4" and same URL but different ownedBy
+		// Model IDs come from MaaSModelRef metadata.name (no backend probe).
+		// The two refs have different names, so they produce different IDs.
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID)
+			assert.Contains(t, []string{"gpt-4-ref", "gpt-4-another-ref"}, model.ID)
 			assert.Equal(t, sharedModelServer.URL, model.URL.String())
 			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
 			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
@@ -1174,8 +1205,9 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	// Setup two subscriptions
-	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+	// Setup two subscriptions. Each subscription has a ModelRef scoping it to a single
+	// namespace so FilterModelsByAccess (readiness-based) returns only the expected model.
+	createSubscription := func(name, modelNamespace string, groups []string) *unstructured.Unstructured {
 		sub := &unstructured.Unstructured{}
 		sub.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "maas.opendatahub.io",
@@ -1190,11 +1222,10 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 			groupSlice[i] = map[string]any{"name": g}
 		}
 
-		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
-			"owner": map[string]any{
-				"groups": groupSlice,
-			},
-		}, "spec")
+		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"name": "gpt-4-ref", "namespace": modelNamespace},
+		}, "spec", "modelRefs")
 
 		// Set status.phase to Active (required for subscription filtering)
 		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
@@ -1207,8 +1238,8 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	subscriptionLister := &fakeSubscriptionListerWithMeta{
 		subscriptions: []*unstructured.Unstructured{
-			createSubscription("sub-a", []string{"user-group"}),
-			createSubscription("sub-b", []string{"user-group"}),
+			createSubscription("sub-a", "namespace-a", []string{"user-group"}),
+			createSubscription("sub-b", "namespace-b", []string{"user-group"}),
 		},
 	}
 
@@ -1248,10 +1279,11 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		// Should have 2 entries because URLs are different (even though model ID is same)
 		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
 
-		// Both should have model ID "gpt-4" but different URLs and subscriptions
+		// Model ID comes from MaaSModelRef metadata.name ("gpt-4-ref").
+		// Each model is scoped to a single subscription via ModelRefs.
 		modelsByURL := make(map[string]models.Model)
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID, "Both entries should have model ID gpt-4")
+			assert.Equal(t, "gpt-4-ref", model.ID, "Both entries should have model ID gpt-4-ref")
 			require.Len(t, model.Subscriptions, 1, "Each model should have exactly 1 subscription")
 			modelsByURL[model.URL.String()] = model
 		}

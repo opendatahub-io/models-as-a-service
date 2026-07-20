@@ -218,7 +218,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponse(&sub), nil
+				return toResponseWithResolvedModel(&sub, requestedModel), nil
 			}
 		}
 
@@ -238,7 +238,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponse(&sub), nil
+				return toResponseWithResolvedModel(&sub, requestedModel), nil
 			}
 		}
 
@@ -267,7 +267,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
 			return nil, err
 		}
-		return toResponse(&accessibleSubs[0]), nil
+		return toResponseWithResolvedModel(&accessibleSubs[0], requestedModel), nil
 	}
 
 	// User has multiple subscriptions - require explicit selection
@@ -828,6 +828,14 @@ func toResponse(sub *subscription) *SelectResponse {
 	if sub.DeletionTimestamp != nil {
 		resp.DeletionTimestamp = *sub.DeletionTimestamp
 	}
+	return resp
+}
+
+// toResponseWithResolvedModel converts a subscription and attaches the resolved
+// MaaSModelRef identity (namespace/name) used for TokenRateLimitPolicy matching.
+func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
+	resp := toResponse(sub)
+	resp.ResolvedModel = resolvedModel
 	return resp
 }
 

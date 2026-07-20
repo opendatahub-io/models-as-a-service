@@ -86,7 +86,7 @@ func TestBuildPlatformParams(t *testing.T) {
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
-	params := PlatformParams{
+	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
 		AppNamespace:            "tenant-ns",
 		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",

@@ -269,8 +269,8 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 // ResolveModelAlias returns the ExternalModel CR name, which is the model identity
 // clients send in the body for BBR requests. This matches what /v1/models returns
 // (spec.modelRef.name for ExternalModel-backed MaaSModelRefs).
-func (h *externalModelHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) string {
-	return model.Spec.ModelRef.Name
+func (h *externalModelHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	return model.Spec.ModelRef.Name, nil
 }
 
 // CleanupOnDelete is called when the MaaSModelRef is deleted.

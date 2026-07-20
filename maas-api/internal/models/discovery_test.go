@@ -6,18 +6,14 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/json"
 	"encoding/pem"
 	"math/big"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/openai/openai-go/v2"
-	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"knative.dev/pkg/apis"
@@ -154,72 +150,82 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	})
 }
 
-func TestFilterModelsByAccess_URLSchemeValidation(t *testing.T) {
+func TestFilterModelsByAccess_ReadinessBased(t *testing.T) {
 	log := logger.New(true)
 
-	// Mock model server that returns 200 for all probes
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		resp := pagination.Page[openai.Model]{
-			Object: "list",
-			Data:   []openai.Model{{ID: "test-model", Object: "model"}},
-		}
-		json.NewEncoder(w).Encode(resp) //nolint:errcheck
-	}))
-	defer server.Close()
-
-	serverURL, err := apis.ParseURL(server.URL)
+	mgr, err := models.NewManager(log, 5, "", false)
 	require.NoError(t, err)
 
-	mgr, err := models.NewManager(log, 5, "")
-	require.NoError(t, err)
-
+	// FilterModelsByAccess is purely readiness-based: no backend probing, no URL validation.
+	// The URL field is informational (returned to clients); it does not affect inclusion.
 	tests := []struct {
 		name     string
 		model    models.Model
 		included bool
 	}{
 		{
-			name: "http scheme is allowed",
+			name: "ready llmisvc with http URL is included",
 			model: models.Model{
 				Model: openai.Model{ID: "http-model", Object: "model"},
-				URL:   serverURL,
+				URL:   &apis.URL{Scheme: "http", Host: "gateway.example.com"},
 				Ready: true,
 			},
 			included: true,
 		},
 		{
-			name: "file scheme is rejected",
+			name: "not-ready llmisvc is excluded regardless of URL",
 			model: models.Model{
-				Model: openai.Model{ID: "file-model", Object: "model"},
-				URL:   &apis.URL{Scheme: "file", Host: "localhost", Path: "/etc/passwd"},
-				Ready: true,
+				Model: openai.Model{ID: "not-ready-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
+				Ready: false,
 			},
 			included: false,
 		},
 		{
-			name: "ftp scheme is rejected",
-			model: models.Model{
-				Model: openai.Model{ID: "ftp-model", Object: "model"},
-				URL:   &apis.URL{Scheme: "ftp", Host: "attacker.example.com"},
-				Ready: true,
-			},
-			included: false,
-		},
-		{
-			name: "empty scheme is rejected",
-			model: models.Model{
-				Model: openai.Model{ID: "empty-scheme-model", Object: "model"},
-				URL:   &apis.URL{Scheme: "", Host: "localhost"},
-				Ready: true,
-			},
-			included: false,
-		},
-		{
-			name: "nil URL is skipped",
+			name: "ready llmisvc with nil URL is included",
 			model: models.Model{
 				Model: openai.Model{ID: "nil-url-model", Object: "model"},
 				URL:   nil,
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "ready ExternalModel is included",
+			model: models.Model{
+				Model: openai.Model{ID: "ext-model", Object: "model"},
+				Kind:  "ExternalModel",
+				URL:   &apis.URL{Scheme: "https", Host: "provider.example.com"},
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "not-ready ExternalModel is excluded",
+			model: models.Model{
+				Model: openai.Model{ID: "ext-not-ready", Object: "model"},
+				Kind:  "ExternalModel",
+				URL:   &apis.URL{Scheme: "https", Host: "provider.example.com"},
+				Ready: false,
+			},
+			included: false,
+		},
+		{
+			name: "ready LLMInferenceService kind (alternate spelling) is included",
+			model: models.Model{
+				Model: openai.Model{ID: "llmisvc-alt", Object: "model"},
+				Kind:  "LLMInferenceService",
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "unknown kind is excluded",
+			model: models.Model{
+				Model: openai.Model{ID: "unknown-kind-model", Object: "model"},
+				Kind:  "UnknownKind",
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
 				Ready: true,
 			},
 			included: false,
@@ -230,9 +236,9 @@ func TestFilterModelsByAccess_URLSchemeValidation(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result := mgr.FilterModelsByAccess(t.Context(), []models.Model{tt.model}, "Bearer test-token", "")
 			if tt.included {
-				assert.Len(t, result, 1, "model with allowed scheme should be included")
+				assert.Len(t, result, 1, "ready model should be included")
 			} else {
-				assert.Empty(t, result, "model with disallowed scheme should be excluded")
+				assert.Empty(t, result, "not-ready or unknown-kind model should be excluded")
 			}
 		})
 	}

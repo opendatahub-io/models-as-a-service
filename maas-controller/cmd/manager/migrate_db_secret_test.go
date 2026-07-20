@@ -17,31 +17,31 @@ func TestConvertToFQDNConnectionURL(t *testing.T) {
 		namespace string
 		want      string
 	}{
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name:      "simple hostname with port",
 			url:       "postgresql://user:pass@postgres:5432/db",
 			namespace: "opendatahub",
 			want:      "postgresql://user:pass@postgres.opendatahub.svc.cluster.local:5432/db",
 		},
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name:      "hostname without port",
 			url:       "postgresql://user:pass@postgres/db",
 			namespace: "redhat-ods-applications",
 			want:      "postgresql://user:pass@postgres.redhat-ods-applications.svc.cluster.local/db",
 		},
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name:      "already FQDN - no change",
 			url:       "postgresql://user:pass@postgres.opendatahub.svc.cluster.local:5432/db",
 			namespace: "opendatahub",
 			want:      "postgresql://user:pass@postgres.opendatahub.svc.cluster.local:5432/db",
 		},
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name:      "hostname with query params",
 			url:       "postgresql://user:pass@postgres:5432/db?sslmode=require",
 			namespace: "opendatahub",
 			want:      "postgresql://user:pass@postgres.opendatahub.svc.cluster.local:5432/db?sslmode=require",
 		},
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name:      "external FQDN hostname",
 			url:       "postgresql://user:pass@db.example.com:5432/db",
 			namespace: "opendatahub",
@@ -65,7 +65,7 @@ func TestMaskConnectionURL(t *testing.T) {
 		url  string
 		want string
 	}{
-		{
+		{ //nolint:gosec // test data only, not real credentials
 			name: "with password",
 			url:  "postgresql://user:password@host:5432/db",
 			want: "postgresql://user:xxxxx@host:5432/db",
@@ -98,8 +98,8 @@ func TestMigrateMaaSDBSecretToInfraNamespace(t *testing.T) {
 		secretKey       = "DB_CONNECTION_URL"
 		controllerNs    = "opendatahub"
 		infraNs         = "odh-ai-gateway-infra"
-		originalConnURL = "postgresql://maas:password@postgres:5432/maas"
-		expectedFQDN    = "postgresql://maas:password@postgres.opendatahub.svc.cluster.local:5432/maas"
+		originalConnURL = "postgresql://maas:password@postgres:5432/maas"                               //nolint:gosec // test data only, not real credentials
+		expectedFQDN    = "postgresql://maas:password@postgres.opendatahub.svc.cluster.local:5432/maas" //nolint:gosec // test data only, not real credentials
 	)
 
 	tests := []struct {

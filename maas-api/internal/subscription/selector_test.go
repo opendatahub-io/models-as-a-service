@@ -1218,3 +1218,47 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestSelector_ResolvedModelFromPublisherAlias(t *testing.T) {
+	log := logger.New(false)
+	publisherID := "publishers/llm/models/facebook/opt-125m"
+	canonicalRef := "llm/facebook-opt-125m-simulated"
+
+	sub := createSubscriptionWithModelRefs("simulator-subscription", []string{"g1"}, []map[string]any{
+		{"name": "facebook-opt-125m-simulated", "namespace": "llm"},
+	})
+
+	modelRef := createMaaSModelRef("facebook-opt-125m-simulated", "llm", "LLMInferenceService")
+	if err := unstructured.SetNestedField(modelRef.Object, publisherID, "status", "resolvedModelAlias"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+
+	selector := subscription.NewSelector(
+		log,
+		&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
+		nil,
+	)
+
+	t.Run("publisher ID resolves to MaaSModelRef identity", func(t *testing.T) {
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := selector.Select([]string{"g1"}, "", "", publisherID)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.ResolvedModel != canonicalRef {
+			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, canonicalRef)
+		}
+	})
+
+	t.Run("path-style identity is returned unchanged", func(t *testing.T) {
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := selector.Select([]string{"g1"}, "", "", canonicalRef)
+		if err != nil {
+			t.Fatalf("Select: %v", err)
+		}
+		if result.ResolvedModel != canonicalRef {
+			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, canonicalRef)
+		}
+	})
+}

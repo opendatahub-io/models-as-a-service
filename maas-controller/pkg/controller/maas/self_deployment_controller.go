@@ -528,6 +528,11 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 // ensureUsageLogs deploys or removes OTel collector and RBAC for usage logging based on
 // the Config's usageLogging feature gate.
 func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logger) error {
+	if r.UsageLogsManifestPath == "" {
+		log.Info("WARNING: Usage logs manifest path not configured; skipping usage logs")
+		return nil
+	}
+
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		if apierrors.IsNotFound(err) {

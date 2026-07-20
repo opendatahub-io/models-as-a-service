@@ -350,10 +350,10 @@ PREMIUM_API_KEY=$(curl -sS -H "Authorization: Bearer $TOKEN" -H "Content-Type: a
   "${MAAS_API}/v1/api-keys" | jq -r .key)
 
 curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
-  -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
+  -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m-premium","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 curl -sS -o /dev/null -w "%{http_code}\n" "https://${GATEWAY_HOST}/llm/premium-simulated-simulated-premium/v1/chat/completions" \
   -H "Authorization: Bearer $PREMIUM_API_KEY" \
-  -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
+  -H "Content-Type: application/json" -d '{"model":"facebook/opt-125m-premium","messages":[{"role":"user","content":"Hi"}],"max_tokens":5}'
 ```
 
 See [docs/samples/maas-system/README.md](../docs/samples/maas-system/README.md) for more details.

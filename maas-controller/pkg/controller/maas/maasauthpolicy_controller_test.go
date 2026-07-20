@@ -1693,6 +1693,22 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 				}
 			}
 		}
+
+		keyField, exists := identity["selected_subscription_key"]
+		if !exists {
+			t.Fatal("selected_subscription_key missing")
+		}
+		keyMap, ok := keyField.(map[string]any)
+		if !ok {
+			t.Fatalf("selected_subscription_key should be a map, got %T", keyField)
+		}
+		keyExpr, ok := keyMap["expression"].(string)
+		if !ok {
+			t.Fatalf("selected_subscription_key expression missing")
+		}
+		if !contains(keyExpr, `resolvedModel`) {
+			t.Errorf("selected_subscription_key must prefer subscription-info.resolvedModel for BBR TRLP matching, got: %s", keyExpr)
+		}
 	})
 
 	// Test 3: Verify metrics are enabled on identity filter

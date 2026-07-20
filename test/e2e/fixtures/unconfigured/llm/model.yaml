@@ -1,18 +1,19 @@
 apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
-  name: simulated-premium
+  name: e2e-unconfigured-facebook-opt-125m-simulated
 spec:
   model:
     # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
     uri: hf://placeholder/no-model
-    # Distinct from free simulator (facebook/opt-125m) so catalog entries stay unique.
-    name: facebook/opt-125m-premium
+    # Unique served ID — must not share facebook/opt-125m with the free simulator
+    # (avoids ambiguous BBR routing when fixtures are installed together).
+    name: test/e2e-unconfigured-model
   # Skip storage-initializer; simulator generates responses without model weights.
   storageInitializer:
     enabled: false
   replicas: 1
-  router: 
+  router:
     route: {}
     # Connect to MaaS-enabled gateway
     gateway:
@@ -29,7 +30,7 @@ spec:
         - --port
         - "8000"
         - --model
-        - facebook/opt-125m-premium
+        - test/e2e-unconfigured-model
         - --mode
         - random
         - --no-mm-encoder-only
@@ -62,6 +63,13 @@ spec:
             path: /health
             port: https
             scheme: HTTPS
+        resources:
+          requests:
+            cpu: 100m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
         readinessProbe:
           httpGet:
             path: /ready

@@ -23,7 +23,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
-	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -65,15 +65,15 @@ func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.M
 func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
 	return f.endpoint, nil
 }
-func (f *fakeHandler) ResolveModelAlias(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) string {
-	return ""
+func (f *fakeHandler) ResolveModelAlias(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
+	return "", nil
 }
 func (f *fakeHandler) CleanupOnDelete(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
 	return nil
 }
 
 func init() {
-	utilruntime.Must(kservev1alpha1.AddToScheme(scheme))
+	utilruntime.Must(kservev1alpha2.AddToScheme(scheme))
 }
 
 // --- Test helpers ---
@@ -92,12 +92,12 @@ func newMaaSModelRef(name, ns, kind, refName string) *maasv1alpha1.MaaSModelRef 
 }
 
 // newLLMISvc is a helper function to create a LLMInferenceService resource.
-func newLLMISvc(name, ns string, readyStatus ...corev1.ConditionStatus) *kservev1alpha1.LLMInferenceService {
-	svc := &kservev1alpha1.LLMInferenceService{
+func newLLMISvc(name, ns string, readyStatus ...corev1.ConditionStatus) *kservev1alpha2.LLMInferenceService {
+	svc := &kservev1alpha2.LLMInferenceService{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
 	}
 	if len(readyStatus) > 0 {
-		svc.Status = kservev1alpha1.LLMInferenceServiceStatus{
+		svc.Status = kservev1alpha2.LLMInferenceServiceStatus{
 			Status: duckv1.Status{
 				Conditions: duckv1.Conditions{{Type: apis.ConditionReady, Status: readyStatus[0]}},
 			},
@@ -315,7 +315,7 @@ func TestMaaSModelReconciler_LLMISvcReadyTransition_ModelBecomesReady(t *testing
 
 	// --- Phase 2: KServe marks the llmisvc ready -> model should become Ready ---
 
-	currentLLMISvc := &kservev1alpha1.LLMInferenceService{}
+	currentLLMISvc := &kservev1alpha2.LLMInferenceService{}
 	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
@@ -381,7 +381,7 @@ func TestMaaSModelReconciler_LLMISvcReadyToNotReady_ModelBecomesUnhealthy(t *tes
 
 	// --- Phase 2: KServe marks the llmisvc not-ready -> model should become Unhealthy (governed but runtime failed) ---
 
-	currentLLMISvc := &kservev1alpha1.LLMInferenceService{}
+	currentLLMISvc := &kservev1alpha2.LLMInferenceService{}
 	if err := c.Get(ctx, types.NamespacedName{Name: llmisvcName, Namespace: ns}, currentLLMISvc); err != nil {
 		t.Fatalf("Get llmisvc: %v", err)
 	}
@@ -1367,7 +1367,7 @@ func newSchemeWithCRDs() *runtime.Scheme {
 
 // TestMapLLMISvcToMaaSModelRefs_UnstructuredObject locks in the fix for the
 // critical bug where the dynamic watch passed *unstructured.Unstructured but
-// mapLLMISvcToMaaSModelRefs type-asserted to *kservev1alpha1.LLMInferenceService.
+// mapLLMISvcToMaaSModelRefs type-asserted to *kservev1alpha2.LLMInferenceService.
 // Verifies that an unstructured object with the correct name and namespace
 // returns reconcile requests (not nil).
 func TestMapLLMISvcToMaaSModelRefs_UnstructuredObject(t *testing.T) {
@@ -1401,7 +1401,7 @@ func TestMapLLMISvcToMaaSModelRefs_UnstructuredObject(t *testing.T) {
 	obj.SetName(llmisvcName)
 	obj.SetNamespace(llmisvcNamespace)
 	obj.SetGroupVersionKind(schema.GroupVersionKind{
-		Group: "serving.kserve.io", Version: "v1alpha1", Kind: "LLMInferenceService",
+		Group: "serving.kserve.io", Version: "v1alpha2", Kind: "LLMInferenceService",
 	})
 
 	reqs := r.mapLLMISvcToMaaSModelRefs(context.Background(), obj)
