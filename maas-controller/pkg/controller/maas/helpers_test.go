@@ -140,6 +140,12 @@ func TestObjectBeingDeleted(t *testing.T) {
 			},
 			expected: false,
 		},
+		{
+			name:     "nil ObjectNew returns false",
+			oldObj:   &maasv1alpha1.MaaSModelRef{ObjectMeta: metav1.ObjectMeta{Name: "test"}},
+			newObj:   nil,
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

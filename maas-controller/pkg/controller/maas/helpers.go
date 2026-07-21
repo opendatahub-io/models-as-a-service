@@ -33,6 +33,9 @@ func deletionTimestampSet(e event.UpdateEvent) bool {
 // filtered.  This prevents progress from stalling when a RequeueAfter is lost
 // to a conflict-induced exponential backoff.
 func objectBeingDeleted(e event.UpdateEvent) bool {
+	if e.ObjectNew == nil {
+		return false
+	}
 	return !e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
