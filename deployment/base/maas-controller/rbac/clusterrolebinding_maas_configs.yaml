@@ -3,7 +3,7 @@ kind: ClusterRoleBinding
 metadata:
   name: maas-controller-cluster-config-rolebinding
   labels:
-    app.kubernetes.io/part-of: modelsasservice
+    app.kubernetes.io/part-of: models-as-a-service
     app.opendatahub.io/modelsasservice: "true"
 roleRef:
   apiGroup: rbac.authorization.k8s.io

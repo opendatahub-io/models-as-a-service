@@ -6,7 +6,7 @@ kind: ClusterRole
 metadata:
   name: maas-controller-cluster-config-role
   labels:
-    app.kubernetes.io/part-of: modelsasservice
+    app.kubernetes.io/part-of: models-as-a-service
     app.opendatahub.io/modelsasservice: "true"
 rules:
   # The controller cache lists/watches Config cluster-wide. Kubernetes only
