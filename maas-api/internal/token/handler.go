@@ -134,3 +134,83 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		c.Next()
 	}
 }
+
+// ExtractUserInfoOptional is a lenient variant of ExtractUserInfo for endpoints
+// that must remain accessible when no auth policy is active (e.g. no
+// LLMInferenceService deployed). When the identity headers are entirely absent
+// the middleware continues without setting a user context, letting the handler
+// decide what to return. If headers ARE present but malformed, it still aborts
+// so that real configuration errors are surfaced.
+func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
+		groupHeader := c.GetHeader(constant.HeaderGroup)
+
+		// When both identity headers are absent, continue without user context.
+		// This allows the handler to return a graceful response (e.g. empty list).
+		if username == "" && groupHeader == "" {
+			h.logger.Debug("Auth identity headers not present, continuing without user context")
+			c.Next()
+			return
+		}
+
+		// If only one header is present, that is a partial / broken auth config.
+		if username == "" {
+			h.logger.Error("Missing or empty username header while group header is present",
+				"header", constant.HeaderUsername,
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":         "Exception thrown while generating token",
+				"exceptionCode": "AUTH_FAILURE",
+				"refId":         "001",
+			})
+			c.Abort()
+			return
+		}
+
+		if groupHeader == "" {
+			h.logger.Error("Missing group header while username header is present",
+				"header", constant.HeaderGroup,
+				"username", logger.RedactValue(username),
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":         "Exception thrown while generating token",
+				"exceptionCode": "AUTH_FAILURE",
+				"refId":         "002",
+			})
+			c.Abort()
+			return
+		}
+
+		// Parse groups — malformed headers are still an error.
+		groups, err := ParseGroupsHeader(groupHeader)
+		if err != nil {
+			h.logger.Error("Failed to parse group header",
+				"header", constant.HeaderGroup,
+				"header_value", groupHeader,
+				"error", err,
+			)
+			c.JSON(http.StatusInternalServerError, gin.H{
+				"error":         "Exception thrown while generating token",
+				"exceptionCode": "AUTH_FAILURE",
+				"refId":         "003",
+			})
+			c.Abort()
+			return
+		}
+
+		userContext := &UserContext{
+			Username: username,
+			Groups:   groups,
+			Tenant:   h.tenantName,
+		}
+
+		h.logger.Debug("Extracted user info from headers",
+			"username", logger.RedactValue(username),
+			"groups", groups,
+		)
+
+		c.Set("user", userContext)
+		c.Next()
+	}
+}

@@ -252,7 +252,10 @@ func registerHandlers(
 	}
 	authMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
 
-	v1Routes.GET("/models", append(authMiddleware, modelsHandler.ListLLMs)...)
+	// /v1/models uses optional auth so it can return an empty list when no
+	// LLMInferenceService is deployed (Authorino has no auth policy).
+	modelsMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
+	v1Routes.GET("/models", append(modelsMiddleware, modelsHandler.ListLLMs)...)
 
 	// Subscription listing routes
 	v1Routes.GET("/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptions)...)
