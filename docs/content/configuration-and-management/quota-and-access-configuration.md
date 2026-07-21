@@ -175,6 +175,13 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     
     **Tracking:** [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) proposes the controller change for coexisting token rate limit policies on a shared route.
     
+!!! warning "Token rate limiting and API format"
+    **TokenRateLimitPolicy** enforcement applies only to the **`/v1/chat/completions`** endpoint (OpenAI Chat format). Requests using **`/v1/messages`** (Anthropic Messages API) or **`/v1/responses`** (OpenAI Responses API) are **not** subject to token rate limits.
+    
+    Limitador counts tokens using the `usage.total_tokens` field in the response body, which is only present in OpenAI Chat Completions responses. Anthropic Messages and OpenAI Responses report usage differently (`input_tokens`/`output_tokens` without `total_tokens`), so the rate limiting integration cannot extract the token count.
+    
+    Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.
+
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
