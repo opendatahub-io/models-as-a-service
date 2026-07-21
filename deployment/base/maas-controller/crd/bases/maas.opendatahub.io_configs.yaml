@@ -52,8 +52,11 @@ spec:
               controllerReplicas:
                 description: |-
                   ControllerReplicas sets the replica count for the maas-controller Deployment.
-                  Increasing replicas parallelizes subscription reconciliation across
-                  multiple controller pods. Defaults to 1 if not specified.
+                  Additional replicas provide high availability — if the leader pod fails,
+                  a standby takes over without waiting for a new pod to start.
+                  Note: the controller uses leader election, so only one replica is active
+                  at a time; extra replicas are standby, not parallel workers.
+                  Defaults to 1 if not specified.
                 format: int32
                 maximum: 10
                 minimum: 1

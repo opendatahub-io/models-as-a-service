@@ -67,8 +67,11 @@ type ConfigSpec struct {
 	UsageLogging *bool `json:"usageLogging,omitempty"`
 
 	// ControllerReplicas sets the replica count for the maas-controller Deployment.
-	// Increasing replicas parallelizes subscription reconciliation across
-	// multiple controller pods. Defaults to 1 if not specified.
+	// Additional replicas provide high availability — if the leader pod fails,
+	// a standby takes over without waiting for a new pod to start.
+	// Note: the controller uses leader election, so only one replica is active
+	// at a time; extra replicas are standby, not parallel workers.
+	// Defaults to 1 if not specified.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=10
