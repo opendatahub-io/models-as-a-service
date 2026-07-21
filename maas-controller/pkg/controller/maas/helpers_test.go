@@ -94,6 +94,68 @@ func TestDeletionTimestampSet(t *testing.T) {
 	}
 }
 
+func TestObjectBeingDeleted(t *testing.T) {
+	tests := []struct {
+		name     string
+		oldObj   client.Object
+		newObj   client.Object
+		expected bool
+	}{
+		{
+			name: "deletion timestamp transitions from nil to non-nil",
+			oldObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			newObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test",
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "deletion timestamp already set on both old and new",
+			oldObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test",
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+			},
+			newObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "test",
+					DeletionTimestamp: &metav1.Time{Time: time.Now()},
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "no deletion timestamp",
+			oldObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			newObj: &maasv1alpha1.MaaSModelRef{
+				ObjectMeta: metav1.ObjectMeta{Name: "test"},
+			},
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := event.UpdateEvent{
+				ObjectOld: tt.oldObj,
+				ObjectNew: tt.newObj,
+			}
+			got := objectBeingDeleted(e)
+			if got != tt.expected {
+				t.Errorf("objectBeingDeleted() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
 // TestTokenRateLimitWindowPattern validates the kubebuilder regex pattern applied to
 // TokenRateLimit.Window (defined in maassubscription_types.go).
 //

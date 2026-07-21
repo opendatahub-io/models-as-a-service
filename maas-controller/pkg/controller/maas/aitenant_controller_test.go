@@ -2266,7 +2266,7 @@ func TestAITenantReconcile_DeletionAddsTenantFinalizerBeforeDelete(t *testing.T)
 		Namespace: "models-as-a-service",
 	}, &updatedTenant)).To(Succeed())
 	g.Expect(updatedTenant.Finalizers).To(ContainElement(tenantFinalizer))
-	g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeTrue())
+	g.Expect(updatedTenant.DeletionTimestamp.IsZero()).To(BeFalse(), "MaasTenantConfig should be marked for deletion in the same reconcile pass")
 }
 
 func TestAITenantReconcile_TerminatingNamespaceDoesNotBlockDeletion(t *testing.T) {

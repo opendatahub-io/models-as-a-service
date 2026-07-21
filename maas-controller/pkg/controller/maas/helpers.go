@@ -26,6 +26,16 @@ func deletionTimestampSet(e event.UpdateEvent) bool {
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
+// objectBeingDeleted returns true when the updated object has a non-zero
+// DeletionTimestamp.  Unlike deletionTimestampSet it fires on every update
+// while the object is terminating, so status/metadata writes during a
+// multi-step deletion flow re-trigger the reconciler instead of being silently
+// filtered.  This prevents progress from stalling when a RequeueAfter is lost
+// to a conflict-induced exponential backoff.
+func objectBeingDeleted(e event.UpdateEvent) bool {
+	return !e.ObjectNew.GetDeletionTimestamp().IsZero()
+}
+
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.
 // Rejects values containing characters that could break or inject into CEL string literals.
 func validateCELValue(value, fieldName string) error {

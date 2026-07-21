@@ -202,7 +202,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
-			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
+			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: objectBeingDeleted}),
 		)).
 		Complete(r)
 }
@@ -605,7 +605,6 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 		if err := r.Patch(ctx, &tenant, client.MergeFrom(base)); err != nil {
 			return false, fmt.Errorf("add cleanup finalizer to MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
 		}
-		return false, nil
 	}
 	if err := r.Delete(ctx, &tenant); client.IgnoreNotFound(err) != nil {
 		return false, fmt.Errorf("delete MaasTenantConfig %s/%s: %w", key.Namespace, key.Name, err)
