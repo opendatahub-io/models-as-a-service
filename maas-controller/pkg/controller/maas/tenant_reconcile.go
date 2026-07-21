@@ -357,6 +357,9 @@ func surfaceReplicaWarnings(tenant *maasv1alpha1.MaasTenantConfig, runRes *tenan
 	if len(runRes.Warnings) > 0 {
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
 			"InvalidReplicaAnnotation", strings.Join(runRes.Warnings, "; "))
+	} else if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
+			"Resolved", "")
 	}
 }
 
