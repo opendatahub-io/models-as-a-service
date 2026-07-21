@@ -111,7 +111,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 		tenant.SetNamespace("models-as-a-service")
 		tenant.SetName("default-tenant")
 		tenant.SetAnnotations(map[string]string{
-			AnnotationMaaSAPIReplicas:            "3",
+			AnnotationMaaSAPIReplicas:           "3",
 			AnnotationPayloadProcessingReplicas: "2",
 		})
 
@@ -428,7 +428,7 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	maasReplicas := int32(3)
 	payloadReplicas := int32(2)
-	params := PlatformParams{
+	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
 		AppNamespace:              "tenant-ns",
 		ControllerNamespace:       "controller-ns",
 		GatewayNamespace:          "gateway-ns",
