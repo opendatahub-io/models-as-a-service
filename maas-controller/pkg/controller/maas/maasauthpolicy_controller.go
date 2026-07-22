@@ -434,12 +434,6 @@ const (
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
 const maasGatewayAuthPolicyName = "maas-gateway-auth"
 
-// maasManagementAuthPolicyName is the route-level AuthPolicy that targets the management
-// HTTPRoute (maas-api-route). Kuadrant gateway-level defaults do not always propagate the
-// ext-authz filter to every attached route, so management endpoints (/v1/models,
-// /v1/api-keys, /v1/subscriptions, /maas-api/*) need an explicit route-level AuthPolicy
-// to ensure Authorino is invoked and sets the X-MaaS-Username / X-MaaS-Group headers.
-
 // gatewayDefaultAuthPolicyName is the static deny-all AuthPolicy deployed by the Tenant
 // reconciler. It must be deleted when maas-gateway-auth is created (two gateway-level
 // AuthPolicies on the same target conflict in Kuadrant), and restored when the last
@@ -1543,6 +1537,9 @@ func (r *MaaSAuthPolicyReconciler) buildManagementAuthPolicySpec(oidc *oidcConfi
 		}
 	}
 
+	// Management endpoints have no model identity, so the cache key is based on the API key alone.
+	managementAuthValidCacheKey := `"api-key|" + (` + celExtractKey + `)`
+
 	authorizationRules := map[string]any{
 		"auth-valid": map[string]any{
 			"metrics":  false,
@@ -1555,6 +1552,12 @@ func (r *MaaSAuthPolicyReconciler) buildManagementAuthPolicySpec(oidc *oidcConfi
 allow {
   not input.auth.metadata.apiKeyValidation
 }`,
+			},
+			"cache": map[string]any{
+				"key": map[string]any{
+					"selector": managementAuthValidCacheKey,
+				},
+				"ttl": r.authzCacheTTL(),
 			},
 		},
 	}

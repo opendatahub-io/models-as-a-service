@@ -3250,6 +3250,38 @@ func TestBuildManagementAuthPolicySpec_TargetRef(t *testing.T) {
 			t.Errorf("response.success.headers must include %s", requiredHeader)
 		}
 	}
+
+	// Verify auth-valid authorization has cache with correct TTL (consistent with gateway policy)
+	authz, ok := rules["authorization"].(map[string]any)
+	if !ok {
+		t.Fatal("rules must contain authorization")
+	}
+	authValid, ok := authz["auth-valid"].(map[string]any)
+	if !ok {
+		t.Fatal("authorization must include auth-valid")
+	}
+	cache, ok := authValid["cache"].(map[string]any)
+	if !ok {
+		t.Fatal("auth-valid must include cache block for consistency with gateway policy")
+	}
+	cacheTTL, ok := cache["ttl"].(int64)
+	if !ok {
+		t.Fatal("auth-valid cache must include ttl")
+	}
+	if cacheTTL != r.authzCacheTTL() {
+		t.Errorf("auth-valid cache.ttl = %d, want %d", cacheTTL, r.authzCacheTTL())
+	}
+	cacheKey, ok := cache["key"].(map[string]any)
+	if !ok {
+		t.Fatal("auth-valid cache must include key")
+	}
+	selector, ok := cacheKey["selector"].(string)
+	if !ok || selector == "" {
+		t.Error("auth-valid cache.key.selector must be non-empty")
+	}
+	if !strings.Contains(selector, "api-key") {
+		t.Errorf("auth-valid cache key must include api-key prefix, got: %s", selector)
+	}
 }
 
 // TestBuildManagementAuthPolicySpec_WithOIDC verifies that when OIDC is configured,
