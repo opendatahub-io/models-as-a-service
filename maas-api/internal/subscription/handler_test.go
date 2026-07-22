@@ -1328,8 +1328,8 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
 		req.Header.Set("Authorization", "Bearer valid-token")
-		req.Header.Set("X-MaaS-Username", "test-user")
-		req.Header.Set("X-MaaS-Group", `["premium-users"]`)
+		req.Header.Set("X-Maas-Username", "test-user")
+		req.Header.Set("X-Maas-Group", `["premium-users"]`)
 		w := httptest.NewRecorder()
 		authedRouter.ServeHTTP(w, req)
 
