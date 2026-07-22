@@ -253,7 +253,6 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 	if !isTelemetryEnabled(telemetry) {
 		return nil
 	}
-	// Caller should have checked CRD; still skip if API missing at apply time.
 	gatewayNamespace := params.GatewayNamespace
 	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
@@ -288,6 +287,40 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 	telemetryPolicyName := TelemetryPolicyName(tenantID)
 	log.V(2).Info("Appending TelemetryPolicy", "name", telemetryPolicyName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *tp)
+
+	mgmtLabels := buildManagementTelemetryLabels(log, telemetry)
+	mgmtRouteName := MaaSAPIRouteName(tenantID)
+	mgmtTP := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "extensions.kuadrant.io/v1alpha1",
+			"kind":       "TelemetryPolicy",
+			"metadata": map[string]any{
+				"name":      ManagementTelemetryPolicyName(tenantID),
+				"namespace": params.AppNamespace,
+				"labels": map[string]any{
+					"app.kubernetes.io/part-of": "maas-observability",
+					LabelTenantName:             tenantTrackingName(tenant),
+					LabelTenantNamespace:        tenant.GetNamespace(),
+				},
+			},
+			"spec": map[string]any{
+				"targetRef": map[string]any{
+					"group": "gateway.networking.k8s.io",
+					"kind":  "HTTPRoute",
+					"name":  mgmtRouteName,
+				},
+				"metrics": map[string]any{
+					"default": map[string]any{
+						"labels": mgmtLabels,
+					},
+				},
+			},
+		},
+	}
+	mgmtPolicyName := ManagementTelemetryPolicyName(tenantID)
+	log.V(2).Info("Appending management TelemetryPolicy", "name", mgmtPolicyName, "namespace", params.AppNamespace, "targetRoute", mgmtRouteName)
+	*resources = append(*resources, *mgmtTP)
+
 	return nil
 }
 
@@ -379,6 +412,12 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 	if captureModelUsage {
 		labels["model"] = "responseBodyJSON(\"/model\")"
 	}
+	return labels
+}
+
+func buildManagementTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryConfig) map[string]any {
+	labels := buildTelemetryLabels(log, config)
+	delete(labels, "model")
 	return labels
 }
 

@@ -208,6 +208,7 @@ func TestResourceNameLength(t *testing.T) {
 		{"CronJob", MaaSAPIKeyCleanupCronJobName(maxLengthTenantName), 63},
 		{"DestinationRule", GatewayDestinationRuleName(maxLengthTenantName), 63},
 		{"TelemetryPolicy", TelemetryPolicyName(maxLengthTenantName), 63},
+		{"ManagementTelemetryPolicy", ManagementTelemetryPolicyName(maxLengthTenantName), 63},
 		{"IstioTelemetry", IstioTelemetryName(maxLengthTenantName), 63},
 	}
 

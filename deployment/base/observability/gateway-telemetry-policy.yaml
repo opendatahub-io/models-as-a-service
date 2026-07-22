@@ -9,9 +9,7 @@ spec:
   metrics:
     default:
       labels:
-        model: responseBodyJSON("/model")
         user: auth.identity.userid
-        # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription
         organization_id: auth.identity.subscription_info.organizationId
         cost_center: auth.identity.subscription_info.costCenter

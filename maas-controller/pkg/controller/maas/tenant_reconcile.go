@@ -595,6 +595,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 			name:      tenantreconcile.MaaSAPIAuthPolicyName(tenantID),
 			namespace: appNs,
 		},
+		{
+			gvk:       tenantreconcile.GVKTelemetryPolicy,
+			name:      tenantreconcile.ManagementTelemetryPolicyName(tenantID),
+			namespace: appNs,
+		},
 	}
 
 	gatewayResourcesToDelete := []struct {

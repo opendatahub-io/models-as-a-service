@@ -67,6 +67,7 @@ const (
 	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
 	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
 	baseTelemetryPolicyName                        = "maas-telemetry"
+	baseManagementTelemetryPolicyName              = "maas-mgmt-telemetry"
 	baseIstioTelemetryName                         = "latency-per-subscription"
 	baseMaaSAPIDeploymentName                      = "maas-api"
 	baseMaaSAPIServiceName                         = "maas-api"
@@ -165,6 +166,10 @@ func GatewayDestinationRuleName(tenantID string) string {
 
 func TelemetryPolicyName(tenantID string) string {
 	return resourceNameForTenant(baseTelemetryPolicyName, tenantID)
+}
+
+func ManagementTelemetryPolicyName(tenantID string) string {
+	return resourceNameForTenant(baseManagementTelemetryPolicyName, tenantID)
 }
 
 func IstioTelemetryName(tenantID string) string {
