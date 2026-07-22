@@ -515,6 +515,9 @@ validate_configuration() {
     log_debug "Using fixed namespace for operator mode: $NAMESPACE"
   fi
 
+  # Export so subprocesses (subscripts called via bash, not sourced functions) inherit the values.
+  export NAMESPACE OPERATOR_TYPE
+
   log_info "Configuration validated successfully"
 }
 
