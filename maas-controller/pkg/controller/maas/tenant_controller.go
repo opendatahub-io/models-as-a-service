@@ -290,26 +290,8 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	if !authExists {
-		if err := registerWatchWhenCRDAppears(c, mgr, authCRD, func() source.Source {
-			auth := &unstructured.Unstructured{}
-			auth.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "config.openshift.io", Version: "v1", Kind: "Authentication",
-			})
-			return source.Kind(mgr.GetCache(), auth,
-				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
-					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-						if obj.GetName() != openshiftAuthenticationClusterName {
-							return nil
-						}
-						return r.enqueueDefaultTenant(ctx, obj)
-					},
-				),
-			)
-		}); err != nil {
-			return fmt.Errorf("failed to register CRD watcher for Authentication: %w", err)
-		}
-	}
+	// No dynamic watch for Authentication CRD: it ships with OpenShift itself,
+	// so it is either present at boot (OCP) or will never appear (xKS).
 
 	if !dsciExists {
 		if err := registerWatchWhenCRDAppears(c, mgr, dsciCRD, func() source.Source {
@@ -323,6 +305,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 						return r.enqueueDefaultTenant(ctx, obj)
 					},
 				),
+				predicate.TypedResourceVersionChangedPredicate[*unstructured.Unstructured]{},
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for DSCInitialization: %w", err)
