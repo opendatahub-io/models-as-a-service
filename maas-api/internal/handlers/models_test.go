@@ -1429,6 +1429,27 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
 	})
 
+	t.Run("returns empty list when Authorization header present but no identity headers", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// User sends a Bearer token, but Authorino doesn't inject identity
+		// headers because no LLMInferenceService/auth policy is active.
+		req.Header.Set("Authorization", "Bearer some-token")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with empty list when identity headers absent")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty model list when no identity context")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+	})
+
 	t.Run("returns 401 when Authorization header missing but identity headers present", func(t *testing.T) {
 		w := httptest.NewRecorder()
 		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)

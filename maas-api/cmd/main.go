@@ -257,9 +257,10 @@ func registerHandlers(
 	modelsMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
 	v1Routes.GET("/models", append(modelsMiddleware, modelsHandler.ListLLMs)...)
 
-	// Subscription listing routes
-	v1Routes.GET("/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptions)...)
-	v1Routes.GET("/model/:model-id/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
+	// Subscription listing routes use optional auth so they can return an empty
+	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
+	v1Routes.GET("/subscriptions", append(modelsMiddleware, subscriptionHandler.ListSubscriptions)...)
+	v1Routes.GET("/model/:model-id/subscriptions", append(modelsMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
 	// API Key routes - Complete CRUD for hash-based key architecture
 	apiKeyRoutes := v1Routes.Group("/api-keys", authMiddleware...)

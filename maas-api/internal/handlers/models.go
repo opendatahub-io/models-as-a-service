@@ -357,13 +357,13 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
-	// When no auth context is present at all (no Authorization header and no
-	// user identity from Authorino), return an empty model list.  This handles
-	// the case where no LLMInferenceService is deployed so Authorino has no
-	// auth policy and does not inject any headers.
-	authHeaderRaw := strings.TrimSpace(c.GetHeader("Authorization"))
+	// When no user identity was extracted by the ExtractUserInfoOptional
+	// middleware, return an empty model list.  This covers the case where no
+	// LLMInferenceService is deployed (Authorino has no auth policy and does
+	// not inject identity headers) regardless of whether the caller sent an
+	// Authorization header.
 	_, hasUserContext := c.Get("user")
-	if authHeaderRaw == "" && !hasUserContext {
+	if !hasUserContext {
 		h.logger.Debug("No auth context present, returning empty model list")
 		c.Header("Cache-Control", "no-store")
 		c.Header("X-Access-Checked-At", time.Now().UTC().Format(time.RFC3339))
