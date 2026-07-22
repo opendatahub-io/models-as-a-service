@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,6 +32,8 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 	if mcfg == nil || mcfg.UID == "" {
 		return errors.New("config with UID is required for platform apply")
 	}
+
+	appliedHTTPRoutes := make(map[string]metav1.OwnerReference)
 
 	for i := range objs {
 		u := objs[i].DeepCopy()
@@ -68,6 +71,9 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			}
 			setTenantTrackingLabels(u, tenant)
 		}
+
+		setHTTPRouteOwnerRef(u, appliedHTTPRoutes)
+
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
 		unstructured.RemoveNestedField(u.Object, "metadata", "resourceVersion")
 		unstructured.RemoveNestedField(u.Object, "status")
@@ -75,6 +81,16 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// Tenant platform resources, ensuring a clean field-manager handoff.
 		if err := c.Patch(ctx, u, client.Apply, client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
 			return fmt.Errorf("apply %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+		}
+
+		if u.GetKind() == "HTTPRoute" {
+			key := fmt.Sprintf("%s/%s", u.GetNamespace(), u.GetName())
+			appliedHTTPRoutes[key] = metav1.OwnerReference{
+				APIVersion: u.GetAPIVersion(),
+				Kind:       u.GetKind(),
+				Name:       u.GetName(),
+				UID:        u.GetUID(),
+			}
 		}
 	}
 	return nil
@@ -141,6 +157,29 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 		}
 	}
 	return false
+}
+
+func setHTTPRouteOwnerRef(u *unstructured.Unstructured, appliedHTTPRoutes map[string]metav1.OwnerReference) {
+	if u.GetKind() != "TelemetryPolicy" {
+		return
+	}
+	targetKind, _, _ := unstructured.NestedString(u.Object, "spec", "targetRef", "kind")
+	if targetKind != "HTTPRoute" {
+		return
+	}
+	targetName, _, _ := unstructured.NestedString(u.Object, "spec", "targetRef", "name")
+	routeKey := fmt.Sprintf("%s/%s", u.GetNamespace(), targetName)
+	ownerRef, ok := appliedHTTPRoutes[routeKey]
+	if !ok {
+		return
+	}
+	refs := u.GetOwnerReferences()
+	for _, ref := range refs {
+		if ref.UID == ownerRef.UID {
+			return
+		}
+	}
+	u.SetOwnerReferences(append(refs, ownerRef))
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
