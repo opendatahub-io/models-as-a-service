@@ -434,6 +434,12 @@ const (
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
 const maasGatewayAuthPolicyName = "maas-gateway-auth"
 
+// maasManagementAuthPolicyName is the route-level AuthPolicy that targets the management
+// HTTPRoute (maas-api-route). Kuadrant gateway-level defaults do not always propagate the
+// ext-authz filter to every attached route, so management endpoints (/v1/models,
+// /v1/api-keys, /v1/subscriptions, /maas-api/*) need an explicit route-level AuthPolicy
+// to ensure Authorino is invoked and sets the X-MaaS-Username / X-MaaS-Group headers.
+
 // gatewayDefaultAuthPolicyName is the static deny-all AuthPolicy deployed by the Tenant
 // reconciler. It must be deleted when maas-gateway-auth is created (two gateway-level
 // AuthPolicies on the same target conflict in Kuadrant), and restored when the last
@@ -603,6 +609,13 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
 		log.Error(err, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
+		return ctrl.Result{}, err
+	}
+	// Reconcile route-level management AuthPolicy so Authorino is explicitly invoked
+	// for management endpoint requests (/v1/models, /v1/api-keys, /v1/subscriptions, /maas-api/*).
+	if err := r.reconcileManagementAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID); err != nil {
+		log.Error(err, "failed to reconcile management AuthPolicy")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile management AuthPolicy: %v", err), statusSnapshot)
 		return ctrl.Result{}, err
 	}
 	if legacyPolicyExists {
@@ -1388,6 +1401,359 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	return nil
 }
 
+// reconcileManagementAuthPolicy creates or updates a route-level AuthPolicy targeting the
+// management HTTPRoute (maas-api-route). This is necessary because Kuadrant gateway-level
+// defaults with the "defaults" strategy do not always configure Authorino's ext-authz
+// filter for every attached HTTPRoute. Without this explicit route-level policy, Authorino
+// is never invoked for management endpoint requests (/v1/models, /v1/api-keys,
+// /v1/subscriptions, /maas-api/*), causing OIDC tokens to pass through without evaluation
+// and the X-MaaS-Username / X-MaaS-Group headers to remain unset.
+func (r *MaaSAuthPolicyReconciler) reconcileManagementAuthPolicy(ctx context.Context, log logr.Logger, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID string) error {
+	routeName := tenantreconcile.MaaSAPIRouteName(tenantID)
+	policyName := tenantreconcile.MaaSAPIAuthPolicyName(tenantID)
+
+	log.Info("reconciling management AuthPolicy",
+		"policyName", policyName,
+		"routeName", routeName,
+		"infraNamespace", r.InfraNamespace,
+		"tenantID", tenantID)
+
+	spec := r.buildManagementAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, routeName)
+
+	mgmtPolicy := &unstructured.Unstructured{}
+	mgmtPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	mgmtPolicy.SetName(policyName)
+	mgmtPolicy.SetNamespace(r.InfraNamespace)
+	mgmtPolicy.SetLabels(map[string]string{
+		"app.kubernetes.io/managed-by": "maas-controller",
+		"app.kubernetes.io/part-of":    "maas-management-auth",
+		"app.kubernetes.io/component":  "management-auth",
+	})
+
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(mgmtPolicy.GroupVersionKind())
+	err := r.Get(ctx, client.ObjectKeyFromObject(mgmtPolicy), existing)
+	if err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to get management AuthPolicy: %w", err)
+	}
+	existingFound := err == nil
+
+	if !existingFound {
+		if err := unstructured.SetNestedMap(mgmtPolicy.Object, spec, "spec"); err != nil {
+			return fmt.Errorf("failed to set management AuthPolicy spec: %w", err)
+		}
+		if err := r.Create(ctx, mgmtPolicy); err != nil {
+			return fmt.Errorf("failed to create management AuthPolicy: %w", err)
+		}
+		log.Info("management AuthPolicy created", "name", policyName, "namespace", r.InfraNamespace)
+		return nil
+	}
+
+	if !isManaged(existing) {
+		log.Info("management AuthPolicy opted out of management, skipping", "name", policyName)
+		return nil
+	}
+
+	snapshot := existing.DeepCopy()
+	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
+		return fmt.Errorf("failed to set management AuthPolicy spec for update: %w", err)
+	}
+	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+		log.Info("management AuthPolicy unchanged, skipping update", "name", policyName)
+		return nil
+	}
+	if err := r.Update(ctx, existing); err != nil {
+		return fmt.Errorf("failed to update management AuthPolicy: %w", err)
+	}
+	log.Info("management AuthPolicy updated", "name", policyName, "namespace", r.InfraNamespace)
+	return nil
+}
+
+// buildManagementAuthPolicySpec returns the Authorino AuthPolicy spec for the route-level
+// management policy targeting maas-api-route. This contains the authentication and response
+// rules needed for Authorino to evaluate OIDC/API-key tokens and set X-MaaS-Username,
+// X-MaaS-Group, and X-MaaS-Subscription headers on management endpoint requests.
+//
+// Model-specific rules (subscription-info, subscription-valid) are omitted since management
+// endpoints do not target a specific model. The require-group-membership rule allows all
+// requests with model_identity == "" (which is the case for management endpoints).
+func (r *MaaSAuthPolicyReconciler) buildManagementAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, routeName string) map[string]any {
+	maasAPIServiceName := tenantreconcile.MaaSAPIServiceName(tenantID)
+	apiKeyValidationURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:8443/internal/v1/api-keys/validate", maasAPIServiceName, r.InfraNamespace)
+
+	celIsAPIKey, celIsNotAPIKey, celExtractKey := apiKeyCELPredicates(xAPIKeyEnabled)
+
+	authenticationRules := map[string]any{
+		"api-keys": map[string]any{
+			"plain": map[string]any{
+				"selector": "request.headers.authorization",
+			},
+			"when": []any{
+				map[string]any{
+					"selector": "request.headers.authorization",
+					"operator": "matches",
+					"value":    "^Bearer sk-oai-.*",
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+		},
+		"openshift-identities": map[string]any{
+			"kubernetesTokenReview": map[string]any{
+				"audiences": []any{r.ClusterAudience},
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(2),
+		},
+	}
+
+	if xAPIKeyEnabled {
+		authenticationRules["api-keys-x-api-key"] = map[string]any{
+			"plain": map[string]any{
+				"expression": `"Bearer " + request.headers["x-api-key"]`,
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": `"x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*") && !request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+		}
+	}
+
+	if oidc != nil {
+		authenticationRules["oidc-identities"] = map[string]any{
+			"jwt": map[string]any{
+				"issuerUrl": oidc.IssuerURL,
+				"ttl":       int64(oidc.TTL),
+			},
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey + ` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+		}
+	}
+
+	authorizationRules := map[string]any{
+		"auth-valid": map[string]any{
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": `allow {
+  object.get(input.auth.metadata, "apiKeyValidation", {})
+  input.auth.metadata.apiKeyValidation.valid == true
+}
+allow {
+  not input.auth.metadata.apiKeyValidation
+}`,
+			},
+		},
+	}
+
+	if oidc != nil {
+		authorizationRules["oidc-groups-safe"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey + ` && has(auth.identity.groups) && size(auth.identity.groups) > 0`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"opa": map[string]any{
+				"rego": `unsafe_group[g] {
+	g := input.auth.identity.groups[_]
+	not regex.match("` + safeGroupNamePattern + `", g)
+}
+
+allow {
+	count(unsafe_group) == 0
+}`,
+			},
+		}
+		authorizationRules["oidc-client-bound"] = map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsNotAPIKey +
+						` && request.headers.authorization.matches("^Bearer [^.]+\\.[^.]+\\.[^.]+$")` +
+						` && has(auth.identity.azp)`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(1),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{
+						"selector": "auth.identity.azp",
+						"operator": "eq",
+						"value":    oidc.ClientID,
+					},
+				},
+			},
+		}
+	}
+
+	rules := map[string]any{
+		"metadata": map[string]any{
+			"apiKeyValidation": map[string]any{
+				"when": []any{
+					map[string]any{
+						"predicate": celIsAPIKey,
+					},
+				},
+				"http": map[string]any{
+					"url":         apiKeyValidationURL,
+					"contentType": "application/json",
+					"method":      "POST",
+					"body": map[string]any{
+						"expression": `{"key": ` + celExtractKey + `}`,
+					},
+				},
+				"cache": map[string]any{
+					"key": map[string]any{
+						"selector": celExtractKey,
+					},
+					"ttl": r.MetadataCacheTTL,
+				},
+				"metrics":  false,
+				"priority": int64(0),
+			},
+		},
+		"authentication": authenticationRules,
+		"authorization":  authorizationRules,
+		"response": map[string]any{
+			"success": map[string]any{
+				"headers": map[string]any{
+					"X-MaaS-Username": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": celIsAPIKey,
+							},
+						},
+						"plain": map[string]any{
+							"selector": "auth.metadata.apiKeyValidation.username",
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-Username-Token": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": celIsNotAPIKey,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)`,
+						},
+						"key":      "X-MaaS-Username",
+						"metrics":  false,
+						"priority": int64(1),
+					},
+					"X-MaaS-Group": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": celIsAPIKey,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `size(auth.metadata.apiKeyValidation.groups) > 0 ? '["' + auth.metadata.apiKeyValidation.groups.join('","') + '"]' : '[]'`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-Group-Token": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": celIsNotAPIKey,
+							},
+						},
+						"plain": map[string]any{
+							"expression": celTokenGroupsHeaderJSON,
+						},
+						"key":      "X-MaaS-Group",
+						"metrics":  false,
+						"priority": int64(1),
+					},
+					"X-MaaS-Subscription": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": celSubscription,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+				},
+			},
+			"unauthenticated": map[string]any{
+				"code": int64(401),
+				"message": map[string]any{
+					"value": "Authentication required",
+				},
+			},
+			"unauthorized": map[string]any{
+				"code": int64(403),
+				"body": map[string]any{
+					"value": "Access denied",
+				},
+				"headers": map[string]any{
+					"x-ext-auth-reason": map[string]any{
+						"value": "unauthorized",
+					},
+					"content-type": map[string]any{
+						"value": "text/plain",
+					},
+				},
+			},
+		},
+	}
+
+	return map[string]any{
+		"targetRef": map[string]any{
+			"group": "gateway.networking.k8s.io",
+			"kind":  "HTTPRoute",
+			"name":  routeName,
+		},
+		// Skip auth for the health readiness probe so unauthenticated GET /maas-api/health
+		// returns 200 without triggering Authorino.
+		"when": []any{
+			map[string]any{
+				"predicate": `request.path != "/maas-api/health" || request.method != "GET"`,
+			},
+		},
+		"rules": rules,
+	}
+}
+
+// deleteManagementAuthPolicy removes the management route-level AuthPolicy.
+func (r *MaaSAuthPolicyReconciler) deleteManagementAuthPolicy(ctx context.Context, log logr.Logger, tenantID string) error {
+	policyName := tenantreconcile.MaaSAPIAuthPolicyName(tenantID)
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	policy.SetName(policyName)
+	policy.SetNamespace(r.InfraNamespace)
+
+	if err := r.Delete(ctx, policy); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete management AuthPolicy %s/%s: %w", r.InfraNamespace, policyName, err)
+	}
+	log.Info("management AuthPolicy deleted", "name", policyName, "namespace", r.InfraNamespace)
+	return nil
+}
+
 // reconcileModelAuthPolicies creates or updates the per-model group-membership AuthPolicy for
 // each model referenced by the given MaaSAuthPolicy. These lightweight policies use the Kuadrant
 // `defaults` strategy so they chain with the singleton gateway-level AuthPolicy without replacing it.
@@ -1653,6 +2019,11 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 						return ctrl.Result{}, err
 					}
 				}
+			}
+			// Also delete the management route-level AuthPolicy
+			if err := r.deleteManagementAuthPolicy(ctx, log, tenantID); err != nil {
+				log.Error(err, "failed to delete management AuthPolicy")
+				return ctrl.Result{}, err
 			}
 		}
 

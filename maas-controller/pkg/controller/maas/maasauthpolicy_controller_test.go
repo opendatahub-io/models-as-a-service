@@ -898,6 +898,14 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Fatalf("gateway AuthPolicy not found before deletion: %v", err)
 	}
 
+	// Verify management AuthPolicy was also created in the infra namespace
+	mgmtPolicy := &unstructured.Unstructured{}
+	mgmtPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	mgmtPolicyName := tenantreconcile.MaaSAPIAuthPolicyName("")
+	if err := c.Get(context.Background(), types.NamespacedName{Name: mgmtPolicyName, Namespace: "maas-system"}, mgmtPolicy); err != nil {
+		t.Fatalf("management AuthPolicy should exist after reconciliation: %v", err)
+	}
+
 	// Verify gateway-default-auth was DELETED (superseded by maas-gateway-auth)
 	defaultAuth = &unstructured.Unstructured{}
 	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
@@ -931,6 +939,13 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy)
 	if !apierrors.IsNotFound(err) {
 		t.Errorf("gateway AuthPolicy should be deleted after deleting last parent policy, but got: %v", err)
+	}
+
+	// Management AuthPolicy should also be deleted
+	mgmtPolicyAfterDelete := &unstructured.Unstructured{}
+	mgmtPolicyAfterDelete.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if getErr := c.Get(context.Background(), types.NamespacedName{Name: mgmtPolicyName, Namespace: "maas-system"}, mgmtPolicyAfterDelete); !apierrors.IsNotFound(getErr) {
+		t.Errorf("management AuthPolicy should be deleted after deleting last parent policy, but got: %v", getErr)
 	}
 
 	// gateway-default-auth should be RECREATED (deny-all restored for unconfigured models)
@@ -3028,5 +3043,312 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 	getErr := c.Get(context.Background(), types.NamespacedName{Name: staleAuthPolicyName, Namespace: tenantGwNS}, got)
 	if getErr != nil {
 		t.Fatalf("expected unmanaged stale tenant gateway AuthPolicy %q to be preserved, but Get returned error: %v", staleAuthPolicyName, getErr)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_ManagementAuthPolicyLifecycle verifies that reconciling
+// a MaaSAuthPolicy creates a route-level management AuthPolicy targeting maas-api-route,
+// and that deleting the last MaaSAuthPolicy also deletes the management AuthPolicy.
+//
+// This test validates the fix for RHOAIENG-78563: management endpoints (/v1/models,
+// /v1/api-keys, /v1/subscriptions) returned AUTH_FAILURE because Authorino was never
+// invoked for those requests. The root cause was that Kuadrant gateway-level defaults
+// did not propagate the ext-authz filter to the management HTTPRoute. An explicit
+// route-level AuthPolicy is required for Authorino to evaluate tokens on management endpoints.
+func TestMaaSAuthPolicyReconciler_ManagementAuthPolicyLifecycle(t *testing.T) {
+	const (
+		modelName      = "test-model"
+		namespace      = "default"
+		httpRouteName  = "maas-" + modelName
+		maasPolicyName = "mgmt-test-policy"
+		gatewayNS      = "openshift-ingress"
+		infraNS        = "maas-system"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   infraNS,
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+	}
+
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	// Reconcile should create the management AuthPolicy
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	// Verify management AuthPolicy was created in the infra namespace
+	mgmtPolicy := &unstructured.Unstructured{}
+	mgmtPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	mgmtPolicyName := tenantreconcile.MaaSAPIAuthPolicyName("")
+	if err := c.Get(ctx, types.NamespacedName{Name: mgmtPolicyName, Namespace: infraNS}, mgmtPolicy); err != nil {
+		t.Fatalf("management AuthPolicy should exist after reconciliation: %v", err)
+	}
+
+	// Verify it targets the HTTPRoute (not the Gateway)
+	targetKind, found, err := unstructured.NestedString(mgmtPolicy.Object, "spec", "targetRef", "kind")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy missing spec.targetRef.kind: found=%v err=%v", found, err)
+	}
+	if targetKind != "HTTPRoute" {
+		t.Errorf("management AuthPolicy targetRef.kind = %q, want %q", targetKind, "HTTPRoute")
+	}
+
+	// Verify it targets the correct HTTPRoute name
+	targetName, found, err := unstructured.NestedString(mgmtPolicy.Object, "spec", "targetRef", "name")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy missing spec.targetRef.name: found=%v err=%v", found, err)
+	}
+	expectedRouteName := tenantreconcile.MaaSAPIRouteName("")
+	if targetName != expectedRouteName {
+		t.Errorf("management AuthPolicy targetRef.name = %q, want %q", targetName, expectedRouteName)
+	}
+
+	// Verify labels indicate management auth
+	labels := mgmtPolicy.GetLabels()
+	if labels["app.kubernetes.io/part-of"] != "maas-management-auth" {
+		t.Errorf("management AuthPolicy missing expected part-of label, got: %v", labels)
+	}
+
+	// Verify authentication rules include openshift-identities (OIDC token auth)
+	_, found, err = unstructured.NestedMap(mgmtPolicy.Object, "spec", "rules", "authentication", "openshift-identities")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy should include openshift-identities authentication rule")
+	}
+
+	// Verify response headers include X-MaaS-Username
+	_, found, err = unstructured.NestedMap(mgmtPolicy.Object, "spec", "rules", "response", "success", "headers", "X-MaaS-Username")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy should include X-MaaS-Username response header")
+	}
+
+	// Verify response headers include X-MaaS-Group
+	_, found, err = unstructured.NestedMap(mgmtPolicy.Object, "spec", "rules", "response", "success", "headers", "X-MaaS-Group")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy should include X-MaaS-Group response header")
+	}
+
+	// Verify response headers include X-MaaS-Username-Token (for non-API-key tokens / OIDC)
+	_, found, err = unstructured.NestedMap(mgmtPolicy.Object, "spec", "rules", "response", "success", "headers", "X-MaaS-Username-Token")
+	if err != nil || !found {
+		t.Fatalf("management AuthPolicy should include X-MaaS-Username-Token response header for OIDC tokens")
+	}
+
+	// Verify health endpoint exclusion
+	when, found, err := unstructured.NestedSlice(mgmtPolicy.Object, "spec", "when")
+	if err != nil || !found || len(when) == 0 {
+		t.Fatalf("management AuthPolicy should have a 'when' predicate to skip health endpoint")
+	}
+	whenEntry, ok := when[0].(map[string]any)
+	if !ok {
+		t.Fatal("management AuthPolicy 'when' entry is not a map")
+	}
+	predicate, ok, _ := unstructured.NestedString(whenEntry, "predicate")
+	if !ok {
+		t.Fatal("management AuthPolicy 'when' predicate should not be empty")
+	}
+	if predicate != `request.path != "/maas-api/health" || request.method != "GET"` {
+		t.Errorf("management AuthPolicy 'when' predicate mismatch: got %s", predicate)
+	}
+
+	// Now test deletion: mark the MaaSAuthPolicy for deletion
+	if err := c.Delete(ctx, maasPolicy); err != nil {
+		t.Fatalf("Delete MaaSAuthPolicy: %v", err)
+	}
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile policy deletion: %v", err)
+	}
+
+	// Verify management AuthPolicy was deleted along with the gateway AuthPolicy
+	mgmtPolicyAfterDelete := &unstructured.Unstructured{}
+	mgmtPolicyAfterDelete.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	err = c.Get(ctx, types.NamespacedName{Name: mgmtPolicyName, Namespace: infraNS}, mgmtPolicyAfterDelete)
+	if !apierrors.IsNotFound(err) {
+		t.Errorf("management AuthPolicy should be deleted after last MaaSAuthPolicy is removed, got: %v", err)
+	}
+}
+
+// TestBuildManagementAuthPolicySpec_TargetRef verifies that the management AuthPolicy
+// spec targets the HTTPRoute (not the Gateway) and includes proper auth rules.
+func TestBuildManagementAuthPolicySpec_TargetRef(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    30,
+	}
+
+	routeName := "maas-api-route"
+	spec := r.buildManagementAuthPolicySpec(nil, false, "", routeName)
+
+	// Verify targetRef points to HTTPRoute
+	targetRef, ok := spec["targetRef"].(map[string]any)
+	if !ok {
+		t.Fatal("spec must contain targetRef")
+	}
+	if targetRef["kind"] != "HTTPRoute" {
+		t.Errorf("targetRef.kind = %v, want HTTPRoute", targetRef["kind"])
+	}
+	if targetRef["name"] != routeName {
+		t.Errorf("targetRef.name = %v, want %s", targetRef["name"], routeName)
+	}
+	if targetRef["group"] != "gateway.networking.k8s.io" {
+		t.Errorf("targetRef.group = %v, want gateway.networking.k8s.io", targetRef["group"])
+	}
+
+	// Verify rules exist
+	rules, ok := spec["rules"].(map[string]any)
+	if !ok {
+		t.Fatal("spec must contain rules")
+	}
+
+	// Verify authentication includes openshift-identities and api-keys
+	auth, ok := rules["authentication"].(map[string]any)
+	if !ok {
+		t.Fatal("rules must contain authentication")
+	}
+	if _, ok := auth["openshift-identities"]; !ok {
+		t.Error("authentication must include openshift-identities")
+	}
+	if _, ok := auth["api-keys"]; !ok {
+		t.Error("authentication must include api-keys")
+	}
+
+	// Verify response includes required headers
+	resp, ok := rules["response"].(map[string]any)
+	if !ok {
+		t.Fatal("rules must contain response")
+	}
+	success, ok := resp["success"].(map[string]any)
+	if !ok {
+		t.Fatal("response must contain success")
+	}
+	headers, ok := success["headers"].(map[string]any)
+	if !ok {
+		t.Fatal("response.success must contain headers")
+	}
+	for _, requiredHeader := range []string{"X-MaaS-Username", "X-MaaS-Username-Token", "X-MaaS-Group", "X-MaaS-Group-Token", "X-MaaS-Subscription"} {
+		if _, ok := headers[requiredHeader]; !ok {
+			t.Errorf("response.success.headers must include %s", requiredHeader)
+		}
+	}
+}
+
+// TestBuildManagementAuthPolicySpec_WithOIDC verifies that when OIDC is configured,
+// the management AuthPolicy includes OIDC authentication and authorization rules.
+func TestBuildManagementAuthPolicySpec_WithOIDC(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    30,
+	}
+
+	oidc := &oidcConfig{
+		IssuerURL: "https://sso.example.com/realms/maas",
+		ClientID:  "maas-ui",
+		TTL:       300,
+	}
+
+	spec := r.buildManagementAuthPolicySpec(oidc, false, "", "maas-api-route")
+	rules := spec["rules"].(map[string]any)
+	auth := rules["authentication"].(map[string]any)
+
+	// Verify OIDC identity source is present
+	oidcIdentities, ok := auth["oidc-identities"].(map[string]any)
+	if !ok {
+		t.Fatal("authentication must include oidc-identities when OIDC is configured")
+	}
+	jwt, ok := oidcIdentities["jwt"].(map[string]any)
+	if !ok {
+		t.Fatal("oidc-identities must include jwt config")
+	}
+	if jwt["issuerUrl"] != oidc.IssuerURL {
+		t.Errorf("oidc-identities jwt.issuerUrl = %v, want %s", jwt["issuerUrl"], oidc.IssuerURL)
+	}
+
+	// Verify OIDC authorization rules
+	authz := rules["authorization"].(map[string]any)
+	if _, ok := authz["oidc-groups-safe"]; !ok {
+		t.Error("authorization must include oidc-groups-safe when OIDC is configured")
+	}
+	if _, ok := authz["oidc-client-bound"]; !ok {
+		t.Error("authorization must include oidc-client-bound when OIDC is configured")
+	}
+}
+
+// TestBuildManagementAuthPolicySpec_WithXAPIKey verifies that when x-api-key is enabled,
+// the management AuthPolicy includes the x-api-key authentication source.
+func TestBuildManagementAuthPolicySpec_WithXAPIKey(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    30,
+	}
+
+	spec := r.buildManagementAuthPolicySpec(nil, true, "", "maas-api-route")
+	rules := spec["rules"].(map[string]any)
+	auth := rules["authentication"].(map[string]any)
+
+	if _, ok := auth["api-keys-x-api-key"]; !ok {
+		t.Error("authentication must include api-keys-x-api-key when xAPIKeyEnabled is true")
+	}
+}
+
+// TestBuildManagementAuthPolicySpec_TenantSpecific verifies that tenant-specific routing
+// is correctly reflected in the management AuthPolicy (route name and API key validation URL).
+func TestBuildManagementAuthPolicySpec_TenantSpecific(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+		ClusterAudience:  "https://kubernetes.default.svc",
+		MetadataCacheTTL: 60,
+		AuthzCacheTTL:    30,
+	}
+
+	tenantID := "redteam"
+	routeName := tenantreconcile.MaaSAPIRouteName(tenantID)
+	spec := r.buildManagementAuthPolicySpec(nil, false, tenantID, routeName)
+
+	// Verify targetRef uses tenant-specific route name
+	targetRef := spec["targetRef"].(map[string]any)
+	if targetRef["name"] != "maas-api-route-redteam" {
+		t.Errorf("targetRef.name = %v, want maas-api-route-redteam", targetRef["name"])
+	}
+
+	// Verify API key validation URL uses tenant-specific maas-api service
+	rules := spec["rules"].(map[string]any)
+	metadata := rules["metadata"].(map[string]any)
+	apiKeyValidation := metadata["apiKeyValidation"].(map[string]any)
+	httpConfig := apiKeyValidation["http"].(map[string]any)
+	url := httpConfig["url"].(string)
+
+	expectedService := "maas-api-redteam"
+	if !strings.Contains(url, expectedService) {
+		t.Errorf("API key validation URL should reference %s, got: %s", expectedService, url)
 	}
 }
