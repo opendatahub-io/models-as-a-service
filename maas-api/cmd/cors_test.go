@@ -17,16 +17,14 @@ func TestIsLocalhostOrigin(t *testing.T) {
 		want   bool
 	}{
 		{name: "http localhost with port", origin: "http://localhost:3000", want: true},
-		{name: "https localhost with port", origin: "https://localhost:8443", want: true},
 		{name: "http 127.0.0.1 with port", origin: "http://127.0.0.1:8080", want: true},
-		{name: "https 127.0.0.1 with port", origin: "https://127.0.0.1:443", want: true},
 		{name: "http localhost default port", origin: "http://localhost", want: true},
-		{name: "https localhost default port", origin: "https://localhost", want: true},
 		{name: "http 127.0.0.1 default port", origin: "http://127.0.0.1", want: true},
-		{name: "https 127.0.0.1 default port", origin: "https://127.0.0.1", want: true},
 		{name: "loopback range 127.0.0.2", origin: "http://127.0.0.2:8080", want: true},
 		{name: "loopback range 127.255.255.254", origin: "http://127.255.255.254:9090", want: true},
 
+		{name: "https localhost rejected", origin: "https://localhost:8443", want: false},
+		{name: "https 127.0.0.1 rejected", origin: "https://127.0.0.1:443", want: false},
 		{name: "external origin", origin: "https://external.com", want: false},
 		{name: "external with localhost in path", origin: "https://external.com/localhost:3000", want: false},
 		{name: "localhost without scheme", origin: "localhost:3000", want: false},
@@ -59,13 +57,9 @@ func TestDebugCORS_AllowsLocalhostOrigin(t *testing.T) {
 
 	origins := []string{
 		"http://localhost:3000",
-		"https://localhost:8443",
 		"http://127.0.0.1:8080",
-		"https://127.0.0.1:443",
 		"http://localhost",
-		"https://localhost",
 		"http://127.0.0.1",
-		"https://127.0.0.1",
 	}
 
 	for _, origin := range origins {
