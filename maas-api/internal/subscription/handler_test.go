@@ -1281,6 +1281,9 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 		if len(result) != 0 {
 			t.Errorf("expected empty array, got %d items", len(result))
 		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("expected Cache-Control: no-store, got %q", cc)
+		}
 	})
 
 	t.Run("returns empty list when Authorization present but no identity headers", func(t *testing.T) {
@@ -1318,6 +1321,9 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 		}
 		if len(result) != 0 {
 			t.Errorf("expected empty array, got %d items", len(result))
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("expected Cache-Control: no-store, got %q", cc)
 		}
 	})
 

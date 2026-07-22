@@ -421,6 +421,7 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 // When no user context is present (ExtractUserInfoOptional did not set one),
 // an empty list is returned gracefully.
 func (h *Handler) SearchAPIKeys(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
 		// No identity headers from Authorino — return an empty list instead

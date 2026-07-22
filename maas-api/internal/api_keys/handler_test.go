@@ -2344,6 +2344,8 @@ func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
 		assert.Equal(t, "list", response.Object)
 		assert.Empty(t, response.Data, "should return empty list when no auth context")
 		assert.False(t, response.HasMore)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"),
+			"expected Cache-Control: no-store to prevent caching of personalized listings")
 	})
 
 	t.Run("returns empty list when Authorization present but no identity headers", func(t *testing.T) {
