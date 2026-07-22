@@ -43,7 +43,6 @@ rules:
   - get
   - list
   - patch
-  - update
   - watch
 - apiGroups:
   - ""
@@ -112,11 +111,26 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - batch
+  resources:
+  - jobs
+  verbs:
+  - create
+  - delete
+  - get
+- apiGroups:
   - config.openshift.io
   resources:
   - authentications
   verbs:
   - get
+  - list
+  - watch
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
   - list
   - watch
 - apiGroups:
@@ -222,7 +236,7 @@ rules:
   - maasauthpolicies
   - maasmodelrefs
   - maassubscriptions
-  - tenants
+  - maastenantconfigs
   verbs:
   - create
   - delete
@@ -248,7 +262,7 @@ rules:
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status
-  - tenants/status
+  - maastenantconfigs/status
   verbs:
   - get
   - patch
@@ -261,6 +275,16 @@ rules:
   verbs:
   - get
   - list
+  - watch
+- apiGroups:
+  - maas.opendatahub.io
+  resources:
+  - tenants
+  verbs:
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - monitoring.coreos.com
@@ -312,6 +336,17 @@ rules:
   - networking.k8s.io
   resources:
   - networkpolicies
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - watch
+- apiGroups:
+  - opentelemetry.io
+  resources:
+  - opentelemetrycollectors
   verbs:
   - create
   - delete

@@ -18,10 +18,12 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,9 +40,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-// TenantReconciler reconciles the Tenant CR (platform singleton).
+// TenantReconciler reconciles the MaasTenantConfig CR (platform singleton).
 // Platform manifest logic follows the ODH operator's component deploy pattern (kustomize + post-render + SSA apply).
-// The Tenant CR is the runtime object; DSC.modelsAsService controls only enablement.
+// The MaasTenantConfig CR is the runtime object; DSC.modelsAsService controls only enablement.
 type TenantReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -55,7 +57,7 @@ type TenantReconciler struct {
 	// ControllerNamespace is the namespace where maas-controller runs (--controller-namespace).
 	// Used for automatic legacy cleanup when infrastructure namespace differs from controller namespace.
 	ControllerNamespace string
-	// TenantNamespace is the namespace where the Tenant CR lives (--maas-subscription-namespace, default models-as-a-service).
+	// TenantNamespace is the namespace where MaasTenantConfig lives (--maas-subscription-namespace, default models-as-a-service).
 	TenantNamespace string
 	// GatewayName is the name of the Gateway resource resolved from cmd/manager flags.
 	GatewayName string
@@ -69,7 +71,7 @@ type TenantReconciler struct {
 	cleanupCompleted bool
 	// ClusterAudience is the OIDC audience resolved at startup (auto-detected issuer or default).
 	ClusterAudience string
-	// TenantNamespaceDiscoveryEnabled allows reconciling Tenant CRs across all namespaces
+	// TenantNamespaceDiscoveryEnabled allows reconciling MaasTenantConfig CRs across all namespaces
 	// instead of only TenantNamespace (enables AITenant multi-tenancy).
 	TenantNamespaceDiscoveryEnabled bool
 	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
@@ -78,9 +80,9 @@ type TenantReconciler struct {
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants/status,verbs=get;update;patch
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
@@ -130,17 +132,39 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels/finalizers;externalproviders/finalizers,verbs=update
 // +kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=delete
 
-// Reconcile drives the Tenant platform lifecycle. ODH deploys maas-controller; the controller
-// owns the full deploy pipeline via the Tenant CR (no standalone ModelsAsService instance CR exists).
+// Reconcile drives the MaasTenantConfig platform lifecycle. ODH deploys maas-controller; the controller
+// owns the full deploy pipeline via the MaasTenantConfig CR (no standalone ModelsAsService instance CR exists).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	return r.reconcile(ctx, req)
+	result, err := r.reconcile(ctx, req)
+	if apierrors.IsConflict(err) && isMaasTenantConfigConflict(err, req) {
+		// Stale-cache conflict on the MaasTenantConfig itself: the in-memory object's
+		// UID/ResourceVersion diverged from etcd (e.g. deleted and recreated between
+		// Get and Status.Update). Requeue without surfacing an error so controller-runtime
+		// doesn't log "Reconciler error" or apply exponential back-off; the next reconcile
+		// will re-read a fresh copy. Conflicts on child resources are propagated unchanged.
+		ctrl.LoggerFrom(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
+		return ctrl.Result{Requeue: true}, nil
+	}
+	return result, err
+}
+
+// isMaasTenantConfigConflict returns true when the conflict error originates from
+// the MaasTenantConfig being reconciled (identified by object name in the Status
+// details), as opposed to a conflict on a child resource managed by the reconciler.
+func isMaasTenantConfigConflict(err error, req ctrl.Request) bool {
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	details := statusErr.ErrStatus.Details
+	return details != nil && details.Name == req.Name
 }
 
 const openshiftAuthenticationClusterName = "cluster"
 
 func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{
-		Name:      maasv1alpha1.TenantInstanceName,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 		Namespace: r.TenantNamespace,
 	}}}
 }
@@ -151,7 +175,7 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{
-		Name:      maasv1alpha1.TenantInstanceName,
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 		Namespace: tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace),
 	}}}
 }
@@ -171,7 +195,7 @@ func secretNamedMaaSDB() predicate.Predicate {
 	})
 }
 
-// inTenantWorkNamespaces limits watches to the namespaces where Tenant children live,
+// inTenantWorkNamespaces limits watches to the namespaces where tenant config children live,
 // avoiding cluster-wide informer noise on busy clusters.
 func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -192,7 +216,7 @@ func configResourceDefault() predicate.Predicate {
 	})
 }
 
-// SetupWithManager registers the Tenant controller.
+// SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	authMeta := &metav1.PartialObjectMetadata{}
 	authMeta.SetGroupVersionKind(schema.GroupVersionKind{
@@ -209,13 +233,13 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	return ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.Tenant{}).
+		For(&maasv1alpha1.MaasTenantConfig{}).
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.TenantNamespace,
-					Name:      maasv1alpha1.TenantInstanceName,
+					Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 				}}}
 			}),
 			builder.WithPredicates(configResourceDefault()),

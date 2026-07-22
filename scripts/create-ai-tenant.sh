@@ -11,7 +11,7 @@
 #
 # This script creates:
 #   - Gateway with LoadBalancer service and TLS certificate
-#   - AITenant CR (triggers controller to create Tenant, maas-api, etc.)
+#   - AITenant CR (triggers controller to create MaasTenantConfig, maas-api, etc.)
 #
 
 set -euo pipefail
@@ -171,7 +171,7 @@ echo "  AITenant:         ${TENANT_NAME} (${AITENANT_NAMESPACE})"
 echo ""
 echo "The MaaS controller will automatically create:"
 echo "  Namespace:        ${TENANT_NAMESPACE}"
-echo "  Tenant CR:        default-tenant (${TENANT_NAMESPACE})"
+echo "  MaasTenantConfig: default-tenant (${TENANT_NAMESPACE})"
 echo "  Deployment:       maas-api-${TENANT_NAME} (opendatahub)"
 echo "  AuthPolicy:       ${TENANT_NAME}-maas-auth (${GATEWAY_NAMESPACE})"
 echo ""
@@ -181,7 +181,7 @@ echo "  Service type:     LoadBalancer (Gateway API standard)"
 echo ""
 echo "Monitor status:"
 echo "  oc get aitenant ${TENANT_NAME} -n ${AITENANT_NAMESPACE} -w"
-echo "  oc get tenant default-tenant -n ${TENANT_NAMESPACE} -w"
+echo "  oc get maastenantconfig default-tenant -n ${TENANT_NAMESPACE} -w"
 echo "  oc get gateway ${TENANT_NAME} -n ${GATEWAY_NAMESPACE}"
 echo ""
 echo "Grant tenant-admin access with a standard RoleBinding, for example:"

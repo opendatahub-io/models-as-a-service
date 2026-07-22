@@ -164,6 +164,70 @@ curl -sS \
 
 ---
 
+## Unified Endpoint (Body-Based Routing)
+
+The examples above use **per-model URLs** (path-based routing), where each model has its own endpoint such as `https://maas.example.com/llm/my-model/v1/chat/completions`.
+
+With **body-based routing** (BBR), you send all requests to a single endpoint and specify the model in the request body. The gateway reads the `model` field and routes the request to the correct backend automatically.
+
+!!! note "Administrator prerequisite"
+    Body-based routing requires the Inference Payload Processing (IPP) component to be deployed. Contact your administrator to confirm IPP is available on your cluster.
+
+### Basic BBR Request
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{
+        \"model\": \"${MODEL_NAME}\",
+        \"messages\": [
+          {
+            \"role\": \"user\",
+            \"content\": \"Hello, how are you?\"
+          }
+        ],
+        \"max_tokens\": 100
+      }" \
+  "${MAAS_API_URL}/v1/chat/completions"
+```
+
+The only difference from path-based requests is the URL: `${MAAS_API_URL}/v1/chat/completions` instead of `${MODEL_URL}/v1/chat/completions`. The `model` field in the body determines which backend receives the request.
+
+### Streaming with BBR
+
+```bash
+curl -sS --no-buffer \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{
+        \"model\": \"${MODEL_NAME}\",
+        \"messages\": [
+          {
+            \"role\": \"user\",
+            \"content\": \"Tell me a short story\"
+          }
+        ],
+        \"max_tokens\": 200,
+        \"stream\": true
+      }" \
+  "${MAAS_API_URL}/v1/chat/completions"
+```
+
+### Path-Based vs Body-Based Routing
+
+| | Path-based | Body-based (BBR) |
+|---|---|---|
+| **URL** | Per-model: `${MODEL_URL}/v1/chat/completions` | Single: `${MAAS_API_URL}/v1/chat/completions` |
+| **Model selection** | URL path determines the model | `model` field in request body determines the model |
+| **OpenAI SDK compatible** | Requires setting `base_url` per model | Works with a single `base_url` for all models |
+| **Requires IPP** | No | Yes |
+
+!!! tip
+    The `model` value must match a model `id` returned by [`/maas-api/v1/models`](model-discovery.md). If the model name does not match, the request will be rejected.
+
+---
+
 ## Access and Rate Limits
 
 Your API key is **bound to one subscription** at creation time, which determines:

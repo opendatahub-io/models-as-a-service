@@ -293,11 +293,13 @@ should_retry_api_key_mint() {
 }
 
 # Check if running on OpenShift
-# First check if kubectl is working, then check for OpenShift-specific API resources
+# First check if kubectl is working, then check for OpenShift-specific API resources.
+# Use a here-string (not echo|grep -q): with pipefail, grep -q exits early on match and
+# the writer gets SIGPIPE (141), which falsely looks like "not OpenShift".
 api_resources=$(kubectl api-resources 2>/dev/null)
 if [ $? -ne 0 ]; then
     print_warning "Could not query API resources (kubectl may be slow to respond)" "Continuing validation anyway..."
-elif ! echo "$api_resources" | grep -q "route.openshift.io"; then
+elif ! grep -Fq "route.openshift.io" <<<"$api_resources"; then
     print_fail "Not running on OpenShift" "This validation script is designed for OpenShift clusters" "Use a different validation approach for vanilla Kubernetes"
     exit 1
 fi
@@ -409,7 +411,8 @@ print_check "HTTPRoute for maas-api"
 if kubectl get httproute maas-api-route -n "$INFRA_NAMESPACE" &>/dev/null; then
     # Check if any parent has an Accepted condition with status True
     # HTTPRoutes can have multiple parents (Kuadrant policies + gateway controller)
-    HTTPROUTE_ACCEPTED=$(kubectl get httproute maas-api-route -n "$INFRA_NAMESPACE" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null | grep -q "True" && echo "True" || echo "False")
+    HTTPROUTE_STATUS=$(kubectl get httproute maas-api-route -n "$INFRA_NAMESPACE" -o jsonpath='{.status.parents[*].conditions[?(@.type=="Accepted")].status}' 2>/dev/null || true)
+    HTTPROUTE_ACCEPTED=$(grep -Fq "True" <<<"$HTTPROUTE_STATUS" && echo "True" || echo "False")
     if [ "$HTTPROUTE_ACCEPTED" = "True" ]; then
         print_success "HTTPRoute maas-api-route is configured and accepted"
     else
@@ -648,7 +651,7 @@ else
                     # (e.g. https://<service>.svc.cluster.local/llm/<model>).
                     # When running from outside the cluster (CI/Prow) rewrite it to
                     # use the external gateway hostname so the request is routable.
-                    if echo "$MODEL_CHAT" | grep -q "\.svc\.cluster\.local"; then
+                    if grep -q "\.svc\.cluster\.local" <<<"$MODEL_CHAT"; then
                         MODEL_PATH=$(echo "$MODEL_CHAT" | sed 's|https\?://[^/]*||')
                         MODEL_CHAT="${HOST}${MODEL_PATH}"
                         print_info "Rewrote internal model URL to external gateway: $MODEL_CHAT"
@@ -657,7 +660,7 @@ else
                     if [ -n "$CUSTOM_MODEL_PATH" ]; then
                         MODEL_CHAT_ENDPOINT="${MODEL_CHAT}${CUSTOM_MODEL_PATH}"
                     else
-                        MODEL_CHAT_ENDPOINT="${MODEL_CHAT}/v1/${INFERENCE_ENDPOINT}"
+                        MODEL_CHAT_ENDPOINT="${MODEL_CHAT%/}/v1/${INFERENCE_ENDPOINT}"
                     fi
                 elif [ -n "$MODEL_NAME" ]; then
                     print_warning "Model endpoint not found" "Model endpoint not found for $MODEL_NAME" "Check model HTTPRoute configuration: kubectl get httproute -n llm"

@@ -17,3 +17,12 @@ rules:
   - get
   - list
   - watch
+- apiGroups:
+  - inference.opendatahub.io
+  resources:
+  - externalproviders
+  - externalmodels
+  verbs:
+  - get
+  - list
+  - watch

@@ -45,6 +45,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1066,10 +1067,6 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to setup field indexer for MaaSSubscription: %w", err)
 	}
 
-	// Watch generated TokenRateLimitPolicies so we re-reconcile when someone manually edits them.
-	generatedTRLP := &unstructured.Unstructured{}
-	generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
-
 	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaaSSubscription{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
@@ -1091,15 +1088,25 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSModelRefToMaaSSubscriptions,
 		)).
-		// Watch generated TokenRateLimitPolicies so manual edits get overwritten by the controller.
-		Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
-			r.mapGeneratedTRLPToParent,
-		)).
 		// Watch AITenants so gateway/OIDC platform-context changes refresh subscription
 		// gateway validation for the affected tenant namespace.
 		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapAITenantToMaaSSubscriptions,
 		))
+
+	// Watch generated TokenRateLimitPolicies — Kuadrant CRD must be present for this watch to succeed.
+	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
+	const trlpCRD = "tokenratelimitpolicies.kuadrant.io"
+	trlpExists := crdExists(context.Background(), mgr.GetAPIReader(), trlpCRD)
+	if trlpExists {
+		generatedTRLP := &unstructured.Unstructured{}
+		generatedTRLP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+		b = b.Watches(generatedTRLP, handler.EnqueueRequestsFromMapFunc(
+			r.mapGeneratedTRLPToParent,
+		))
+	} else {
+		ctrl.Log.Info("TokenRateLimitPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
+	}
 
 	if r.TenantNamespaceDiscoveryEnabled {
 		// Watch Namespaces so that subscriptions in newly labeled tenant
@@ -1109,7 +1116,27 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
-	return b.Complete(r)
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	if !trlpExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, trlpCRD, func() source.Source {
+			trlp := &unstructured.Unstructured{}
+			trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+			return source.Kind(mgr.GetCache(), trlp,
+				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+						return r.mapGeneratedTRLPToParent(ctx, obj)
+					},
+				),
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for TokenRateLimitPolicy: %w", err)
+		}
+	}
+	return nil
 }
 
 func (r *MaaSSubscriptionReconciler) mapAITenantToMaaSSubscriptions(ctx context.Context, obj client.Object) []reconcile.Request {

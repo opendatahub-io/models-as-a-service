@@ -27,14 +27,17 @@ Environment variables (all optional unless noted):
   - E2E_MODEL_NAMESPACE: Namespace where models live (default: llm)
   - E2E_SIMULATOR_SUBSCRIPTION: Free-tier subscription (default: simulator-subscription)
   - E2E_PREMIUM_MODEL_REF: Premium model ref (default: premium-simulated-simulated-premium)
+  - E2E_PREMIUM_MODEL_NAME: Premium served model name (default: facebook/opt-125m-premium)
+  - E2E_PREMIUM_MODEL_PATH: Gateway path for premium model (default: /llm/premium-simulated-simulated-premium)
   - E2E_PREMIUM_SIMULATOR_SUBSCRIPTION: Premium subscription (default: premium-simulator-subscription)
   - E2E_SIMULATOR_ACCESS_POLICY: Simulator auth policy name (default: simulator-access)
   - E2E_UNCONFIGURED_MODEL_REF: Unconfigured model ref (default: e2e-unconfigured-facebook-opt-125m-simulated)
   - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
+  - E2E_UNCONFIGURED_MODEL_NAME: Unconfigured served model name (default: test/e2e-unconfigured-model)
   - E2E_DISTINCT_MODEL_REF: First distinct model ref (default: e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_ID: Model ID for first distinct model (default: test/e2e-distinct-model)
+  - E2E_DISTINCT_MODEL_ID: Canonical BBR model ID for first distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model)
   - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref (default: e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_ID: Model ID for second distinct model (default: test/e2e-distinct-model-2)
+  - E2E_DISTINCT_MODEL_2_ID: Canonical BBR model ID for second distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2)
   - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model) 
@@ -64,6 +67,9 @@ MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated"
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
+# Canonical BBR model ID as returned by GET /v1/models (publishers/{namespace}/models/{spec.model.name}).
+# Clients must use this form in the "model" field when targeting the BBR gateway endpoint.
+MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODEL_NAMESPACE}/models/{MODEL_NAME}")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 
 
@@ -91,19 +97,27 @@ def _resolve_maas_api_deployment_namespace() -> str:
 # Infrastructure namespace where maas-api workloads run.
 MAAS_API_DEPLOYMENT_NAMESPACE = _resolve_maas_api_deployment_namespace()
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
-# Ephemeral curl probes must run in a namespace allowed by maas-api NetworkPolicy
-# (openshift-ingress gateway namespace), not in the maas-api infra namespace.
-E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", GATEWAY_NAMESPACE)
+# Ephemeral curl probes run from the deployment namespace (where the UI runs),
+# matching the real traffic path for internal endpoints like /v1/tenants.
+E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
+PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
+PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
+PREMIUM_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_PREMIUM_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{PREMIUM_MODEL_NAME}",
+)
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
 UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
+UNCONFIGURED_MODEL_NAME = os.environ.get("E2E_UNCONFIGURED_MODEL_NAME", "test/e2e-unconfigured-model")
 DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simulated")
-DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", "test/e2e-distinct-model")
+# Canonical BBR form: publishers/{namespace}/models/{spec.model.name}
+DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
-DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", "test/e2e-distinct-model-2")
+DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2")
 TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
 TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
 TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
@@ -614,13 +628,20 @@ def _create_test_subscription(
 def _inference(api_key, path=None, extra_headers=None, model_name=None, max_tokens=3):
     """POST completions using an API key only (subscription is bound at mint)."""
     path = path or MODEL_PATH
+    if model_name is None:
+        if path == PREMIUM_MODEL_PATH:
+            model_name = PREMIUM_MODEL_NAME
+        elif path == UNCONFIGURED_MODEL_PATH:
+            model_name = UNCONFIGURED_MODEL_NAME
+        else:
+            model_name = MODEL_NAME
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
-        json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": max_tokens},
+        json={"model": model_name, "prompt": "Hello", "max_tokens": max_tokens},
         timeout=TIMEOUT, verify=TLS_VERIFY,
     )
 
@@ -682,6 +703,28 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+# ---------------------------------------------------------------------------
+# IPP (Payload Processing) Helpers
+# ---------------------------------------------------------------------------
+
+def _check_ipp_pods_deployed():
+    """Check if payload-processing (IPP) pods are deployed in the gateway namespace."""
+    for name in ("payload-pre-processing", "payload-processing"):
+        result = subprocess.run(
+            ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
+             "-o", "jsonpath={.status.readyReplicas}"],
+            capture_output=True, text=True,
+        )
+        if result.returncode != 0:
+            log.debug("oc check for %s failed: %s", name, result.stderr.strip())
+            return False
+        ready = result.stdout.strip()
+        if not ready or ready == "0":
+            log.debug("Deployment %s has no ready replicas", name)
+            return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -1091,7 +1134,13 @@ def _scale_kuadrant_controller_up(namespace="kuadrant-system", timeout=60):
 # Multi-tenant model helpers
 # ---------------------------------------------------------------------------
 
-def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespace: str = "openshift-ingress"):
+def _create_llmis(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = "openshift-ingress",
+    model_name: str = "facebook/opt-125m",
+):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
     Args:
@@ -1099,6 +1148,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
         namespace: Namespace to create LLMIS in
         gateway_name: Gateway name to route through
         gateway_namespace: Gateway namespace (default: openshift-ingress)
+        model_name: Served model ID (spec.model.name and simulator --model)
     """
     _apply_cr({
         "apiVersion": "serving.kserve.io/v1alpha1",
@@ -1109,7 +1159,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
         },
         "spec": {
             "model": {
-                "name": "facebook/opt-125m",
+                "name": model_name,
                 # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
                 "uri": "hf://placeholder/no-model",
             },
@@ -1137,7 +1187,7 @@ def _create_llmis(name: str, namespace: str, gateway_name: str, gateway_namespac
                         "command": ["/app/llm-d-inference-sim"],
                         "args": [
                             "--port", "8000",
-                            "--model", "facebook/opt-125m",
+                            "--model", model_name,
                             "--mode", "random",
                             "--no-mm-encoder-only",
                             "--ssl-certfile", "/var/run/kserve/tls/tls.crt",

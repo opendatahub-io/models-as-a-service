@@ -42,7 +42,7 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 		errContains string
 	}{
 		{
-			name: "allow policy in namespace with Tenant CR",
+			name: "allow policy in namespace with legacy Tenant CR",
 			policy: &maasv1alpha1.MaaSAuthPolicy{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-policy",
@@ -58,7 +58,7 @@ func TestMaaSAuthPolicyValidator_ValidateCreate(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "reject policy in namespace without Tenant CR",
+			name: "reject policy in namespace without tenant config CR",
 			policy: &maasv1alpha1.MaaSAuthPolicy{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-policy",

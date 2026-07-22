@@ -198,6 +198,46 @@ Check that LWS deployments are ready:
 
 ## Install Gateway API Controller
 
+!!! warning "Do not install OpenShift Service Mesh manually (OLM-managed OCP versions)"
+    On OCP versions where the `openshift-ingress` ClusterOperator uses OLM to
+    manage OSSM 3, manually installing OSSM can leave the GatewayClass in
+    `Accepted: Unknown` ("Waiting for controller") and block all Gateway API
+    traffic — including `maas-default-gateway`.
+
+    **Which versions are affected?** The ingress operator is migrating from OLM
+    to the Sail Library for OSSM management. The conflict described here applies
+    only to OCP versions still on the OLM path:
+
+    | OCP version | OSSM management | Manual OSSM conflict? |
+    |-------------|-----------------|----------------------|
+    | 4.19        | OLM             | **Yes** (backport TBD) |
+    | 4.20        | OLM             | **Yes** (direct-install backport in progress) |
+    | 4.21 < 4.21.22 | OLM         | **Yes** |
+    | 4.21.22+    | Sail Library    | No — CIO installs Istio directly |
+    | 4.22+       | Sail Library    | No — shipped without OLM from day one |
+
+    On OLM-managed versions, two common conflicts occur:
+
+    - **OSSM v2.x subscription present:** OSSM v2 and v3 cannot coexist. An active
+      `servicemeshoperator` (v2) subscription prevents the ingress operator from
+      installing OSSM v3, and the `clusteroperator/ingress` reports
+      `GatewayAPIOSSMConflict`.
+    - **OSSM v3 installed manually:** Manually installing `servicemeshoperator3`
+      (e.g. from the OperatorHub stable channel) pins a version that may differ from
+      what the ingress operator expects, preventing it from managing the OSSM
+      lifecycle.
+
+    Additionally, any operator installed into the `openshift-operators` namespace can
+    pull an OSSM upgrade into its InstallPlan (OLM v0 limitation), re-breaking the
+    gateway even after the conflicting subscription is removed.
+
+    **If you have a conflicting OSSM subscription:** delete the
+    `servicemeshoperator` (v2) or `servicemeshoperator3` (v3) Subscription and CSV.
+    The `openshift-ingress` operator will install OSSM at the correct pinned version
+    automatically. Do **not** approve the upgrade InstallPlan that appears afterward.
+    See [Troubleshooting — GatewayClass stuck](troubleshooting.md#common-issues)
+    (issue 12) for step-by-step remediation.
+
 Initialize OpenShift's provided Gateway API implementation:
 
 ```yaml

@@ -98,6 +98,7 @@ func serve() error {
 
 	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.BodyLimit())
 	accessLogCfg := middleware.TenantLoggerConfig{
 		DefaultTenant:   cfg.TenantName,
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
@@ -226,14 +227,12 @@ func registerHandlers(
 		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
 	}
 	if gatewayInternalHost == "" {
-		log.Warn("No gateway service found - model access checks will be disabled",
-			"gateway", cfg.GatewayName,
-			"namespace", cfg.GatewayNamespace)
-	} else {
-		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
+			cfg.GatewayNamespace, cfg.GatewayName)
 	}
+	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
@@ -278,36 +277,40 @@ func registerHandlers(
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
 }
 
-// isLocalhostOrigin reports whether the origin is a localhost address,
-// used by the debug-mode CORS policy to restrict cross-origin access to
-// local development only. Accepts both ported (http://localhost:3000)
-// and default-port (http://localhost) forms.
+// isLocalhostOrigin reports whether the origin is an http://localhost or
+// http://127.0.0.1 address, used by the debug-mode CORS policy to restrict
+// cross-origin access to local development only.
+// Only plain HTTP is accepted — local dev servers do not use HTTPS.
+// (CWE-942 / FIND-Debug-CORS.)
 func isLocalhostOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != "http" {
 		return false
 	}
-	if u.Hostname() == "localhost" {
+	host := u.Hostname()
+	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(u.Hostname())
+	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 
 func debugCORSConfig() cors.Config {
 	return cors.Config{
-		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
-		ExposeHeaders:   []string{"Content-Type"},
-		AllowOriginFunc: isLocalhostOrigin,
-		MaxAge:          12 * time.Hour,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:    []string{"Content-Type"},
+		AllowOriginFunc:  isLocalhostOrigin,
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
 	}
 }

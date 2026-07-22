@@ -7,6 +7,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -14,7 +15,7 @@ import (
 // PostRender mutates rendered resources after kustomize build. It patches all
 // dynamic values (images, gateway config, namespace, audience, env vars) and
 // applies OIDC, telemetry, and managed-annotation customizations.
-func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenant, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
+func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, resources []unstructured.Unstructured, params PlatformParams) ([]unstructured.Unstructured, error) {
 	gatewayNamespace := params.GatewayNamespace
 	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
@@ -50,7 +51,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.Tenan
 			}
 		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
 			// Configure per-tenant HTTPRoute
-			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, tenant, params); err != nil {
+			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, params); err != nil {
 				return nil, err
 			}
 		}
@@ -247,15 +248,16 @@ func isTelemetryEnabled(t *maasv1alpha1.TenantTelemetryConfig) bool {
 	return *t.Enabled
 }
 
-func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, params PlatformParams) error {
-	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
+func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	telemetry := telemetryConfigFor(tenant)
+	if !isTelemetryEnabled(telemetry) {
 		return nil
 	}
 	// Caller should have checked CRD; still skip if API missing at apply time.
 	gatewayNamespace := params.GatewayNamespace
 	gatewayName := params.GatewayName
 	tenantID := params.TenantIdentifier
-	metricLabels := buildTelemetryLabels(log, tenant.Spec.Telemetry)
+	metricLabels := buildTelemetryLabels(log, telemetry)
 	tp := &unstructured.Unstructured{
 		Object: map[string]any{
 			"apiVersion": "extensions.kuadrant.io/v1alpha1",
@@ -265,8 +267,8 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenant.Name,
-					LabelTenantNamespace:        tenant.Namespace,
+					LabelTenantName:             tenantTrackingName(tenant),
+					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -289,8 +291,8 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant *maasv1alpha1.Ten
 	return nil
 }
 
-func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tenant, resources *[]unstructured.Unstructured, params PlatformParams) error {
-	if !isTelemetryEnabled(tenant.Spec.Telemetry) {
+func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	if !isTelemetryEnabled(telemetryConfigFor(tenant)) {
 		return nil
 	}
 	gatewayNamespace := params.GatewayNamespace
@@ -305,8 +307,8 @@ func configureIstioTelemetryResources(log logr.Logger, tenant *maasv1alpha1.Tena
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenant.Name,
-					LabelTenantNamespace:        tenant.Namespace,
+					LabelTenantName:             tenantTrackingName(tenant),
+					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -380,7 +382,7 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 	return labels
 }
 
-func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, tenant *maasv1alpha1.Tenant, params PlatformParams) error {
+func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, params PlatformParams) error {
 	tenantID := params.TenantIdentifier
 
 	// Rename HTTPRoute for non-default tenants

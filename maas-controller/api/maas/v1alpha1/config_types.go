@@ -54,6 +54,17 @@ type ConfigSpec struct {
 	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
 	// +kubebuilder:validation:MaxLength=16
 	LimitadorScrapeInterval string `json:"limitadorScrapeInterval,omitempty"`
+
+	// UsageLogging enables cluster-wide per-request structured OTel access logging
+	// for usage tracking (token counts, identity, model). When enabled, the
+	// controller deploys an EnvoyFilter on the shared gateway that emits
+	// structured usage logs via OTel Access Log Service.
+	// Enabling this logs identity attributes (user_id, key_id, key_name,
+	// organization_id, groups, subscription) per request — ensure
+	// GDPR/privacy compliance before enabling.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	UsageLogging *bool `json:"usageLogging,omitempty"`
 }
 
 // ConfigStatus defines the observed state of Config.

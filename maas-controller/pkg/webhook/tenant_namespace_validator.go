@@ -34,7 +34,7 @@ type TenantNamespaceValidator struct {
 // ValidateNamespace checks if the given namespace is allowed to contain MaaS tenant resources.
 // Returns (allowed bool, error message string).
 //
-// A namespace is allowed if a Tenant CR exists in the namespace.
+// A namespace is allowed if a MaasTenantConfig CR exists in the namespace.
 // This ensures proper tenant initialization before MaaSSubscription or MaaSAuthPolicy
 // resources can be created.
 func (v *TenantNamespaceValidator) ValidateNamespace(ctx context.Context, namespace string) (bool, string) {
@@ -42,19 +42,26 @@ func (v *TenantNamespaceValidator) ValidateNamespace(ctx context.Context, namesp
 		return false, "namespace validator not configured"
 	}
 
-	// Check if a Tenant CR exists in this namespace
-	tenantList := &maasv1alpha1.TenantList{}
-	if err := v.Client.List(ctx, tenantList, client.InNamespace(namespace)); err != nil {
-		return false, fmt.Sprintf("failed to check for Tenant CR in namespace %q: %v", namespace, err)
+	configList := &maasv1alpha1.MaasTenantConfigList{}
+	if err := v.Client.List(ctx, configList, client.InNamespace(namespace)); err != nil {
+		return false, fmt.Sprintf("failed to check for MaasTenantConfig CR in namespace %q: %v", namespace, err)
 	}
 
-	if len(tenantList.Items) == 0 {
-		return false, fmt.Sprintf(
-			"namespace %q is not enabled for MaaS tenant resources. "+
-				"Create a Tenant CR in this namespace to enable it.",
-			namespace,
-		)
+	if len(configList.Items) > 0 {
+		return true, ""
 	}
 
-	return true, ""
+	legacyList := &maasv1alpha1.TenantList{}
+	if err := v.Client.List(ctx, legacyList, client.InNamespace(namespace)); err != nil {
+		return false, fmt.Sprintf("failed to check for legacy Tenant CR in namespace %q: %v", namespace, err)
+	}
+	if len(legacyList.Items) > 0 {
+		return true, ""
+	}
+
+	return false, fmt.Sprintf(
+		"namespace %q is not enabled for MaaS tenant resources. "+
+			"Create a MaasTenantConfig CR in this namespace to enable it.",
+		namespace,
+	)
 }
