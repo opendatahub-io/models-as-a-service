@@ -11,5 +11,8 @@ spec:
       managementState: Managed
       modelsAsAService:
         managementState: Managed
+    kserve:
+      managementState: Managed
+      rawDeploymentServiceConfig: Headed
     dashboard:
       managementState: Removed
