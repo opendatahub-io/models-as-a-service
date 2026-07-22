@@ -261,15 +261,20 @@ func registerHandlers(
 	v1Routes.GET("/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptions)...)
 	v1Routes.GET("/model/:model-id/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
-	// API Key routes use optional auth so listing returns an empty result
-	// when no LLMInferenceService is deployed (same rationale as /v1/models).
-	apiKeyRoutes := v1Routes.Group("/api-keys", optionalAuthMiddleware...)
+	// API Key routes use strict auth for mutating operations.
+	// Only the search/listing endpoint uses optional auth so it can return
+	// an empty result when no LLMInferenceService is deployed (same rationale
+	// as /v1/models and /v1/subscriptions).
+	strictAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+	apiKeyRoutes := v1Routes.Group("/api-keys", strictAuthMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
-	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
+
+	// API key search uses optional auth — returns empty list when no auth context
+	v1Routes.POST("/api-keys/search", append(optionalAuthMiddleware, apiKeyHandler.SearchAPIKeys)...)
 
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
