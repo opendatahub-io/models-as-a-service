@@ -15,7 +15,8 @@ func LooksLikeJWT(tokenString string) bool {
 	return len(parts) == 3
 }
 
-// ExtractClaims parses the JWT and extracts claims without validation.
+// ExtractClaims parses the JWT and extracts claims without verification.
+// SECURITY: claims are NOT signature-verified; do not use for authz decisions.
 func ExtractClaims(tokenString string) (jwt.MapClaims, error) {
 	token, _, err := new(jwt.Parser).ParseUnverified(tokenString, jwt.MapClaims{})
 	if err != nil {
