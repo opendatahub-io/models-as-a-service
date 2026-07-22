@@ -250,20 +250,20 @@ func registerHandlers(
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
 		GatewayName:     cfg.GatewayName,
 	}
-	authMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
-
-	// /v1/models uses optional auth so it can return an empty list when no
-	// LLMInferenceService is deployed (Authorino has no auth policy).
-	modelsMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
-	v1Routes.GET("/models", append(modelsMiddleware, modelsHandler.ListLLMs)...)
+	// Optional-auth middleware lets handlers return graceful responses (e.g.
+	// empty lists) when no LLMInferenceService is deployed and Authorino has
+	// no auth policy to inject identity headers.
+	optionalAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
+	v1Routes.GET("/models", append(optionalAuthMiddleware, modelsHandler.ListLLMs)...)
 
 	// Subscription listing routes use optional auth so they can return an empty
 	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
-	v1Routes.GET("/subscriptions", append(modelsMiddleware, subscriptionHandler.ListSubscriptions)...)
-	v1Routes.GET("/model/:model-id/subscriptions", append(modelsMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
+	v1Routes.GET("/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptions)...)
+	v1Routes.GET("/model/:model-id/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
-	// API Key routes - Complete CRUD for hash-based key architecture
-	apiKeyRoutes := v1Routes.Group("/api-keys", authMiddleware...)
+	// API Key routes use optional auth so listing returns an empty result
+	// when no LLMInferenceService is deployed (same rationale as /v1/models).
+	apiKeyRoutes := v1Routes.Group("/api-keys", optionalAuthMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
 	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
