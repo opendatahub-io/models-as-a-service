@@ -49,11 +49,12 @@ from multitenancy_helpers import (
     wait_for_per_tenant_ipp_ready,
 )
 from test_helper import (
-    GATEWAY_HOST,
     MODEL_NAME,
     MODEL_PATH,
     _check_ipp_pods_deployed,
+    _gateway_url,
     _get_cluster_token,
+    _maas_api_url,
     _wait_reconcile,
 )
 
@@ -97,7 +98,7 @@ def _create_default_api_key() -> str:
     oc_token = _get_cluster_token()
     subscription = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
     response = requests.post(
-        f"https://{GATEWAY_HOST}/maas-api/v1/api-keys",
+        f"{_maas_api_url()}/v1/api-keys",
         headers={
             "Authorization": f"Bearer {oc_token}",
             "Content-Type": "application/json",
@@ -284,7 +285,7 @@ class TestPerTenantIPPRouting:
 
         time.sleep(2)
         api_key = _create_default_api_key()
-        response = _post_hybrid_chat(f"https://{GATEWAY_HOST}", MODEL_PATH, api_key)
+        response = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
         assert response.status_code == 200, (
             f"Default gateway hybrid BBR failed: {response.status_code} "
             f"{redact_sensitive(response.text[:500])}"
