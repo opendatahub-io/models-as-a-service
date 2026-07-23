@@ -249,8 +249,12 @@ class TestPerTenantIPPInfrastructure:
                     f"Per-tenant NetworkPolicy {names['networkpolicy']} not present "
                     "(may be blocked by managed-ingress webhook on OpenShift)"
                 )
-            match_labels = (np.get("spec") or {}).get("podSelector", {}).get("matchLabels") or {}
-            assert match_labels.get(LABEL_TENANT_INSTANCE) == names["processing_deployment"]
+            match_exprs = np["spec"]["podSelector"].get("matchExpressions") or []
+            tenant_values = next(
+                (expr.get("values") or [] for expr in match_exprs if expr.get("key") == LABEL_TENANT_INSTANCE),
+                [],
+            )
+            assert names["processing_deployment"] in tenant_values
 
 
 @requires_default_ipp
