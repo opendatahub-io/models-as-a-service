@@ -64,6 +64,9 @@ type MaaSModelRefReconciler struct {
 	DefaultTenantNamespace string
 	// TenantNamespaceDiscoveryEnabled enables AITenant-labeled tenant namespaces.
 	TenantNamespaceDiscoveryEnabled bool
+
+	// AITenantNamespace is the infrastructure namespace where AITenant CRs live.
+	AITenantNamespace string
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
@@ -79,6 +82,7 @@ func (r *MaaSModelRefReconciler) gatewayNamespace() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasmodelrefs/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maasauthpolicies,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;list;watch;create;update;patch;delete

@@ -690,6 +690,43 @@ func deriveInfraNamespace(controllerNs string) string {
 	}
 }
 
+func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string) error {
+	if err := (&webhook.AITenantValidator{
+		Client:            mgr.GetAPIReader(),
+		AITenantNamespace: aitenantNamespace,
+		GatewayNamespace:  gatewayNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("AITenant webhook: %w", err)
+	}
+
+	tenantValidator := &webhook.TenantNamespaceValidator{
+		Client: mgr.GetAPIReader(),
+	}
+
+	if err := (&webhook.MaaSSubscriptionValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSSubscription webhook: %w", err)
+	}
+
+	if err := (&webhook.MaaSAuthPolicyValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSAuthPolicy webhook: %w", err)
+	}
+
+	if err := (&webhook.MaaSModelRefValidator{
+		Client:            mgr.GetAPIReader(),
+		AITenantNamespace: aitenantNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSModelRef webhook: %w", err)
+	}
+
+	return nil
+}
+
 func main() {
 	var metricsAddr string
 	var enableLeaderElection bool
@@ -889,6 +926,7 @@ func main() {
 		GatewayNamespace:                gatewayNamespace,
 		DefaultTenantNamespace:          maasSubscriptionNamespace,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		AITenantNamespace:               aitenantNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
@@ -1012,36 +1050,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup validating webhooks for placement-sensitive MaaS resources.
-	if err := (&webhook.AITenantValidator{
-		Client:            mgr.GetAPIReader(),
-		AITenantNamespace: aitenantNamespace,
-		GatewayNamespace:  gatewayNamespace,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "AITenant")
-		os.Exit(1)
-	}
-
-	// MaaSSubscription and MaaSAuthPolicy must be created in tenant-enabled namespaces.
-	// This prevents users from creating resources in random namespaces where they
-	// would be silently ignored.
-	tenantValidator := &webhook.TenantNamespaceValidator{
-		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
-	}
-
-	if err := (&webhook.MaaSSubscriptionValidator{
-		Client:    mgr.GetClient(),
-		Validator: tenantValidator,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSSubscription")
-		os.Exit(1)
-	}
-
-	if err := (&webhook.MaaSAuthPolicyValidator{
-		Client:    mgr.GetClient(),
-		Validator: tenantValidator,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSAuthPolicy")
+	if err := setupWebhooks(mgr, aitenantNamespace, gatewayNamespace); err != nil {
+		setupLog.Error(err, "unable to setup webhooks")
 		os.Exit(1)
 	}
 
