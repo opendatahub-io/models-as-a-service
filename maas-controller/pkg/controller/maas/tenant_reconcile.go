@@ -330,6 +330,8 @@ func (r *TenantReconciler) reconcilePlatform(
 		return &res, nil
 	}
 
+	surfaceReplicaWarnings(tenant, runRes)
+
 	if runRes.DeploymentPending {
 		tenant.Status.Phase = "Pending"
 		setDeploymentsAvailableCondition(tenant, false, "DeploymentsNotReady", runRes.Detail)
@@ -349,6 +351,16 @@ func (r *TenantReconciler) reconcilePlatform(
 	}
 
 	return nil, nil
+}
+
+func surfaceReplicaWarnings(tenant *maasv1alpha1.MaasTenantConfig, runRes *tenantreconcile.RunResult) {
+	if len(runRes.Warnings) > 0 {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
+			"InvalidReplicaAnnotation", strings.Join(runRes.Warnings, "; "))
+	} else if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
+			"Resolved", "")
+	}
 }
 
 func (r *TenantReconciler) attemptLegacyCleanup(ctx context.Context, log logr.Logger) {
