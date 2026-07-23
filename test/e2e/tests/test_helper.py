@@ -709,9 +709,17 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
 # IPP (Payload Processing) Helpers
 # ---------------------------------------------------------------------------
 
-def _check_ipp_pods_deployed():
+def _ipp_resource_name(base_name: str, tenant_name: Optional[str] = None) -> str:
+    """Return IPP resource name for default (legacy) or suffixed AITenant stacks."""
+    if not tenant_name or tenant_name == "models-as-a-service":
+        return base_name
+    return f"{base_name}-{tenant_name}"
+
+
+def _check_ipp_pods_deployed(tenant_name: Optional[str] = None):
     """Check if payload-processing (IPP) pods are deployed in the gateway namespace."""
-    for name in ("payload-pre-processing", "payload-processing"):
+    for base_name in ("payload-pre-processing", "payload-processing"):
+        name = _ipp_resource_name(base_name, tenant_name)
         result = subprocess.run(
             ["oc", "get", "deployment", name, "-n", GATEWAY_NAMESPACE,
              "-o", "jsonpath={.status.readyReplicas}"],

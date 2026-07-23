@@ -31,7 +31,7 @@ EXT_PROC_PORT = 9004
 
 
 class TestPayloadProcessingNetworkPolicyExists:
-    """Verify the payload-processing NetworkPolicy exists with correct selectors."""
+    """Verify the default-tenant payload-processing NetworkPolicy exists with correct selectors."""
 
     def test_networkpolicy_exists(self):
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
@@ -87,7 +87,7 @@ class TestPayloadProcessingNetworkPolicyExists:
         )
 
     def test_ingress_does_not_hardcode_single_gateway(self):
-        """Ingress must NOT use gateway-name label that restricts to one gateway."""
+        """Default-tenant ingress must NOT pin ext_proc to one gateway via gateway-name label."""
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
         ingress_rules = np["spec"].get("ingress") or []
@@ -99,8 +99,9 @@ class TestPayloadProcessingNetworkPolicyExists:
             for from_selector in rule.get("from") or []:
                 pod_labels = (from_selector.get("podSelector") or {}).get("matchLabels") or {}
                 assert "gateway.networking.k8s.io/gateway-name" not in pod_labels, (
-                    "ext_proc ingress must NOT use gateway.networking.k8s.io/gateway-name "
-                    "as pod selector — this restricts traffic to a single gateway. "
+                    "default-tenant ext_proc ingress must NOT use "
+                    "gateway.networking.k8s.io/gateway-name as pod selector — "
+                    "this restricts traffic to a single gateway. "
                     f"Found: {pod_labels!r}"
                 )
 

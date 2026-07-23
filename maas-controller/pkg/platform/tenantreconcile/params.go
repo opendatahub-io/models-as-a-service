@@ -187,6 +187,7 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetName(MaaSAPIDeploymentName(tenantID))
 		return patchMaaSAPIDeployment(log, r, params)
 	case gvk == GVKDeployment && name == PayloadProcessingName:
+		r.SetName(PayloadProcessingDeploymentName(tenantID))
 		return patchPayloadProcessingDeployment(log, r, params)
 	case gvk == GVKCronJob && name == baseMaaSAPIKeyCleanupCronJobName:
 		// Rename and patch cleanup CronJob for this tenant
@@ -201,27 +202,43 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetName(GatewayDestinationRuleName(tenantID))
 		return patchMaaSAPIDestinationRule(log, r, params)
 	case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
+		if name == PayloadPreProcessingName {
+			r.SetName(PayloadPreProcessingDeploymentName(tenantID))
+		} else {
+			r.SetName(PayloadProcessingDeploymentName(tenantID))
+		}
 		return patchPayloadDestinationRule(log, r, params)
 	case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
+		r.SetName(PayloadProcessingEnvoyFilterName(tenantID))
 		return patchPayloadProcessingEnvoyFilter(log, r, params)
 	case gvk == GVKDeployment && name == PayloadPreProcessingName:
-		return patchPreProcessingDeployment(r, params)
+		r.SetName(PayloadPreProcessingDeploymentName(tenantID))
+		return patchPreProcessingDeployment(log, r, params)
 	case gvk == GVKService && name == baseMaaSAPIServiceName:
 		// Rename and patch maas-api Service for this tenant
 		r.SetName(MaaSAPIServiceName(tenantID))
 		return patchMaaSAPIService(log, r, params)
 	case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
-		r.SetNamespace(params.GatewayNamespace)
+		if name == PayloadPreProcessingName {
+			r.SetName(PayloadPreProcessingServiceName(tenantID))
+			return patchPayloadPreProcessingService(log, r, params)
+		}
+		r.SetName(PayloadProcessingServiceName(tenantID))
+		return patchPayloadProcessingService(log, r, params)
 	case gvk == GVKServiceAccount && name == PayloadProcessingName:
+		r.SetName(PayloadProcessingServiceAccountName(tenantID))
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
+		r.SetName(PayloadProcessingPluginsConfigMapForTenant(tenantID))
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
-		r.SetNamespace(params.GatewayNamespace)
+		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
+		return patchPayloadProcessingNetworkPolicy(log, r, params)
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
-		return patchClusterRoleBindingSubjectNS(r, params.GatewayNamespace)
+		r.SetName(PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
+		return patchPayloadProcessingClusterRoleBinding(r, params)
 	}
 	return nil
 }
@@ -322,28 +339,95 @@ func patchMaaSAPIService(log logr.Logger, r *unstructured.Unstructured, params P
 
 func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
+	deploymentName := PayloadProcessingDeploymentName(params.TenantIdentifier)
 
 	if params.PayloadProcessingReplicas != nil {
 		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadProcessingReplicas), "spec", "replicas"); err != nil {
 			return fmt.Errorf("patch payload-processing replicas: %w", err)
 		}
-		log.V(4).Info("Patching payload-processing replicas", "replicas", *params.PayloadProcessingReplicas)
+		log.V(4).Info("Patching payload-processing replicas", "deployment", deploymentName, "replicas", *params.PayloadProcessingReplicas)
 	}
 
-	log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
+	log.V(4).Info("Patching payload-processing image", "deployment", deploymentName, "image", params.PayloadProcessingImage)
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAMESPACE", params.GatewayNamespace); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAMESPACE: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "payload-processing", "GATEWAY_NAME", params.GatewayName); err != nil {
+		return fmt.Errorf("patch GATEWAY_NAME: %w", err)
+	}
+	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
+		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
+	}
+	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
+		return fmt.Errorf("patch tenant-instance label: %w", err)
+	}
+	if err := setDeploymentSelectorMatchLabels(r, map[string]string{
+		"app":               PayloadProcessingName,
+		LabelTenantInstance: deploymentName,
+	}); err != nil {
+		return fmt.Errorf("patch deployment selector: %w", err)
+	}
+	if err := patchDeploymentServiceAccountName(r, PayloadProcessingServiceAccountName(params.TenantIdentifier)); err != nil {
+		return fmt.Errorf("patch serviceAccountName: %w", err)
+	}
+	if err := patchConfigMapVolumeRef(r, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(params.TenantIdentifier)); err != nil {
+		return fmt.Errorf("patch plugins ConfigMap volume: %w", err)
 	}
 	return nil
 }
 
-func patchPreProcessingDeployment(r *unstructured.Unstructured, params PlatformParams) error {
+func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
+	deploymentName := PayloadPreProcessingDeploymentName(params.TenantIdentifier)
 	if params.PayloadProcessingImage != "" {
 		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
 		}
 	}
+	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
+		return fmt.Errorf("patch tenant-instance label: %w", err)
+	}
+	if err := setDeploymentSelectorMatchLabels(r, map[string]string{
+		"app":               PayloadPreProcessingName,
+		LabelTenantInstance: deploymentName,
+	}); err != nil {
+		return fmt.Errorf("patch deployment selector: %w", err)
+	}
+	if err := patchDeploymentServiceAccountName(r, PayloadProcessingServiceAccountName(params.TenantIdentifier)); err != nil {
+		return fmt.Errorf("patch serviceAccountName: %w", err)
+	}
+	if err := patchConfigMapVolumeRef(r, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(params.TenantIdentifier)); err != nil {
+		return fmt.Errorf("patch plugins ConfigMap volume: %w", err)
+	}
+	return nil
+}
+
+func patchPayloadProcessingService(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	deploymentName := PayloadProcessingDeploymentName(params.TenantIdentifier)
+	if err := setServiceSelectorMatchLabels(r, map[string]string{
+		"app":               PayloadProcessingName,
+		LabelTenantInstance: deploymentName,
+	}); err != nil {
+		return fmt.Errorf("patch payload-processing service selector: %w", err)
+	}
+	log.V(4).Info("Configured payload-processing Service selector", "deployment", deploymentName)
+	return nil
+}
+
+func patchPayloadPreProcessingService(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+	deploymentName := PayloadPreProcessingDeploymentName(params.TenantIdentifier)
+	if err := setServiceSelectorMatchLabels(r, map[string]string{
+		"app":               PayloadPreProcessingName,
+		LabelTenantInstance: deploymentName,
+	}); err != nil {
+		return fmt.Errorf("patch payload-pre-processing service selector: %w", err)
+	}
+	log.V(4).Info("Configured payload-pre-processing Service selector", "deployment", deploymentName)
 	return nil
 }
 
@@ -488,12 +572,12 @@ func patchMaaSAPIDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	name := r.GetName()
 	r.SetNamespace(params.GatewayNamespace)
+	newHost := fmt.Sprintf("%s.%s.svc.cluster.local", name, params.GatewayNamespace)
 	host, found, err := unstructured.NestedString(r.Object, "spec", "host")
 	if err != nil {
 		return fmt.Errorf("read %s DestinationRule host: %w", name, err)
 	}
-	if found && host != "" {
-		newHost := replaceHostNamespace(host, params.GatewayNamespace)
+	if found && host != newHost {
 		log.V(4).Info("Patching payload DestinationRule host", "name", name, "old", host, "new", newHost)
 		if err := unstructured.SetNestedField(r.Object, newHost, "spec", "host"); err != nil {
 			return fmt.Errorf("write %s DestinationRule host: %w", name, err)
@@ -533,8 +617,8 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	}
 
 	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
-	beforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
-	afterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
+	beforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
+	afterCluster := grpcClusterName(PayloadProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)
 
 	configPatches, found, err := unstructured.NestedSlice(r.Object, "spec", "configPatches")
 	if err != nil {
@@ -592,7 +676,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	return nil
 }
 
-func patchClusterRoleBindingSubjectNS(r *unstructured.Unstructured, ns string) error {
+func patchPayloadProcessingClusterRoleBinding(r *unstructured.Unstructured, params PlatformParams) error {
 	subjects, found, err := unstructured.NestedSlice(r.Object, "subjects")
 	if err != nil {
 		return fmt.Errorf("read ClusterRoleBinding subjects: %w", err)
@@ -604,11 +688,39 @@ func patchClusterRoleBindingSubjectNS(r *unstructured.Unstructured, ns string) e
 	if !ok {
 		return errors.New("ClusterRoleBinding subjects[0] is not an object")
 	}
-	subj["namespace"] = ns
+	subj["namespace"] = params.GatewayNamespace
+	subj["name"] = PayloadProcessingServiceAccountName(params.TenantIdentifier)
 	subjects[0] = subj
 	if err := unstructured.SetNestedSlice(r.Object, subjects, "subjects"); err != nil {
 		return fmt.Errorf("write ClusterRoleBinding subjects: %w", err)
 	}
+	return nil
+}
+
+func patchPayloadProcessingNetworkPolicy(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	r.SetNamespace(params.GatewayNamespace)
+
+	tenantInstances := []any{
+		PayloadProcessingDeploymentName(params.TenantIdentifier),
+		PayloadPreProcessingDeploymentName(params.TenantIdentifier),
+	}
+	if err := unstructured.SetNestedField(r.Object, map[string]any{
+		"matchExpressions": []any{
+			map[string]any{
+				"key":      LabelTenantInstance,
+				"operator": "In",
+				"values":   tenantInstances,
+			},
+		},
+	}, "spec", "podSelector"); err != nil {
+		return fmt.Errorf("write NetworkPolicy podSelector: %w", err)
+	}
+
+	// Keep the ingress peer selector from the base manifest / ODH overlay
+	// (gateway.istio.io/managed). OpenShift managed ingress rejects NetworkPolicies
+	// in openshift-ingress that match on gateway.networking.k8s.io/gateway-name.
+	log.V(4).Info("Configured payload-processing NetworkPolicy podSelector",
+		"tenantInstances", tenantInstances)
 	return nil
 }
 
@@ -696,6 +808,18 @@ func addPodTemplateLabel(r *unstructured.Unstructured, key, value string) error 
 	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "template", "metadata", "labels")
 }
 
+func setDeploymentSelectorMatchLabels(r *unstructured.Unstructured, labels map[string]string) error {
+	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "selector", "matchLabels")
+}
+
+func setServiceSelectorMatchLabels(r *unstructured.Unstructured, labels map[string]string) error {
+	return unstructured.SetNestedStringMap(r.Object, labels, "spec", "selector")
+}
+
+func patchDeploymentServiceAccountName(r *unstructured.Unstructured, serviceAccountName string) error {
+	return unstructured.SetNestedField(r.Object, serviceAccountName, "spec", "template", "spec", "serviceAccountName")
+}
+
 // addServiceSelectorLabel adds a label to the Service selector.
 // This ensures the Service only routes to pods with matching labels.
 func addServiceSelectorLabel(r *unstructured.Unstructured, key, value string) error {
@@ -708,4 +832,30 @@ func addServiceSelectorLabel(r *unstructured.Unstructured, key, value string) er
 	}
 	selector[key] = value
 	return unstructured.SetNestedStringMap(r.Object, selector, "spec", "selector")
+}
+
+func patchConfigMapVolumeRef(r *unstructured.Unstructured, volumeName, configMapName string) error {
+	volumes, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("read pod volumes: %w", err)
+	}
+	if !found {
+		return nil
+	}
+	for i, vol := range volumes {
+		volMap, ok := vol.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(volMap, "name")
+		if name != volumeName {
+			continue
+		}
+		if err := unstructured.SetNestedField(volMap, configMapName, "configMap", "name"); err != nil {
+			return fmt.Errorf("write volume %q configMap name: %w", volumeName, err)
+		}
+		volumes[i] = volMap
+		return unstructured.SetNestedSlice(r.Object, volumes, "spec", "template", "spec", "volumes")
+	}
+	return nil
 }
