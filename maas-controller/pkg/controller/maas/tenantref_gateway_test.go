@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -90,6 +91,9 @@ func TestResolveGatewayRef_WithTenantRef(t *testing.T) {
 	if ref.Namespace != "openshift-ingress" {
 		t.Errorf("resolveGatewayRef() gateway namespace = %q, want %q", ref.Namespace, "openshift-ingress")
 	}
+	if model.Status.ResolvedTenantRef != "redteam" {
+		t.Errorf("resolveGatewayRef() ResolvedTenantRef = %q, want %q", model.Status.ResolvedTenantRef, "redteam")
+	}
 }
 
 func TestResolveGatewayRef_WithTenantRef_NotFound(t *testing.T) {
@@ -120,7 +124,7 @@ func TestResolveGatewayRef_WithTenantRef_NotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolveGatewayRef() expected error for nonexistent AITenant, got nil")
 	}
-	if !containsStr(err.Error(), "not found") {
+	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("resolveGatewayRef() error = %v, want error containing 'not found'", err)
 	}
 }
@@ -163,7 +167,7 @@ func TestResolveGatewayRef_WithTenantRef_NoGatewayInStatus(t *testing.T) {
 	if err == nil {
 		t.Fatal("resolveGatewayRef() expected error for AITenant without gateway in status, got nil")
 	}
-	if !containsStr(err.Error(), "no gateway reference") {
+	if !strings.Contains(err.Error(), "no gateway reference") {
 		t.Errorf("resolveGatewayRef() error = %v, want error containing 'no gateway reference'", err)
 	}
 }
@@ -273,14 +277,7 @@ func TestResolveGatewayRef_WithTenantRef_OverridesModelNamespace(t *testing.T) {
 	if ref.Namespace != "correct-ns" {
 		t.Errorf("resolveGatewayRef() gateway namespace = %q, want %q", ref.Namespace, "correct-ns")
 	}
-}
-
-// containsStr is a simple string-contains helper for test assertions.
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	if model.Status.ResolvedTenantRef != "correct-tenant" {
+		t.Errorf("resolveGatewayRef() ResolvedTenantRef = %q, want %q", model.Status.ResolvedTenantRef, "correct-tenant")
 	}
-	return false
 }

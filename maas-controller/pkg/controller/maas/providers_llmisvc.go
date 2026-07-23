@@ -133,6 +133,7 @@ func (h *llmisvcHandler) resolveGatewayRef(ctx context.Context, log logr.Logger,
 			}
 			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to get AITenant %q: %w", model.Spec.TenantRef, err)
 		}
+		model.Status.ResolvedTenantRef = model.Spec.TenantRef
 		ref := aitenant.Status.GatewayRef
 		if ref.Name == "" || ref.Namespace == "" {
 			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q has no gateway reference in status", model.Spec.TenantRef)

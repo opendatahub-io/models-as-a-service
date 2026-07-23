@@ -49,6 +49,8 @@ type MaaSModelSpec struct {
 	// TenantRef is the name of the AITenant this model belongs to.
 	// When omitted, the model is assigned to the default tenant.
 	// +optional
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	TenantRef string `json:"tenantRef,omitempty"`
 }
 
@@ -122,6 +124,12 @@ type MaaSModelStatus struct {
 	// HTTPRouteHostnames are the hostnames configured on the HTTPRoute
 	// +optional
 	HTTPRouteHostnames []string `json:"httpRouteHostnames,omitempty"`
+
+	// ResolvedTenantRef is the name of the AITenant this model was resolved to.
+	// Set from spec.tenantRef when provided, or left empty for models using the
+	// default tenant.
+	// +optional
+	ResolvedTenantRef string `json:"resolvedTenantRef,omitempty"`
 
 	// ResolvedModelAlias is the model identity used in body-based routing headers.
 	// For LLMInferenceService: publishers/{namespace}/models/{spec.model.name}.

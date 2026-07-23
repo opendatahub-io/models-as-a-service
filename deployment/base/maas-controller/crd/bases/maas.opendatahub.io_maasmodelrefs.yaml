@@ -89,6 +89,8 @@ spec:
                 description: |-
                   TenantRef is the name of the AITenant this model belongs to.
                   When omitted, the model is assigned to the default tenant.
+                maxLength: 253
+                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                 type: string
             required:
             - modelRef
@@ -217,6 +219,12 @@ spec:
                 - Unhealthy
                 - Failed
                 - Invalid
+                type: string
+              resolvedTenantRef:
+                description: |-
+                  ResolvedTenantRef is the name of the AITenant this model was resolved to.
+                  Set from spec.tenantRef when provided, or left empty for models using the
+                  default tenant.
                 type: string
               resolvedModelAlias:
                 description: |-
