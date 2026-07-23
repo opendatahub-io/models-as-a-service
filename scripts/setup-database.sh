@@ -16,8 +16,9 @@
 #   POSTGRES_USER      Database user (default: maas)
 #   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
-#   DB_SSLMODE         PostgreSQL sslmode (default: require). Set to "disable"
-#                      for CI environments where the Postgres pod lacks TLS.
+#   DB_SSLMODE         PostgreSQL sslmode (default: disable). The POC postgres
+#                      container has no TLS configured; set to "require" only
+#                      when connecting to TLS-enabled databases.
 #
 # Usage:
 #   ./scripts/setup-database.sh
@@ -278,7 +279,7 @@ EOF
 # than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
 # Uses od (POSIX) instead of xxd which may not be available in all environments.
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
-: "${DB_SSLMODE:=require}"
+: "${DB_SSLMODE:=disable}"
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
 create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
 

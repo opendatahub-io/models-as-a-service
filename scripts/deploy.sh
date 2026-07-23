@@ -965,7 +965,7 @@ deploy_postgresql() {
     log_warn "  (AWS RDS, Crunchy Operator, Azure Database, etc.)"
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     # setup-database.sh handles upgrade detection and namespace selection
-    "${SCRIPT_DIR}/setup-database.sh"
+    NAMESPACE="$NAMESPACE" "${SCRIPT_DIR}/setup-database.sh"
   fi
 }
 
