@@ -25,11 +25,15 @@
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
 #   --maas-api-image <image>      Custom MaaS API container image
+#   --ai-gateway-operator-image <image> Custom ai-gateway-operator image (operator mode only)
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API image (passed to Tenant reconciler via RELATED_IMAGE)
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only; patches ODH CSV
+#                             RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE and enables the AIGateway
+#                             DSC component)
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists
@@ -143,6 +147,7 @@ OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
+AI_GATEWAY_OPERATOR_IMAGE="${AI_GATEWAY_OPERATOR_IMAGE:-}"
 PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
@@ -222,6 +227,12 @@ ADVANCED OPTIONS (PR Testing):
       Custom MaaS controller container image (PR testing)
       Example: quay.io/opendatahub/maas-controller:pr-406
 
+  --ai-gateway-operator-image <image>
+      Custom ai-gateway-operator image (PR/stable testing, operator mode only)
+      Patches RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE on the ODH operator CSV
+      and enables spec.components.aigateway.managementState=Managed on the DSC.
+      Example: quay.io/opendatahub/odh-ai-gateway-operator:odh-stable
+
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), stable-3.x (RHOAI)
@@ -234,6 +245,7 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)
@@ -363,6 +375,11 @@ parse_arguments() {
       --maas-controller-image)
         require_flag_value "$1" "${2:-}"
         MAAS_CONTROLLER_IMAGE="$2"
+        shift 2
+        ;;
+      --ai-gateway-operator-image)
+        require_flag_value "$1" "${2:-}"
+        AI_GATEWAY_OPERATOR_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -533,6 +550,9 @@ main() {
   if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
     log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
   fi
+  if [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]]; then
+    log_info "  ai-gateway-operator image: $AI_GATEWAY_OPERATOR_IMAGE"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -570,7 +590,36 @@ main() {
     return 1
   fi
 
-  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
+  local maas_controller_exists=false
+  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+    maas_controller_exists=true
+  elif [[ "$DEPLOYMENT_MODE" == "operator" && "$FORCE_OVERWRITE" != "true" ]]; then
+    # In operator mode, the ODH operator's AIGateway/ModelsAsService module reconciler owns
+    # deploying maas-controller. Silently falling back to a direct kustomize install here
+    # would mask the exact integration gaps this deployment mode exists to catch (e.g. RBAC
+    # errors, manifest drift, version skew between the operator and MaaS images). So: wait
+    # briefly for the operator to reconcile, then fail loudly with diagnostics if it doesn't —
+    # rather than quietly installing maas-controller ourselves and reporting false success.
+    log_info "  Waiting for the ODH operator to create maas-controller (operator-managed)..."
+    if wait_for_resource "deployment" "maas-controller" "$NAMESPACE" "$ROLLOUT_TIMEOUT"; then
+      maas_controller_exists=true
+    else
+      log_error "The ODH operator did not create maas-controller within ${ROLLOUT_TIMEOUT}s."
+      log_error "This means the operator's AIGateway/ModelsAsService module failed to reconcile it — a real integration gap, not something deploy.sh should paper over in operator mode."
+      log_error "Failing DataScienceCluster module conditions:"
+      local dsc_name_diag
+      dsc_name_diag=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+      if [[ -n "$dsc_name_diag" ]]; then
+        kubectl get datasciencecluster "$dsc_name_diag" \
+          -o jsonpath='{range .status.conditions[?(@.status=="False")]}  {.type}: {.reason} - {.message}{"\n"}{end}' 2>/dev/null \
+          | while IFS= read -r line; do log_error "$line"; done
+      fi
+      log_error "Tip: set FORCE_OVERWRITE=true to bypass this check and install maas-controller directly (only for local debugging; defeats the purpose of operator-mode validation)."
+      return 1
+    fi
+  fi
+
+  if [[ "$maas_controller_exists" == "true" && "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
     # Direct-install path used when maas-controller is absent, or when
@@ -756,6 +805,22 @@ deploy_via_operator() {
 
   # Apply custom resources
   apply_custom_resources
+
+  # Wait for ai-gateway-operator (deployed by the ODH operator's AIGateway module reconciler)
+  # to roll out with the requested image before proceeding.
+  if [[ -n "$AI_GATEWAY_OPERATOR_IMAGE" ]]; then
+    log_info "Waiting for ai-gateway-operator to be deployed..."
+    if wait_for_resource "deployment" "ai-gateway-operator" "$NAMESPACE" "$ROLLOUT_TIMEOUT"; then
+      kubectl rollout status deployment/ai-gateway-operator -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s" || {
+        log_error "ai-gateway-operator deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+        exit 1
+      }
+      log_info "ai-gateway-operator ready."
+    else
+      log_error "ai-gateway-operator deployment not found in $NAMESPACE after ${ROLLOUT_TIMEOUT}s"
+      exit 1
+    fi
+  fi
 
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
@@ -1155,6 +1220,16 @@ install_primary_operator() {
       if [[ -n "$OPERATOR_IMAGE" ]]; then
         patch_operator_csv "opendatahub-operator" "$NAMESPACE" "$OPERATOR_IMAGE"
       fi
+
+      # Inject RELATED_IMAGE_* overrides for sub-components the ODH operator's own
+      # module/component reconcilers deploy: ai-gateway-operator, maas-controller, maas-api.
+      # In operator mode these images are otherwise NOT applied once the operator manages
+      # ModelsAsService/AIGateway directly (see MaaS Controller step in main()), so this must
+      # run before apply_custom_resources() creates the DSC that triggers those reconcilers.
+      patch_operator_related_images "$NAMESPACE" "opendatahub-operator" \
+        "RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE}" \
+        "RELATED_IMAGE_ODH_MAAS_API_IMAGE=${MAAS_API_IMAGE}" \
+        "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}"
       ;;
   esac
 }
@@ -1213,6 +1288,10 @@ apply_custom_resources() {
 
   # Apply DataScienceCluster
   apply_dsc
+
+  # Enable the AIGateway component (ai-gateway-operator) when a custom image was requested.
+  # Not part of the base DSC manifest since most callers don't need this sub-component.
+  enable_ai_gateway_component
 
   # Wait for DataScienceCluster to be ready
   log_info "Waiting for DataScienceCluster to be ready..."
@@ -1321,6 +1400,31 @@ apply_dsc() {
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
+}
+
+# enable_ai_gateway_component
+#   Enables spec.components.aigateway.managementState=Managed on the DataScienceCluster so the
+#   ODH operator deploys ai-gateway-operator (pinned via patch_operator_related_images earlier
+#   in install_primary_operator). No-op unless --ai-gateway-operator-image/AI_GATEWAY_OPERATOR_IMAGE
+#   was set, since most callers don't exercise this sub-component.
+#   Note: the DSC schema field is lowercase "aigateway" (see componentApi.AIGatewayKind /
+#   opendatahub-operator's tests/e2e/aigateway_test.go), not "aiGateway".
+enable_ai_gateway_component() {
+  [[ -z "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && return 0
+
+  local dsc_name
+  dsc_name=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [[ -z "$dsc_name" ]]; then
+    log_warn "No DataScienceCluster found, cannot enable AIGateway component"
+    return 1
+  fi
+
+  log_info "Enabling AIGateway component on DataScienceCluster '$dsc_name'..."
+  kubectl patch datasciencecluster "$dsc_name" --type=merge \
+    -p '{"spec":{"components":{"aigateway":{"managementState":"Managed"}}}}' || {
+    log_error "Failed to enable AIGateway component on DataScienceCluster '$dsc_name'"
+    return 1
+  }
 }
 
 #──────────────────────────────────────────────────────────────

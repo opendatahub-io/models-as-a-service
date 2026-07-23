@@ -122,21 +122,13 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 		return
 	}
 
-	if errors.As(err, &accessDeniedErr) {
-		h.logger.Debug("Access denied to subscription")
+	// Unify "access denied" and "not found" responses to prevent callers from
+	// probing whether a subscription exists. (CWE-639 / FIND-009)
+	if errors.As(err, &accessDeniedErr) || errors.As(err, &notFoundErr) {
+		h.logger.Debug("Subscription access denied or not found")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
-				"message": err.Error(),
-				"type":    "permission_error",
-			}})
-		return
-	}
-
-	if errors.As(err, &notFoundErr) {
-		h.logger.Debug("Subscription not found")
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": gin.H{
-				"message": err.Error(),
+				"message": "access denied to requested subscription",
 				"type":    "permission_error",
 			}})
 		return
@@ -185,7 +177,8 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 		return "", "", false, errors.New("missing authorization")
 	}
 
-	// Extract x-maas-subscription header.
+	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
+
 	requestedSubscription := ""
 	headerValues := c.Request.Header.Values("X-Maas-Subscription")
 	for i := len(headerValues) - 1; i >= 0; i-- {
@@ -195,7 +188,6 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 			break
 		}
 	}
-	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
 
 	// Fail closed: API keys without a bound subscription must be rejected
 	if isAPIKeyRequest && requestedSubscription == "" {

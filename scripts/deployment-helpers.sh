@@ -272,6 +272,54 @@ patch_csv_operator_container_env() {
   return 0
 }
 
+# Patch one or more RELATED_IMAGE_* env vars on an operator's CSV and force-restart it so
+# the new values take effect (operators read their own env vars once, at process startup).
+# Used to override sub-component images (e.g. ai-gateway-operator, maas-controller, maas-api)
+# that the ODH operator's module/component reconcilers read from their own container env.
+#
+# Arguments: <namespace> <csv_name_prefix> <NAME=VALUE> [<NAME=VALUE> ...]
+# Entries with an empty VALUE are skipped (so callers can pass through unset overrides safely).
+patch_operator_related_images() {
+  local namespace=$1
+  local operator_prefix=$2
+  shift 2
+
+  local pairs=("$@")
+  [[ ${#pairs[@]} -eq 0 ]] && return 0
+
+  local has_value=false
+  local pair
+  for pair in "${pairs[@]}"; do
+    [[ -n "${pair#*=}" ]] && has_value=true
+  done
+  [[ "$has_value" == "true" ]] || return 0
+
+  local csv_name
+  csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | awk '{print $1}' | head -1)
+  if [[ -z "$csv_name" ]]; then
+    log_warn "Could not find CSV for $operator_prefix in $namespace, skipping RELATED_IMAGE patch"
+    return 0
+  fi
+
+  local patched_any=false
+  local pair name value
+  for pair in "${pairs[@]}"; do
+    name="${pair%%=*}"
+    value="${pair#*=}"
+    [[ -z "$value" ]] && continue
+    log_info "Setting ${name}=${value} on ${csv_name}..."
+    patch_csv_operator_container_env "$namespace" "$csv_name" "$name" "$value" && patched_any=true
+  done
+
+  if [[ "$patched_any" != "true" ]]; then
+    log_debug "CSV $csv_name already has the requested RELATED_IMAGE values"
+    return 0
+  fi
+
+  log_info "Restarting $operator_prefix operator to pick up RELATED_IMAGE changes..."
+  kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || true
+}
+
 # Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
 # This is required because Kuadrant needs to know about the Gateway API provider
 # Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
@@ -1305,7 +1353,9 @@ cleanup_custom_catalogsource() {
 }
 
 # wait_datasciencecluster_ready [name] [timeout]
-#   Waits for a DataScienceCluster's KServe and ModelsAsService components to be ready.
+#   Waits for a DataScienceCluster's KServe component (and AIGateway, if enabled) to be
+#   ready. Does NOT gate on ModelsAsServiceReady — see the comment inside the loop below
+#   for why that condition isn't a usable signal at this function's call sites.
 #
 # Arguments:
 #   name    - Name of the DataScienceCluster (default: default-dsc)
@@ -1319,7 +1369,13 @@ wait_datasciencecluster_ready() {
   local interval=20
   local elapsed=0
 
-  echo "* Waiting for DataScienceCluster '$name' KServe and ModelsAsService components to be ready..."
+  echo "* Waiting for DataScienceCluster '$name' KServe component to be ready..."
+
+  # AIGateway is only expected to be Managed/ready when the caller asked deploy.sh to pin
+  # an ai-gateway-operator image (see enable_ai_gateway_component). Only gate on it then —
+  # otherwise a cluster without AI Gateway enabled would never satisfy this check.
+  local require_aigateway=false
+  [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && require_aigateway=true
 
   while [ $elapsed -lt $timeout ]; do
     # Grab full DSC status as JSON
@@ -1333,34 +1389,43 @@ wait_datasciencecluster_ready() {
       continue
     fi
 
-    local kserve_state kserve_ready maas_ready model_controller_ready
+    local kserve_state kserve_ready maas_ready aigateway_ready aigateway_message
     kserve_state=$(echo "$dsc_json" | jq -r '.status.components.kserve.managementState // ""')
     kserve_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="KserveReady") | .status' | tail -n1)
     maas_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelsAsServiceReady") | .status' | tail -n1)
-    model_controller_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="ModelControllerReady") | .status' | tail -n1)
+    aigateway_ready=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="AIGatewayReady") | .status' | tail -n1)
+    aigateway_message=$(echo "$dsc_json" | jq -r '.status.conditions[]? | select(.type=="AIGatewayReady") | .message' | tail -n1)
 
-    # v2 API: ModelsAsServiceReady doesn't exist, use ModelControllerReady instead
-    # v1 API: ModelsAsServiceReady exists but may stay False
-    # Use ModelControllerReady as fallback if ModelsAsServiceReady is not True
-    # This handles both v2 API (no ModelsAsServiceReady condition) and v1 API (condition exists but may stay False)
-    local maas_check="$maas_ready"
-    if [[ "$maas_ready" != "True" && "$model_controller_ready" == "True" ]]; then
-      maas_check="$model_controller_ready"
+    # ModelsAsServiceReady is NOT gated on here. Per the ModelsAsService component's own
+    # reconciler (opendatahub-operator internal/controller/components/modelsasservice), this
+    # condition just mirrors the maas-controller-owned Tenant CR's Ready status — and
+    # maas-controller isn't installed yet at any of this function's call sites (kustomize mode
+    # installs it via deploy.sh only after this DSC-readiness wait returns; operator mode's
+    # AIGateway module deploys it asynchronously afterward too). So ModelsAsServiceReady can
+    # never legitimately be True here — it isn't a usable readiness signal at this point in
+    # either deploy mode. Real maas-controller/Tenant readiness is verified later, once it
+    # actually exists (see wait_for_resource "deployment" "maas-controller" in deploy.sh).
+    # We still surface it below purely for diagnostics.
+    if [[ "$require_aigateway" == "true" && "$aigateway_ready" == "False" && -n "$aigateway_message" ]]; then
+      echo "  ERROR: AIGateway failed to reconcile in DataScienceCluster/$name: $aigateway_message"
+      echo "  This is a real deployment gap (not a transient state) — failing fast instead of waiting out the full timeout."
+      return 1
     fi
 
-    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" && "$maas_check" == "True" ]]; then
-      echo "  * KServe and ModelsAsService are ready in DataScienceCluster '$name'"
+    if [[ "$kserve_state" == "Managed" && "$kserve_ready" == "True" ]] \
+      && { [[ "$require_aigateway" != "true" ]] || [[ "$aigateway_ready" == "True" ]]; }; then
+      echo "  * KServe (and AIGateway, if applicable) are ready in DataScienceCluster '$name'"
       return 0
     else
-      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: $maas_ready, ModelControllerReady: $model_controller_ready"
+      echo "  - KServe state: $kserve_state, KserveReady: $kserve_ready, ModelsAsServiceReady: ${maas_ready:-<absent>} (informational only), AIGatewayReady: ${aigateway_ready:-<n/a>}"
     fi
 
     sleep $interval
     elapsed=$((elapsed + interval))
   done
 
-  echo "  ERROR: KServe and/or ModelsAsService did not become ready in DataScienceCluster/$name within $timeout seconds."
-  echo "  Final status: KServe=$kserve_state, KserveReady=$kserve_ready, ModelsAsServiceReady=$maas_ready, ModelControllerReady=$model_controller_ready"
+  echo "  ERROR: KServe/AIGateway did not become ready in DataScienceCluster/$name within $timeout seconds."
+  echo "  Final status: KServe=$kserve_state, KserveReady=$kserve_ready, ModelsAsServiceReady=${maas_ready:-<absent>} (informational only), AIGatewayReady=${aigateway_ready:-<n/a>}"
   echo "  Tip: Check 'kubectl describe datasciencecluster $name' for more details"
   return 1
 }

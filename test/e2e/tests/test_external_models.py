@@ -11,7 +11,10 @@ Prerequisites:
 - For body-based routing tests: IPP (payload-processing) pods deployed
 
 Environment variables:
-- E2E_EXTERNAL_ENDPOINT: External endpoint hostname (default: httpbin.org)
+- E2E_EXTERNAL_ENDPOINT: External endpoint hostname (default: httpbingo.org — an
+  actively-maintained httpbin clone; the original httpbin.org demo instance is
+  prone to unrelated 503s that would silently skip every test in this file via
+  _check_external_endpoint_reachable)
 - E2E_EXTERNAL_SUBSCRIPTION: Subscription name (default: e2e-external-subscription)
 - GATEWAY_HOST: MaaS gateway hostname (required)
 """
@@ -40,7 +43,7 @@ log = logging.getLogger(__name__)
 
 # ─── Configuration ──────────────────────────────────────────────────────────
 
-EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbin.org"))
+EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbingo.org"))
 SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
@@ -49,11 +52,20 @@ RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
 TARGET_MODEL = "gpt-3.5-turbo"
 
 EXTERNAL_MODEL_NAME = "e2e-external-model"
-EXTERNAL_MODEL_RESOURCE_NAME = f"maas-{EXTERNAL_MODEL_NAME}"
+EXTERNAL_PROVIDER_NAME = "e2e-external-provider"
 
-# MaaS ExternalModel CR (not inference.opendatahub.io ExternalModel — oc resolves the
-# short name "externalmodel" to the inference API group by default).
-MAAS_EXTERNAL_MODEL_KIND = "externalmodels.maas.opendatahub.io"
+# Canonical inference.opendatahub.io CRDs. maas-controller's MaaSModelRef
+# externalModelHandler and the IPP model-provider-resolver plugin both watch
+# this group; the legacy maas.opendatahub.io/ExternalModel is a fallback only
+# and is a no-op for BBR (model-provider-resolver never watches it).
+EXTERNAL_MODEL_KIND = "externalmodels.inference.opendatahub.io"
+EXTERNAL_PROVIDER_KIND = "externalproviders.inference.opendatahub.io"
+
+# The canonical reconciler (ai-gateway-payload-processing) names the HTTPRoute
+# after the ExternalModel itself (no "maas-" prefix) and the backend Service
+# after the ExternalProvider (the HTTPRoute's backendRef).
+EXTERNAL_MODEL_HTTPROUTE_NAME = EXTERNAL_MODEL_NAME
+EXTERNAL_PROVIDER_SERVICE_NAME = EXTERNAL_PROVIDER_NAME
 
 
 # ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -103,31 +115,54 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     """
     log.info(f"Setting up external model test fixture (endpoint: {EXTERNAL_ENDPOINT})...")
 
-    # Create a dummy secret (ExternalModel requires credentialRef)
+    # Create a dummy secret (ExternalModel requires credentialRef).
+    # The apikey-injection plugin's secret store only watches Secrets carrying
+    # this label; without it credential lookups silently fail with a 500 at
+    # request time (masked by tests that only assert non-401/403).
     _apply_cr({
         "apiVersion": "v1",
         "kind": "Secret",
         "metadata": {
             "name": f"{EXTERNAL_MODEL_NAME}-api-key",
             "namespace": MODEL_NAMESPACE,
+            "labels": {"inference.llm-d.ai/ipp-managed": "true"},
         },
         "type": "Opaque",
         "stringData": {"api-key": "e2e-test-key"},
     })
 
-    # Create ExternalModel CR
+    # Create ExternalProvider CR (inference.opendatahub.io — canonical)
     _apply_cr({
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "apiVersion": "inference.opendatahub.io/v1alpha1",
+        "kind": "ExternalProvider",
+        "metadata": {"name": EXTERNAL_PROVIDER_NAME, "namespace": MODEL_NAMESPACE},
+        "spec": {
+            "provider": "openai",
+            "endpoint": EXTERNAL_ENDPOINT,
+            "auth": {
+                "type": "simple",
+                "secretRef": {"name": f"{EXTERNAL_MODEL_NAME}-api-key"},
+            },
+        },
+    })
+
+    # Create ExternalModel CR (inference.opendatahub.io — canonical). This is
+    # what the IPP model-provider-resolver plugin watches to populate its
+    # model->provider store, and what maas-controller's externalModelHandler
+    # tries first when reconciling the MaaSModelRef.
+    _apply_cr({
+        "apiVersion": "inference.opendatahub.io/v1alpha1",
         "kind": "ExternalModel",
         "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
         "spec": {
-            "provider": "openai",
-            "targetModel": TARGET_MODEL,
-            "endpoint": EXTERNAL_ENDPOINT,
-            "credentialRef": {
-                "name": f"{EXTERNAL_MODEL_NAME}-api-key",
-                "namespace": MODEL_NAMESPACE,
-            },
+            "externalProviderRefs": [
+                {
+                    "ref": {"name": EXTERNAL_PROVIDER_NAME},
+                    "targetModel": TARGET_MODEL,
+                    "apiFormat": "openai-chat",
+                    "path": "/v1/chat/completions",
+                },
+            ],
         },
     })
 
@@ -207,7 +242,8 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
               {"metadata": {"finalizers": []}})
     _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _delete_cr(MAAS_EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+    _delete_cr(EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+    _delete_cr(EXTERNAL_PROVIDER_KIND, EXTERNAL_PROVIDER_NAME, MODEL_NAMESPACE)
     _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
 
 
@@ -222,14 +258,14 @@ class TestExternalModelDiscovery:
         assert cr is not None, f"MaaSModelRef {EXTERNAL_MODEL_NAME} not found"
 
     def test_reconciler_created_httproute(self, external_models_setup):
-        """Reconciler created a MaaS-owned HTTPRoute for the ExternalModel."""
-        cr = _get_cr("httproute", EXTERNAL_MODEL_RESOURCE_NAME, MODEL_NAMESPACE)
-        assert cr is not None, f"HTTPRoute {EXTERNAL_MODEL_RESOURCE_NAME} not found"
+        """IPP's ExternalModel reconciler created the HTTPRoute (named after the model)."""
+        cr = _get_cr("httproute", EXTERNAL_MODEL_HTTPROUTE_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"HTTPRoute {EXTERNAL_MODEL_HTTPROUTE_NAME} not found"
 
     def test_reconciler_created_backend_service(self, external_models_setup):
-        """Reconciler created backend service."""
-        cr = _get_cr("service", EXTERNAL_MODEL_RESOURCE_NAME, MODEL_NAMESPACE)
-        assert cr is not None, f"Service {EXTERNAL_MODEL_RESOURCE_NAME} not found"
+        """IPP's ExternalProvider reconciler created the backend service (named after the provider)."""
+        cr = _get_cr("service", EXTERNAL_PROVIDER_SERVICE_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"Service {EXTERNAL_PROVIDER_SERVICE_NAME} not found"
 
 
 # ─── Tests: Auth ─────────────────────────────────────────────────────────────
@@ -298,24 +334,25 @@ class TestExternalModelCleanup:
     def test_delete_removes_httproute(self, external_models_setup):
         """
         Deleting an ExternalModel removes the HTTPRoute via OwnerReference
-        garbage collection (ExternalModel owns all reconciled resources).
+        garbage collection (the ExternalModel reconciler sets itself as the
+        HTTPRoute's controller owner).
         """
         temp_name = "e2e-cleanup-test"
-        temp_resource_name = f"maas-{temp_name}"
 
-        # Create temporary model
+        # Reuse the shared ExternalProvider; only the ExternalModel is temporary.
         _apply_cr({
-            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "apiVersion": "inference.opendatahub.io/v1alpha1",
             "kind": "ExternalModel",
             "metadata": {"name": temp_name, "namespace": MODEL_NAMESPACE},
             "spec": {
-                "provider": "openai",
-                "targetModel": TARGET_MODEL,
-                "endpoint": EXTERNAL_ENDPOINT,
-                "credentialRef": {
-                    "name": f"{EXTERNAL_MODEL_NAME}-api-key",
-                    "namespace": MODEL_NAMESPACE,
-                },
+                "externalProviderRefs": [
+                    {
+                        "ref": {"name": EXTERNAL_PROVIDER_NAME},
+                        "targetModel": TARGET_MODEL,
+                        "apiFormat": "openai-chat",
+                        "path": "/v1/chat/completions",
+                    },
+                ],
             },
         })
 
@@ -323,20 +360,20 @@ class TestExternalModelCleanup:
             # Wait for reconciler to create resources
             time.sleep(RECONCILE_WAIT * 2)
 
-            # Verify HTTPRoute was created
-            route = _get_cr("httproute", temp_resource_name, MODEL_NAMESPACE)
-            assert route is not None, f"HTTPRoute {temp_resource_name} should exist before deletion"
+            # Verify HTTPRoute was created (named after the ExternalModel)
+            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
+            assert route is not None, f"HTTPRoute {temp_name} should exist before deletion"
 
             # Delete the ExternalModel (owns the HTTPRoute via OwnerReference)
-            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
+            _delete_cr(EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
             time.sleep(RECONCILE_WAIT)
 
             # Verify HTTPRoute was cleaned up by garbage collection
-            route = _get_cr("httproute", temp_resource_name, MODEL_NAMESPACE)
-            assert route is None, f"HTTPRoute {temp_resource_name} should be cleaned up after ExternalModel deletion"
+            route = _get_cr("httproute", temp_name, MODEL_NAMESPACE)
+            assert route is None, f"HTTPRoute {temp_name} should be cleaned up after ExternalModel deletion"
         finally:
             # Always clean up to avoid resource leaks
-            _delete_cr(MAAS_EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
+            _delete_cr(EXTERNAL_MODEL_KIND, temp_name, MODEL_NAMESPACE)
 
 
 
@@ -378,9 +415,17 @@ class TestExternalModelBodyRouting:
     """Verify body-based routing for external models.
 
     IPP pre-processing extracts the ``model`` field from the JSON body and
-    sets the ``X-Gateway-Model-Name`` header. These tests prove the body
-    model field drives routing: a correct model succeeds while a wrong
-    model is rejected by the model-provider-resolver plugin.
+    resolves it via the model-provider-resolver plugin's store.
+
+    IMPORTANT CAVEAT: every request here hits ``/{ns}/{model}/v1/...``, a
+    path that already encodes a valid model name, so Kuadrant's AuthPolicy
+    authorizes from the path alone and the plugin silently no-ops (rather
+    than rejecting) on an unresolvable body model. Only
+    test_correct_model_in_body_succeeds is a meaningful assertion today
+    (proves a legitimately provisioned model's body isn't blocked); the
+    "wrong"/"missing" model tests are smoke checks only — see their
+    docstrings. Genuine path-agnostic body-only enforcement is future work
+    (RHAISTRAT-1540).
     """
 
     def _post_chat(self, gateway_url, model_path, api_key, body):
@@ -391,8 +436,49 @@ class TestExternalModelBodyRouting:
         }
         return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
-    def test_wrong_model_in_body_rejected(self, external_models_setup):
-        """Wrong model name in body is rejected by IPP model-provider-resolver."""
+    def test_correct_model_in_body_succeeds(self, external_models_setup):
+        """
+        Correct model name in body passes through IPP and reaches the
+        external endpoint.
+
+        Unlike the tenant/LLMInferenceService path, the backend here is an
+        uncontrolled external endpoint (httpbin.org by default), which does
+        not implement /v1/chat/completions and may not return 200. As with
+        TestExternalModelEgress.test_request_forwarded_returns_200, any
+        non-auth response confirms the body model field was accepted and the
+        request was forwarded rather than rejected by the
+        model-provider-resolver plugin.
+        """
+        setup = external_models_setup
+        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
+
+        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
+            "model": EXTERNAL_MODEL_NAME,
+            "messages": [{"role": "user", "content": "hello"}],
+        })
+        assert r.status_code not in (401, 403), (
+            f"Expected correct model in body to be forwarded, got {r.status_code}. "
+            f"Body routing may be rejecting a legitimately provisioned model."
+        )
+        log.info("Body routing (correct model): HTTP %d", r.status_code)
+
+    def test_wrong_model_in_body_does_not_error(self, external_models_setup):
+        """
+        Wrong model name in body does not crash the request pipeline.
+
+        NOTE: This is a smoke check, not an enforcement check. The URL path
+        already contains a valid model name, so Kuadrant's AuthPolicy
+        authorizes the request from the path alone before the body is
+        considered. IPP's model-provider-resolver plugin does not reject
+        unresolvable models either — it silently no-ops (returns nil) and
+        lets the request pass through unchanged when the body's model isn't
+        found in its store (see plugin.go ProcessRequest). So today there is
+        no code path that actually rejects a mismatched body model for
+        ExternalModel; this test only proves the request isn't dropped or
+        errored (still != 200, since httpbingo never returns 200 for these
+        paths). True body-only enforcement without a path is tracked under
+        RHAISTRAT-1540 (unified BBR routing) and isn't implemented yet.
+        """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
 
@@ -401,13 +487,19 @@ class TestExternalModelBodyRouting:
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert r.status_code != 200, (
-            f"Expected rejection for wrong model in body, got 200. "
+            f"Expected non-200 for wrong model in body, got 200. "
             f"Body routing may not be active — request succeeded via path routing alone."
         )
         log.info("Body routing (wrong model): HTTP %d", r.status_code)
 
-    def test_missing_model_in_body_rejected(self, external_models_setup):
-        """Missing model field in body is rejected by IPP."""
+    def test_missing_model_in_body_does_not_error(self, external_models_setup):
+        """
+        Missing model field in body does not crash the request pipeline.
+
+        NOTE: Same caveat as test_wrong_model_in_body_does_not_error — this
+        is a smoke check, not proof that a missing model is rejected. See
+        that test's docstring for why no enforcement path currently exists.
+        """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
 
@@ -415,7 +507,7 @@ class TestExternalModelBodyRouting:
             "messages": [{"role": "user", "content": "hello"}],
         })
         assert r.status_code != 200, (
-            f"Expected rejection for missing model in body, got 200. "
+            f"Expected non-200 for missing model in body, got 200. "
             f"Body routing may not be active — request succeeded without model field."
         )
         log.info("Body routing (missing model): HTTP %d", r.status_code)

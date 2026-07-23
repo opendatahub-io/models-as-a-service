@@ -283,31 +283,34 @@ func registerHandlers(
 	return nil
 }
 
-// isLocalhostOrigin reports whether the origin is a localhost address,
-// used by the debug-mode CORS policy to restrict cross-origin access to
-// local development only. Accepts both ported (http://localhost:3000)
-// and default-port (http://localhost) forms.
+// isLocalhostOrigin reports whether the origin is an http://localhost or
+// http://127.0.0.1 address, used by the debug-mode CORS policy to restrict
+// cross-origin access to local development only.
+// Only plain HTTP is accepted — local dev servers do not use HTTPS.
+// (CWE-942 / FIND-Debug-CORS.)
 func isLocalhostOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != "http" {
 		return false
 	}
-	if u.Hostname() == "localhost" {
+	host := u.Hostname()
+	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(u.Hostname())
+	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 
 func debugCORSConfig() cors.Config {
 	return cors.Config{
-		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
-		ExposeHeaders:   []string{"Content-Type"},
-		AllowOriginFunc: isLocalhostOrigin,
-		MaxAge:          12 * time.Hour,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:    []string{"Content-Type"},
+		AllowOriginFunc:  isLocalhostOrigin,
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
 	}
 }

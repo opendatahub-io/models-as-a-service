@@ -1219,46 +1219,77 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 	}
 }
 
-func TestSelector_ResolvedModelFromPublisherAlias(t *testing.T) {
-	log := logger.New(false)
-	publisherID := "publishers/llm/models/facebook/opt-125m"
-	canonicalRef := "llm/facebook-opt-125m-simulated"
-
-	sub := createSubscriptionWithModelRefs("simulator-subscription", []string{"g1"}, []map[string]any{
-		{"name": "facebook-opt-125m-simulated", "namespace": "llm"},
-	})
-
-	modelRef := createMaaSModelRef("facebook-opt-125m-simulated", "llm", "LLMInferenceService")
-	if err := unstructured.SetNestedField(modelRef.Object, publisherID, "status", "resolvedModelAlias"); err != nil {
-		t.Fatalf("SetNestedField: %v", err)
+func TestSelector_ResolvedModelFromAlias(t *testing.T) {
+	cases := []struct {
+		name         string
+		alias        string
+		canonicalRef string
+		subName      string
+		modelName    string
+		modelNS      string
+		modelKind    string
+	}{
+		{
+			name:         "publisher alias (LLMInferenceService)",
+			alias:        "publishers/llm/models/facebook/opt-125m",
+			canonicalRef: "llm/facebook-opt-125m-simulated",
+			subName:      "simulator-subscription",
+			modelName:    "facebook-opt-125m-simulated",
+			modelNS:      "llm",
+			modelKind:    "LLMInferenceService",
+		},
+		{
+			name:         "external model alias (ExternalModel)",
+			alias:        "gpt-3.5-turbo",
+			canonicalRef: "llm/e2e-external-model",
+			subName:      "external-subscription",
+			modelName:    "e2e-external-model",
+			modelNS:      "llm",
+			modelKind:    "ExternalModel",
+		},
 	}
 
-	selector := subscription.NewSelector(
-		log,
-		&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
-		&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
-		nil,
-	)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log := logger.New(false)
 
-	t.Run("publisher ID resolves to MaaSModelRef identity", func(t *testing.T) {
-		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-		result, err := selector.Select([]string{"g1"}, "", "", publisherID)
-		if err != nil {
-			t.Fatalf("Select: %v", err)
-		}
-		if result.ResolvedModel != canonicalRef {
-			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, canonicalRef)
-		}
-	})
+			sub := createSubscriptionWithModelRefs(tc.subName, []string{"g1"}, []map[string]any{
+				{"name": tc.modelName, "namespace": tc.modelNS},
+			})
 
-	t.Run("path-style identity is returned unchanged", func(t *testing.T) {
-		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-		result, err := selector.Select([]string{"g1"}, "", "", canonicalRef)
-		if err != nil {
-			t.Fatalf("Select: %v", err)
-		}
-		if result.ResolvedModel != canonicalRef {
-			t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, canonicalRef)
-		}
-	})
+			modelRef := createMaaSModelRef(tc.modelName, tc.modelNS, tc.modelKind)
+			if err := unstructured.SetNestedField(modelRef.Object, tc.alias, "status", "resolvedModelAlias"); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+
+			selector := subscription.NewSelector(
+				log,
+				&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+				&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
+				nil,
+			)
+
+			t.Run("alias resolves to MaaSModelRef identity", func(t *testing.T) {
+				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+				result, err := selector.Select([]string{"g1"}, "", "", tc.alias)
+				if err != nil {
+					t.Fatalf("Select: %v", err)
+				}
+				if result.ResolvedModel != tc.canonicalRef {
+					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
+				}
+			})
+
+			t.Run("path-style identity is returned unchanged", func(t *testing.T) {
+				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+				result, err := selector.Select([]string{"g1"}, "", "", tc.canonicalRef)
+				if err != nil {
+					t.Fatalf("Select: %v", err)
+				}
+				if result.ResolvedModel != tc.canonicalRef {
+					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
+				}
+			})
+		})
+	}
 }
