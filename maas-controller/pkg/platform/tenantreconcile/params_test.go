@@ -84,6 +84,143 @@ func TestBuildPlatformParams(t *testing.T) {
 	})
 }
 
+func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "maas-default-gateway",
+	}}
+
+	t.Run("no annotations leaves replicas nil", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.MaaSAPIReplicas)
+		assert.Nil(t, got.PayloadProcessingReplicas)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("valid annotations set replica counts", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationMaaSAPIReplicas:           "3",
+			AnnotationPayloadProcessingReplicas: "2",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		require.NotNil(t, got.MaaSAPIReplicas)
+		assert.Equal(t, int32(3), *got.MaaSAPIReplicas)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(2), *got.PayloadProcessingReplicas)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("invalid annotation produces warning and nil replicas", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationMaaSAPIReplicas: "not-a-number",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.MaaSAPIReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "invalid value")
+		assert.Contains(t, got.Warnings[0], AnnotationMaaSAPIReplicas)
+	})
+
+	t.Run("zero replica count produces warning", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingReplicas: "0",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.PayloadProcessingReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be >= 1")
+	})
+
+	t.Run("negative replica count produces warning", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationMaaSAPIReplicas: "-1",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.MaaSAPIReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be >= 1")
+	})
+
+	t.Run("replica count exceeding max produces warning", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationMaaSAPIReplicas: "101",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.Nil(t, got.MaaSAPIReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be <= 100")
+	})
+}
+
+func TestParseReplicaAnnotation(t *testing.T) {
+	tests := []struct {
+		name        string
+		value       string
+		wantVal     *int32
+		wantWarning bool
+	}{
+		{"valid 1", "1", int32Ptr(1), false},
+		{"valid 3", "3", int32Ptr(3), false},
+		{"valid 100", "100", int32Ptr(100), false},
+		{"exceeds max", "101", nil, true},
+		{"very large", "2000000000", nil, true},
+		{"zero", "0", nil, true},
+		{"negative", "-1", nil, true},
+		{"non-numeric", "abc", nil, true},
+		{"float", "1.5", nil, true},
+		{"empty", "", nil, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, warn := parseReplicaAnnotation("test-annotation", tt.value)
+			if tt.wantWarning {
+				assert.NotEmpty(t, warn)
+				assert.Nil(t, got)
+			} else {
+				assert.Empty(t, warn)
+				require.NotNil(t, got)
+				assert.Equal(t, *tt.wantVal, *got)
+			}
+		})
+	}
+}
+
+func int32Ptr(i int32) *int32 { return &i }
+
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
@@ -285,6 +422,40 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, "kubernetes.io/metadata.name", namespaceExpression["key"])
 	assert.Equal(t, "In", namespaceExpression["operator"])
 	assert.ElementsMatch(t, []any{"kuadrant-system", "openshift-operators", "rh-connectivity-link"}, namespaceExpression["values"])
+}
+
+func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+	maasReplicas := int32(3)
+	payloadReplicas := int32(2)
+	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+		AppNamespace:              "tenant-ns",
+		ControllerNamespace:       "controller-ns",
+		GatewayNamespace:          "gateway-ns",
+		GatewayName:               "custom-gateway",
+		ClusterAudience:           "openshift-custom",
+		MaaSAPIImage:              "quay.io/example/maas-api:test",
+		PayloadProcessingImage:    "quay.io/example/payload:test",
+		MaaSAPIKeyCleanupImage:    "quay.io/example/cleanup:test",
+		APIKeyMaxExpirationDays:   "45",
+		MaaSAPIReplicas:           &maasReplicas,
+		PayloadProcessingReplicas: &payloadReplicas,
+	}
+
+	err := applyPlatformParams(logr.Discard(), resources, params)
+	require.NoError(t, err)
+
+	maasAPIDeployment := requireResource(t, resources, GVKDeployment, MaaSAPIDeploymentName(""))
+	replicas, found, err := unstructured.NestedInt64(maasAPIDeployment.Object, "spec", "replicas")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(3), replicas)
+
+	payloadDeployment := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
+	payloadReplicasVal, found, err := unstructured.NestedInt64(payloadDeployment.Object, "spec", "replicas")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, int64(2), payloadReplicasVal)
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

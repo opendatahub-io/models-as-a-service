@@ -33,6 +33,14 @@ type PlatformParams struct {
 	MaaSAPIKeyCleanupImage string
 
 	APIKeyMaxExpirationDays string
+
+	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
+	MaaSAPIReplicas *int32
+	// PayloadProcessingReplicas overrides the payload-processing Deployment replica count when non-nil.
+	PayloadProcessingReplicas *int32
+
+	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
+	Warnings []string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -58,6 +66,8 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
 	}
 
+	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
+
 	log.Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
@@ -74,6 +84,55 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// resolveReplicaAnnotations reads replica-count annotations from the tenant object
+// and returns parsed values (nil if not set) plus any validation warnings.
+func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIReplicas, payloadProcessingReplicas *int32, warnings []string) {
+	annotations := tenant.GetAnnotations()
+	if annotations == nil {
+		return nil, nil, nil
+	}
+
+	var w []string
+	if v, ok := annotations[AnnotationMaaSAPIReplicas]; ok {
+		r, warn := parseReplicaAnnotation(AnnotationMaaSAPIReplicas, v)
+		if warn != "" {
+			w = append(w, warn)
+			log.Info("Invalid replica annotation", "annotation", AnnotationMaaSAPIReplicas, "value", v, "warning", warn)
+		} else {
+			maasAPIReplicas = r
+			log.Info("Resolved maas-api replicas from annotation", "replicas", *r)
+		}
+	}
+	if v, ok := annotations[AnnotationPayloadProcessingReplicas]; ok {
+		r, warn := parseReplicaAnnotation(AnnotationPayloadProcessingReplicas, v)
+		if warn != "" {
+			w = append(w, warn)
+			log.Info("Invalid replica annotation", "annotation", AnnotationPayloadProcessingReplicas, "value", v, "warning", warn)
+		} else {
+			payloadProcessingReplicas = r
+			log.Info("Resolved payload-processing replicas from annotation", "replicas", *r)
+		}
+	}
+	return maasAPIReplicas, payloadProcessingReplicas, w
+}
+
+const maxReplicaCount = 100
+
+func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
+	n, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return nil, fmt.Sprintf("annotation %s has invalid value %q: must be a positive integer; remove the annotation to use the default replica count", annotationKey, value)
+	}
+	if n < 1 {
+		return nil, fmt.Sprintf("annotation %s has invalid value %q: must be >= 1; remove the annotation to use the default replica count", annotationKey, value)
+	}
+	if n > maxReplicaCount {
+		return nil, fmt.Sprintf("annotation %s has invalid value %q: must be <= %d; remove the annotation to use the default replica count", annotationKey, value, maxReplicaCount)
+	}
+	r := int32(n)
+	return &r, ""
 }
 
 func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
@@ -200,6 +259,13 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 }
 
 func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	if params.MaaSAPIReplicas != nil {
+		if err := unstructured.SetNestedField(r.Object, int64(*params.MaaSAPIReplicas), "spec", "replicas"); err != nil {
+			return fmt.Errorf("patch maas-api replicas: %w", err)
+		}
+		log.V(4).Info("Patching maas-api replicas", "replicas", *params.MaaSAPIReplicas)
+	}
+
 	log.V(4).Info("Patching maas-api image", "image", params.MaaSAPIImage)
 	if err := setContainerImage(r, "maas-api", params.MaaSAPIImage); err != nil {
 		return fmt.Errorf("patch maas-api image: %w", err)
@@ -256,6 +322,14 @@ func patchMaaSAPIService(log logr.Logger, r *unstructured.Unstructured, params P
 
 func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
+
+	if params.PayloadProcessingReplicas != nil {
+		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadProcessingReplicas), "spec", "replicas"); err != nil {
+			return fmt.Errorf("patch payload-processing replicas: %w", err)
+		}
+		log.V(4).Info("Patching payload-processing replicas", "replicas", *params.PayloadProcessingReplicas)
+	}
+
 	log.V(4).Info("Patching payload-processing image", "image", params.PayloadProcessingImage)
 	if err := setContainerImage(r, "payload-processing", params.PayloadProcessingImage); err != nil {
 		return fmt.Errorf("patch payload-processing image: %w", err)

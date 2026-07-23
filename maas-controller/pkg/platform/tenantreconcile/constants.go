@@ -22,6 +22,12 @@ const (
 	// other packages that need the same key must reference this constant.
 	AnnotationManaged = "opendatahub.io/managed"
 
+	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
+	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
+
+	// AnnotationPayloadProcessingReplicas overrides the payload-processing Deployment replica count for a tenant.
+	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
+
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
 	ComponentName = "modelsasservice"
