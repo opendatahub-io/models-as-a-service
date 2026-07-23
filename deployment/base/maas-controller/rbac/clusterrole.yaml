@@ -121,7 +121,7 @@ rules:
 - apiGroups:
   - config.openshift.io
   resources:
-  - authentications
+  - apiservers
   verbs:
   - get
   - list
