@@ -143,6 +143,8 @@ func (h *llmisvcHandler) resolveGatewayRef(ctx context.Context, log logr.Logger,
 	}
 
 	// Fall back to namespace-based resolution using the default tenant namespace.
+	// Clear any previously resolved tenant (e.g. after spec.tenantRef is removed).
+	model.Status.ResolvedTenantRef = ""
 	return tenantGatewayRefForNamespace(
 		ctx,
 		h.r.Client,

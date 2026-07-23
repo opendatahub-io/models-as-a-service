@@ -211,6 +211,43 @@ func TestResolveGatewayRef_WithoutTenantRef_FallsBackToDefault(t *testing.T) {
 	}
 }
 
+func TestResolveGatewayRef_WithoutTenantRef_ClearsResolvedTenantRef(t *testing.T) {
+	ctx := context.Background()
+
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "models-as-a-service"},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "LLMInferenceService", Name: "test-llmisvc"},
+		},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedTenantRef: "old-tenant",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		Build()
+
+	r := &MaaSModelRefReconciler{
+		Client:                          c,
+		Scheme:                          scheme,
+		GatewayName:                     testGatewayName,
+		GatewayNamespace:                testGatewayNamespace,
+		DefaultTenantNamespace:          "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: false,
+		AITenantNamespace:               testAITenantNamespace,
+	}
+	h := &llmisvcHandler{r: r}
+
+	_, err := h.resolveGatewayRef(ctx, logr.Discard(), model)
+	if err != nil {
+		t.Fatalf("resolveGatewayRef() error = %v", err)
+	}
+	if model.Status.ResolvedTenantRef != "" {
+		t.Errorf("resolveGatewayRef() ResolvedTenantRef = %q, want empty (stale value not cleared)", model.Status.ResolvedTenantRef)
+	}
+}
+
 func TestResolveGatewayRef_WithTenantRef_OverridesModelNamespace(t *testing.T) {
 	// This test verifies the core bug fix: even when model.Namespace points
 	// to a different tenant, the tenantRef-based resolution uses the correct AITenant.
