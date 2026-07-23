@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -62,10 +63,11 @@ const envoyFilterManifestPath = "/deployment/components/observability/usage-logs
 // usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
 const usageLogsCollectorName = "usage-logs"
 
-// lokiGatewayHTTPService is the Loki gateway Service fronting the application logs OTLP endpoint.
-const lokiGatewayHTTPService = "maas-loki-gateway-http"
+// usageLogsTenancyProxyDeploymentName is the Deployment for the Loki query tenancy proxy.
+const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 
-const lokiGatewayOTLPEndpointPath = "/api/logs/v1/application/otlp"
+// usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
+const usageLogsTenancyProxyContainerName = "proxy"
 
 // envoyFilterName is the name of the usage-logs EnvoyFilter resource.
 const envoyFilterName = "maas-model-access-logs"
@@ -584,7 +586,10 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 
 		for _, resource := range resources {
 			res := resource // avoid loop variable aliasing
-			if err := patchUsageLogsOpenTelemetryCollector(&res, r.MonitoringNamespace); err != nil {
+			if err := patchTenancyProxyImage(&res); err != nil {
+				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
+			if err := patchPersesDatasourceURL(&res); err != nil {
 				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
 			if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
@@ -613,7 +618,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 			}
 			crb := &unstructured.Unstructured{}
 			crb.SetGroupVersionKind(gvkClusterRoleBinding)
-			crb.SetName("usage-logs-writer")
+			crb.SetName("usage-collector-application-logs-write")
 
 			if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err == nil {
 				if isOwnedByConfigOrController(crb, cfg.UID) {
@@ -649,27 +654,78 @@ func isOwnedByConfigOrController(obj client.Object, configUID types.UID) bool {
 	return false
 }
 
-func lokiGatewayEndpoint(monitoringNamespace string) string {
-	return fmt.Sprintf(
-		"https://%s.%s.svc.cluster.local:8080%s",
-		lokiGatewayHTTPService,
-		monitoringNamespace,
-		lokiGatewayOTLPEndpointPath,
-	)
-}
-
-// patchUsageLogsOpenTelemetryCollector rewrites the Loki OTLP exporter endpoint to target the
-// monitoring namespace. The manifest keeps the overlay default namespace as a build-time placeholder.
-func patchUsageLogsOpenTelemetryCollector(res *unstructured.Unstructured, monitoringNamespace string) error {
-	if res.GetKind() != "OpenTelemetryCollector" || res.GetName() != usageLogsCollectorName {
+// patchPersesDatasourceURL expands short service references in PersesDatasource URLs to FQDNs.
+// Rewrites URLs like "https://service-name:port" to "https://service-name.{namespace}.svc:port"
+// using the datasource's deployed namespace. This allows YAML to use simple service references
+// while ensuring they work correctly in any namespace.
+func patchPersesDatasourceURL(res *unstructured.Unstructured) error {
+	if res.GetKind() != "PersesDatasource" {
 		return nil
 	}
-	endpoint := lokiGatewayEndpoint(monitoringNamespace)
-	if err := unstructured.SetNestedField(res.Object, endpoint,
-		"spec", "config", "exporters", "otlp_http/loki", "endpoint"); err != nil {
-		return fmt.Errorf("set loki exporter endpoint: %w", err)
+
+	namespace := res.GetNamespace()
+	if namespace == "" {
+		// No namespace set, skip patching
+		return nil
 	}
+
+	urlPath := []string{"spec", "config", "plugin", "spec", "proxy", "spec", "url"}
+	url, found, err := unstructured.NestedString(res.Object, urlPath...)
+	if err != nil {
+		return fmt.Errorf("read datasource URL: %w", err)
+	}
+	if !found {
+		// URL field doesn't exist in this datasource
+		return nil
+	}
+
+	// Only patch if URL doesn't already have .svc (i.e., it's a short service reference)
+	if !strings.Contains(url, ".svc") {
+		// Pattern: https://service-name:port/path -> https://service-name.{namespace}.svc:port/path
+		// Use regex to insert .{namespace}.svc before the port
+		re := regexp.MustCompile(`(https?://[^:]+)(:\d+)`)
+		patchedURL := re.ReplaceAllString(url, fmt.Sprintf("$1.%s.svc$2", namespace))
+
+		if err := unstructured.SetNestedField(res.Object, patchedURL, urlPath...); err != nil {
+			return fmt.Errorf("set datasource URL: %w", err)
+		}
+	}
+
 	return nil
+}
+
+// patchTenancyProxyImage sets the tenancy-proxy container image to RELATED_IMAGE_ODH_PYTHON_312_IMAGE
+// if configured, otherwise uses DefaultUsageLogsTenancyProxyImage. This enables disconnected deployments
+// to mirror the image while maintaining a code-defined default.
+func patchTenancyProxyImage(res *unstructured.Unstructured) error {
+	if res.GetKind() != "Deployment" || res.GetName() != usageLogsTenancyProxyDeploymentName {
+		return nil
+	}
+
+	image := os.Getenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE")
+	if image == "" {
+		image = DefaultUsageLogsTenancyProxyImage
+	}
+
+	containers, found, err := unstructured.NestedSlice(res.Object, "spec", "template", "spec", "containers")
+	if err != nil {
+		return fmt.Errorf("read containers in deployment: %w", err)
+	}
+	if !found {
+		return errors.New("containers not found in usage-logs-tenancy-proxy deployment")
+	}
+
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != usageLogsTenancyProxyContainerName {
+			continue
+		}
+		cm["image"] = image
+		containers[i] = cm
+		return unstructured.SetNestedSlice(res.Object, containers, "spec", "template", "spec", "containers")
+	}
+
+	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
 // ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
@@ -728,7 +784,7 @@ func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log
 		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
 	}
 
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc.cluster.local", r.MonitoringNamespace)
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
 	if err := patchClusterAddress(ef, collectorAddress); err != nil {
 		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
 	}

@@ -610,19 +610,20 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		assert.True(t, modelIDs["free-model"], "Should include free model")
 	})
 
-	// Table-driven tests for API key subscription error scenarios
+	// FIND-009: Subscription error responses are unified so callers cannot
+	// distinguish "not found" from "access denied" (prevents existence probing).
 	subscriptionErrorTests := []struct {
 		name         string
 		subscription string
 		userGroups   string
 	}{
 		{
-			name:         "API key - unknown subscription - returns 403",
+			name:         "user token - unknown subscription - returns 403",
 			subscription: "nonexistent-subscription",
 			userGroups:   `["free-users"]`,
 		},
 		{
-			name:         "API key - no access to subscription - returns 403",
+			name:         "user token - no access to subscription - returns 403",
 			subscription: "premium",
 			userGroups:   `["free-users"]`,
 		},
@@ -649,6 +650,8 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			errorObj, ok := errorResponse["error"].(map[string]any)
 			require.True(t, ok, "Expected error object")
 			assert.Equal(t, "permission_error", errorObj["type"])
+			// Both cases return the same message to prevent subscription existence probing
+			assert.Equal(t, "access denied to requested subscription", errorObj["message"])
 		})
 	}
 }

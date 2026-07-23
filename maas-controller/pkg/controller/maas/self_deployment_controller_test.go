@@ -784,7 +784,7 @@ func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(lbEndpoints).NotTo(BeEmpty())
 		lbe0, _ := lbEndpoints[0].(map[string]any)
 		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
-		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc.cluster.local"),
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"),
 			"collector address should be patched with MonitoringNamespace")
 	})
 
@@ -857,7 +857,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 
 		crb := &unstructured.Unstructured{}
 		crb.SetGroupVersionKind(gvkClusterRoleBinding)
-		crb.SetName("usage-logs-writer")
+		crb.SetName("usage-collector-application-logs-write")
 		crb.SetOwnerReferences([]metav1.OwnerReference{{
 			APIVersion: "maas.opendatahub.io/v1alpha1",
 			Kind:       "Config",
@@ -883,7 +883,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-managed OpenTelemetryCollector should be deleted")
 
 		got.SetGroupVersionKind(gvkClusterRoleBinding)
-		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, got)
 		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-owned ClusterRoleBinding should be deleted")
 	})
 
@@ -906,7 +906,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		// Pre-existing foreign ClusterRoleBinding with same name
 		foreignCRB := &unstructured.Unstructured{}
 		foreignCRB.SetGroupVersionKind(gvkClusterRoleBinding)
-		foreignCRB.SetName("usage-logs-writer")
+		foreignCRB.SetName("usage-collector-application-logs-write")
 		// No ownership metadata
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, foreignOtelCR, foreignCRB).Build()
@@ -928,7 +928,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 			"foreign resource should not have managed-by label")
 
 		got.SetGroupVersionKind(gvkClusterRoleBinding)
-		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, got)
 		g.Expect(err).NotTo(HaveOccurred(), "foreign ClusterRoleBinding should be preserved (CWE-284)")
 		g.Expect(got.GetOwnerReferences()).To(BeEmpty(),
 			"foreign resource should not have OwnerReferences")
@@ -959,16 +959,9 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs", Namespace: monitoringNS}, got)).
 			To(Succeed(), "OpenTelemetryCollector should exist when usageLogging is enabled")
 
-		endpoint, found, err := unstructured.NestedString(got.Object,
-			"spec", "config", "exporters", "otlp_http/loki", "endpoint")
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(found).To(BeTrue())
-		g.Expect(endpoint).To(Equal(lokiGatewayEndpoint(monitoringNS)),
-			"Loki exporter endpoint should target MonitoringNamespace")
-
 		got = &unstructured.Unstructured{}
 		got.SetGroupVersionKind(gvkClusterRoleBinding)
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-logs-writer"}, got)).
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "usage-collector-application-logs-write"}, got)).
 			To(Succeed(), "ClusterRoleBinding should exist when usageLogging is enabled")
 
 		subjects, found, err := unstructured.NestedSlice(got.Object, "subjects")
@@ -978,5 +971,257 @@ func TestEnsureUsageLogs(t *testing.T) {
 		subj, ok := subjects[0].(map[string]any)
 		g.Expect(ok).To(BeTrue())
 		g.Expect(subj["namespace"]).To(Equal(monitoringNS))
+
+		dep := &appsv1.Deployment{}
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
+		}, dep)).To(Succeed(), "tenancy proxy Deployment should exist when usageLogging is enabled")
+	})
+}
+
+func TestPatchTenancyProxyImage(t *testing.T) {
+	t.Run("patches proxy container image when RELATED_IMAGE set", func(t *testing.T) {
+		g := NewWithT(t)
+		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "usage-logs-tenancy-proxy",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "proxy",
+									"image": "registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(containers).To(HaveLen(1))
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal("quay.io/example/tenancy-proxy:test"))
+	})
+
+	t.Run("uses default image when RELATED_IMAGE not set", func(t *testing.T) {
+		g := NewWithT(t)
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "usage-logs-tenancy-proxy",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name": "proxy",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal(DefaultUsageLogsTenancyProxyImage))
+	})
+
+	t.Run("ignores non-matching deployment", func(t *testing.T) {
+		g := NewWithT(t)
+		t.Setenv("RELATED_IMAGE_ODH_PYTHON_312_IMAGE", "quay.io/example/tenancy-proxy:test")
+
+		deployment := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "apps/v1",
+				"kind":       "Deployment",
+				"metadata": map[string]any{
+					"name": "some-other-deployment",
+				},
+				"spec": map[string]any{
+					"template": map[string]any{
+						"spec": map[string]any{
+							"containers": []any{
+								map[string]any{
+									"name":  "proxy",
+									"image": "registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172",
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchTenancyProxyImage(deployment)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		containers, found, err := unstructured.NestedSlice(deployment.Object, "spec", "template", "spec", "containers")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+
+		container, ok := containers[0].(map[string]any)
+		g.Expect(ok).To(BeTrue())
+		g.Expect(container["image"]).To(Equal("registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172"))
+	})
+}
+
+func TestPatchPersesDatasourceURL(t *testing.T) {
+	t.Run("expands short service reference to FQDN", func(t *testing.T) {
+		g := NewWithT(t)
+
+		datasource := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "perses.dev/v1alpha1",
+				"kind":       "PersesDatasource",
+				"metadata": map[string]any{
+					"name":      "usage-logs",
+					"namespace": "redhat-ods-monitoring",
+				},
+				"spec": map[string]any{
+					"config": map[string]any{
+						"plugin": map[string]any{
+							"spec": map[string]any{
+								"proxy": map[string]any{
+									"spec": map[string]any{
+										"url": "https://usage-logs-tenancy-proxy:8443",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchPersesDatasourceURL(datasource)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		url, found, err := unstructured.NestedString(datasource.Object,
+			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal("https://usage-logs-tenancy-proxy.redhat-ods-monitoring.svc:8443"))
+	})
+
+	t.Run("expands service reference with path", func(t *testing.T) {
+		g := NewWithT(t)
+
+		datasource := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "perses.dev/v1alpha1",
+				"kind":       "PersesDatasource",
+				"metadata": map[string]any{
+					"name":      "usage-logs-admin",
+					"namespace": "opendatahub",
+				},
+				"spec": map[string]any{
+					"config": map[string]any{
+						"plugin": map[string]any{
+							"spec": map[string]any{
+								"proxy": map[string]any{
+									"spec": map[string]any{
+										"url": "https://usage-gateway-http:8080/api/logs/v1/application",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchPersesDatasourceURL(datasource)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		url, found, err := unstructured.NestedString(datasource.Object,
+			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal("https://usage-gateway-http.opendatahub.svc:8080/api/logs/v1/application"))
+	})
+
+	t.Run("skips already-qualified URLs", func(t *testing.T) {
+		g := NewWithT(t)
+
+		datasource := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "perses.dev/v1alpha1",
+				"kind":       "PersesDatasource",
+				"metadata": map[string]any{
+					"name":      "usage-logs",
+					"namespace": "opendatahub",
+				},
+				"spec": map[string]any{
+					"config": map[string]any{
+						"plugin": map[string]any{
+							"spec": map[string]any{
+								"proxy": map[string]any{
+									"spec": map[string]any{
+										"url": "https://usage-logs-tenancy-proxy.opendatahub.svc:8443",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+
+		err := patchPersesDatasourceURL(datasource)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		url, found, err := unstructured.NestedString(datasource.Object,
+			"spec", "config", "plugin", "spec", "proxy", "spec", "url")
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(found).To(BeTrue())
+		g.Expect(url).To(Equal("https://usage-logs-tenancy-proxy.opendatahub.svc:8443"),
+			"should not modify already-qualified URL")
+	})
+
+	t.Run("ignores non-PersesDatasource resources", func(t *testing.T) {
+		g := NewWithT(t)
+
+		configMap := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       "ConfigMap",
+				"metadata": map[string]any{
+					"name":      "test",
+					"namespace": "opendatahub",
+				},
+			},
+		}
+
+		err := patchPersesDatasourceURL(configMap)
+		g.Expect(err).NotTo(HaveOccurred())
 	})
 }
