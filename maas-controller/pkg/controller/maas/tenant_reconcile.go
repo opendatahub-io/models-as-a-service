@@ -634,6 +634,61 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 			name:      tenantreconcile.IstioTelemetryName(tenantID),
 			namespace: gatewayNs,
 		},
+		{
+			gvk:       tenantreconcile.GVKDeployment,
+			name:      tenantreconcile.PayloadProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDeployment,
+			name:      tenantreconcile.PayloadPreProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKService,
+			name:      tenantreconcile.PayloadProcessingServiceName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKService,
+			name:      tenantreconcile.PayloadPreProcessingServiceName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDestinationRule,
+			name:      tenantreconcile.PayloadProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDestinationRule,
+			name:      tenantreconcile.PayloadPreProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.PayloadProcessingEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKNetworkPolicy,
+			name:      tenantreconcile.PayloadProcessingNetworkPolicyName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKServiceAccount,
+			name:      tenantreconcile.PayloadProcessingServiceAccountName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKConfigMap,
+			name:      tenantreconcile.PayloadProcessingPluginsConfigMapForTenant(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKClusterRoleBinding,
+			name:      tenantreconcile.PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID),
+			namespace: "",
+		},
 	}
 
 	for _, res := range append(appResourcesToDelete, gatewayResourcesToDelete...) {

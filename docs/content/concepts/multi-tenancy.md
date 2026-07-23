@@ -33,6 +33,7 @@ When you create an AITenant, the controller provisions the tenant namespace and 
 **API isolation:**
 - Each tenant has a separate maas-api Deployment
 - Dedicated Gateway per tenant (Gateways cannot be shared)
+- Dedicated IPP (payload-processing) Deployments per tenant in the gateway namespace, wired to that tenant's Gateway via a per-tenant EnvoyFilter
 - API keys and subscriptions are tenant-scoped
 
 **Database isolation:**
