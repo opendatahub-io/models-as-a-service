@@ -46,6 +46,10 @@ type MaaSModelSpec struct {
 	// or Gateway/HTTPRoute).
 	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
+	// TenantRef is the name of the AITenant this model belongs to.
+	// When omitted, the model is assigned to the default tenant.
+	// +optional
+	TenantRef string `json:"tenantRef,omitempty"`
 }
 
 // ModelReference references a model endpoint in the same namespace.

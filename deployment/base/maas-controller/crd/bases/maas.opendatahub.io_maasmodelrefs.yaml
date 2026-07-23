@@ -85,6 +85,11 @@ spec:
                 - kind
                 - name
                 type: object
+              tenantRef:
+                description: |-
+                  TenantRef is the name of the AITenant this model belongs to.
+                  When omitted, the model is assigned to the default tenant.
+                type: string
             required:
             - modelRef
             type: object
