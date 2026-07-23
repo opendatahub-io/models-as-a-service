@@ -37,9 +37,15 @@
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
+#   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional). Requires DEPLOY_MODE=operator
+#                           (ai-gateway-operator is only deployed by the ODH operator's own reconciler).
+#                           Example: quay.io/opendatahub/odh-ai-gateway-operator:odh-stable
+#   DEPLOY_MODE           - deploy.sh --deployment-mode to use: kustomize (default, matches default CI)
+#                           or operator (exercises ODH's ModelsAsService/AIGateway component
+#                           reconcilers directly; required for AI_GATEWAY_OPERATOR_IMAGE)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
-#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: true). deploy.sh runs with
+#   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false). When true, deploy.sh runs with
 #                   --external-oidc and --enable-keycloak; Keycloak test realms (tenant-a) are applied.
 #   OIDC_ISSUER_URL - When EXTERNAL_OIDC=true: defaults to Keycloak tenant-a realm if unset
 #   OIDC_TOKEN_URL - Defaults to .../protocol/openid-connect/token under the issuer realm
@@ -49,8 +55,9 @@
 #   OIDC_READINESS_STRICT - When true, exit if OIDC gateway readiness fails (default: false).
 #                           If false, log a warning and continue to pytest.
 #   OIDC_READINESS_STRICT - When true, exit before pytest if the OIDC readiness probe times out.
-#   DEPLOYMENT_NAMESPACE - Namespace of MaaS API and controller (default: opendatahub)
-#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and Tenant CR (default: models-as-a-service)
+#   DEPLOYMENT_NAMESPACE - Namespace of maas-controller (default: opendatahub)
+#   INFRA_NAMESPACE - Namespace of MaaS API infrastructure; AUTO derives from DEPLOYMENT_NAMESPACE (default: AUTO)
+#   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs and MaasTenantConfig CR (default: models-as-a-service)
 #   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller with discovery flag before pytest (default: true)
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
@@ -90,13 +97,19 @@ SKIP_DEPLOYMENT=${SKIP_DEPLOYMENT:-false}  # Skip platform and model deployment 
 SKIP_VALIDATION=${SKIP_VALIDATION:-false}
 SKIP_AUTH_CHECK=${SKIP_AUTH_CHECK:-true}  # TODO: Set to false once operator TLS fix lands
 INSECURE_HTTP=${INSECURE_HTTP:-false}
-EXTERNAL_OIDC=${EXTERNAL_OIDC:-true}
+EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
+export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
+# DEPLOY_MODE - deploy.sh --deployment-mode to use (default: kustomize, matches default CI).
+# Set to "operator" to exercise the ODH operator's own ModelsAsService/AIGateway reconcilers
+# instead of installing maas-controller/maas-api directly via kustomize. Required when
+# AI_GATEWAY_OPERATOR_IMAGE is set, since ai-gateway-operator is only deployed by the operator.
+DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 AUTHORINO_NAMESPACE="kuadrant-system"
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
@@ -109,8 +122,9 @@ INGRESS_MODE="${INGRESS_MODE:-clusterip}"
 export INGRESS_MODE
 # Gateway programming can lag during fresh cluster bring-up; allow a generous timeout.
 GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
-# OIDC readiness gate: by default do not block pytest if Keycloak/Authorino still returns 401
-OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-false}"
+# OIDC readiness gate: fail before pytest if Keycloak/Authorino isn't ready.
+# Set to false to warn-only (useful during local development against a partially ready cluster).
+OIDC_READINESS_STRICT="${OIDC_READINESS_STRICT:-true}"
 # Multi-tenancy Phase 1: patch maas-controller for tenant namespace discovery E2E.
 ENABLE_TENANT_NAMESPACE_DISCOVERY="${ENABLE_TENANT_NAMESPACE_DISCOVERY:-true}"
 AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
@@ -165,6 +179,12 @@ apply_default_oidc_for_keycloak() {
     export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-test-client}"
     export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
     export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
+    # dave_noaccess has no group memberships — used by the empty-list test.
+    export OIDC_USERNAME_NO_ACCESS="${OIDC_USERNAME_NO_ACCESS:-dave_noaccess}"
+    export OIDC_PASSWORD_NO_ACCESS="${OIDC_PASSWORD_NO_ACCESS:-letmein}"
+    # tenant-b token URL for per-tenant OIDC isolation test.
+    local realm_b_base="https://keycloak.${cluster_domain}/realms/tenant-b"
+    export OIDC_TOKEN_URL_TENANT_B="${OIDC_TOKEN_URL_TENANT_B:-${realm_b_base}/protocol/openid-connect/token}"
     echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
 }
 
@@ -265,6 +285,10 @@ deploy_maas_platform() {
     if [[ -n "${OPERATOR_IMAGE:-}" ]]; then
         echo "Using custom ODH operator image: ${OPERATOR_IMAGE}"
     fi
+    if [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]]; then
+        echo "Using custom ai-gateway-operator image: ${AI_GATEWAY_OPERATOR_IMAGE} (requires DEPLOY_MODE=operator)"
+    fi
+    echo "Deployment mode: ${DEPLOY_MODE}"
 
     # 1. Install cert-manager and LeaderWorkerSet (required for KServe/LLMInferenceService)
     echo "Installing cert-manager and LeaderWorkerSet operators..."
@@ -274,10 +298,17 @@ deploy_maas_platform() {
     fi
 
     # 2. Install ODH operator with DataScienceCluster (KServe + ModelsAsService)
-    echo "Installing OpenDataHub operator..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
-        echo "❌ ERROR: ODH installation failed"
-        exit 1
+    # Skipped in operator mode: deploy.sh's operator-based flow installs ODH and applies the
+    # DSC itself (with ModelsAsService/AIGateway managed), so running install-odh.sh here too
+    # would apply a second, incompatible DSC and fail deploy.sh's DSC drift check.
+    if [[ "${DEPLOY_MODE}" == "kustomize" ]]; then
+        echo "Installing OpenDataHub operator..."
+        if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
+            echo "❌ ERROR: ODH installation failed"
+            exit 1
+        fi
+    else
+        echo "Skipping standalone ODH install (DEPLOY_MODE=${DEPLOY_MODE}; deploy.sh installs ODH + DSC directly)"
     fi
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
@@ -294,7 +325,7 @@ deploy_maas_platform() {
     export DB_SSLMODE="${DB_SSLMODE:-disable}"
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
-        --deployment-mode kustomize
+        --deployment-mode "${DEPLOY_MODE}"
     )
     if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
         deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
@@ -514,12 +545,12 @@ wait_for_auth_policies_enforced() {
 validate_deployment() {
     echo "Deployment Validation"
     echo "Using controller namespace: $DEPLOYMENT_NAMESPACE"
-    echo "Using maas-api namespace: $DEPLOYMENT_NAMESPACE"
+    echo "Using maas-api namespace: $MAAS_API_DEPLOYMENT_NAMESPACE"
     echo "Using AITenant namespace: $AITENANT_NAMESPACE"
 
     if [ "$SKIP_VALIDATION" = false ]; then
-        # maas-api deploys to operator namespace (opendatahub for ODH, redhat-ods-applications for RHOAI)
-        # validate-deployment.sh uses MAAS_API_NAMESPACE env var or defaults to opendatahub
+        # maas-api deploys to the resolved infrastructure namespace.
+        # validate-deployment.sh derives INFRA_NAMESPACE the same way.
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
             echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
             sleep 30
@@ -816,6 +847,8 @@ run_e2e_tests() {
         "$test_dir/tests/test_tenant_subscription_isolation.py" \
         "$test_dir/tests/test_tenant_rate_limit_isolation.py" \
         "$test_dir/tests/test_config_tenant.py" \
+        "$test_dir/tests/test_tenant_discovery.py" \
+        "$test_dir/tests/test_tenant_discovery_isolation.py" \
         "$test_dir/tests/test_external_oidc.py" ; then
         echo "❌ ERROR: E2E tests failed"
         exit 1

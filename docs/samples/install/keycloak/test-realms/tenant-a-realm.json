@@ -31,12 +31,23 @@
           }
         }
       ]
+    },
+    {
+      "clientId": "wrong-client",
+      "enabled": true,
+      "publicClient": true,
+      "directAccessGrantsEnabled": true,
+      "standardFlowEnabled": false,
+      "redirectUris": [],
+      "webOrigins": [],
+      "description": "Test-only client used to verify oidc-client-bound enforcement. Tokens issued to this client carry azp=wrong-client and must be rejected by MaaS even though the issuer is valid."
     }
   ],
   "groups": [
     {"name": "Engineering"},
     {"name": "Site-Reliability"},
-    {"name": "Project-Alpha"}
+    {"name": "Project-Alpha"},
+    {"name": "unsafe;group"}
   ],
   "users": [
     {
@@ -54,6 +65,30 @@
       "requiredActions": [],
       "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
       "groups": ["Site-Reliability"]
+    },
+    {
+      "username": "evil_user",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": ["unsafe;group"]
+    },
+    {
+      "username": "dave_noaccess",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": []
+    },
+    {
+      "username": "mixed_user",
+      "enabled": true,
+      "emailVerified": true,
+      "requiredActions": [],
+      "credentials": [{"type": "password", "value": "letmein", "temporary": false}],
+      "groups": ["Engineering", "unsafe;group"]
     }
   ]
 }

@@ -18,6 +18,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
@@ -27,7 +28,9 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tenant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tracing"
 )
 
 func main() {
@@ -77,20 +80,41 @@ func serve() error {
 		gin.SetMode(gin.DebugMode)
 	}
 
+	// Initialize OTEL tracing (noop if endpoint not configured)
+	tracingShutdown, err := tracing.InitTracer(
+		ctx, cfg.OTELEndpoint, cfg.OTELInsecure, cfg.OTELSampleRate,
+		"maas-api", cfg.Namespace,
+	)
+	if err != nil {
+		return fmt.Errorf("failed to initialize tracing: %w", err)
+	}
+	defer tracingShutdown(ctx)
+	if cfg.OTELEndpoint != "" {
+		log.Info("OTEL tracing enabled", "endpoint", cfg.OTELEndpoint)
+	}
+
 	// Use gin.New() instead of gin.Default() to control middleware order
 	router := gin.New()
 
 	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.BodyLimit())
+	accessLogCfg := middleware.TenantLoggerConfig{
+		DefaultTenant:   cfg.TenantName,
+		TenantNamespace: cfg.MaaSSubscriptionNamespace,
+		GatewayName:     cfg.GatewayName,
+	}
+
 	router.Use(middleware.RequestID())
-	router.Use(middleware.AccessLogger())
+	router.Use(middleware.AccessLogger(log, accessLogCfg))
+	router.Use(tracing.NewMiddleware(cfg.TenantName, cfg.MaaSSubscriptionNamespace, cfg.GatewayName, cfg.GatewayNamespace))
 
 	// Add metrics middleware
 	metricsRecorder, err := metrics.NewPrometheusRecorder(metricsRegistry)
 	if err != nil {
 		return fmt.Errorf("failed to create metrics recorder: %w", err)
 	}
-	router.Use(metrics.NewMiddleware(metricsRecorder))
+	router.Use(metrics.NewMiddleware(metricsRecorder, cfg.TenantName))
 
 	// Start metrics server
 	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
@@ -120,7 +144,7 @@ func serve() error {
 		}
 	}()
 
-	if err = registerHandlers(ctx, log, router, cfg, cluster, store); err != nil {
+	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
@@ -174,7 +198,15 @@ func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
 }
 
-func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engine, cfg *config.Config, cluster *config.ClusterConfig, store api_keys.MetadataStore) error {
+func registerHandlers(
+	ctx context.Context,
+	log *logger.Logger,
+	router *gin.Engine,
+	cfg *config.Config,
+	cluster *config.ClusterConfig,
+	store api_keys.MetadataStore,
+	metricsRecorder *metrics.PrometheusRecorder,
+) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
 	log.Info("Starting informers and waiting for cache sync...")
@@ -195,14 +227,12 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
 	}
 	if gatewayInternalHost == "" {
-		log.Warn("No gateway service found - model access checks will be disabled",
-			"gateway", cfg.GatewayName,
-			"namespace", cfg.GatewayNamespace)
-	} else {
-		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
+			cfg.GatewayNamespace, cfg.GatewayName)
 	}
+	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
@@ -212,16 +242,24 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
-	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker)
+	apiKeyService.StartDebounceCleanup(ctx)
+	apiKeyHandler := api_keys.NewHandler(log, apiKeyService, cluster.AdminChecker, metricsRecorder)
 
-	v1Routes.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+	tenantLogCfg := middleware.TenantLoggerConfig{
+		DefaultTenant:   cfg.TenantName,
+		TenantNamespace: cfg.MaaSSubscriptionNamespace,
+		GatewayName:     cfg.GatewayName,
+	}
+	authMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+
+	v1Routes.GET("/models", append(authMiddleware, modelsHandler.ListLLMs)...)
 
 	// Subscription listing routes
-	v1Routes.GET("/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptions)
-	v1Routes.GET("/model/:model-id/subscriptions", tokenHandler.ExtractUserInfo(), subscriptionHandler.ListSubscriptionsForModel)
+	v1Routes.GET("/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptions)...)
+	v1Routes.GET("/model/:model-id/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
 	// API Key routes - Complete CRUD for hash-based key architecture
-	apiKeyRoutes := v1Routes.Group("/api-keys", tokenHandler.ExtractUserInfo())
+	apiKeyRoutes := v1Routes.Group("/api-keys", authMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
 	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
@@ -229,40 +267,50 @@ func registerHandlers(ctx context.Context, log *logger.Logger, router *gin.Engin
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
 
+	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
+	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
+	v1Routes.GET("/tenants",
+		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
+		tenantHandler.GetTenantInfo)
+
 	// Internal routes (no auth required - called by Authorino / CronJob)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
 }
 
-// isLocalhostOrigin reports whether the origin is a localhost address,
-// used by the debug-mode CORS policy to restrict cross-origin access to
-// local development only. Accepts both ported (http://localhost:3000)
-// and default-port (http://localhost) forms.
+// isLocalhostOrigin reports whether the origin is an http://localhost or
+// http://127.0.0.1 address, used by the debug-mode CORS policy to restrict
+// cross-origin access to local development only.
+// Only plain HTTP is accepted — local dev servers do not use HTTPS.
+// (CWE-942 / FIND-Debug-CORS.)
 func isLocalhostOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != "http" {
 		return false
 	}
-	if u.Hostname() == "localhost" {
+	host := u.Hostname()
+	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(u.Hostname())
+	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 
 func debugCORSConfig() cors.Config {
 	return cors.Config{
-		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
-		ExposeHeaders:   []string{"Content-Type"},
-		AllowOriginFunc: isLocalhostOrigin,
-		MaxAge:          12 * time.Hour,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:    []string{"Content-Type"},
+		AllowOriginFunc:  isLocalhostOrigin,
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
 	}
 }

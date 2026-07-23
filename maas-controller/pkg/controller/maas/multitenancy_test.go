@@ -29,6 +29,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -180,10 +181,23 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 	policy := newMaaSAuthPolicy(policyName, namespace, "team-a",
 		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 
+	// Gateway object — required for OwnerReference on tenant gateway AuthPolicy
+	gateway := &gatewayapiv1.Gateway{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: gatewayapiv1.GroupVersion.String(),
+			Kind:       "Gateway",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a-gateway",
+			Namespace: "team-a-gateway-ns",
+			UID:       "team-a-gw-uid",
+		},
+	}
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(ns, tenant, model, route, policy).
+		WithObjects(ns, tenant, model, route, policy, gateway).
 		Build()
 
 	const gwNamespace = "team-a-gateway-ns"
@@ -195,7 +209,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		// Controller's default gateway (different from tenant's gateway)
 		GatewayName:      "maas-default-gateway",
 		GatewayNamespace: "openshift-ingress",
-		MaaSAPINamespace: "opendatahub",
+		InfraNamespace:   "opendatahub",
 	}
 
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: policyName, Namespace: namespace}}
@@ -597,27 +611,45 @@ func TestMapAITenantToMaaSSubscriptions(t *testing.T) {
 }
 
 func TestFetchTenantForNamespace(t *testing.T) {
-	tenant := &maasv1alpha1.Tenant{
+	config := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "default-tenant",
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 			Namespace: "team-a-maas",
 		},
-		Spec: maasv1alpha1.TenantSpec{
-			GatewayRef: maasv1alpha1.TenantGatewayRef{
-				Name:      "team-a-gateway",
-				Namespace: "openshift-ingress",
-			},
-		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{},
 	}
 
-	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant).Build()
+	legacyTenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "legacy-maas",
+		},
+		Spec: maasv1alpha1.TenantSpec{GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Name:      "legacy-gateway",
+			Namespace: "openshift-ingress",
+		}},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(config, legacyTenant).Build()
 
 	got, err := fetchTenantForNamespace(context.Background(), c, "team-a-maas")
 	if err != nil {
 		t.Fatalf("fetchTenantForNamespace: %v", err)
 	}
-	if got.Spec.GatewayRef.Name != "team-a-gateway" {
-		t.Errorf("GatewayRef.Name = %q, want team-a-gateway", got.Spec.GatewayRef.Name)
+	if got.config == nil {
+		t.Fatalf("fetchTenantForNamespace returned legacy=%T, want MaasTenantConfig", got.legacy)
+	}
+
+	got, err = fetchTenantForNamespace(context.Background(), c, "legacy-maas")
+	if err != nil {
+		t.Fatalf("fetchTenantForNamespace legacy fallback: %v", err)
+	}
+	legacy := got.legacy
+	if legacy == nil {
+		t.Fatalf("fetchTenantForNamespace legacy fallback returned config=%T, want Tenant", got.config)
+	}
+	if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
+		t.Errorf("legacy GatewayRef.Name = %q, want legacy-gateway", legacy.Spec.GatewayRef.Name)
 	}
 
 	_, err = fetchTenantForNamespace(context.Background(), c, "nonexistent")

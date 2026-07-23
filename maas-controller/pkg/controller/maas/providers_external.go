@@ -266,6 +266,13 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)
 }
 
+// ResolveModelAlias returns the ExternalModel CR name, which is the model identity
+// clients send in the body for BBR requests. This matches what /v1/models returns
+// (spec.modelRef.name for ExternalModel-backed MaaSModelRefs).
+func (h *externalModelHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	return model.Spec.ModelRef.Name, nil
+}
+
 // CleanupOnDelete is called when the MaaSModelRef is deleted.
 // ExternalModel: the ExternalModel reconciler handles cleanup of all resources via finalizer.
 func (h *externalModelHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
@@ -279,7 +286,11 @@ type externalModelRouteResolver struct{}
 func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c client.Reader, model *maasv1alpha1.MaaSModelRef) (routeName, routeNamespace string, err error) {
 	routeNamespace = model.Namespace
 
-	// Read route name from inference ExternalModel status if available
+	// Read route name from inference ExternalModel status if available.
+	// If the inference ExternalModel exists but status.httpRouteName is not set yet,
+	// signal not-ready rather than falling back to maas-<name>: that fallback only
+	// applies to the legacy maas.opendatahub.io/ExternalModel flow where the MaaS
+	// ExternalModel reconciler itself creates the maas-prefixed HTTPRoute.
 	if c != nil {
 		key := types.NamespacedName{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
 		inferenceEM := &unstructured.Unstructured{}
@@ -288,12 +299,15 @@ func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c clien
 			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
 				return name, routeNamespace, nil
 			}
+			return "", routeNamespace, fmt.Errorf("%w: inference ExternalModel %s/%s status.httpRouteName not set yet",
+				ErrHTTPRouteNotFound, routeNamespace, model.Spec.ModelRef.Name)
 		} else if !apierrors.IsNotFound(err) && !apimeta.IsNoMatchError(err) {
 			return "", routeNamespace, fmt.Errorf("failed to get inference ExternalModel %s/%s: %w",
 				model.Namespace, model.Spec.ModelRef.Name, err)
 		}
 	}
 
+	// Inference ExternalModel not found — fall back to legacy maas.opendatahub.io naming.
 	routeName = modelnaming.ExternalModelResourceName(model.Spec.ModelRef.Name)
 	return routeName, routeNamespace, nil
 }

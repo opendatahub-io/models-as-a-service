@@ -34,10 +34,11 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "maas-default-gateway",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
+		assert.Equal(t, "opendatahub", got.ControllerNamespace)
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
@@ -69,7 +70,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "gateway-ns",
 			Name:      "gateway-name",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "cluster-audience", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
@@ -85,8 +86,9 @@ func TestBuildPlatformParams(t *testing.T) {
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
-	params := PlatformParams{
+	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
 		AppNamespace:            "tenant-ns",
+		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
 		GatewayName:             "custom-gateway",
 		ClusterAudience:         "openshift-custom",
@@ -173,20 +175,22 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
 
-	// Verify dual-stage filter chain: configPatches[0]=INSERT_BEFORE, configPatches[1]=INSERT_AFTER,
-	// plus per-route disable patches: configPatches[2] and [3]=MERGE on maas-api-route rules.
+	// Verify dual-stage filter chain with dual anchors:
+	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
+	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 4, "expected four configPatches (INSERT_BEFORE + INSERT_AFTER + 2x MERGE)")
+	require.Len(t, configPatches, 8, "expected eight configPatches (4x filter insert + 4x MERGE)")
 
-	wantAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
+	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingName, params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingName, params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER"}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster}
+	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
+	wantAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
+	wantClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
 
-	for i, raw := range configPatches[:2] {
+	for i, raw := range configPatches[:4] {
 		cp, ok := raw.(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -194,14 +198,14 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
 
 		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-		assert.Equal(t, wantAnchor, anchor, "configPatches[%d] subFilter.name", i)
+		assert.Equal(t, wantAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
 
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
 		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
-	// Verify per-route ext_proc disable on maas-api-route rules 0 and 1.
-	for i := 2; i < 4; i++ {
+	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
+	for i := 4; i < 8; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
@@ -209,13 +213,18 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, "MERGE", op, "configPatches[%d] operation", i)
 
 		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
-		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-2)
+		wantRouteName := fmt.Sprintf("%s.%s.%d", params.AppNamespace, MaaSAPIRouteName(params.TenantIdentifier), i-4)
 		assert.Equal(t, wantRouteName, routeName, "configPatches[%d] route name", i)
 
 		disabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp-pre", "disabled")
 		require.NoError(t, err, "configPatches[%d] ipp-pre disabled field", i)
 		require.True(t, found, "configPatches[%d] ipp-pre disabled field should exist", i)
 		assert.True(t, disabled, "configPatches[%d] ipp-pre should be disabled", i)
+
+		ippDisabled, found, err := unstructured.NestedBool(cp, "patch", "value", "typed_per_filter_config", "envoy.filters.http.ext_proc.ipp", "disabled")
+		require.NoError(t, err, "configPatches[%d] ipp disabled field", i)
+		require.True(t, found, "configPatches[%d] ipp disabled field should exist", i)
+		assert.True(t, ippDisabled, "configPatches[%d] ipp should be disabled", i)
 	}
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
@@ -234,6 +243,48 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	firstSubject, ok := subjects[0].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.GatewayNamespace, firstSubject["namespace"])
+
+	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
+	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, ingress)
+	rule, ok := ingress[0].(map[string]any)
+	require.True(t, ok)
+	from, ok := rule["from"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, from)
+	peer, ok := from[0].(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.ControllerNamespace, matchLabels["kubernetes.io/metadata.name"])
+
+	authorinoPolicy := requireResource(t, resources, GVKNetworkPolicy, "maas-authorino-allow")
+	assert.Equal(t, params.AppNamespace, authorinoPolicy.GetNamespace())
+	authorinoIngress, found, err := unstructured.NestedSlice(authorinoPolicy.Object, "spec", "ingress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, authorinoIngress, 1, "expected exactly one Authorino ingress rule")
+	authorinoRule, ok := authorinoIngress[0].(map[string]any)
+	require.True(t, ok)
+	authorinoPeers, ok := authorinoRule["from"].([]any)
+	require.True(t, ok)
+	require.Len(t, authorinoPeers, 1, "expected exactly one Authorino ingress peer")
+	authorinoPeer, ok := authorinoPeers[0].(map[string]any)
+	require.True(t, ok)
+	authorinoNSSelector, ok := authorinoPeer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	matchExpressions, ok := authorinoNSSelector["matchExpressions"].([]any)
+	require.True(t, ok)
+	require.Len(t, matchExpressions, 1, "expected exactly one Authorino namespace match expression")
+	namespaceExpression, ok := matchExpressions[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "kubernetes.io/metadata.name", namespaceExpression["key"])
+	assert.Equal(t, "In", namespaceExpression["operator"])
+	assert.ElementsMatch(t, []any{"kuadrant-system", "openshift-operators", "rh-connectivity-link"}, namespaceExpression["values"])
 }
 
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {

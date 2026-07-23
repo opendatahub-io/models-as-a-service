@@ -13,15 +13,20 @@ data:
       parameters:
         fieldName: model
         headerName: X-Gateway-Model-Name
+    - type: model-provider-resolver
     profiles:
     - name: default
       plugins:
         request:
         - pluginRef: model-extractor
+        - pluginRef: model-provider-resolver
   custom-ipp-config.yaml: |
     apiVersion: llm-d.ai/v1alpha1
     kind: PayloadProcessorConfig
     plugins:
+    - type: maas-headers-guard
+      name: maas-headers-guard
+    - type: stream-usage-enforcer
     - type: model-provider-resolver
     - type: api-translation
     - type: apikey-injection
@@ -29,6 +34,8 @@ data:
     - name: default
       plugins:
         request:
+        - pluginRef: maas-headers-guard
+        - pluginRef: stream-usage-enforcer
         - pluginRef: model-provider-resolver
         - pluginRef: api-translation
         - pluginRef: apikey-injection

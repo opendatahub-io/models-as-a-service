@@ -30,7 +30,7 @@ The ClusterRoleBinding `maas-controller-rolebinding` must bind this role to the 
 
 ### Fix: Add the Missing Rule
 
-If the ODH operator manages these resources (via the `modelsAsService` DSC component), upgrade or reconcile the component. Otherwise, patch the ClusterRole directly:
+If the ODH operator manages these resources (via the `aigateway.modelsAsAService` DSC component), upgrade or reconcile the component. Otherwise, patch the ClusterRole directly:
 
 ```bash
 oc patch clusterrole maas-controller-role --type=json -p='[

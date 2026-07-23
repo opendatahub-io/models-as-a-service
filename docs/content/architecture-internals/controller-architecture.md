@@ -4,11 +4,31 @@ This document provides a technical deep-dive into the MaaS Controller architectu
 
 ---
 
+## Namespace Architecture
+
+MaaS uses multiple namespaces to separate concerns and enable flexible deployment patterns:
+
+| Namespace | Purpose | Default Value | Configurable |
+|-----------|---------|---------------|--------------|
+| **Controller Namespace** | Where maas-controller operator runs | `opendatahub` (ODH)<br/>`redhat-ods-applications` (RHOAI) | Set by operator/deployment |
+| **Infrastructure Namespace** | Where maas-api deployment and maas-db-config secret run | Same as controller (default)<br/>`odh-ai-gateway-infra` (ODH separated)<br/>`redhat-ai-gateway-infra` (RHOAI separated) | `--infra-namespace` flag |
+| **Default Tenant Namespace** | Where default Tenant CR and subscriptions live | `models-as-a-service` | `--maas-subscription-namespace` flag |
+| **AITenant Namespace** | Where AITenant CRs are created | `ai-tenants` | `--aitenant-namespace` flag |
+| **Gateway Namespace** | Where Gateway API resources live | `openshift-ingress` | `--gateway-namespace` flag |
+
+**Key points:**
+
+- **PostgreSQL location is independent:** The database can be external (AWS RDS, Azure Database, etc.) or in any namespace. Only the `maas-db-config` secret (containing the connection URL) needs to be in the infrastructure namespace.
+- **Default behavior (no separation):** Infrastructure namespace equals controller namespace. This works on all clusters including ODH on ROSA.
+- **Namespace separation:** When enabled, maas-api and related secrets deploy to a dedicated infrastructure namespace while the controller stays in its original namespace. See [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md) for migration details.
+
+---
+
 ## What Is the MaaS Controller?
 
 The **MaaS Controller** is a Kubernetes controller with two main responsibilities:
 
-1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`Tenant`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps `AITenant/models-as-a-service` in the `ai-tenants` namespace; the AITenant reconciler creates or adopts `Tenant/default-tenant` in the `models-as-a-service` namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
+1. **Tenant reconciler** — deploys and manages the MaaS platform workloads (`maas-api`, gateway policies, telemetry, DestinationRule) via the **`MaasTenantConfig`** CR (`maas.opendatahub.io/v1alpha1`). On startup the controller self-bootstraps `AITenant/models-as-a-service` in the `ai-tenants` namespace; the AITenant reconciler creates or adopts `MaasTenantConfig/default-tenant` in the `models-as-a-service` namespace. The Tenant reconciler renders embedded kustomize manifests at runtime and applies them via Server-Side Apply (SSA).
 
 2. **Subscription reconcilers** — let platform operators define:
     - **Which models** are exposed through MaaS (via **MaaSModelRef**).
@@ -25,7 +45,7 @@ The controller does not run inference. It **reconciles** your high-level MaaS CR
 flowchart TB
     subgraph Platform["Platform lifecycle"]
         AITenant["AITenant CR\n(models-as-a-service)"]
-        Tenant["Tenant CR\n(default-tenant)"]
+        Tenant["MaasTenantConfig CR\n(default-tenant)"]
     end
 
     subgraph Operator["Platform operator"]
@@ -76,7 +96,7 @@ flowchart TB
     HTTPRoute --> LLMIS
 ```
 
-**Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `Tenant` CR; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
+**Summary:** The controller has two sides: the **Tenant reconciler** deploys and manages the MaaS platform workloads (maas-api, gateway policies, telemetry) from the `MaasTenantConfig` CR and AITenant platform context; the **subscription reconcilers** turn MaaS CRs into Gateway/Kuadrant resources that attach to per-model HTTPRoutes and backends (e.g. KServe LLMInferenceService).
 
 ---
 

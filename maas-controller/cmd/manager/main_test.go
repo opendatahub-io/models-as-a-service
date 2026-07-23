@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -15,6 +16,7 @@ import (
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -323,6 +325,120 @@ func TestEnsureDefaultAITenantBootstrapWaitsForConfigUID(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultAITenantBootstrapSkipsWhenTeardownRequested(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantreconcile.MaaSControllerDeploymentName,
+					Namespace: "opendatahub",
+					Annotations: map[string]string{
+						maas.TeardownRequestedAnnotation: "true",
+					},
+				},
+			},
+			&maasv1alpha1.Config{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: maasv1alpha1.ConfigInstanceName,
+					UID:  types.UID("cfg-default"),
+				},
+			},
+		).
+		Build()
+
+	created, err := ensureDefaultAITenantBootstrap(
+		ctx,
+		cl,
+		"models-as-a-service",
+		tenantreconcile.DefaultAITenantNamespace,
+		"opendatahub",
+		tenantreconcile.MaaSControllerDeploymentName,
+		"maas-default-gateway",
+		"openshift-ingress",
+	)
+	if err != nil {
+		t.Fatalf("ensure default AITenant: %v", err)
+	}
+	if created {
+		t.Fatalf("created = true, want false")
+	}
+
+	var aitenant maasv1alpha1.AITenant
+	if err := cl.Get(ctx, client.ObjectKey{
+		Name:      tenantreconcile.DefaultAITenantName,
+		Namespace: tenantreconcile.DefaultAITenantNamespace,
+	}, &aitenant); err == nil {
+		t.Fatalf("default AITenant was created during teardown: %#v", aitenant)
+	}
+}
+
+func TestAitenantTeardownPauseConditionPausesWhenDeploymentMissing(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	cl := controllerfake.NewClientBuilder().WithScheme(s).Build()
+
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if !pause {
+		t.Fatalf("pause = false, want true when Deployment is missing during teardown")
+	}
+}
+
+func TestAitenantTeardownPauseConditionPausesWhenTeardownRequested(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      deploymentKey.Name,
+				Namespace: deploymentKey.Namespace,
+				Annotations: map[string]string{
+					maas.TeardownRequestedAnnotation: "true",
+				},
+			},
+		}).
+		Build()
+
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if !pause {
+		t.Fatalf("pause = false, want true when Deployment advertises teardown")
+	}
+}
+
+func TestAitenantTeardownPauseConditionRunsWhenDeploymentIsHealthy(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	deploymentKey := client.ObjectKey{Name: tenantreconcile.MaaSControllerDeploymentName, Namespace: "opendatahub"}
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      deploymentKey.Name,
+				Namespace: deploymentKey.Namespace,
+			},
+		}).
+		Build()
+
+	pause, err := aitenantTeardownPauseCondition(cl, deploymentKey)(ctx)
+	if err != nil {
+		t.Fatalf("evaluate pause condition: %v", err)
+	}
+	if pause {
+		t.Fatalf("pause = true, want false when Deployment does not advertise teardown")
+	}
+}
+
 func TestEnsureDefaultAITenantBootstrapDoesNotRecreateAfterBootstrapMarker(t *testing.T) {
 	ctx := context.Background()
 	s := managerTestScheme(t)
@@ -368,5 +484,86 @@ func TestEnsureDefaultAITenantBootstrapDoesNotRecreateAfterBootstrapMarker(t *te
 		Namespace: tenantreconcile.DefaultAITenantNamespace,
 	}, &maasv1alpha1.AITenant{}); err == nil {
 		t.Fatalf("default AITenant was recreated after bootstrap marker")
+	}
+}
+
+func TestEnsureManagedNamespaceAddsNetworkPolicyLabelWithoutOverwritingOwnership(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+			Labels: map[string]string{
+				"app.kubernetes.io/part-of":    "ai-gateway",
+				"app.kubernetes.io/managed-by": "ai-gateway-operator",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated-namespace label = %q, want true", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
+		t.Fatalf("managed-by label was overwritten to %q, want ai-gateway-operator preserved", got)
+	}
+	if got := ns.Labels["app.kubernetes.io/part-of"]; got != "ai-gateway" {
+		t.Fatalf("part-of label was overwritten to %q, want ai-gateway preserved", got)
+	}
+}
+
+func TestEnsureManagedNamespaceNoUpdateWhenNetworkPolicyLabelPresent(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+			Labels: map[string]string{
+				"opendatahub.io/generated-namespace": "true",
+				"app.kubernetes.io/managed-by":       "ai-gateway-operator",
+				"app.kubernetes.io/part-of":          "ai-gateway",
+			},
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["app.kubernetes.io/managed-by"]; got != "ai-gateway-operator" {
+		t.Fatalf("managed-by label changed to %q, want ai-gateway-operator unchanged", got)
+	}
+}
+
+func TestEnsureManagedNamespacePatchesNilLabels(t *testing.T) {
+	existing := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "test-infra-ns",
+		},
+	}
+	clientset := clientsetfake.NewSimpleClientset(existing)
+
+	if err := ensureManagedNamespaceWithClient(context.Background(), "test-infra-ns", "infra", clientset); err != nil {
+		t.Fatalf("ensure managed namespace: %v", err)
+	}
+
+	ns, err := clientset.CoreV1().Namespaces().Get(context.Background(), "test-infra-ns", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get namespace: %v", err)
+	}
+	if got := ns.Labels["opendatahub.io/generated-namespace"]; got != "true" {
+		t.Fatalf("generated-namespace label = %q, want true", got)
+	}
+	if _, exists := ns.Labels["app.kubernetes.io/managed-by"]; exists {
+		t.Fatalf("managed-by label was added to namespace not created by maas-controller")
 	}
 }

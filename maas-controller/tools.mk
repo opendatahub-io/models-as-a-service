@@ -8,7 +8,7 @@ $(LOCALBIN):
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 OPERATOR_CHAOS ?= $(LOCALBIN)/operator-chaos
 
-GOLANGCI_LINT_VERSION ?= v2.6.2
+GOLANGCI_LINT_VERSION ?= v2.12.2
 OPERATOR_CHAOS_VERSION ?= ec5cd239b770735cab3028d3594385950b51e327
 # Target the versioned binary so version bumps trigger reinstall
 $(GOLANGCI_LINT)-$(GOLANGCI_LINT_VERSION): $(LOCALBIN)

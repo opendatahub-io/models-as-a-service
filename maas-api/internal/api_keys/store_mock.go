@@ -15,6 +15,10 @@ import (
 type MockStore struct {
 	mu   sync.RWMutex
 	keys map[string]*storedKey // keyed by ID
+
+	// UpdateLastUsedCount tracks how many times UpdateLastUsed has been called.
+	// Useful for asserting debounce behavior in tests.
+	UpdateLastUsedCount int
 }
 
 type storedKey struct {
@@ -440,6 +444,21 @@ func (m *MockStore) InvalidateAll(ctx context.Context, username string, tenant s
 	return count, nil
 }
 
+func (m *MockStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	count := 0
+	for _, k := range m.keys {
+		if k.metadata.Tenant == tenant && k.metadata.Status == StatusActive {
+			k.metadata.Status = StatusRevoked
+			count++
+		}
+	}
+
+	return count, nil
+}
+
 func (m *MockStore) Revoke(ctx context.Context, keyID string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -469,7 +488,16 @@ func (m *MockStore) UpdateLastUsed(ctx context.Context, keyID string) error {
 
 	now := time.Now().UTC()
 	k.lastUsedAt = &now
+	m.UpdateLastUsedCount++
 	return nil
+}
+
+// GetUpdateLastUsedCount returns the current call count under the store's read lock,
+// safe for concurrent use with in-flight UpdateLastUsed calls.
+func (m *MockStore) GetUpdateLastUsedCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.UpdateLastUsedCount
 }
 
 // DeleteExpiredEphemeral removes expired ephemeral keys from the mock store.

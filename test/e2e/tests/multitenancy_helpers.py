@@ -15,6 +15,8 @@ import pytest
 import requests
 
 from test_helper import (
+    DEPLOYMENT_NAMESPACE,
+    MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
     TIMEOUT,
@@ -27,6 +29,7 @@ from test_helper import (
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
+TENANT_CONFIG_KIND = "maastenantconfig"
 TENANT_CR_NAME = "default-tenant"
 
 LABEL_AI_GATEWAY_TENANT = "ai-gateway.opendatahub.io/tenant"
@@ -45,7 +48,7 @@ AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
-DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
 OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
@@ -156,7 +159,10 @@ def _delete(kind: str, name: str, namespace: Optional[str] = None, *, timeout: s
     args = ["delete", kind, name, "--ignore-not-found", f"--timeout={timeout}"]
     if namespace:
         args.extend(["-n", namespace])
-    result = _oc_run(args, timeout=OC_TIMEOUT + 30)
+    process_timeout = OC_TIMEOUT + 30
+    if timeout.endswith("s") and timeout[:-1].isdigit():
+        process_timeout = max(process_timeout, int(timeout[:-1]) + 30)
+    result = _oc_run(args, timeout=process_timeout)
     if result.returncode != 0:
         raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
@@ -289,7 +295,7 @@ def wait_for_status_condition(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
-def wait_for_deployment_available(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, timeout: int = 180) -> dict:
+def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
         if status.get("availableReplicas", 0) < 1:
@@ -438,18 +444,6 @@ def remove_gateway_access_label(namespace: str, gateway_name: str) -> None:
         raise RuntimeError(f"failed to remove gateway access label from {namespace}: {result.stderr.strip()}")
 
 
-def admin_subject() -> str:
-    whoami = _oc_run(["whoami"])
-    if whoami.returncode == 0 and whoami.stdout.strip():
-        return whoami.stdout.strip()
-    raise RuntimeError(
-        "oc whoami failed: "
-        f"returncode={whoami.returncode} "
-        f"stdout={whoami.stdout.strip()!r} "
-        f"stderr={whoami.stderr.strip()!r}"
-    )
-
-
 def ensure_namespace(name: str, *, labels: Optional[dict[str, str]] = None) -> None:
     result = _oc_run(["create", "namespace", name])
     if result.returncode != 0 and "AlreadyExists" not in (result.stderr or "") and "already exists" not in (result.stderr or "").lower():
@@ -501,22 +495,16 @@ def apply_tenant_cr(
     gateway_namespace: str = GATEWAY_NAMESPACE,
     external_oidc: Optional[dict[str, str]] = None,
 ) -> None:
-    spec: dict[str, Any] = {
-        "gatewayRef": {
-            "name": gateway_name,
-            "namespace": gateway_namespace,
-        }
-    }
-    if external_oidc is None and gateway_name == DEFAULT_GATEWAY_NAME:
-        external_oidc = external_oidc_from_env()
-    if external_oidc:
-        spec["externalOIDC"] = external_oidc
+    # gateway_name/gateway_namespace/external_oidc are kept for older callers.
+    # Gateway and OIDC platform context now belongs to AITenant; MaasTenantConfig
+    # only enables the namespace for MaaS runtime CRs and carries API key/telemetry config.
+    _ = (gateway_name, gateway_namespace, external_oidc)
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
-            "kind": "Tenant",
+            "kind": "MaasTenantConfig",
             "metadata": {"name": TENANT_CR_NAME, "namespace": namespace},
-            "spec": spec,
+            "spec": {},
         }
     )
 
@@ -525,7 +513,8 @@ def apply_gateway_fixture(gateway_name: str, *, fixture_label: str) -> None:
     gw_options_name = f"{gateway_name}-gw-options"
     service_ca_secret = f"{gateway_name}-gw-service-tls"
     gateway_access_label = gateway_access_label_key(gateway_name)
-    apply_gateway_access_label(DEPLOYMENT_NAMESPACE, gateway_name)
+    # Apply gateway access label to infra namespace where HTTPRoutes are created
+    apply_gateway_access_label(INFRA_NAMESPACE, gateway_name)
     _apply(
         {
             "apiVersion": "v1",
@@ -713,9 +702,6 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
 def apply_aitenant(case: dict[str, str]) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
-        "rbac": {
-            "admins": [{"kind": "User", "name": admin_subject()}],
-        },
     }
     oidc = external_oidc_from_env()
     if oidc:
@@ -765,7 +751,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
     apply_aitenant(case)
     wait_for_json(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, predicate=aitenant_ready)
     wait_for_json(
-        "tenant",
+        "maastenantconfig",
         TENANT_CR_NAME,
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),
@@ -774,7 +760,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(
             per_tenant_maas_api_names(case["tenant_label_name"])["httproute"],
-            DEPLOYMENT_NAMESPACE,
+            INFRA_NAMESPACE,
             case["gateway_name"],
         )
 
@@ -829,6 +815,43 @@ def apply_maas_subscription(
             "spec": spec,
         }
     )
+
+
+def apply_unrelated_tenant_objects(case: dict[str, str]) -> dict[str, str]:
+    """Create user-owned objects that must survive AITenant teardown."""
+    names = {
+        "secret": f"{case['tenant_label_name']}-user-secret",
+        "rolebinding": f"{case['tenant_label_name']}-user-binding",
+    }
+    _apply(
+        {
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {"name": names["secret"], "namespace": case["tenant_ns"]},
+            "type": "Opaque",
+            "stringData": {"purpose": "unrelated-user-content"},
+        }
+    )
+    _apply(
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {"name": names["rolebinding"], "namespace": case["tenant_ns"]},
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "Role",
+                "name": f"aitenant-{case['tenant_label_name']}-tenant-admin",
+            },
+            "subjects": [
+                {
+                    "apiGroup": "rbac.authorization.k8s.io",
+                    "kind": "User",
+                    "name": "e2e-preserved-user",
+                }
+            ],
+        }
+    )
+    return names
 
 
 def provision_tenant_model(
@@ -948,7 +971,7 @@ def parse_annotation_list(value: str) -> list[str]:
     return [item.strip() for item in (value or "").split(",") if item.strip()]
 
 
-def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
+def deployment_env(name: str, namespace: str = INFRA_NAMESPACE, *, container_name: str = "maas-api") -> dict[str, str]:
     deployment = get_json_or_none("deployment", name, namespace)
     if not deployment:
         return {}
@@ -957,14 +980,14 @@ def deployment_env(name: str, namespace: str = DEPLOYMENT_NAMESPACE, *, containe
     return {entry.get("name"): entry.get("value") for entry in container.get("env") or [] if entry.get("name")}
 
 
-def http_route_parent_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_parent_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
     return ((route.get("spec") or {}).get("parentRefs") or [])
 
 
-def http_route_backend_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) -> list[dict]:
+def http_route_backend_refs(name: str, namespace: str = INFRA_NAMESPACE) -> list[dict]:
     route = get_json_or_none("httproute", name, namespace)
     if not route:
         return []
@@ -974,13 +997,57 @@ def http_route_backend_refs(name: str, namespace: str = DEPLOYMENT_NAMESPACE) ->
     return refs
 
 
+def per_tenant_resource_name(base_name: str, tenant_name: str) -> str:
+    if not tenant_name:
+        return base_name
+    return f"{base_name}-{tenant_name}"
+
+
 def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:
     return {
-        "deployment": f"maas-api-{tenant_name}",
-        "service": f"maas-api-{tenant_name}",
-        "httproute": f"maas-api-{tenant_name}-route",
-        "authpolicy": f"maas-api-{tenant_name}-auth",
+        "deployment": per_tenant_resource_name("maas-api", tenant_name),
+        "service": per_tenant_resource_name("maas-api", tenant_name),
+        "httproute": per_tenant_resource_name("maas-api-route", tenant_name),
+        "cronjob": per_tenant_resource_name("maas-api-key-cleanup", tenant_name),
+        "authpolicy": per_tenant_resource_name("maas-api-auth-policy", tenant_name),
     }
+
+
+def per_tenant_gateway_policy_names(tenant_name: str, gateway_name: str) -> dict[str, str]:
+    return {
+        "gateway_authpolicy": f"{gateway_name}-maas-auth",
+        "default_deny": per_tenant_resource_name("gateway-default-deny", tenant_name),
+        "destinationrule": per_tenant_resource_name("maas-api-backend-tls", tenant_name),
+    }
+
+
+def aitenant_cleanup_resource_refs(case: dict[str, str]) -> list[tuple[str, str, str]]:
+    maas_api_names = per_tenant_maas_api_names(case["tenant_label_name"])
+    gateway_policy_names = per_tenant_gateway_policy_names(case["tenant_label_name"], case["gateway_name"])
+    return [
+        ("deployment", maas_api_names["deployment"], INFRA_NAMESPACE),
+        ("service", maas_api_names["service"], INFRA_NAMESPACE),
+        ("httproute", maas_api_names["httproute"], INFRA_NAMESPACE),
+        ("cronjob", maas_api_names["cronjob"], INFRA_NAMESPACE),
+        ("authpolicy", gateway_policy_names["gateway_authpolicy"], GATEWAY_NAMESPACE),
+        ("tokenratelimitpolicy", gateway_policy_names["default_deny"], GATEWAY_NAMESPACE),
+        ("destinationrule", gateway_policy_names["destinationrule"], GATEWAY_NAMESPACE),
+    ]
+
+
+def wait_for_aitenant_cleanup_resources(case: dict[str, str], *, timeout: int = 180) -> None:
+    for kind, name, namespace in aitenant_cleanup_resource_refs(case):
+        wait_for_json(kind, name, namespace, timeout=timeout)
+
+
+def wait_for_aitenant_cleanup_resources_deleted(case: dict[str, str], *, timeout: int = 180) -> None:
+    for kind, name, namespace in aitenant_cleanup_resource_refs(case):
+        wait_for_not_found(kind, name, namespace, timeout=timeout)
+
+    # The route-level maas-api AuthPolicy is no longer rendered, but the delete
+    # path still removes stale instances left by older deployments.
+    maas_api_names = per_tenant_maas_api_names(case["tenant_label_name"])
+    wait_for_not_found("authpolicy", maas_api_names["authpolicy"], INFRA_NAMESPACE, timeout=timeout)
 
 
 def get_gateway_authpolicy(namespace: str = GATEWAY_NAMESPACE, name: str = GATEWAY_AUTH_POLICY_NAME) -> Optional[dict]:
@@ -1033,7 +1100,7 @@ def auth_can_create_maassubscription(subject: str, namespace: str) -> bool:
 
 
 def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True) -> None:
-    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE)
+    delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
     delete_maas_auth_policy(case["policy_name"], case["tenant_ns"])
     delete_maas_subscription(case["subscription_name"], case["tenant_ns"])
     delete_namespace_best_effort(case["tenant_ns"])
@@ -1042,7 +1109,7 @@ def cleanup_discovery_case(case: dict[str, str], *, delete_gateway: bool = True)
         delete_best_effort("gateway", case["gateway_name"], GATEWAY_NAMESPACE)
         delete_best_effort("configmap", f"{case['gateway_name']}-gw-options", GATEWAY_NAMESPACE)
         try:
-            remove_gateway_access_label(DEPLOYMENT_NAMESPACE, case["gateway_name"])
+            remove_gateway_access_label(INFRA_NAMESPACE, case["gateway_name"])
         except Exception as exc:  # noqa: BLE001
             print(f"[cleanup] failed to remove gateway access label for {case['gateway_name']}: {exc}")
 

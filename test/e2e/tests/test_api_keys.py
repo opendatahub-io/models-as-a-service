@@ -77,20 +77,26 @@ GATEWAY_PROPAGATION_DELAY = 5  # seconds
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on empty 403 from gateway propagation delay.
+    """Make an HTTP request, retrying on transient gateway/auth errors.
 
-    Empty 403 means Envoy hasn't loaded the AuthPolicy yet. Retries with
-    backoff and returns the last response — the caller's assertion will
-    surface the failure clearly if the gateway never becomes ready.
+    Retries on:
+    - Empty 403: Envoy hasn't loaded the AuthPolicy yet.
+    - 500 with AUTH_FAILURE: Authorino race condition during AuthConfig updates
+      (metadata evaluators not yet linked after policy reconciliation).
+
+    Returns the last response — the caller's assertion will surface the
+    failure clearly if the gateway never becomes ready.
     """
     for attempt in range(1, retries + 1):
         r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
-        if r.status_code == 403 and not r.text.strip():
-            if attempt < retries:
-                log.info("Gateway returned empty 403 (attempt %d/%d), retrying in %ds...",
-                         attempt, retries, GATEWAY_PROPAGATION_DELAY)
-                time.sleep(GATEWAY_PROPAGATION_DELAY)
-                continue
+        retryable = (r.status_code == 403 and not r.text.strip()) or (
+            r.status_code == 500 and "AUTH_FAILURE" in r.text
+        )
+        if retryable and attempt < retries:
+            log.info("Gateway returned %d (attempt %d/%d), retrying in %ds...",
+                     r.status_code, attempt, retries, GATEWAY_PROPAGATION_DELAY)
+            time.sleep(GATEWAY_PROPAGATION_DELAY)
+            continue
         return r
     return r  # last attempt's response — assertion will catch the failure
 
@@ -898,7 +904,7 @@ class TestEphemeralKeyCleanup:
     oc exec into the maas-api pod.
 
     Environment Variables:
-    - DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: opendatahub)
+    - E2E_MAAS_API_DEPLOYMENT_NAMESPACE: Namespace where maas-api is deployed (default: derived INFRA_NAMESPACE)
     """
 
     @pytest.fixture
@@ -906,7 +912,7 @@ class TestEphemeralKeyCleanup:
         """Return the namespace where maas-api is deployed.
 
         Controlled by E2E_MAAS_API_DEPLOYMENT_NAMESPACE env var,
-        defaults to DEPLOYMENT_NAMESPACE/opendatahub.
+        defaults to the derived INFRA_NAMESPACE.
         """
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE
@@ -1231,43 +1237,19 @@ class TestAPIKeySubscriptionPhases:
         subscription_name = "e2e-apikey-failed-sub"
         auth_name = "e2e-apikey-failed-auth"
         sa_name = "e2e-apikey-failed-sa"
+        nonexistent_model = "nonexistent-model-apikey-failed"
 
         try:
             oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_reconcile(seconds=10)
-
-            # Patch to Failed phase
-            patch_data = {
-                "status": {
-                    "phase": "Failed",
-                    "conditions": [{
-                        "type": "Ready",
-                        "status": "False",
-                        "reason": "Failed",
-                        "message": "Test scenario",
-                        "lastTransitionTime": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
-                    }],
-                    "modelRefStatuses": [{
-                        "name": MODEL_REF,
-                        "namespace": MODEL_NAMESPACE,
-                        "ready": False,
-                        "reason": "ReconcileFailed",
-                        "message": "Test failure"
-                    }]
-                }
-            }
-
-            cmd = [
-                "kubectl", "patch", "maassubscription", subscription_name,
-                "-n", ns, "--type=merge", "--subresource=status",
-                "-p", json.dumps(patch_data)
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            assert result.returncode == 0, f"Failed to patch: {result.stderr}"
+            # Reference only a nonexistent model so the controller naturally
+            # computes Failed (all model refs invalid in deriveFinalPhase).
+            _create_test_subscription(subscription_name, nonexistent_model, users=[sa_user])
+            _wait_for_maas_subscription_phase(
+                subscription_name, expected_phase="Failed", namespace=ns
+            )
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase")
@@ -1302,9 +1284,14 @@ class TestAPIKeySubscriptionPhases:
 
             _create_test_auth_policy(auth_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_reconcile(seconds=10)
+            _wait_for_maas_subscription_phase(subscription_name, namespace=ns)
 
-            # Patch to Pending phase
+            # The controller never naturally produces Pending for
+            # subscriptions (deriveFinalPhase returns Active/Degraded/Failed),
+            # so a status patch is still necessary.  Scale the controller down
+            # first to eliminate the race that caused flakiness.
+            _scale_controller_down()
+
             patch_data = {
                 "status": {
                     "phase": "Pending",
@@ -1344,6 +1331,10 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            try:
+                _scale_controller_up()
+            except Exception:
+                log.exception("Best-effort controller scale-up failed")
             _wait_reconcile()
 
     def test_reject_key_for_unreconciled_subscription(self):
@@ -1506,7 +1497,8 @@ class TestAPIKeySubscriptionFilter:
 
             # Create 2 keys bound to sub_a
             for i in range(2):
-                r = requests.post(
+                r = _request_with_gateway_retry(
+                    requests.post,
                     api_keys_base_url,
                     headers=sa_headers,
                     json={"name": f"e2e-filter-a-{i}", "subscription": sub_a},
@@ -1517,7 +1509,8 @@ class TestAPIKeySubscriptionFilter:
                 key_ids_a.append(r.json()["id"])
 
             # Create 1 key bound to sub_b
-            r_b = requests.post(
+            r_b = _request_with_gateway_retry(
+                requests.post,
                 api_keys_base_url,
                 headers=sa_headers,
                 json={"name": "e2e-filter-b-0", "subscription": sub_b},

@@ -21,9 +21,9 @@ import (
 )
 
 const (
-	// TenantKind is the API kind for the cluster MaaS tenant / platform singleton.
+	// TenantKind is the deprecated API kind for the legacy tenant config singleton.
 	TenantKind = "Tenant"
-	// TenantInstanceName is the singleton resource name enforced by the API.
+	// TenantInstanceName is the deprecated singleton resource name enforced by the API.
 	TenantInstanceName = "default-tenant"
 )
 
@@ -35,10 +35,10 @@ const (
 // +kubebuilder:printcolumn:name="Reason",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].reason`,description="Reason"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
-// Tenant is the namespace-scoped API for the MaaS platform tenant.
-// The CEL validation above enforces a singleton (name == "default-tenant") during v1alpha1.
-// To enable multi-tenancy later, remove the XValidation rule — no CRD migration required
-// because removing a validation is a non-breaking schema change.
+// Tenant is the deprecated namespace-scoped API used before the MaasTenantConfig
+// rename. It remains registered during the migration window so existing clusters
+// can copy MaaS-owned settings into MaasTenantConfig/default-tenant and preserve
+// legacy Gateway/OIDC values for AITenant bootstrap.
 type Tenant struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

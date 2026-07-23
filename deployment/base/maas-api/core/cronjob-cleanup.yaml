@@ -16,7 +16,8 @@ spec:
           labels:
             app: maas-api-cleanup
         spec:
-          serviceAccountName: maas-api
+          serviceAccountName: maas-api-cleanup
+          automountServiceAccountToken: false
           restartPolicy: OnFailure
           securityContext:
             runAsNonRoot: true
@@ -42,3 +43,5 @@ spec:
                 - ALL
               readOnlyRootFilesystem: true
               runAsNonRoot: true
+              seccompProfile:
+                type: RuntimeDefault

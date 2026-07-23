@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"strings"
 
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -22,13 +21,13 @@ const ssaFieldOwner = "maas-controller"
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
 // The cluster-scoped Config is a valid owner for namespaced resources in any namespace
-// and for cluster-scoped operands. Tenant tracking labels are always applied so the Tenant
-// reconciler can correlate resources with the subscription-namespace Tenant CR for status and debugging.
+// and for cluster-scoped operands. Tenant tracking labels are always applied so the
+// reconciler can correlate resources with the namespace-local config object for status and debugging.
 //
 // Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
 // Config controller ownerReference; they still receive tenant tracking labels. Add predicates
 // there for future exceptions (e.g. shared config that must outlive Config GC).
-func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant *maasv1alpha1.Tenant, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
+func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant client.Object, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
 		return errors.New("config with UID is required for platform apply")
 	}
@@ -75,16 +74,6 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// ForceOwnership is intentional: maas-controller is the sole manager for
 		// Tenant platform resources, ensuring a clean field-manager handoff.
 		if err := c.Patch(ctx, u, client.Apply, client.FieldOwner(ssaFieldOwner), client.ForceOwnership); err != nil {
-			if apimeta.IsNoMatchError(err) && isOptionalAPIGroup(u.GroupVersionKind().Group) {
-				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
-				// installed by COO which may not be present yet). Skip so the rest of the
-				// platform manifests are applied and Tenant reconcile does not fail.
-				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
-					"group", u.GroupVersionKind().Group, "kind", u.GetKind(),
-					"name", u.GetName(), "namespace", u.GetNamespace())
-				continue
-			}
 			return fmt.Errorf("apply %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
 		}
 	}
@@ -132,7 +121,7 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 
 // isOwnedByExternalController returns true when the live cluster copy of the
 // rendered resource has a controller:true ownerReference whose UID differs from
-// the given Config UID. This prevents the Tenant reconciler from SSA-applying
+// the given Config UID. This prevents the tenant config reconciler from SSA-applying
 // over resources the ODH operator's ModelsAsService component already owns,
 // which would fail on immutable fields (spec.selector) and produce conflicting
 // controller ownerReferences.
@@ -154,12 +143,20 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 	return false
 }
 
-func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant *maasv1alpha1.Tenant) {
+func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)
 	}
-	labels[LabelTenantName] = tenant.Name
-	labels[LabelTenantNamespace] = tenant.Namespace
+	labels[LabelTenantName] = tenantTrackingName(tenant)
+	labels[LabelTenantNamespace] = tenant.GetNamespace()
 	obj.SetLabels(labels)
+}
+
+func tenantTrackingName(tenant client.Object) string {
+	tenantLabels := tenant.GetLabels()
+	if tenantLabels != nil && tenantLabels[LabelTenantName] != "" {
+		return tenantLabels[LabelTenantName]
+	}
+	return tenant.GetName()
 }

@@ -1,7 +1,7 @@
 # Create Release Workflow
 #
 # This workflow creates a release following the data-science-pipelines-operator pattern:
-#   1. Creates a release branch (e.g., v1.x) from main
+#   1. Creates a release branch (e.g., v1.x) from the base branch (default: stable)
 #   2. Updates kustomization files and MAAS_REF references on the release branch
 #   3. Creates and pushes the release tag from the release branch
 #   4. Builds and pushes the maas-api image
@@ -16,7 +16,7 @@
 #
 # The workflow will:
 #   - Extract minor version (e.g., v1.0.0 -> v1.x)
-#   - Create/update release branch (e.g., v1.x)
+#   - Create/update release branch (e.g., v1.x) from the base branch (default: stable)
 #   - Update files on the release branch
 #   - Create tag from the release branch
 #   - Build image and deploy docs
@@ -41,6 +41,11 @@ on:
         required: false
         type: boolean
         default: false
+      base_branch:
+        description: 'Base branch to create the release from (default: stable)'
+        required: false
+        type: string
+        default: 'stable'
       create_release:
         description: 'Create GitHub release'
         required: false
@@ -68,7 +73,7 @@ jobs:
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -126,7 +131,7 @@ jobs:
     
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -137,26 +142,30 @@ jobs:
           git config user.email "${{ env.GH_USER_EMAIL }}"
 
       - name: Create or update release branch
+        env:
+          BASE_BRANCH: ${{ inputs.base_branch || 'stable' }}
         run: |
           BRANCH="${{ needs.prepare-release.outputs.minor_release_branch }}"
+          
+          git fetch origin "$BASE_BRANCH"
           
           # Check if branch exists (use exact ref path to avoid matching v1.0.x-test when looking for v1.0.x)
           if git ls-remote --exit-code --heads origin "refs/heads/$BRANCH" &>/dev/null; then
             echo "Release branch $BRANCH already exists, checking it out"
             git fetch origin "$BRANCH"
             git checkout -b "$BRANCH" "origin/$BRANCH" || git checkout "$BRANCH"
-            # Attempt to merge main, but don't fail if already up-to-date
-            if ! git merge main --no-edit; then
+            # Attempt to merge base branch, but don't fail if already up-to-date
+            if ! git merge "origin/$BASE_BRANCH" --no-edit; then
               # Check if merge failed due to conflicts vs already up-to-date
               if git diff --name-only --diff-filter=U | grep -q .; then
                 echo "❌ Merge conflicts detected. Please resolve manually."
                 exit 1
               fi
-              echo "Branch is already up to date with main"
+              echo "Branch is already up to date with $BASE_BRANCH"
             fi
           else
-            echo "Creating new release branch $BRANCH from main"
-            git checkout -b "$BRANCH" main
+            echo "Creating new release branch $BRANCH from $BASE_BRANCH"
+            git checkout -b "$BRANCH" "origin/$BASE_BRANCH"
           fi
 
       - name: Update kustomization files with new tag
@@ -192,7 +201,7 @@ jobs:
     
     steps:
       - name: Checkout release branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           ref: ${{ needs.create-release-branch.outputs.minor_release_branch }}
@@ -238,7 +247,7 @@ jobs:
 
       - name: Create GitHub Release
         if: inputs.create_release == true
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           tag_name: ${{ needs.create-release-branch.outputs.version_tag }}
           name: Release ${{ needs.create-release-branch.outputs.version_tag }}
@@ -248,7 +257,7 @@ jobs:
             ### Updated Files
             - `deployment/base/maas-api/kustomization.yaml`
             - `maas-api/deploy/overlays/dev/kustomization.yaml`
-            - MAAS_REF references updated to use `${{ needs.create-release-branch.outputs.version_tag }}` instead of `main`
+            - MAAS_REF references updated to use `${{ needs.create-release-branch.outputs.version_tag }}`
             
             ### Release Branch
             - Branch: `${{ needs.create-release-branch.outputs.minor_release_branch }}`
@@ -269,20 +278,20 @@ jobs:
     
     steps:
       - name: Checkout release branch
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           ref: ${{ needs.create-tag.outputs.version_tag }}
 
       - name: Setup Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
         with:
           go-version-file: maas-api/go.mod
           cache: true
           cache-dependency-path: maas-api/go.sum
 
       - name: Login to Quay.io
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3
         with:
           registry: quay.io
           username: ${{ secrets.APP_QUAY_USERNAME }}
@@ -314,7 +323,7 @@ jobs:
 
     steps:
       - name: Checkout version tag
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -322,12 +331,12 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.11'
 
       - name: Cache pip dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('docs/requirements.txt') }}

@@ -6,6 +6,20 @@ The MaaS Platform is a Kubernetes-native layer for AI model serving built on [Ga
 
 Our future plans include improved request routing and discovery—and we're already sketching what comes after that.
 
+## Deployment Architecture
+
+MaaS is deployed as a sub-component of the **AI Gateway Operator**, managed by the ODH/RHOAI operator. Enabling `aigateway.modelsAsAService: Managed` in your `DataScienceCluster` triggers the following component chain:
+
+```
+DataScienceCluster
+  └── aigateway.modelsAsAService: Managed
+        └── AI Gateway Operator
+              └── maas-controller
+                    └── maas-api, Tenant, MaaSAuthPolicy, MaaSSubscription, ...
+```
+
+This replaces the previous `kserve.modelsAsService` nesting. KServe is no longer a prerequisite for MaaS — include it only if you need independent model serving.
+
 ## Architecture
 
 ### 🏗️ High-Level Architecture
@@ -97,7 +111,7 @@ graph TB
 6. Only the hash and metadata (username, groups, name, `subscription` — the MaaSSubscription name bound at mint, `expiresAt`) are stored in PostgreSQL.
 7. The plaintext key is returned to the user **only in this minting response** (show-once), along with `expiresAt`; it is **not** exposed again on later reads. The diagram below stops at storage and does not show the HTTP response back to the user.
 
-Every key expires. With **operator-managed** MaaS, the cluster operator sets the maximum lifetime on the **`Tenant`** CR: **`spec.apiKeys.maxExpirationDays`** (see [Tenant CR](../install/maas-setup.md#tenant-cr)). **`maas-api`** applies that cap as **`API_KEY_MAX_EXPIRATION_DAYS`** (for example 90 days by default when defaults apply). Omit **`expiresIn`** on create to use that maximum, or set a shorter **`expiresIn`** (e.g., `30d`, `90d`, `1h`) within the configured cap. The response always includes **`expiresAt`** (RFC3339).
+Every key expires. With **operator-managed** MaaS, the cluster operator sets the maximum lifetime on the **`MaasTenantConfig`** CR: **`spec.apiKeys.maxExpirationDays`** (see [MaasTenantConfig CR](../install/maas-setup.md#maastenantconfig-cr)). **`maas-api`** applies that cap as **`API_KEY_MAX_EXPIRATION_DAYS`** (for example 90 days by default when defaults apply). Omit **`expiresIn`** on create to use that maximum, or set a shorter **`expiresIn`** (e.g., `30d`, `90d`, `1h`) within the configured cap. The response always includes **`expiresAt`** (RFC3339).
 
 ```mermaid
 graph TB

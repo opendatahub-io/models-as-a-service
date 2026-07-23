@@ -6,7 +6,8 @@ spec:
   model:
     # uri is required by the LLMIS schema but not used by llm-d-inference-sim.
     uri: hf://placeholder/no-model
-    name: facebook/opt-125m
+    # Distinct from free simulator (facebook/opt-125m) so catalog entries stay unique.
+    name: facebook/opt-125m-premium
   # Skip storage-initializer; simulator generates responses without model weights.
   storageInitializer:
     enabled: false
@@ -28,7 +29,7 @@ spec:
         - --port
         - "8000"
         - --model
-        - facebook/opt-125m
+        - facebook/opt-125m-premium
         - --mode
         - random
         - --no-mm-encoder-only

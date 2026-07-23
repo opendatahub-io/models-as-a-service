@@ -13,8 +13,10 @@ import (
 	"testing"
 	"time"
 
+	"github.com/openai/openai-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"knative.dev/pkg/apis"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
@@ -22,7 +24,7 @@ import (
 
 func TestNewManager(t *testing.T) {
 	t.Run("returns error when logger is nil", func(t *testing.T) {
-		manager, err := models.NewManager(nil, 15, "")
+		manager, err := models.NewManager(nil, 15, "", false)
 		require.Error(t, err)
 		assert.Nil(t, manager)
 		assert.Contains(t, err.Error(), "log is required")
@@ -31,7 +33,7 @@ func TestNewManager(t *testing.T) {
 	t.Run("creates manager successfully with valid logger", func(t *testing.T) {
 		log := logger.New(true)
 
-		manager, err := models.NewManager(log, 15, "")
+		manager, err := models.NewManager(log, 15, "", false)
 		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
@@ -63,7 +65,7 @@ func TestBuildClusterTLSConfig(t *testing.T) {
 
 func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("returns error when logger is nil", func(t *testing.T) {
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(nil, "/nonexistent")
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(nil, "/nonexistent", false)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 	})
@@ -71,7 +73,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("uses system root CAs when CA file is absent", func(t *testing.T) {
 		log := logger.New(true)
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt")
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
@@ -89,7 +91,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name())
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 		assert.Contains(t, err.Error(), "failed to parse")
@@ -103,7 +105,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, os.WriteFile(caPath, []byte("placeholder"), 0o000))
 		t.Cleanup(func() { _ = os.Chmod(caPath, 0o644) })
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, caPath)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, caPath, false)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 	})
@@ -118,7 +120,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name())
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
@@ -126,6 +128,120 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		assert.Equal(t, uint16(tls.VersionTLS12), tlsConfig.MinVersion)
 		assert.NotNil(t, tlsConfig.RootCAs)
 	})
+
+	t.Run("sets NextProtos when HTTP/2 is enabled", func(t *testing.T) {
+		log := logger.New(true)
+
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", true)
+		require.NoError(t, err)
+		require.NotNil(t, tlsConfig)
+
+		assert.Equal(t, []string{"h2", "http/1.1"}, tlsConfig.NextProtos)
+	})
+
+	t.Run("does not set NextProtos when HTTP/2 is disabled", func(t *testing.T) {
+		log := logger.New(true)
+
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false)
+		require.NoError(t, err)
+		require.NotNil(t, tlsConfig)
+
+		assert.Nil(t, tlsConfig.NextProtos)
+	})
+}
+
+func TestFilterModelsByAccess_ReadinessBased(t *testing.T) {
+	log := logger.New(true)
+
+	mgr, err := models.NewManager(log, 5, "", false)
+	require.NoError(t, err)
+
+	// FilterModelsByAccess is purely readiness-based: no backend probing, no URL validation.
+	// The URL field is informational (returned to clients); it does not affect inclusion.
+	tests := []struct {
+		name     string
+		model    models.Model
+		included bool
+	}{
+		{
+			name: "ready llmisvc with http URL is included",
+			model: models.Model{
+				Model: openai.Model{ID: "http-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "http", Host: "gateway.example.com"},
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "not-ready llmisvc is excluded regardless of URL",
+			model: models.Model{
+				Model: openai.Model{ID: "not-ready-model", Object: "model"},
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
+				Ready: false,
+			},
+			included: false,
+		},
+		{
+			name: "ready llmisvc with nil URL is included",
+			model: models.Model{
+				Model: openai.Model{ID: "nil-url-model", Object: "model"},
+				URL:   nil,
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "ready ExternalModel is included",
+			model: models.Model{
+				Model: openai.Model{ID: "ext-model", Object: "model"},
+				Kind:  "ExternalModel",
+				URL:   &apis.URL{Scheme: "https", Host: "provider.example.com"},
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "not-ready ExternalModel is excluded",
+			model: models.Model{
+				Model: openai.Model{ID: "ext-not-ready", Object: "model"},
+				Kind:  "ExternalModel",
+				URL:   &apis.URL{Scheme: "https", Host: "provider.example.com"},
+				Ready: false,
+			},
+			included: false,
+		},
+		{
+			name: "ready LLMInferenceService kind (alternate spelling) is included",
+			model: models.Model{
+				Model: openai.Model{ID: "llmisvc-alt", Object: "model"},
+				Kind:  "LLMInferenceService",
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
+				Ready: true,
+			},
+			included: true,
+		},
+		{
+			name: "unknown kind is excluded",
+			model: models.Model{
+				Model: openai.Model{ID: "unknown-kind-model", Object: "model"},
+				Kind:  "UnknownKind",
+				URL:   &apis.URL{Scheme: "https", Host: "gateway.example.com"},
+				Ready: true,
+			},
+			included: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := mgr.FilterModelsByAccess(t.Context(), []models.Model{tt.model}, "Bearer test-token", "")
+			if tt.included {
+				assert.Len(t, result, 1, "ready model should be included")
+			} else {
+				assert.Empty(t, result, "not-ready or unknown-kind model should be excluded")
+			}
+		})
+	}
 }
 
 // selfSignedCertPEM generates a minimal self-signed CA certificate in PEM format for use in tests.

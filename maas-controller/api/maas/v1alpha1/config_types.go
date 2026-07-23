@@ -46,8 +46,26 @@ type Config struct {
 }
 
 // ConfigSpec defines the desired state of Config.
-// Reserved for future cluster-wide configuration; v1alpha1 uses an empty spec.
-type ConfigSpec struct{}
+type ConfigSpec struct {
+	// LimitadorScrapeInterval defines the scrape interval for Limitador metrics in the ServiceMonitor.
+	// Defaults to "30s" if not specified.
+	// +optional
+	// +kubebuilder:default="30s"
+	// +kubebuilder:validation:Pattern=`^([0-9]+(\.[0-9]+)?(ms|s|m|h))+$`
+	// +kubebuilder:validation:MaxLength=16
+	LimitadorScrapeInterval string `json:"limitadorScrapeInterval,omitempty"`
+
+	// UsageLogging enables cluster-wide per-request structured OTel access logging
+	// for usage tracking (token counts, identity, model). When enabled, the
+	// controller deploys an EnvoyFilter on the shared gateway that emits
+	// structured usage logs via OTel Access Log Service.
+	// Enabling this logs identity attributes (user_id, key_id, key_name,
+	// organization_id, groups, subscription) per request — ensure
+	// GDPR/privacy compliance before enabling.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	UsageLogging *bool `json:"usageLogging,omitempty"`
+}
 
 // ConfigStatus defines the observed state of Config.
 type ConfigStatus struct{}

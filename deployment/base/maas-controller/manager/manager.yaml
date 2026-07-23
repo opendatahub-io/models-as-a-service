@@ -1,6 +1,7 @@
 # Default namespace: opendatahub (ODH overlay). Override via kustomize.
-# MAAS_API_NAMESPACE points to the infrastructure namespace where maas-api runs.
-# This is separate from the controller's namespace to support the namespace split architecture.
+# INFRA_NAMESPACE: infrastructure namespace where maas-api and maas-db-config run.
+# Note: PostgreSQL can be external - only the maas-api deployment and connection secret are here.
+# Defaults to AUTO (namespace separation enabled). Set to "" (empty) to disable for ROSA.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -31,9 +32,10 @@ spec:
           - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
-          - --maas-api-namespace=$(MAAS_API_NAMESPACE)
+          - --infra-namespace=$(INFRA_NAMESPACE)
           - --maas-subscription-namespace=$(MAAS_SUBSCRIPTION_NAMESPACE)
           - --aitenant-namespace=$(AITENANT_NAMESPACE)
+          - --monitoring-namespace=$(MONITORING_NAMESPACE)
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
@@ -46,10 +48,10 @@ spec:
             value: "maas-default-gateway"
           - name: GATEWAY_NAMESPACE
             value: "openshift-ingress"
-          - name: MAAS_API_NAMESPACE
-            valueFrom:
-              fieldRef:
-                fieldPath: metadata.namespace
+          # AUTO = derive infra namespace from controller namespace (opendatahub → odh-ai-gateway-infra)
+          # To disable namespace separation (required for ROSA), override to empty string via kustomize
+          - name: INFRA_NAMESPACE
+            value: "AUTO"
           - name: MAAS_SUBSCRIPTION_NAMESPACE
             value: "models-as-a-service"
           - name: AITENANT_NAMESPACE
@@ -72,6 +74,18 @@ spec:
                 key: maas-api-key-cleanup-image
                 name: maas-parameters
                 optional: true
+          - name: RELATED_IMAGE_ODH_PYTHON_312_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: usage-logs-tenancy-proxy-image
+                name: maas-parameters
+                optional: true
+          - name: MONITORING_NAMESPACE
+            valueFrom:
+              configMapKeyRef:
+                key: monitoring-namespace
+                name: maas-parameters
+                optional: true
         image: maas-controller
         name: manager
         imagePullPolicy: Always
@@ -83,6 +97,9 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
         livenessProbe:
           httpGet:
             path: /healthz

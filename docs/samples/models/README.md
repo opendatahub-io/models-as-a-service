@@ -46,11 +46,10 @@ To deploy both simulator models:
 
 The two simulator models can be distinguished by:
 
-- **Model Name**:
-  - Standard: `facebook-opt-125m-simulated` (from kustomization namePrefix)
-  - Premium: `premium-simulated-simulated-premium` (from kustomization namePrefix + model name)
-
-- **LLMInferenceService Name**:
+- **Served model ID** (`spec.model.name` / inference `model` field):
+  - Standard: `facebook/opt-125m`
+  - Premium: `facebook/opt-125m-premium`
+- **LLMInferenceService / MaaSModelRef name**:
   - Standard: `facebook-opt-125m-simulated`
   - Premium: `premium-simulated-simulated-premium`
 

@@ -24,9 +24,9 @@ type ApiKey struct {
 	Name           string   `json:"name"`
 	Description    string   `json:"description,omitempty"`
 	Username       string   `json:"username,omitempty"`
-	Subscription   string   `json:"subscription,omitempty"`   // MaaSSubscription name bound at mint time
+	Subscription   string   `json:"subscription,omitempty"` // MaaSSubscription name bound at mint time
 	Tenant         string   `json:"tenant,omitempty"`
-	Groups         []string `json:"groups,omitempty"`         // User's groups at creation (immutable snapshot for authorization)
+	Groups         []string `json:"groups,omitempty"` // User's groups at creation (immutable snapshot for authorization)
 	CreationDate   string   `json:"creationDate"`
 	ExpirationDate string   `json:"expirationDate,omitempty"` // Empty for permanent keys
 	Status         Status   `json:"status"`                   // "active", "expired", "revoked"
@@ -153,6 +153,12 @@ type BulkRevokeRequest struct {
 
 // BulkRevokeResponse returns count of revoked keys.
 type BulkRevokeResponse struct {
+	RevokedCount int    `json:"revokedCount"`
+	Message      string `json:"message"`
+}
+
+// TenantRevokeResponse returns count of revoked keys for tenant-wide cleanup.
+type TenantRevokeResponse struct {
 	RevokedCount int    `json:"revokedCount"`
 	Message      string `json:"message"`
 }

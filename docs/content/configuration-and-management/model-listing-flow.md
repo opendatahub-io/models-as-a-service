@@ -13,7 +13,7 @@ Each entry includes an `id`, **`url`** (the model’s endpoint), a `ready` flag,
 !!! note "Model endpoints and routing"
     The returned value includes a **URL** per model; clients use that URL to call the model (e.g. for chat or completions).
 
-    Currently each model is served on a **different endpoint**. **Body Based Routing** is being evaluated to provide a more unified OpenAI API feel (single endpoint with model selection in the request body).
+    By default each model is served on a **different endpoint** (path-based routing). **[Body-Based Routing](../user-guide/inference.md#unified-endpoint-body-based-routing)** provides a unified OpenAI API experience — a single endpoint with model selection in the request body. BBR requires the Inference Payload Processing (IPP) component.
 
 ## MaaSModelRef flow
 
@@ -67,6 +67,7 @@ The maas-api deployment supports the following environment variable to control a
 | Variable | Description | Default | Constraints |
 |----------|-------------|---------|-------------|
 | `ACCESS_CHECK_TIMEOUT_SECONDS` | Timeout in seconds for each model access validation probe during `GET /v1/models`. Models that do not respond within this window are excluded from the response (fail-closed). | `15` | Must be ≥ 1 |
+| `DISCOVERY_ENABLE_HTTP2` | Enable HTTP/2 ALPN negotiation on the TLS client used for model discovery probes. Only enable if all model backends support HTTP/2. | `false` | `true` or `false` |
 
 !!! tip "When to increase"
     If models are missing from `GET /v1/models` responses and maas-api logs show probe timeouts, increase `ACCESS_CHECK_TIMEOUT_SECONDS` to give slower backends more time to respond. This is common when model endpoints have cold-start latency or are under heavy load.

@@ -213,6 +213,13 @@ spec:
                 - Failed
                 - Invalid
                 type: string
+              resolvedModelAlias:
+                description: |-
+                  ResolvedModelAlias is the model identity used in body-based routing headers.
+                  For LLMInferenceService: publishers/{namespace}/models/{spec.model.name}.
+                  For ExternalModel: the targetModel from spec.externalProviderRefs[0].targetModel.
+                  The maas-api uses this for reverse-lookup when matching subscription model refs.
+                type: string
             type: object
         required:
         - spec

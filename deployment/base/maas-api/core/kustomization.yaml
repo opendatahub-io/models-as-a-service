@@ -6,6 +6,7 @@ resources:
   - service.yaml
   - cronjob-cleanup.yaml
   - networkpolicy-cleanup.yaml
+  - networkpolicy-cleanup-ingress.yaml
 
 images:
   - name: maas-api
