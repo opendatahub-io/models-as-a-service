@@ -48,7 +48,7 @@ type TenantReconciler struct {
 	Scheme *runtime.Scheme
 	// OperatorNamespace overrides POD_NAMESPACE / WATCH_NAMESPACE when discovering namespaced platform workloads (tests).
 	OperatorNamespace string
-	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
+	// ManifestPath is the directory containing kustomization.yaml for the maas-api overlay (e.g. maas-api/deploy/overlays/odh or maas-api/deploy/overlays/xks).
 	ManifestPath string
 	// AppNamespace is the namespace where maas-api workloads are deployed (--infra-namespace,
 	// default opendatahub for ODH, redhat-ods-applications for RHOAI).

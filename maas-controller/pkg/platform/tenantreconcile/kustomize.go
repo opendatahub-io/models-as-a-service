@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -175,10 +176,17 @@ func fileExists(p string) bool {
 	return fs.Exists(p)
 }
 
-// DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS or a dev default relative to cwd (models-as-a-service repo layout).
+// DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS, or selects a
+// platform-appropriate overlay relative to cwd (models-as-a-service repo layout).
+// On vanilla Kubernetes (ODH_MODULE_OPERATOR_PLATFORM_TYPE=XKS) the xKS overlay
+// is used, which avoids OpenShift-specific volume mounts (openshift-service-ca.crt
+// configmap, OCP service-serving certificates).
 func DefaultManifestPath() string {
 	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
 		return v
+	}
+	if strings.EqualFold(os.Getenv("ODH_MODULE_OPERATOR_PLATFORM_TYPE"), "XKS") {
+		return "../maas-api/deploy/overlays/xks"
 	}
 	return "../maas-api/deploy/overlays/odh"
 }
