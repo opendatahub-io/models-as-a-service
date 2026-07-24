@@ -1203,7 +1203,7 @@ func main() {
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
 	if manifestPath == "" {
-		manifestPath = tenantreconcile.DefaultManifestPath()
+		manifestPath = tenantreconcile.ManifestPathForPlatform(tlsConfig.available)
 	}
 	if abs, err := filepath.Abs(manifestPath); err == nil {
 		manifestPath = abs
