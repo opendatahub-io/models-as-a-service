@@ -78,7 +78,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
-	baseMaaSAPIServingCertName                     = "maas-api-serving-cert" //nolint:gosec // Kubernetes resource name, not a credential
+	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseMaaSAPISelfsignedIssuerName                = "maas-api-selfsigned"
 
 	// Base IPP resource names in kustomize manifests. Per-tenant deployments suffix

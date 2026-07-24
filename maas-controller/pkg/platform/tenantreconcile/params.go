@@ -498,8 +498,8 @@ func patchCronJobVolumeSecret(r *unstructured.Unstructured, volumeName, secretNa
 	if err != nil {
 		return fmt.Errorf("read CronJob volumes: %w", err)
 	}
-	if !found {
-		return fmt.Errorf("CronJob has no volumes; expected volume %q", volumeName)
+	if !found || len(volumes) == 0 {
+		return nil
 	}
 	for i, vol := range volumes {
 		volMap, ok := vol.(map[string]any)
