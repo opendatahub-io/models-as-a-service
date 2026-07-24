@@ -12,13 +12,16 @@ import pytest
 import requests
 
 from multitenancy_helpers import (
+    GATEWAY_NAMESPACE,
     apply_maas_auth_policy,
     apply_maas_subscription,
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
+    per_tenant_gateway_policy_names,
     provision_tenant_model,
     response_summary,
+    wait_for_status_condition,
     wait_for_status_phase,
 )
 from test_helper import (
@@ -74,6 +77,17 @@ def tenant_rate_limit_setup(tenant_env):
                 policy_name,
                 tenant["namespace"],
                 expected_phase="Active",
+            )
+
+        for tenant in (tenant_a, tenant_b):
+            gateway_auth_names = per_tenant_gateway_policy_names(tenant["gateway_name"], tenant["gateway_name"])
+            wait_for_status_condition(
+                "authpolicy",
+                gateway_auth_names["gateway_authpolicy"],
+                GATEWAY_NAMESPACE,
+                condition_type="Enforced",
+                expected_status="True",
+                timeout=120,
             )
 
         apply_maas_subscription(
