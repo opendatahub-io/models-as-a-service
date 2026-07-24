@@ -4,6 +4,8 @@ kind: Kustomization
 resources:
   - ../../default
   - destinationrule.yaml
+  - issuer.yaml
+  - certificate.yaml
 
 patches:
   - path: deployment-patch.yaml

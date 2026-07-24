@@ -49,6 +49,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 			if err := configureMaaSAPIDeployment(log, resource, tenantID); err != nil {
 				return nil, err
 			}
+		case gvk == GVKCertificate && resource.GetName() == baseMaaSAPIServingCertName:
+			if err := configureMaaSAPICertificate(log, resource, tenantID, params.AppNamespace); err != nil {
+				return nil, err
+			}
+		case gvk == GVKIssuer && resource.GetName() == baseMaaSAPISelfsignedIssuerName:
+			configureMaaSAPIIssuer(log, resource, tenantID)
 		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
 			// Configure per-tenant HTTPRoute
 			if err := configureMaaSAPIHTTPRoute(log, resource, gatewayNamespace, gatewayName, params); err != nil {
@@ -154,6 +160,40 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 
 	log.V(4).Info("Configured maas-api Deployment TLS secret volume", "tenantID", tenantID, "secretName", secretName)
 	return nil
+}
+
+func configureMaaSAPICertificate(log logr.Logger, resource *unstructured.Unstructured, tenantID, appNamespace string) error {
+	secretName := MaaSAPIServingCertName(tenantID)
+	certName := MaaSAPIServingCertName(tenantID)
+	issuerName := MaaSAPISelfsignedIssuerName(tenantID)
+	serviceName := MaaSAPIServiceName(tenantID)
+
+	resource.SetName(certName)
+
+	if err := unstructured.SetNestedField(resource.Object, secretName, "spec", "secretName"); err != nil {
+		return fmt.Errorf("failed to set Certificate secretName: %w", err)
+	}
+	if err := unstructured.SetNestedField(resource.Object, issuerName, "spec", "issuerRef", "name"); err != nil {
+		return fmt.Errorf("failed to set Certificate issuerRef name: %w", err)
+	}
+
+	dnsNames := []any{
+		serviceName,
+		fmt.Sprintf("%s.%s.svc", serviceName, appNamespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, appNamespace),
+	}
+	if err := unstructured.SetNestedSlice(resource.Object, dnsNames, "spec", "dnsNames"); err != nil {
+		return fmt.Errorf("failed to set Certificate dnsNames: %w", err)
+	}
+
+	log.V(4).Info("Configured maas-api Certificate", "tenantID", tenantID, "secretName", secretName)
+	return nil
+}
+
+func configureMaaSAPIIssuer(log logr.Logger, resource *unstructured.Unstructured, tenantID string) {
+	issuerName := MaaSAPISelfsignedIssuerName(tenantID)
+	resource.SetName(issuerName)
+	log.V(4).Info("Configured maas-api Issuer", "tenantID", tenantID, "issuerName", issuerName)
 }
 
 func configureExternalOIDC(log logr.Logger, params PlatformParams) error {

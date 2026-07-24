@@ -11,7 +11,10 @@ spec:
         number: 8443
       tls:
         mode: SIMPLE
-        # Skip cert verification for internal cluster traffic. The gateway pod
-        # doesn't have access to the cluster CA bundle out of the box, and mounting it
-        # to gateway pods is complex. Traffic is still encrypted.
+        # TODO(RHOAIENG-61070): Remove insecureSkipVerify and configure backend
+        # certificate validation. On xKS the cert-manager CA that signs
+        # maas-api's serving cert is not available to the managed gateway proxy.
+        # Distributing the CA to Istio gateway pods requires cluster-level Istio
+        # configuration (credentialName or volume mount) outside this overlay's
+        # scope. Traffic is still encrypted.
         insecureSkipVerify: true

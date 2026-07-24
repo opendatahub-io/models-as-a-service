@@ -14,4 +14,15 @@ spec:
             - /bin/sh
             - -c
             - |
-              curl -sf -k -X POST https://maas-api:8443/internal/v1/api-keys/cleanup
+              curl -sf --cacert /etc/maas-api-ca/ca.crt -X POST https://maas-api:8443/internal/v1/api-keys/cleanup
+            volumeMounts:
+            - name: maas-api-ca
+              mountPath: /etc/maas-api-ca
+              readOnly: true
+          volumes:
+          - name: maas-api-ca
+            secret:
+              secretName: maas-api-serving-cert
+              items:
+              - key: ca.crt
+                path: ca.crt

@@ -484,6 +484,36 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 		}
 	}
 
+	// Patch the CA volume's secretName for per-tenant cert-manager Certificate
+	if err := patchCronJobVolumeSecret(r, "maas-api-ca", MaaSAPIServingCertName(params.TenantIdentifier)); err != nil {
+		return fmt.Errorf("patch cleanup CronJob CA volume: %w", err)
+	}
+
+	return nil
+}
+
+func patchCronJobVolumeSecret(r *unstructured.Unstructured, volumeName, secretName string) error {
+	volumes, found, err := unstructured.NestedSlice(r.Object,
+		"spec", "jobTemplate", "spec", "template", "spec", "volumes")
+	if err != nil || !found {
+		return nil
+	}
+	for i, vol := range volumes {
+		volMap, ok := vol.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(volMap, "name")
+		if name != volumeName {
+			continue
+		}
+		if err := unstructured.SetNestedField(volMap, secretName, "secret", "secretName"); err != nil {
+			return fmt.Errorf("write volume %q secret name: %w", volumeName, err)
+		}
+		volumes[i] = volMap
+		return unstructured.SetNestedSlice(r.Object, volumes,
+			"spec", "jobTemplate", "spec", "template", "spec", "volumes")
+	}
 	return nil
 }
 

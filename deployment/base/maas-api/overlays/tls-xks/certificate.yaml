@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: maas-api-serving-cert
+spec:
+  secretName: maas-api-serving-cert
+  issuerRef:
+    name: maas-api-selfsigned
+    kind: Issuer
+  dnsNames:
+  - maas-api
+  - maas-api.opendatahub.svc
+  - maas-api.opendatahub.svc.cluster.local
+  duration: 8760h
+  renewBefore: 720h
