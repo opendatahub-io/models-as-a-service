@@ -187,12 +187,3 @@ func ManifestPathForPlatform(isOCP bool) string {
 	}
 	return "../maas-api/deploy/overlays/xks"
 }
-
-// DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS or the ODH dev default
-// relative to cwd. For platform-aware selection use ManifestPathForPlatform.
-func DefaultManifestPath() string {
-	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
-		return v
-	}
-	return "../maas-api/deploy/overlays/odh"
-}
