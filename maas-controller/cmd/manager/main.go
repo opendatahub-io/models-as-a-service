@@ -1124,6 +1124,15 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)
 	}
+	aitenantDeletionTimeout := 10 * time.Minute
+	if v, ok := os.LookupEnv("AITENANT_DELETION_TIMEOUT"); ok {
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			setupLog.Error(err, "invalid AITENANT_DELETION_TIMEOUT, using default", "value", v, "default", aitenantDeletionTimeout)
+		} else {
+			aitenantDeletionTimeout = d
+		}
+	}
 	if err := (&maas.AITenantReconciler{
 		Client:            mgr.GetClient(),
 		Scheme:            mgr.GetScheme(),
@@ -1133,6 +1142,7 @@ func main() {
 		AITenantNamespace: aitenantNamespace,
 		GatewayName:       gatewayName,
 		GatewayNamespace:  gatewayNamespace,
+		DeletionTimeout:   aitenantDeletionTimeout,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
 		os.Exit(1)

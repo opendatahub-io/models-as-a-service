@@ -38,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -94,6 +95,11 @@ type AITenantReconciler struct {
 	GatewayName string
 	// GatewayNamespace is where tenant Gateway resources are expected to exist.
 	GatewayNamespace string
+	// DeletionTimeout is the maximum duration to wait for AITenant cleanup
+	// before force-removing the finalizer. Zero disables the timeout.
+	DeletionTimeout time.Duration
+	// Recorder emits Kubernetes events for deletion timeout warnings.
+	Recorder record.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -200,6 +206,9 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // SetupWithManager registers the AITenant controller.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("maas-aitenant-controller")
+	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
@@ -517,6 +526,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
+	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout {
+		return r.forceRemoveAITenantFinalizer(ctx, aitenant)
+	}
+
 	apiKeysRevoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
 	if err != nil {
 		statusSnapshot = aitenant.Status.DeepCopy()
@@ -578,6 +591,33 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		// The AITenant is already unblocked. The Job TTL is a fallback for this
 		// narrow failure window, so report the error without making deletion fail.
 		ctrl.LoggerFrom(ctx).Error(err, "failed to delete completed API key revocation Job")
+	}
+	return ctrl.Result{}, nil
+}
+
+func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
+	log := ctrl.LoggerFrom(ctx)
+	msg := fmt.Sprintf("Deletion timeout (%s) reached; cleanup finalizer removed without successful cleanup — API keys may still exist", r.DeletionTimeout)
+	log.Info("AITenant deletion timeout reached, forcing finalizer removal",
+		"deletionTimestamp", aitenant.DeletionTimestamp.Time,
+		"timeout", r.DeletionTimeout)
+
+	statusSnapshot := aitenant.Status.DeepCopy()
+	setAITenantPhase(aitenant, "Terminating", "CleanupForced", msg)
+	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+
+	if r.Recorder != nil {
+		r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "AITenantCleanupForced",
+			"Deletion timeout (%s) reached for AITenant %s/%s; cleanup finalizer removed without successful cleanup — API keys may still exist",
+			r.DeletionTimeout, aitenant.Namespace, aitenant.Name)
+	}
+
+	base := aitenant.DeepCopy()
+	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
+	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
+		return ctrl.Result{}, err
 	}
 	return ctrl.Result{}, nil
 }
