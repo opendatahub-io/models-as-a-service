@@ -766,6 +766,15 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
             INFRA_NAMESPACE,
             case["gateway_name"],
         )
+        gateway_names = per_tenant_gateway_policy_names(case["tenant_label_name"], case["gateway_name"])
+        wait_for_status_condition(
+            "authpolicy",
+            gateway_names["gateway_authpolicy"],
+            GATEWAY_NAMESPACE,
+            condition_type="Enforced",
+            expected_status="True",
+            timeout=120,
+        )
 
 
 def apply_maas_auth_policy(name: str, namespace: str, model_ref: str = MODEL_REF, model_namespace: str = MODEL_NAMESPACE) -> None:
