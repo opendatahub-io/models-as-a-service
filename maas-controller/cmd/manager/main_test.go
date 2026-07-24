@@ -676,10 +676,10 @@ func TestEnsureManagedNamespacePatchesNilLabels(t *testing.T) {
 
 func TestParseAITenantDeletionTimeout(t *testing.T) {
 	tests := []struct {
-		name    string
-		envVal  string
-		envSet  bool
-		want    time.Duration
+		name   string
+		envVal string
+		envSet bool
+		want   time.Duration
 	}{
 		{name: "unset returns default", envSet: false, want: 10 * time.Minute},
 		{name: "valid duration", envVal: "5m", envSet: true, want: 5 * time.Minute},
