@@ -3,6 +3,7 @@ kind: Certificate
 metadata:
   name: maas-api-serving-cert
 spec:
+  commonName: maas-api
   secretName: maas-api-serving-cert
   issuerRef:
     name: maas-api-selfsigned

@@ -495,8 +495,11 @@ func patchCleanupCronJobImage(log logr.Logger, r *unstructured.Unstructured, par
 func patchCronJobVolumeSecret(r *unstructured.Unstructured, volumeName, secretName string) error {
 	volumes, found, err := unstructured.NestedSlice(r.Object,
 		"spec", "jobTemplate", "spec", "template", "spec", "volumes")
-	if err != nil || !found {
-		return nil
+	if err != nil {
+		return fmt.Errorf("read CronJob volumes: %w", err)
+	}
+	if !found {
+		return fmt.Errorf("CronJob has no volumes; expected volume %q", volumeName)
 	}
 	for i, vol := range volumes {
 		volMap, ok := vol.(map[string]any)
@@ -514,7 +517,7 @@ func patchCronJobVolumeSecret(r *unstructured.Unstructured, volumeName, secretNa
 		return unstructured.SetNestedSlice(r.Object, volumes,
 			"spec", "jobTemplate", "spec", "template", "spec", "volumes")
 	}
-	return nil
+	return fmt.Errorf("volume %q not found in CronJob", volumeName)
 }
 
 func patchHTTPRoute(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {

@@ -104,12 +104,7 @@ func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructur
 }
 
 func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
-	// For default tenant (tenantID=""), use "maas-api-serving-cert"
-	// For other tenants, use "maas-api-{tenantID}-serving-cert"
-	secretName := "maas-api-serving-cert"
-	if tenantID != "" {
-		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
-	}
+	secretName := MaaSAPIServingCertName(tenantID)
 
 	annotations := resource.GetAnnotations()
 	if annotations == nil {
@@ -123,11 +118,7 @@ func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructure
 }
 
 func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
-	// Update the Deployment to mount the correct tenant-specific TLS secret
-	secretName := "maas-api-serving-cert"
-	if tenantID != "" {
-		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
-	}
+	secretName := MaaSAPIServingCertName(tenantID)
 
 	// Navigate to spec.template.spec.volumes and find the tls-cert volume
 	volumes, found, err := unstructured.NestedSlice(resource.Object, "spec", "template", "spec", "volumes")
