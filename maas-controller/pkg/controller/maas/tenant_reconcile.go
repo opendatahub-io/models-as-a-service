@@ -330,6 +330,8 @@ func (r *TenantReconciler) reconcilePlatform(
 		return &res, nil
 	}
 
+	surfaceReplicaWarnings(tenant, runRes)
+
 	if runRes.DeploymentPending {
 		tenant.Status.Phase = "Pending"
 		setDeploymentsAvailableCondition(tenant, false, "DeploymentsNotReady", runRes.Detail)
@@ -349,6 +351,16 @@ func (r *TenantReconciler) reconcilePlatform(
 	}
 
 	return nil, nil
+}
+
+func surfaceReplicaWarnings(tenant *maasv1alpha1.MaasTenantConfig, runRes *tenantreconcile.RunResult) {
+	if len(runRes.Warnings) > 0 {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
+			"InvalidReplicaAnnotation", strings.Join(runRes.Warnings, "; "))
+	} else if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
+			"Resolved", "")
+	}
 }
 
 func (r *TenantReconciler) attemptLegacyCleanup(ctx context.Context, log logr.Logger) {
@@ -621,6 +633,61 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 			gvk:       tenantreconcile.GVKIstioTelemetry,
 			name:      tenantreconcile.IstioTelemetryName(tenantID),
 			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDeployment,
+			name:      tenantreconcile.PayloadProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDeployment,
+			name:      tenantreconcile.PayloadPreProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKService,
+			name:      tenantreconcile.PayloadProcessingServiceName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKService,
+			name:      tenantreconcile.PayloadPreProcessingServiceName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDestinationRule,
+			name:      tenantreconcile.PayloadProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKDestinationRule,
+			name:      tenantreconcile.PayloadPreProcessingDeploymentName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.PayloadProcessingEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKNetworkPolicy,
+			name:      tenantreconcile.PayloadProcessingNetworkPolicyName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKServiceAccount,
+			name:      tenantreconcile.PayloadProcessingServiceAccountName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKConfigMap,
+			name:      tenantreconcile.PayloadProcessingPluginsConfigMapForTenant(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKClusterRoleBinding,
+			name:      tenantreconcile.PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID),
+			namespace: "",
 		},
 	}
 

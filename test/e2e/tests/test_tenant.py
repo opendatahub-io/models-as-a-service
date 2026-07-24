@@ -120,6 +120,7 @@ class TestTenantLifecycle:
         )
 
     def test_payload_processing_deployed_with_active_tenant(self):
+        """Default-tenant MaasTenantConfig should reconcile legacy unsuffixed IPP Deployments."""
         st = _wait_tenant_ready()
         assert st is not None, "MaasTenantConfig not Ready; skip workload checks."
         phase = st.get("phase")

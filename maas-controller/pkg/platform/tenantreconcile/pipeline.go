@@ -24,6 +24,9 @@ import (
 type RunResult struct {
 	DeploymentPending bool
 	Detail            string
+	// Warnings contains non-fatal issues discovered during reconciliation
+	// (e.g. invalid replica-count annotations) that should be surfaced as status conditions.
+	Warnings []string
 }
 
 // CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
@@ -103,9 +106,9 @@ func RunPlatform(
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
 	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail}, nil
+		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
 	}
-	return &RunResult{}, nil
+	return &RunResult{Warnings: params.Warnings}, nil
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).

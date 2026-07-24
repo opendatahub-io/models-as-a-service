@@ -1245,6 +1245,114 @@ func createTestMaaSModelRef(name, namespace, displayName, description string) *u
 	}
 }
 
+// TestListSubscriptions_NoAuthContext verifies that /v1/subscriptions returns an
+// empty list when no user context is present (ExtractUserInfoOptional did not
+// set one). This covers the case where no LLMInferenceService is deployed.
+func TestListSubscriptions_NoAuthContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	router := gin.New()
+
+	log := logger.New(false)
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{
+		createTestSubscription("premium-sub", []string{"premium-users"}, 10, "org-1", "cc-1"),
+	}}
+	selector := subscription.NewSelector(log, lister, nil, nil)
+	handler := subscription.NewHandler(log, selector)
+
+	tokenHandler := token.NewHandler(log, "test-tenant")
+
+	// Use ExtractUserInfoOptional — same as production wiring.
+	router.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptions)
+	router.GET("/v1/model/:model-id/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptionsForModel)
+
+	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var result []subscription.SubscriptionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("expected empty array, got %d items", len(result))
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("expected Cache-Control: no-store, got %q", cc)
+		}
+	})
+
+	t.Run("returns empty list when Authorization present but no identity headers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+		req.Header.Set("Authorization", "Bearer some-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var result []subscription.SubscriptionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("expected empty array, got %d items", len(result))
+		}
+	})
+
+	t.Run("model subscriptions returns empty list when no auth context", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/v1/model/some-model/subscriptions", nil)
+		req.Header.Set("Authorization", "Bearer some-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var result []subscription.SubscriptionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("expected empty array, got %d items", len(result))
+		}
+		if cc := w.Header().Get("Cache-Control"); cc != "no-store" {
+			t.Errorf("expected Cache-Control: no-store, got %q", cc)
+		}
+	})
+
+	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
+		gin.SetMode(gin.TestMode)
+		authedRouter := gin.New()
+		authedRouter.GET("/v1/subscriptions", tokenHandler.ExtractUserInfoOptional(), handler.ListSubscriptions)
+
+		req := httptest.NewRequest(http.MethodGet, "/v1/subscriptions", nil)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Username", "test-user")
+		req.Header.Set("X-Maas-Group", `["premium-users"]`)
+		w := httptest.NewRecorder()
+		authedRouter.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		var result []subscription.SubscriptionInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatalf("failed to unmarshal: %v", err)
+		}
+		if len(result) != 1 {
+			t.Errorf("expected 1 subscription, got %d", len(result))
+		}
+	})
+}
+
 func TestListSubscriptions_ModelRefEnrichment(t *testing.T) {
 	sub := createTestSubscriptionWithModels(
 		"free-sub",

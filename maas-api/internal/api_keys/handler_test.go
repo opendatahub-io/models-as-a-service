@@ -2303,6 +2303,84 @@ func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
 	assert.False(t, response.HasMore)
 }
 
+// ============================================================
+// NO AUTH CONTEXT TESTS (optional auth for /v1/api-keys)
+// ============================================================
+
+// TestSearchAPIKeys_NoAuthContext verifies that POST /v1/api-keys/search returns
+// an empty list when no user context is present (ExtractUserInfoOptional did not
+// set one). This covers the case where no LLMInferenceService is deployed.
+func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	log := logger.Development()
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, log)
+	handler := NewHandler(log, service, newMockAdminChecker(), nil)
+
+	tokenHandler := token.NewHandler(log, "test-tenant")
+
+	// Wire up with ExtractUserInfoOptional — same as production wiring.
+	router := gin.New()
+	router.POST("/v1/api-keys/search", tokenHandler.ExtractUserInfoOptional(), handler.SearchAPIKeys)
+
+	// Seed data so we can verify no keys leak when there is no auth context.
+	ctx := context.Background()
+	err := store.AddKey(ctx, "alice", "key-1", "hash-1", "Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	require.NoError(t, err)
+
+	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "should return empty list when no auth context")
+		assert.False(t, response.HasMore)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"),
+			"expected Cache-Control: no-store to prevent caching of personalized listings")
+	})
+
+	t.Run("returns empty list when Authorization present but no identity headers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer some-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "should return empty list when no identity headers")
+		assert.False(t, response.HasMore)
+	})
+
+	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Maas-Username", "alice")
+		req.Header.Set("X-Maas-Group", `["system:authenticated"]`)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Len(t, response.Data, 1, "should return keys when auth context is present")
+	})
+}
+
 func TestCreateAPIKey_NameValidation(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()

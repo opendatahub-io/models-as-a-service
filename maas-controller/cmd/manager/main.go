@@ -29,10 +29,13 @@ import (
 	"time"
 
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	confv1 "github.com/openshift/api/config/v1"
+	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -43,6 +46,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -50,6 +54,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -66,15 +71,25 @@ var (
 
 const defaultAITenantBootstrappedAnnotation = "maas.opendatahub.io/default-aitenant-bootstrapped"
 
+const (
+	tlsProfileFetchMaxRetries = 3
+	tlsProfileFetchTimeout    = 10 * time.Second
+	tlsProfileFetchRetryDelay = 2 * time.Second
+)
+
+var tlsProfileRetryDelay = tlsProfileFetchRetryDelay
+
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(extv1.AddToScheme(scheme))
 	utilruntime.Must(kservev1alpha2.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(confv1.Install(scheme))
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
+//+kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -659,6 +674,154 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 	}
 }
 
+// fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
+// If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
+// default Intermediate profile immediately with available=false. For transient
+// errors on OpenShift, it retries a few times before logging and returning the
+// default Intermediate profile with available=true, allowing the watcher to
+// self-heal when the API recovers.
+func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
+	for attempt := range tlsProfileFetchMaxRetries {
+		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
+		profile, err := utiltls.FetchAPIServerTLSProfile(fetchCtx, c)
+		adherencePolicy := confv1.TLSAdherencePolicyNoOpinion
+		if err == nil {
+			adherencePolicy, err = utiltls.FetchAPIServerTLSAdherencePolicy(fetchCtx, c)
+		}
+		fetchCancel()
+
+		if err == nil {
+			return profile, adherencePolicy, true, nil
+		}
+
+		if apimeta.IsNoMatchError(err) || errors.IsNotFound(err) {
+			setupLog.Info("config.openshift.io API not available, using default Intermediate TLS profile " +
+				"(expected on non-OpenShift clusters)")
+			return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+				confv1.TLSAdherencePolicyNoOpinion, false, nil
+		}
+
+		if attempt < tlsProfileFetchMaxRetries-1 {
+			setupLog.Info("transient error fetching cluster TLS profile, retrying",
+				"error", err, "attempt", attempt+1, "maxRetries", tlsProfileFetchMaxRetries)
+			select {
+			case <-ctx.Done():
+				return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+					confv1.TLSAdherencePolicyNoOpinion, false, ctx.Err()
+			case <-time.After(tlsProfileRetryDelay):
+			}
+		} else {
+			setupLog.Info("failed to fetch cluster TLS profile after retries, using default Intermediate TLS profile",
+				"error", err)
+		}
+	}
+
+	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+		confv1.TLSAdherencePolicyNoOpinion, true, nil
+}
+
+func tlsProfileForAdherence(profile confv1.TLSProfileSpec, adherence confv1.TLSAdherencePolicy) confv1.TLSProfileSpec {
+	if shouldHonorClusterTLSProfile(adherence) {
+		return profile
+	}
+	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType]
+}
+
+// shouldHonorClusterTLSProfile mirrors library-go's adherence semantics. This
+// controller's pinned library-go predates that helper, so keep the equivalent
+// switch local rather than upgrading the OpenShift dependency set just for it.
+func shouldHonorClusterTLSProfile(adherence confv1.TLSAdherencePolicy) bool {
+	switch adherence {
+	case confv1.TLSAdherencePolicyNoOpinion,
+		confv1.TLSAdherencePolicyLegacyAdheringComponentsOnly:
+		return false
+	default:
+		// StrictAllComponents and unknown future values honor the profile.
+		return true
+	}
+}
+
+type managerTLSConfig struct {
+	profile      confv1.TLSProfileSpec
+	adherence    confv1.TLSAdherencePolicy
+	available    bool
+	serverTLSOpt func(*tls.Config)
+}
+
+func loadManagerTLSConfig(ctx context.Context, cfg *rest.Config) (managerTLSConfig, error) {
+	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return managerTLSConfig{}, fmt.Errorf("creating pre-manager Kubernetes client: %w", err)
+	}
+
+	profile, adherence, available, err := fetchTLSProfileWithRetry(ctx, k8sClient)
+	if err != nil {
+		return managerTLSConfig{}, err
+	}
+	if available {
+		setupLog.Info("fetched cluster TLS security profile",
+			"minTLSVersion", profile.MinTLSVersion, "tlsAdherence", adherence)
+	}
+
+	appliedProfile := tlsProfileForAdherence(profile, adherence)
+	setupLog.Info("resolved TLS security profile",
+		"configuredMinTLSVersion", profile.MinTLSVersion,
+		"appliedMinTLSVersion", appliedProfile.MinTLSVersion,
+		"tlsAdherence", adherence,
+		"honorClusterTLSProfile", shouldHonorClusterTLSProfile(adherence))
+	serverTLSOpt, unsupportedCiphers := utiltls.NewTLSConfigFromProfile(appliedProfile)
+	if len(unsupportedCiphers) > 0 {
+		setupLog.Info("TLS profile contains ciphers not supported by this Go version; ignoring them",
+			"unsupportedCiphers", unsupportedCiphers)
+	}
+
+	return managerTLSConfig{
+		profile:      profile,
+		adherence:    adherence,
+		available:    available,
+		serverTLSOpt: serverTLSOpt,
+	}, nil
+}
+
+func mustLoadManagerTLSConfig(ctx context.Context, cfg *rest.Config) managerTLSConfig {
+	tlsConfig, err := loadManagerTLSConfig(ctx, cfg)
+	if err != nil {
+		setupLog.Error(err, "unable to fetch cluster TLS security profile")
+		os.Exit(1)
+	}
+	return tlsConfig
+}
+
+func (c managerTLSConfig) setupWatcher(mgr ctrl.Manager, cancel context.CancelFunc) error {
+	if !c.available {
+		return nil
+	}
+
+	return (&utiltls.SecurityProfileWatcher{
+		Client:                    mgr.GetClient(),
+		InitialTLSProfileSpec:     c.profile,
+		InitialTLSAdherencePolicy: c.adherence,
+		OnProfileChange: func(_ context.Context, oldProfile, newProfile confv1.TLSProfileSpec) {
+			setupLog.Info("TLS security profile changed, initiating graceful shutdown to reload",
+				"oldMinTLS", oldProfile.MinTLSVersion, "newMinTLS", newProfile.MinTLSVersion,
+			)
+			cancel()
+		},
+		OnAdherencePolicyChange: func(_ context.Context, oldPolicy, newPolicy confv1.TLSAdherencePolicy) {
+			setupLog.Info("TLS adherence policy changed, initiating graceful shutdown to reload",
+				"oldPolicy", oldPolicy, "newPolicy", newPolicy)
+			cancel()
+		},
+	}).SetupWithManager(mgr)
+}
+
+func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.CancelFunc) {
+	if err := c.setupWatcher(mgr, cancel); err != nil {
+		setupLog.Info("unable to create TLS profile watcher, continuing with current TLS profile",
+			"controller", "TLSProfileWatcher", "error", err)
+	}
+}
+
 // resolveInfraNamespace determines the infrastructure namespace for maas-api and maas-db-config.
 // Note: PostgreSQL itself can be external (e.g., AWS RDS) - only maas-api and the connection secret deploy here.
 // If infraNs is "AUTO", derives the namespace from the controller namespace.
@@ -688,6 +851,43 @@ func deriveInfraNamespace(controllerNs string) string {
 		// Unknown namespace, use same as controller
 		return controllerNs
 	}
+}
+
+func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string) error {
+	if err := (&webhook.AITenantValidator{
+		Client:            mgr.GetAPIReader(),
+		AITenantNamespace: aitenantNamespace,
+		GatewayNamespace:  gatewayNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("AITenant webhook: %w", err)
+	}
+
+	tenantValidator := &webhook.TenantNamespaceValidator{
+		Client: mgr.GetAPIReader(),
+	}
+
+	if err := (&webhook.MaaSSubscriptionValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSSubscription webhook: %w", err)
+	}
+
+	if err := (&webhook.MaaSAuthPolicyValidator{
+		Client:    mgr.GetClient(),
+		Validator: tenantValidator,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSAuthPolicy webhook: %w", err)
+	}
+
+	if err := (&webhook.MaaSModelRefValidator{
+		Client:            mgr.GetAPIReader(),
+		AITenantNamespace: aitenantNamespace,
+	}).SetupWebhookWithManager(mgr); err != nil {
+		return fmt.Errorf("MaaSModelRef webhook: %w", err)
+	}
+
+	return nil
 }
 
 func main() {
@@ -852,17 +1052,21 @@ func main() {
 			"compatTenantNamespaceLabel", tenantreconcile.LabelManagedByAITenant)
 	}
 
+	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
+
+	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
+	nextProtosOpt := func(c *tls.Config) {
+		c.NextProtos = []string{"h2", "http/1.1"}
+	}
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
 		Scheme: scheme,
 		Cache:  cacheOpts,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
-			TLSOpts: []func(*tls.Config){
-				func(c *tls.Config) {
-					c.NextProtos = []string{"h2", "http/1.1"}
-				},
-			},
+			TLSOpts:     []func(*tls.Config){nextProtosOpt},
 		},
+		WebhookServer:          crwebhook.NewServer(crwebhook.Options{TLSOpts: []func(*tls.Config){tlsConfig.serverTLSOpt, nextProtosOpt}}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
 		LeaderElectionID:       "maas-controller.models-as-a-service.opendatahub.io",
@@ -889,6 +1093,7 @@ func main() {
 		GatewayNamespace:                gatewayNamespace,
 		DefaultTenantNamespace:          maasSubscriptionNamespace,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		AITenantNamespace:               aitenantNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
@@ -1012,36 +1217,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Setup validating webhooks for placement-sensitive MaaS resources.
-	if err := (&webhook.AITenantValidator{
-		Client:            mgr.GetAPIReader(),
-		AITenantNamespace: aitenantNamespace,
-		GatewayNamespace:  gatewayNamespace,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "AITenant")
-		os.Exit(1)
-	}
-
-	// MaaSSubscription and MaaSAuthPolicy must be created in tenant-enabled namespaces.
-	// This prevents users from creating resources in random namespaces where they
-	// would be silently ignored.
-	tenantValidator := &webhook.TenantNamespaceValidator{
-		Client: mgr.GetAPIReader(), // Use APIReader for uncached reads
-	}
-
-	if err := (&webhook.MaaSSubscriptionValidator{
-		Client:    mgr.GetClient(),
-		Validator: tenantValidator,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSSubscription")
-		os.Exit(1)
-	}
-
-	if err := (&webhook.MaaSAuthPolicyValidator{
-		Client:    mgr.GetClient(),
-		Validator: tenantValidator,
-	}).SetupWebhookWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create webhook", "webhook", "MaaSAuthPolicy")
+	if err := setupWebhooks(mgr, aitenantNamespace, gatewayNamespace); err != nil {
+		setupLog.Error(err, "unable to setup webhooks")
 		os.Exit(1)
 	}
 
@@ -1049,6 +1226,8 @@ func main() {
 		setupLog.Error(err, "unable to register ensureClusterBootstrap runnable")
 		os.Exit(1)
 	}
+
+	tlsConfig.registerWatcher(mgr, cancel)
 
 	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
 		setupLog.Error(err, "unable to set up health check")
@@ -1060,7 +1239,7 @@ func main() {
 	}
 
 	setupLog.Info("starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}

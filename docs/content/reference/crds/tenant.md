@@ -89,6 +89,37 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 ---
 
+## Annotations
+
+Optional metadata annotations that control per-tenant horizontal scaling.
+
+| Annotation | Default | Valid Range | Description |
+|------------|---------|-------------|-------------|
+| `maas.opendatahub.io/maas-api-replicas` | 1 | 1–100 | Overrides the maas-api Deployment replica count for this tenant |
+| `maas.opendatahub.io/payload-processing-replicas` | 1 | 1–100 | Overrides the payload-processing Deployment replica count for this tenant |
+
+When set, the controller patches the corresponding Deployment's `spec.replicas` during reconciliation. Invalid values (non-numeric, zero, negative, or exceeding 100) produce a `Degraded` status condition with a remediation message; the default replica count is preserved.
+
+Remove the annotation to revert to the manifest default.
+
+### Example: Scaling for High Concurrency
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaasTenantConfig
+metadata:
+  name: default-tenant
+  namespace: models-as-a-service
+  annotations:
+    maas.opendatahub.io/maas-api-replicas: "3"
+    maas.opendatahub.io/payload-processing-replicas: "2"
+spec:
+  apiKeys:
+    maxExpirationDays: 90
+```
+
+---
+
 ## Example
 
 ```yaml

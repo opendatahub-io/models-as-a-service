@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -1377,4 +1378,145 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 	assert.Equal(t, "ExternalModel", response.Data[0].Kind)
 	assert.Equal(t, fixtures.TestNamespace+"/"+maasModelRefName, response.Data[0].OwnedBy,
 		"OwnedBy should still reference the MaaSModelRef for dashboard display")
+}
+
+// TestListModels_NoAuthContext verifies that /v1/models returns an empty list
+// when no auth context is present (no Authorization header and no identity
+// headers). This reproduces the scenario where no LLMInferenceService is
+// deployed and Authorino has no auth policy.
+func TestListModels_NoAuthContext(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Setup with models that would normally be returned
+	modelServer := createMockModelServer(t, "some-model")
+
+	lister := fakeMaaSModelRefLister{
+		fixtures.TestNamespace: []*unstructured.Unstructured{
+			maasModelRefUnstructured("some-model", fixtures.TestNamespace, modelServer.URL, true, nil),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, cfg)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
+	defer cleanup()
+
+	// Use ExtractUserInfoOptional (the production middleware for /v1/models)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+
+	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// No Authorization, no username, no group headers
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with empty list")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty model list when no auth context")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+	})
+
+	t.Run("returns empty list when Authorization header present but no identity headers", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// User sends a Bearer token, but Authorino doesn't inject identity
+		// headers because no LLMInferenceService/auth policy is active.
+		req.Header.Set("Authorization", "Bearer some-token")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with empty list when identity headers absent")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty model list when no identity context")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+	})
+
+	t.Run("returns 401 when Authorization header missing but identity headers present", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// Identity headers present but no Authorization
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusUnauthorized, w.Code, "Should return 401 when Authorization missing but identity present")
+	})
+
+	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with models")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		// With valid auth, models should be returned (filtered by access)
+	})
+}
+
+// TestListModels_StrictAuthOnOtherEndpoints verifies that the strict
+// ExtractUserInfo middleware still aborts for endpoints other than /v1/models.
+// This is a regression test to ensure the optional auth change doesn't weaken
+// authentication on subscription or API key endpoints.
+func TestListModels_StrictAuthOnOtherEndpoints(t *testing.T) {
+	testLogger := logger.Development()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+
+	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, cfg)
+
+	// Use the strict ExtractUserInfo for a non-models endpoint
+	v1 := router.Group("/v1")
+	v1.GET("/strict-endpoint", tokenHandler.ExtractUserInfo(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	t.Run("strict middleware aborts when no auth headers", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/strict-endpoint", nil)
+		require.NoError(t, err)
+		// No headers at all
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusInternalServerError, w.Code,
+			"Strict middleware should abort with 500 when auth headers are missing")
+
+		var body map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &body)
+		require.NoError(t, err)
+		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"],
+			"Should return AUTH_FAILURE for missing headers on strict endpoints")
+	})
 }

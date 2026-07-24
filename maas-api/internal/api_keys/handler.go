@@ -418,15 +418,32 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 
 // SearchAPIKeys handles POST /v1/api-keys/search
 // Searches API keys with flexible filtering, sorting, and pagination.
+// When no user context is present (ExtractUserInfoOptional did not set one),
+// an empty list is returned gracefully.
 func (h *Handler) SearchAPIKeys(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
+	userContextVal, exists := c.Get("user")
+	if !exists {
+		// No identity headers from Authorino — return an empty list instead
+		// of failing.  This mirrors the /v1/models behaviour when no
+		// LLMInferenceService is deployed.
+		h.logger.Debug("No auth context present, returning empty API key list")
+		c.JSON(http.StatusOK, SearchAPIKeysResponse{
+			Object: "list",
+			Data:   []ApiKey{},
+		})
+		return
+	}
+
 	var req SearchAPIKeysRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
-	user := h.getUserContext(c)
-	if user == nil {
+	user, ok := userContextVal.(*token.UserContext)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Invalid user context type"})
 		return
 	}
 
