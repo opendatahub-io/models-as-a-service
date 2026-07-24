@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -690,6 +691,9 @@ func TestParseAITenantDeletionTimeout(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.envSet {
 				t.Setenv("AITENANT_DELETION_TIMEOUT", tt.envVal)
+			} else {
+				t.Setenv("AITENANT_DELETION_TIMEOUT", "")
+				os.Unsetenv("AITENANT_DELETION_TIMEOUT")
 			}
 			got := parseAITenantDeletionTimeout()
 			if got != tt.want {
