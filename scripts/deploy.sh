@@ -1444,9 +1444,13 @@ apply_kuadrant_cr() {
   # Override with ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS as needed.
   local gateway_allowed_namespaces="${ALLOWED_ROUTE_NAMESPACES:-}"
   if [[ -z "$gateway_allowed_namespaces" && -z "${NAMESPACE_SELECTOR_LABELS:-}" ]]; then
-    gateway_allowed_namespaces="$NAMESPACE"
+    # Always include the infra namespace: maas-api-route lives there and must attach
+    # to the gateway for API key/subscription calls to reach maas-api.
+    local infra_ns
+    infra_ns=$(derive_infra_namespace "$NAMESPACE")
+    gateway_allowed_namespaces="$NAMESPACE,$infra_ns"
     if [[ -n "${MODEL_NAMESPACE:-}" && "${MODEL_NAMESPACE}" != "$NAMESPACE" ]]; then
-      gateway_allowed_namespaces="${NAMESPACE},${MODEL_NAMESPACE}"
+      gateway_allowed_namespaces="${gateway_allowed_namespaces},${MODEL_NAMESPACE}"
     fi
   fi
 
