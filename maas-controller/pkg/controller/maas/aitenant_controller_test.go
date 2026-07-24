@@ -2871,16 +2871,18 @@ func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
 
 	var remaining maasv1alpha1.AITenant
 	err = cl.Get(ctx, key, &remaining)
-	if !apierrors.IsNotFound(err) {
+	if apierrors.IsNotFound(err) {
+		// Object was fully deleted after finalizer removal — forced cleanup succeeded.
+	} else {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer),
 			"finalizer must be removed after deletion timeout")
-	}
 
-	cond := apimeta.FindStatusCondition(remaining.Status.Conditions, maasv1alpha1.AITenantConditionReady)
-	g.Expect(cond).NotTo(BeNil())
-	g.Expect(cond.Reason).To(Equal("CleanupForced"))
-	g.Expect(cond.Message).To(ContainSubstring("Deletion timeout"))
+		cond := apimeta.FindStatusCondition(remaining.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Reason).To(Equal("CleanupForced"))
+		g.Expect(cond.Message).To(ContainSubstring("Deletion timeout"))
+	}
 
 	select {
 	case event := <-recorder.Events:

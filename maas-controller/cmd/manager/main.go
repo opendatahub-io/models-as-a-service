@@ -1129,6 +1129,8 @@ func main() {
 		d, err := time.ParseDuration(v)
 		if err != nil {
 			setupLog.Error(err, "invalid AITENANT_DELETION_TIMEOUT, using default", "value", v, "default", aitenantDeletionTimeout)
+		} else if d < 0 {
+			setupLog.Info("negative AITENANT_DELETION_TIMEOUT is not allowed, using default", "value", v, "default", aitenantDeletionTimeout)
 		} else {
 			aitenantDeletionTimeout = d
 		}

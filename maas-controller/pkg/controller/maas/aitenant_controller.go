@@ -518,16 +518,16 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, nil
 	}
 
+	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout {
+		return r.forceRemoveAITenantFinalizer(ctx, aitenant)
+	}
+
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	statusSnapshot := aitenant.Status.DeepCopy()
 	aitenant.Status.TenantNamespace = tenantNamespace
 	setAITenantPhase(aitenant, "Terminating", "DeletionInProgress", "AITenant deletion cleanup is in progress")
 	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
-	}
-
-	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout {
-		return r.forceRemoveAITenantFinalizer(ctx, aitenant)
 	}
 
 	apiKeysRevoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
@@ -605,7 +605,7 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	statusSnapshot := aitenant.Status.DeepCopy()
 	setAITenantPhase(aitenant, "Terminating", "CleanupForced", msg)
 	if err := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err != nil {
-		return ctrl.Result{}, err
+		log.Error(err, "failed to update AITenant status during forced finalizer removal, proceeding with finalizer removal")
 	}
 
 	if r.Recorder != nil {
