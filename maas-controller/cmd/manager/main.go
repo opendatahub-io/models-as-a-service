@@ -677,9 +677,10 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 // fetchTLSProfileWithRetry attempts to fetch the OpenShift TLS security profile.
 // If the config.openshift.io API doesn't exist (non-OpenShift), it returns the
 // default Intermediate profile immediately with available=false. For transient
-// errors on OpenShift, it retries a few times before logging and returning the
-// default Intermediate profile with available=true, allowing the watcher to
-// self-heal when the API recovers.
+// errors, it retries a few times before logging and returning the default
+// Intermediate profile with available=false (same as non-OpenShift). This makes
+// "indeterminate" default to the safe non-OpenShift path — OpenShift-specific
+// resources will be skipped rather than expected but missing on xKS clusters.
 func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSProfileSpec, confv1.TLSAdherencePolicy, bool, error) {
 	for attempt := range tlsProfileFetchMaxRetries {
 		fetchCtx, fetchCancel := context.WithTimeout(ctx, tlsProfileFetchTimeout)
@@ -717,7 +718,7 @@ func fetchTLSProfileWithRetry(ctx context.Context, c client.Client) (confv1.TLSP
 	}
 
 	return *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
-		confv1.TLSAdherencePolicyNoOpinion, true, nil
+		confv1.TLSAdherencePolicyNoOpinion, false, nil
 }
 
 func tlsProfileForAdherence(profile confv1.TLSProfileSpec, adherence confv1.TLSAdherencePolicy) confv1.TLSProfileSpec {

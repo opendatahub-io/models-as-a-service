@@ -1879,6 +1879,15 @@ func containerHasVolumeMount(container *corev1.Container, name, mountPath string
 	return false
 }
 
+func jobHasSecretVolume(job *batcv1.Job, name, secretName string) bool {
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.Name == name && volume.Secret != nil && volume.Secret.SecretName == secretName {
+			return true
+		}
+	}
+	return false
+}
+
 func TestTenantAPIKeyRevocationJob_xKS(t *testing.T) {
 	g := NewWithT(t)
 
@@ -1891,14 +1900,19 @@ func TestTenantAPIKeyRevocationJob_xKS(t *testing.T) {
 	}
 	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", false)
 
-	g.Expect(job.Spec.Template.Spec.Volumes).To(BeEmpty())
 	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
 	container := job.Spec.Template.Spec.Containers[0]
-	g.Expect(container.VolumeMounts).To(BeEmpty())
-	g.Expect(container.Args).To(ContainElement("-k"))
-	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring("--cacert"))
+
+	// xKS path must use --cacert with the cert-manager CA, not -k
+	g.Expect(container.Args).NotTo(ContainElement("-k"))
+	g.Expect(container.Args).To(ContainElement("--cacert"))
+	g.Expect(container.Args).To(ContainElement("/etc/pki/maas-api/ca.crt"))
 	g.Expect(strings.Join(container.Args, " ")).To(ContainSubstring(
 		"https://maas-api-team-xks.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-xks/api-keys"))
+
+	// Volume must mount the tenant-specific TLS secret's ca.crt
+	g.Expect(jobHasSecretVolume(job, "maas-api-tls-ca", "maas-api-team-xks-serving-cert")).To(BeTrue())
+	g.Expect(containerHasVolumeMount(&container, "maas-api-tls-ca", "/etc/pki/maas-api")).To(BeTrue())
 }
 
 func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndKeepsJob(t *testing.T) {

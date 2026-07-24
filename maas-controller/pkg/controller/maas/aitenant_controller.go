@@ -844,10 +844,34 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 			ReadOnly:  true,
 		}}
 	} else {
+		// On xKS clusters, the maas-api TLS secret (provisioned by cert-manager)
+		// contains the CA certificate in its ca.crt key. Mount it and use --cacert
+		// instead of -k to preserve TLS verification.
+		tlsSecretName := "maas-api-serving-cert"
+		if tenantID != "" {
+			tlsSecretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
+		}
 		curlArgs = []string{
 			"--fail", "--silent", "--show-error", "--max-time", "30",
-			"-k", "-X", "DELETE", endpoint,
+			"--cacert", "/etc/pki/maas-api/ca.crt",
+			"-X", "DELETE", endpoint,
 		}
+		volumes = []corev1.Volume{{
+			Name: "maas-api-tls-ca",
+			VolumeSource: corev1.VolumeSource{
+				Secret: &corev1.SecretVolumeSource{
+					SecretName: tlsSecretName,
+					Items: []corev1.KeyToPath{
+						{Key: "ca.crt", Path: "ca.crt"},
+					},
+				},
+			},
+		}}
+		volumeMounts = []corev1.VolumeMount{{
+			Name:      "maas-api-tls-ca",
+			MountPath: "/etc/pki/maas-api",
+			ReadOnly:  true,
+		}}
 	}
 
 	return &batcv1.Job{
