@@ -935,11 +935,15 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	if errs := validation.IsDNS1123Label(monitoringNamespace); len(errs) > 0 {
-		setupLog.Error(stderrors.New("invalid monitoring namespace"),
-			"--monitoring-namespace must be a valid Kubernetes namespace name",
-			"namespace", monitoringNamespace, "errors", errs)
-		os.Exit(1)
+	// Allow empty monitoring-namespace to disable observability features (e.g. on xKS
+	// where the monitoring namespace may not exist). Non-empty values must be valid.
+	if monitoringNamespace != "" {
+		if errs := validation.IsDNS1123Label(monitoringNamespace); len(errs) > 0 {
+			setupLog.Error(stderrors.New("invalid monitoring namespace"),
+				"--monitoring-namespace must be a valid Kubernetes namespace name or empty to disable monitoring",
+				"namespace", monitoringNamespace, "errors", errs)
+			os.Exit(1)
+		}
 	}
 
 	if gatewayName == "" || gatewayNamespace == "" {
