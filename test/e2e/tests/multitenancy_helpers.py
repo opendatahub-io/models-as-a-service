@@ -298,6 +298,29 @@ def wait_for_status_condition(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_gateway_authpolicy_ready(
+    gateway_name: str,
+    namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 120,
+) -> dict:
+    """Wait for the gateway AuthPolicy to be both Accepted and Enforced."""
+    auth_name = per_tenant_gateway_policy_names(gateway_name, gateway_name)["gateway_authpolicy"]
+
+    def _predicate(obj: dict) -> bool:
+        conditions = (obj.get("status") or {}).get("conditions") or []
+        accepted = False
+        enforced = False
+        for c in conditions:
+            if c.get("type") == "Accepted" and c.get("status") == "True":
+                accepted = True
+            if c.get("type") == "Enforced" and c.get("status") == "True":
+                enforced = True
+        return accepted and enforced
+
+    return wait_for_json("authpolicy", auth_name, namespace, predicate=_predicate, timeout=timeout)
+
+
 def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
@@ -923,15 +946,7 @@ def make_tenant_model_accessible(
         expected_phase="Active",
     )
     if gateway_name is not None:
-        gateway_auth_names = per_tenant_gateway_policy_names(gateway_name, gateway_name)
-        wait_for_status_condition(
-            "authpolicy",
-            gateway_auth_names["gateway_authpolicy"],
-            gateway_namespace,
-            condition_type="Enforced",
-            expected_status="True",
-            timeout=120,
-        )
+        wait_for_gateway_authpolicy_ready(gateway_name, namespace=gateway_namespace)
     apply_maas_subscription(
         subscription_name,
         tenant_namespace,

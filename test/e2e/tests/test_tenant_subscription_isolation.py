@@ -10,19 +10,17 @@ import uuid
 import pytest
 
 from multitenancy_helpers import (
-    GATEWAY_NAMESPACE,
     apply_maas_auth_policy,
     apply_maas_subscription,
     create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
     list_subscriptions_at,
-    per_tenant_gateway_policy_names,
     provision_tenant_model,
     redact_sensitive,
     response_summary,
     select_subscription_at,
-    wait_for_status_condition,
+    wait_for_gateway_authpolicy_ready,
     wait_for_status_phase,
 )
 from test_helper import _get_cluster_token, _delete_cr, _wait_for_subscription_trlp_status
@@ -73,15 +71,7 @@ def tenant_subscriptions(tenant_env):
             )
 
         for tenant in (tenant_a, tenant_b):
-            gateway_auth_names = per_tenant_gateway_policy_names(tenant["gateway_name"], tenant["gateway_name"])
-            wait_for_status_condition(
-                "authpolicy",
-                gateway_auth_names["gateway_authpolicy"],
-                GATEWAY_NAMESPACE,
-                condition_type="Enforced",
-                expected_status="True",
-                timeout=120,
-            )
+            wait_for_gateway_authpolicy_ready(tenant["gateway_name"])
 
         apply_maas_subscription(
             shared_name,
