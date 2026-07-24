@@ -1176,10 +1176,7 @@ func main() {
 	//   5. LifecycleReconciler patches Config→AITenant/MaasTenantConfig owner refs.
 	//   6. If Tenant reconciles before Config exists, readyConfigOrWait requeues until the anchor appears.
 
-	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
-	if manifestPath == "" {
-		manifestPath = tenantreconcile.DefaultManifestPath()
-	}
+	manifestPath := tenantreconcile.ManifestPathForPlatform(isOpenShift)
 	if abs, err := filepath.Abs(manifestPath); err == nil {
 		manifestPath = abs
 	}

@@ -175,7 +175,21 @@ func fileExists(p string) bool {
 	return fs.Exists(p)
 }
 
-// DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS or a dev default relative to cwd (models-as-a-service repo layout).
+// ManifestPathForPlatform returns the kustomize overlay path for the given
+// platform. If the MAAS_PLATFORM_MANIFESTS environment variable is set, it
+// overrides platform auto-detection and is returned unchanged.
+func ManifestPathForPlatform(isOCP bool) string {
+	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
+		return v
+	}
+	if isOCP {
+		return "../maas-api/deploy/overlays/odh"
+	}
+	return "../maas-api/deploy/overlays/xks"
+}
+
+// DefaultManifestPath returns MAAS_PLATFORM_MANIFESTS or the ODH dev default
+// relative to cwd. For platform-aware selection use ManifestPathForPlatform.
 func DefaultManifestPath() string {
 	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
 		return v

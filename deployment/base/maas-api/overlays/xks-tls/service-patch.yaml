@@ -1,0 +1,13 @@
+# xKS TLS service patch. Serves HTTPS on 8443 without OpenShift
+# serving-cert-secret-name annotation (cert-manager provisions the Secret).
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-api
+spec:
+  ports:
+  - $patch: replace
+  - name: https
+    port: 8443
+    protocol: TCP
+    targetPort: https

@@ -670,106 +670,141 @@ func TestBuildPlatformParams_IsOpenShift(t *testing.T) {
 	})
 }
 
-func TestPostRender_xKS_StripsOpenShiftResources(t *testing.T) {
-	resources := renderOverlayResources(t, "tenant-ns")
+func TestManifestPathForPlatform(t *testing.T) {
+	t.Run("returns ODH overlay for OpenShift", func(t *testing.T) {
+		t.Setenv("MAAS_PLATFORM_MANIFESTS", "")
+		got := ManifestPathForPlatform(true)
+		assert.Contains(t, got, "overlays/odh")
+	})
 
-	params := PlatformParams{
-		AppNamespace:          "tenant-ns",
-		ControllerNamespace:   "ctrl-ns",
-		GatewayNamespace:      "gateway-ns",
-		GatewayName:           "custom-gateway",
-		ClusterAudience:       "https://kubernetes.default.svc",
-		SubscriptionNamespace: "tenant-ns",
-		IsOpenShift:           false,
-	}
+	t.Run("returns xKS overlay for non-OpenShift", func(t *testing.T) {
+		t.Setenv("MAAS_PLATFORM_MANIFESTS", "")
+		got := ManifestPathForPlatform(false)
+		assert.Contains(t, got, "overlays/xks")
+	})
 
-	rendered, err := PostRender(nil, logr.Discard(), nil, resources, params) //nolint:staticcheck // nil context is fine in test
+	t.Run("MAAS_PLATFORM_MANIFESTS overrides auto-detection", func(t *testing.T) {
+		t.Setenv("MAAS_PLATFORM_MANIFESTS", "/custom/path")
+		got := ManifestPathForPlatform(true)
+		assert.Equal(t, "/custom/path", got)
+		got = ManifestPathForPlatform(false)
+		assert.Equal(t, "/custom/path", got)
+	})
+}
+
+func TestXKSOverlay_NoOpenShiftResources(t *testing.T) {
+	resources := renderXKSOverlayResources(t, "tenant-ns")
+
+	// openshift-service-ca.crt ConfigMap must not be present in the xKS overlay
+	serviceCACM := findResource(resources, schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "openshift-service-ca.crt")
+	assert.Nil(t, serviceCACM, "openshift-service-ca.crt ConfigMap should not be rendered by xKS overlay")
+
+	// maas-api Service must not have the OpenShift serving cert annotation
+	svc := findResource(resources, GVKService, "maas-api")
+	require.NotNil(t, svc, "maas-api Service should be rendered")
+	ann := svc.GetAnnotations()
+	_, hasServingCert := ann["service.beta.openshift.io/serving-cert-secret-name"]
+	assert.False(t, hasServingCert, "xKS Service must not have serving-cert-secret-name annotation")
+
+	// maas-api Deployment must have maas-api-tls volume but not openshift-service-ca
+	dep := findResource(resources, GVKDeployment, MaaSAPIDeploymentName(""))
+	require.NotNil(t, dep, "maas-api Deployment should be rendered")
+
+	volumes, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "volumes")
 	require.NoError(t, err)
+	require.True(t, found)
 
-	// openshift-service-ca.crt ConfigMap should be filtered out
-	serviceCACM := findResource(rendered, schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "openshift-service-ca.crt")
-	assert.Nil(t, serviceCACM, "openshift-service-ca.crt ConfigMap should not be present on xKS")
+	hasMaaSAPITLS := false
+	for _, vol := range volumes {
+		volMap, ok := vol.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(volMap, "name")
+		assert.NotEqual(t, "openshift-service-ca", name,
+			"openshift-service-ca volume must not be present in xKS overlay")
+		if name == "maas-api-tls" {
+			hasMaaSAPITLS = true
+		}
+	}
+	assert.True(t, hasMaaSAPITLS, "maas-api-tls volume must be present in xKS overlay")
 
-	// maas-api Service should not have the OpenShift serving cert annotation
-	svc := findResource(rendered, GVKService, "maas-api")
-	if svc != nil {
-		ann := svc.GetAnnotations()
-		_, hasServingCert := ann["service.beta.openshift.io/serving-cert-secret-name"]
-		assert.False(t, hasServingCert, "Service should not have serving-cert-secret-name on xKS")
+	// SSL_CERT_DIR should not include the openshift path
+	containers, found, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
+	require.True(t, found)
+	for _, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		envSlice, ok := cm["env"].([]any)
+		if !ok {
+			continue
+		}
+		for _, e := range envSlice {
+			em, ok := e.(map[string]any)
+			if !ok {
+				continue
+			}
+			if em["name"] == "SSL_CERT_DIR" {
+				val, _ := em["value"].(string)
+				assert.NotContains(t, val, "openshift-service-ca",
+					"SSL_CERT_DIR must not reference openshift-service-ca in xKS overlay")
+			}
+		}
 	}
 
-	// maas-api Deployment should not have the openshift-service-ca volume but should keep maas-api-tls
-	dep := findResource(rendered, GVKDeployment, MaaSAPIDeploymentName(""))
-	if dep != nil {
-		volumes, found, err := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "volumes")
-		require.NoError(t, err)
-		if found {
-			hasMaaSAPITLS := false
-			for _, vol := range volumes {
-				volMap, ok := vol.(map[string]any)
-				if !ok {
-					continue
-				}
-				name, _, _ := unstructured.NestedString(volMap, "name")
-				assert.NotEqual(t, "openshift-service-ca", name, "openshift-service-ca volume should not be present on xKS")
-				if name == "maas-api-tls" {
-					hasMaaSAPITLS = true
-				}
-			}
-			assert.True(t, hasMaaSAPITLS, "maas-api-tls volume should still be present after stripping OpenShift volumes")
+	// Volume mounts should not include openshift-service-ca
+	for _, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
 		}
-
-		// SSL_CERT_DIR should not include the openshift path
-		containers, found, _ := unstructured.NestedSlice(dep.Object, "spec", "template", "spec", "containers")
-		if found {
-			for _, c := range containers {
-				cm, ok := c.(map[string]any)
-				if !ok {
-					continue
-				}
-				envSlice, ok := cm["env"].([]any)
-				if !ok {
-					continue
-				}
-				for _, e := range envSlice {
-					em, ok := e.(map[string]any)
-					if !ok {
-						continue
-					}
-					if em["name"] == "SSL_CERT_DIR" {
-						val, _ := em["value"].(string)
-						assert.NotContains(t, val, "openshift-service-ca",
-							"SSL_CERT_DIR should not reference openshift-service-ca on xKS")
-					}
-				}
+		mounts, ok := cm["volumeMounts"].([]any)
+		if !ok {
+			continue
+		}
+		for _, m := range mounts {
+			mm, ok := m.(map[string]any)
+			if !ok {
+				continue
 			}
+			name, _, _ := unstructured.NestedString(mm, "name")
+			assert.NotEqual(t, "openshift-service-ca", name,
+				"openshift-service-ca volumeMount must not be present in xKS overlay")
 		}
 	}
 }
 
-func TestPostRender_OpenShift_KeepsOpenShiftResources(t *testing.T) {
+func TestODHOverlay_HasOpenShiftResources(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 
-	params := PlatformParams{
-		AppNamespace:          "tenant-ns",
-		ControllerNamespace:   "ctrl-ns",
-		GatewayNamespace:      "gateway-ns",
-		GatewayName:           "custom-gateway",
-		ClusterAudience:       "https://kubernetes.default.svc",
-		SubscriptionNamespace: "tenant-ns",
-		IsOpenShift:           true,
-	}
+	// openshift-service-ca.crt ConfigMap must be present in the ODH overlay
+	serviceCACM := findResource(resources, schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "openshift-service-ca.crt")
+	assert.NotNil(t, serviceCACM, "openshift-service-ca.crt ConfigMap should be rendered by ODH overlay")
 
-	rendered, err := PostRender(nil, logr.Discard(), nil, resources, params) //nolint:staticcheck // nil context is fine in test
+	// maas-api Service must have the OpenShift serving cert annotation
+	svc := findResource(resources, GVKService, "maas-api")
+	require.NotNil(t, svc, "maas-api Service should be rendered")
+	ann := svc.GetAnnotations()
+	_, hasServingCert := ann["service.beta.openshift.io/serving-cert-secret-name"]
+	assert.True(t, hasServingCert, "ODH Service must have serving-cert-secret-name annotation")
+}
+
+func renderXKSOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
+	t.Helper()
+
+	_, currentFile, _, ok := runtime.Caller(0)
+	require.True(t, ok)
+
+	overlayDir := filepath.Clean(filepath.Join(
+		filepath.Dir(currentFile),
+		"..", "..", "..", "..",
+		"maas-api", "deploy", "overlays", "xks",
+	))
+
+	resources, err := RenderKustomize(overlayDir, appNamespace)
 	require.NoError(t, err)
 
-	serviceCACM := findResource(rendered, schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}, "openshift-service-ca.crt")
-	assert.NotNil(t, serviceCACM, "openshift-service-ca.crt ConfigMap should be present on OpenShift")
-
-	svc := findResource(rendered, GVKService, "maas-api")
-	if svc != nil {
-		ann := svc.GetAnnotations()
-		_, hasServingCert := ann["service.beta.openshift.io/serving-cert-secret-name"]
-		assert.True(t, hasServingCert, "Service should have serving-cert-secret-name on OpenShift")
-	}
+	return resources
 }
