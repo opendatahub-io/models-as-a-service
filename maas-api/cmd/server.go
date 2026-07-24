@@ -10,7 +10,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 )
 
-func newServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
+func newServer(cfg *config.Config, handler http.Handler, profileMinVersion uint16, profileCipherSuites []uint16) (*http.Server, error) {
 	srv := &http.Server{
 		Addr:              cfg.Address,
 		Handler:           handler,
@@ -22,7 +22,7 @@ func newServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
 	}
 
 	if cfg.Secure {
-		tlsConfig, err := buildTLSConfig(cfg)
+		tlsConfig, err := buildTLSConfig(cfg, profileMinVersion, profileCipherSuites)
 		if err != nil {
 			return nil, err
 		}
@@ -32,7 +32,12 @@ func newServer(cfg *config.Config, handler http.Handler) (*http.Server, error) {
 	return srv, nil
 }
 
-func buildTLSConfig(cfg *config.Config) (*tls.Config, error) {
+// buildTLSConfig creates the TLS configuration for the API server.
+// When profileMinVersion > 0 and profileCipherSuites are provided (from the
+// cluster's TLS security profile), they take precedence over the flag-based
+// MinVersion. This ensures the server honors the cluster-wide TLS policy on
+// OpenShift while falling back to flag-driven defaults on vanilla Kubernetes.
+func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherSuites []uint16) (*tls.Config, error) {
 	var tlsCert tls.Certificate
 	var err error
 
@@ -48,12 +53,23 @@ func buildTLSConfig(cfg *config.Config) (*tls.Config, error) {
 		}
 	}
 
-	//nolint:gosec // G402: MinVersion is configurable via --tls-min-version flag (default: TLS 1.2)
-	return &tls.Config{
+	minVersion := cfg.TLS.MinVersion.Value()
+	if profileMinVersion > 0 {
+		minVersion = profileMinVersion
+	}
+
+	//nolint:gosec // G402: MinVersion comes from cluster TLS profile or --tls-min-version flag (default: TLS 1.2)
+	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
-		MinVersion:   cfg.TLS.MinVersion.Value(),
+		MinVersion:   minVersion,
 		NextProtos:   []string{"h2", "http/1.1"},
-	}, nil
+	}
+
+	if len(profileCipherSuites) > 0 {
+		tlsCfg.CipherSuites = profileCipherSuites
+	}
+
+	return tlsCfg, nil
 }
 
 func listenAndServe(srv *http.Server) error {
