@@ -57,11 +57,14 @@ nav:
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
       - Upgrade to 3.4: migration/upgrade-to-3.4.md
+      - Upgrade to 3.5: migration/upgrade-to-3.5.md
   - Concepts:
     - Architecture: concepts/architecture.md
+    - Multi-Tenancy: concepts/multi-tenancy.md
     - Personas: concepts/personas.md
     - Access and Quota Overview: concepts/subscription-overview.md
     - Model Reference: concepts/model-reference.md
+    - Authentication Modes: concepts/auth-modes.md
     - API Key Authentication: concepts/api-key-authentication.md
     - Model Access Control: concepts/model-access-control.md
   - Install:
@@ -74,6 +77,8 @@ nav:
       - Model Setup: install/model-setup.md
       - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
+      - Multi-Tenant Setup: install/multi-tenant-setup.md
+      - Multi-Tenant Validation: install/multi-tenant-validation.md
       - Troubleshooting: install/troubleshooting.md
   - Administration Guide:
     - Configuration & Management:
@@ -118,7 +123,7 @@ nav:
       - MaaSAuthPolicy: reference/crds/maas-auth-policy.md
       - MaaSSubscription: reference/crds/maas-subscription.md
       - AITenant: reference/crds/ai-tenant.md
-      - Tenant: reference/crds/tenant.md
+      - MaasTenantConfig: reference/crds/tenant.md  # Legacy filename, documents MaasTenantConfig CRD
 
 extra:
   version:

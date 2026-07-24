@@ -79,6 +79,10 @@ type Config struct {
 
 	MetricsPort int
 
+	// DiscoveryEnableHTTP2 enables HTTP/2 ALPN negotiation on the TLS client used
+	// by model discovery probes. Default: false (HTTP/1.1 only).
+	DiscoveryEnableHTTP2 bool
+
 	// OTELEndpoint is the OTLP gRPC endpoint for trace export (e.g., "localhost:4317").
 	// Tracing is disabled when empty.
 	OTELEndpoint string
@@ -104,6 +108,7 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
+	discoveryEnableHTTP2, _ := env.GetBool("DISCOVERY_ENABLE_HTTP2", false)
 	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
 	otelSampleRate := 1.0
 	if rateStr := env.GetString("OTEL_TRACES_SAMPLE_RATE", ""); rateStr != "" {
@@ -139,6 +144,7 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		DiscoveryEnableHTTP2:      discoveryEnableHTTP2,
 		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:              otelInsecure,
 		OTELSampleRate:            otelSampleRate,
@@ -174,7 +180,9 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 // It returns an error if the configuration is invalid.
 func (c *Config) Validate() error {
 	// Handle backward compatibility for deprecated flags
-	c.handleDeprecatedFlags()
+	if err := c.handleDeprecatedFlags(); err != nil {
+		return err
+	}
 
 	// Validate required fields
 	if c.DBConnectionURL == "" {
@@ -235,14 +243,27 @@ func (c *Config) Validate() error {
 }
 
 // handleDeprecatedFlags maps deprecated flags to new configuration.
-func (c *Config) handleDeprecatedFlags() {
-	// If deprecated --port flag is used, map to new model (HTTP mode)
-	if c.deprecatedHTTPPort != "" {
-		c.Secure = false
-		if c.Address == "" {
-			c.Address = ":" + c.deprecatedHTTPPort
-		}
+// Returns an error if the deprecated --port flag conflicts with TLS settings
+// (CWE-319/CWE-757 mitigation: refuse to silently downgrade to plaintext).
+func (c *Config) handleDeprecatedFlags() error {
+	if c.deprecatedHTTPPort == "" {
+		return nil
 	}
+
+	port, err := strconv.Atoi(c.deprecatedHTTPPort)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("deprecated --port/PORT value %q is not a valid TCP port (1-65535)", c.deprecatedHTTPPort)
+	}
+
+	if c.Secure || c.TLS.Enabled() {
+		return fmt.Errorf("deprecated --port/PORT cannot be used with --secure or TLS configuration; "+
+			"use --address=:%s with TLS flags instead", c.deprecatedHTTPPort)
+	}
+
+	if c.Address == "" {
+		c.Address = ":" + c.deprecatedHTTPPort
+	}
+	return nil
 }
 
 // PrintDeprecationWarnings prints warnings for deprecated flags to stderr.

@@ -15,7 +15,7 @@ MaaS-generated AuthPolicy resources enable caching on:
 - **Authorization evaluators** (OPA policy evaluation):
   - `auth-valid`, `subscription-valid`, `require-group-membership`
 
-Caching reduces load on maas-api and OPA CPU by reusing results when the cache key repeats within the TTL window. Cache keys include user ID, groups, subscription, and model to prevent cross-principal or cross-subscription cache sharing.
+Caching reduces load on maas-api and OPA CPU by reusing results when the cache key repeats within the TTL window. Cache keys are scoped to the individual API key (using the full unique key string, equivalent to keying on the token JTI), plus groups, subscription, and model, to prevent cross-principal or cross-subscription cache sharing.
 
 ---
 
@@ -70,10 +70,23 @@ Cache TTL represents the maximum staleness window for access control changes:
 - **Subscription selection:** If a user's group membership changes, the cached subscription selection uses the old groups until the metadata cache TTL expires
 - **Authorization policy changes:** May take up to the effective authorization cache TTL (the minimum of the configured authorization TTL and metadata TTL) to propagate
 
-For immediate enforcement after changes:
-1. Delete the affected AuthPolicy to clear Authorino's cache (triggers reconciliation)
-2. Restart Authorino pods to force cache invalidation (disruptive; use during maintenance windows)
-3. Or wait for the TTL to expire
+#### Security implication: revocation lag
+
+> **Known accepted trade-off (ASVS V3.3.1 / CWE-613):** A revoked API key can continue to produce successful inference responses for up to `--metadata-cache-ttl` seconds (default: **60 seconds**) after the revocation is recorded in maas-api. This is a deliberate trade-off — reducing the cache TTL was evaluated and rejected for performance reasons.
+>
+> The `apiKeyValidation` cache entry is scoped to the individual key's unique raw value (functionally equivalent to keying on JTI), so cache hits are always per-key. Authorino does not expose an active cache invalidation API, so there is no mechanism to evict a specific key's cache entry without the workarounds below.
+
+For **immediate enforcement** after a sensitive revocation (e.g., a compromised key):
+
+1. **Delete the affected AuthPolicy** — Authorino drops all cache entries for the policy and re-evaluates on the next request. The maas-controller will reconcile it back within seconds, so this causes only a brief auth disruption for that tenant.
+   ```bash
+   kubectl delete authpolicy <policy-name> -n <tenant-namespace>
+   ```
+2. **Restart Authorino pods** — forces a full cache flush across all tenants. Use only during maintenance windows.
+   ```bash
+   kubectl rollout restart deployment/authorino -n <authorino-namespace>
+   ```
+3. **Wait for TTL to expire** — acceptable for non-urgent revocations; the default window is 60 seconds.
 
 ### When to Tune
 
@@ -86,6 +99,10 @@ For immediate enforcement after changes:
 - Users are frequently added/removed from groups
 - Faster access change propagation is required for compliance
 - Example: `--authz-cache-ttl=30` (30 seconds) for faster group membership updates
+
+**Decrease metadata cache TTL** if:
+- Faster API key revocation propagation is required (e.g., compliance or security policy requires a shorter revocation-lag window)
+- Note: this increases load on maas-api's `/internal/v1/api-keys/validate` endpoint proportionally; monitor request rates before and after
 
 **Monitor after changes:**
 - maas-api load: Reduced `/internal/v1/api-keys/validate` and `/internal/v1/subscriptions/select` call rates

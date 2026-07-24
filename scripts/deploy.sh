@@ -25,11 +25,15 @@
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
 #   --maas-api-image <image>      Custom MaaS API container image
+#   --ai-gateway-operator-image <image> Custom ai-gateway-operator image (operator mode only)
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API image (passed to Tenant reconciler via RELATED_IMAGE)
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only; patches ODH CSV
+#                             RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE and enables the AIGateway
+#                             DSC component)
 #   OPERATOR_TYPE             Operator type (rhoai/odh)
 #   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
 #   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists
@@ -91,6 +95,22 @@ derive_infra_namespace() {
   esac
 }
 
+apply_infra_secret_migration_rbac() {
+  local infra_ns="$1"
+  local controller_ns="$2"
+  local rbac_dir="${SCRIPT_DIR}/../deployment/base/maas-controller/infra-rbac"
+
+  if [ ! -d "$rbac_dir" ]; then
+    log_warn "Infra RBAC directory not found at $rbac_dir, skipping"
+    return 0
+  fi
+
+  log_info "Applying secret migration RBAC to namespace $infra_ns..."
+  kustomize build "$rbac_dir" \
+    | sed "s|namespace: opendatahub|namespace: $controller_ns|g" \
+    | kubectl apply -n "$infra_ns" -f -
+}
+
 # Set log level from environment variable if provided
 case "${LOG_LEVEL:-}" in
   DEBUG)
@@ -127,8 +147,8 @@ OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
-# TODO: Remove temporary IPP pin — revert to params.env default (payload-processing-image=...:odh-stable).
-PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-quay.io/opendatahub/odh-ai-gateway-payload-processing:dc31b949d8c5ea8610b5c10ef53e2a199e00f0e0}"
+AI_GATEWAY_OPERATOR_IMAGE="${AI_GATEWAY_OPERATOR_IMAGE:-}"
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
@@ -207,6 +227,12 @@ ADVANCED OPTIONS (PR Testing):
       Custom MaaS controller container image (PR testing)
       Example: quay.io/opendatahub/maas-controller:pr-406
 
+  --ai-gateway-operator-image <image>
+      Custom ai-gateway-operator image (PR/stable testing, operator mode only)
+      Patches RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE on the ODH operator CSV
+      and enables spec.components.aigateway.managementState=Managed on the DSC.
+      Example: quay.io/opendatahub/odh-ai-gateway-operator:odh-stable
+
   --channel <channel>
       Operator channel override
       Default: fast-3 (ODH), stable-3.x (RHOAI)
@@ -219,6 +245,7 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)
@@ -348,6 +375,11 @@ parse_arguments() {
       --maas-controller-image)
         require_flag_value "$1" "${2:-}"
         MAAS_CONTROLLER_IMAGE="$2"
+        shift 2
+        ;;
+      --ai-gateway-operator-image)
+        require_flag_value "$1" "${2:-}"
+        AI_GATEWAY_OPERATOR_IMAGE="$2"
         shift 2
         ;;
       --channel)
@@ -518,6 +550,9 @@ main() {
   if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
     log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
   fi
+  if [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]]; then
+    log_info "  ai-gateway-operator image: $AI_GATEWAY_OPERATOR_IMAGE"
+  fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
     log_info "DRY RUN MODE - no changes will be applied"
@@ -555,7 +590,36 @@ main() {
     return 1
   fi
 
-  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null && [[ "$FORCE_OVERWRITE" != "true" ]]; then
+  local maas_controller_exists=false
+  if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+    maas_controller_exists=true
+  elif [[ "$DEPLOYMENT_MODE" == "operator" && "$FORCE_OVERWRITE" != "true" ]]; then
+    # In operator mode, the ODH operator's AIGateway/ModelsAsService module reconciler owns
+    # deploying maas-controller. Silently falling back to a direct kustomize install here
+    # would mask the exact integration gaps this deployment mode exists to catch (e.g. RBAC
+    # errors, manifest drift, version skew between the operator and MaaS images). So: wait
+    # briefly for the operator to reconcile, then fail loudly with diagnostics if it doesn't —
+    # rather than quietly installing maas-controller ourselves and reporting false success.
+    log_info "  Waiting for the ODH operator to create maas-controller (operator-managed)..."
+    if wait_for_resource "deployment" "maas-controller" "$NAMESPACE" "$ROLLOUT_TIMEOUT"; then
+      maas_controller_exists=true
+    else
+      log_error "The ODH operator did not create maas-controller within ${ROLLOUT_TIMEOUT}s."
+      log_error "This means the operator's AIGateway/ModelsAsService module failed to reconcile it — a real integration gap, not something deploy.sh should paper over in operator mode."
+      log_error "Failing DataScienceCluster module conditions:"
+      local dsc_name_diag
+      dsc_name_diag=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+      if [[ -n "$dsc_name_diag" ]]; then
+        kubectl get datasciencecluster "$dsc_name_diag" \
+          -o jsonpath='{range .status.conditions[?(@.status=="False")]}  {.type}: {.reason} - {.message}{"\n"}{end}' 2>/dev/null \
+          | while IFS= read -r line; do log_error "$line"; done
+      fi
+      log_error "Tip: set FORCE_OVERWRITE=true to bypass this check and install maas-controller directly (only for local debugging; defeats the purpose of operator-mode validation)."
+      return 1
+    fi
+  fi
+
+  if [[ "$maas_controller_exists" == "true" && "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
     # Direct-install path used when maas-controller is absent, or when
@@ -649,7 +713,8 @@ EOF
   log_info "  Controller ready."
 
   # Wait for the Tenant reconciler to deploy maas-api.
-  # The controller creates a default-tenant CR on startup, and the Tenant
+  # The controller creates AITenant/models-as-a-service on startup; the AITenant
+  # reconciler then creates/adopts MaasTenantConfig/default-tenant, and the Tenant
   # reconciler renders and SSA-applies maas-api manifests + gateway policies.
   # All maas-api instances deploy to infrastructure namespace (controlled by INFRA_NAMESPACE).
   # Infrastructure namespace is configurable via deployment overlays (params.env).
@@ -662,6 +727,12 @@ EOF
   else
     infra_namespace="$infra_namespace_raw"
   fi
+
+  # Apply infra RBAC for secret migration when namespace separation is active
+  if [ "$infra_namespace" != "$NAMESPACE" ] && [ -n "$infra_namespace" ]; then
+    apply_infra_secret_migration_rbac "$infra_namespace" "$NAMESPACE"
+  fi
+
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do
@@ -687,8 +758,8 @@ EOF
   fi
 
   # External OIDC: Patch the default AITenant (source of truth for tenant OIDC)
-  # and the mirrored Tenant CR so the MaaSAuthPolicy controller can add
-  # oidc-identities authentication to the gateway-level AuthPolicy.
+  # so the MaaSAuthPolicy controller can add oidc-identities authentication
+  # to the gateway-level AuthPolicy.
   # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
   if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
     if ! configure_tenant_external_oidc; then
@@ -734,6 +805,22 @@ deploy_via_operator() {
 
   # Apply custom resources
   apply_custom_resources
+
+  # Wait for ai-gateway-operator (deployed by the ODH operator's AIGateway module reconciler)
+  # to roll out with the requested image before proceeding.
+  if [[ -n "$AI_GATEWAY_OPERATOR_IMAGE" ]]; then
+    log_info "Waiting for ai-gateway-operator to be deployed..."
+    if wait_for_resource "deployment" "ai-gateway-operator" "$NAMESPACE" "$ROLLOUT_TIMEOUT"; then
+      kubectl rollout status deployment/ai-gateway-operator -n "$NAMESPACE" --timeout="${ROLLOUT_TIMEOUT}s" || {
+        log_error "ai-gateway-operator deployment not ready (timeout: ${ROLLOUT_TIMEOUT}s)"
+        exit 1
+      }
+      log_info "ai-gateway-operator ready."
+    else
+      log_error "ai-gateway-operator deployment not found in $NAMESPACE after ${ROLLOUT_TIMEOUT}s"
+      exit 1
+    fi
+  fi
 
   # Deploy PostgreSQL for API key storage (requires namespace to exist)
   deploy_postgresql
@@ -792,9 +879,9 @@ deploy_via_kustomize() {
   fi
 
   # maas-api, gateway policies, and AuthPolicy configuration are now handled
-  # by the Tenant reconciler in maas-controller. After the controller starts
-  # it creates the default-tenant CR, which triggers the reconciler to apply
-  # maas-api manifests and gateway policies via SSA.
+  # by the Tenant reconciler in maas-controller. After the controller starts it creates
+  # AITenant/models-as-a-service, whose reconciler creates/adopts MaasTenantConfig/default-tenant,
+  # which triggers the Tenant reconciler to apply maas-api manifests and gateway policies via SSA.
 
   log_info "Kustomize prerequisite deployment completed"
 }
@@ -1133,6 +1220,16 @@ install_primary_operator() {
       if [[ -n "$OPERATOR_IMAGE" ]]; then
         patch_operator_csv "opendatahub-operator" "$NAMESPACE" "$OPERATOR_IMAGE"
       fi
+
+      # Inject RELATED_IMAGE_* overrides for sub-components the ODH operator's own
+      # module/component reconcilers deploy: ai-gateway-operator, maas-controller, maas-api.
+      # In operator mode these images are otherwise NOT applied once the operator manages
+      # ModelsAsService/AIGateway directly (see MaaS Controller step in main()), so this must
+      # run before apply_custom_resources() creates the DSC that triggers those reconcilers.
+      patch_operator_related_images "$NAMESPACE" "opendatahub-operator" \
+        "RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE}" \
+        "RELATED_IMAGE_ODH_MAAS_API_IMAGE=${MAAS_API_IMAGE}" \
+        "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}"
       ;;
   esac
 }
@@ -1191,6 +1288,10 @@ apply_custom_resources() {
 
   # Apply DataScienceCluster
   apply_dsc
+
+  # Enable the AIGateway component (ai-gateway-operator) when a custom image was requested.
+  # Not part of the base DSC manifest since most callers don't need this sub-component.
+  enable_ai_gateway_component
 
   # Wait for DataScienceCluster to be ready
   log_info "Waiting for DataScienceCluster to be ready..."
@@ -1299,6 +1400,31 @@ apply_dsc() {
   # Note: RHOAI 3.2.0 does NOT support modelsAsService in DSC schema
   #       Only ODH currently supports this feature
   kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
+}
+
+# enable_ai_gateway_component
+#   Enables spec.components.aigateway.managementState=Managed on the DataScienceCluster so the
+#   ODH operator deploys ai-gateway-operator (pinned via patch_operator_related_images earlier
+#   in install_primary_operator). No-op unless --ai-gateway-operator-image/AI_GATEWAY_OPERATOR_IMAGE
+#   was set, since most callers don't exercise this sub-component.
+#   Note: the DSC schema field is lowercase "aigateway" (see componentApi.AIGatewayKind /
+#   opendatahub-operator's tests/e2e/aigateway_test.go), not "aiGateway".
+enable_ai_gateway_component() {
+  [[ -z "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && return 0
+
+  local dsc_name
+  dsc_name=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+  if [[ -z "$dsc_name" ]]; then
+    log_warn "No DataScienceCluster found, cannot enable AIGateway component"
+    return 1
+  fi
+
+  log_info "Enabling AIGateway component on DataScienceCluster '$dsc_name'..."
+  kubectl patch datasciencecluster "$dsc_name" --type=merge \
+    -p '{"spec":{"components":{"aigateway":{"managementState":"Managed"}}}}' || {
+    log_error "Failed to enable AIGateway component on DataScienceCluster '$dsc_name'"
+    return 1
+  }
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1515,13 +1641,10 @@ MANIFEST_EOF
   return $rc
 }
 # configure_tenant_external_oidc
-#   Patches the default AITenant with spec.oidc and, when present, the
-#   mirrored default-tenant Tenant CR with spec.externalOIDC.
+#   Patches the default AITenant with spec.oidc.
 configure_tenant_external_oidc() {
   local aitenant_name="${DEFAULT_AITENANT_NAME:-models-as-a-service}"
   local aitenant_ns="${AITENANT_NAMESPACE:-ai-tenants}"
-  local tenant_name="default-tenant"
-  local tenant_ns="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 
   log_info "Configuring default tenant with external OIDC..."
 
@@ -1537,41 +1660,20 @@ configure_tenant_external_oidc() {
     return 1
   }
 
-  local aitenant_patch tenant_patch
+  local aitenant_patch
   aitenant_patch=$(jq -nc \
     --arg issuerUrl "$oidc_issuer_url" \
     --arg clientId "$oidc_client_id" \
     '{spec:{oidc:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
-  tenant_patch=$(jq -nc \
-    --arg issuerUrl "$oidc_issuer_url" \
-    --arg clientId "$oidc_client_id" \
-    '{spec:{externalOIDC:{issuerUrl:$issuerUrl,clientId:$clientId}}}')
 
-  local patched_any="false"
   if kubectl get aitenant "$aitenant_name" -n "$aitenant_ns" &>/dev/null; then
     log_info "  Patching AITenant '$aitenant_name' with external OIDC"
     if ! kubectl patch aitenant "$aitenant_name" -n "$aitenant_ns" --type=merge -p "$aitenant_patch"; then
       log_error "  Failed to patch AITenant with external OIDC"
       return 1
     fi
-    patched_any="true"
   else
-    log_warn "AITenant '$aitenant_name' not found in namespace '$aitenant_ns', skipping AITenant OIDC patch"
-  fi
-
-  if kubectl get tenant "$tenant_name" -n "$tenant_ns" &>/dev/null; then
-    log_info "  Patching Tenant '$tenant_name' with external OIDC"
-    if ! kubectl patch tenant "$tenant_name" -n "$tenant_ns" --type=merge -p "$tenant_patch"; then
-      log_error "  Failed to patch Tenant CR with external OIDC"
-      return 1
-    fi
-    patched_any="true"
-  else
-    log_warn "Tenant '$tenant_name' not found in namespace '$tenant_ns', skipping Tenant OIDC patch"
-  fi
-
-  if [[ "$patched_any" != "true" ]]; then
-    log_error "No default tenant resources were found to patch with external OIDC"
+    log_error "AITenant '$aitenant_name' not found in namespace '$aitenant_ns'; cannot configure external OIDC"
     return 1
   fi
 

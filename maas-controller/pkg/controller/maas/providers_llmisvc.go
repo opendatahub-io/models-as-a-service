@@ -23,7 +23,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
-	kservev1alpha1 "github.com/kserve/kserve/pkg/apis/serving/v1alpha1"
+	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -62,22 +62,14 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
-	gatewayRef, err := tenantGatewayRefForNamespace(
-		ctx,
-		h.r.Client,
-		model.Namespace,
-		h.r.DefaultTenantNamespace,
-		h.r.gatewayName(),
-		h.r.gatewayNamespace(),
-		h.r.TenantNamespaceDiscoveryEnabled,
-	)
+	gatewayRef, err := h.resolveGatewayRef(ctx, log, model)
 	if err != nil {
-		return fmt.Errorf("resolve tenant gateway for namespace %s: %w", model.Namespace, err)
+		return fmt.Errorf("resolve tenant gateway for model %s/%s: %w", model.Namespace, model.Name, err)
 	}
 	if gatewayRef.Name != "" {
 		expectedGatewayName = gatewayRef.Name
 		expectedGatewayNamespace = gatewayRef.Namespace
-		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantNamespace", model.Namespace)
+		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantRef", model.Spec.TenantRef)
 	}
 
 	gatewayFound := false
@@ -123,9 +115,50 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	return nil
 }
 
+// resolveGatewayRef resolves the gateway reference for a MaaSModelRef.
+// When spec.tenantRef is set, it looks up the named AITenant in the AITenant
+// infrastructure namespace and uses its Status.GatewayRef directly.
+// When spec.tenantRef is empty, it falls back to the existing namespace-based
+// resolution via tenantGatewayRefForNamespace.
+func (h *llmisvcHandler) resolveGatewayRef(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (maasv1alpha1.TenantGatewayRef, error) {
+	if model.Spec.TenantRef != "" {
+		aitenant := &maasv1alpha1.AITenant{}
+		key := client.ObjectKey{
+			Name:      model.Spec.TenantRef,
+			Namespace: h.r.AITenantNamespace,
+		}
+		if err := h.r.Get(ctx, key, aitenant); err != nil {
+			if apierrors.IsNotFound(err) {
+				return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q not found in namespace %s", model.Spec.TenantRef, h.r.AITenantNamespace)
+			}
+			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to get AITenant %q: %w", model.Spec.TenantRef, err)
+		}
+		model.Status.ResolvedTenantRef = model.Spec.TenantRef
+		ref := aitenant.Status.GatewayRef
+		if ref.Name == "" || ref.Namespace == "" {
+			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q has no gateway reference in status", model.Spec.TenantRef)
+		}
+		log.V(4).Info("Resolved gateway from AITenant", "aiTenant", model.Spec.TenantRef, "gateway", fmt.Sprintf("%s/%s", ref.Namespace, ref.Name))
+		return ref, nil
+	}
+
+	// Fall back to namespace-based resolution using the default tenant namespace.
+	// Clear any previously resolved tenant (e.g. after spec.tenantRef is removed).
+	model.Status.ResolvedTenantRef = ""
+	return tenantGatewayRefForNamespace(
+		ctx,
+		h.r.Client,
+		model.Namespace,
+		h.r.DefaultTenantNamespace,
+		h.r.gatewayName(),
+		h.r.gatewayNamespace(),
+		h.r.TenantNamespaceDiscoveryEnabled,
+	)
+}
+
 func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
 	llmisvcNS := model.Namespace
-	llmisvc := &kservev1alpha1.LLMInferenceService{}
+	llmisvc := &kservev1alpha2.LLMInferenceService{}
 	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: llmisvcNS}
 	if err := h.r.Get(ctx, key, llmisvc); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -199,21 +232,22 @@ const (
 )
 
 // getEndpointFromLLMISvc returns the endpoint URL from LLMInferenceService status as-reported.
-// Prefers model-routing addresses (body-based /v1/chat/completions) over path-based addresses.
+// Prefers model-routing (BBR) addresses (gateway-external-model-routing) over path-based ones
+// (gateway-external), reflecting that BBR is the primary routing mode.
 // When expectedHostnames is non-empty, only addresses whose hostname matches
 // (case-insensitive per RFC 4343) are considered; this prevents selecting the wrong gateway
 // when multiple gateways exist.
 // When expectedHostnames is empty, preserves legacy behavior for single-gateway deployments.
 // Returns "" when no suitable address is found; the caller (Status) falls through to
 // GetModelEndpoint which derives the endpoint from Gateway/HTTPRoute metadata.
-func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInferenceService, expectedHostnames []string) string {
+func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha2.LLMInferenceService, expectedHostnames []string) string {
 	hostSet := make(map[string]struct{}, len(expectedHostnames))
 	for _, hn := range expectedHostnames {
 		hostSet[strings.ToLower(hn)] = struct{}{}
 	}
 	filtering := len(hostSet) > 0
 
-	// Prefer model-routing addresses (body-based routing), fall back to path-based.
+	// Prefer model-routing (BBR) addresses; fall back to path-based.
 	for _, targetName := range []string{addressNameGatewayExternalModelRouting, addressNameGatewayExternal} {
 		if u := h.selectAddress(llmisvc, targetName, hostSet, filtering); u != "" {
 			return u
@@ -225,28 +259,24 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	if filtering {
 		return ""
 	}
-	// Prefer addresses that include the model path (e.g., gateway-internal over gateway-internal-model-routing).
-	// gateway-internal-model-routing typically has just the base URL without the path.
-	// gateway-internal has the full path including namespace/model.
+	// For unfiltered (legacy single-gateway) deployments, prefer base URLs (model-routing style)
+	// over path-based URLs so status.endpoint is consistent with the BBR gateway entry-point.
 	var fallbackURL string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.URL == nil {
 			continue
 		}
-		// Prefer URLs with non-empty paths beyond just "/"
-		// Base URLs like https://host/ have path="/" (length 1)
-		// Model endpoints like https://host/ns/model have path="/ns/model" (length > 1)
-		if len(addr.URL.Path) > 1 && addr.URL.Path != "/" {
+		// Prefer base URLs (path "" or "/") — these are model-routing endpoints.
+		if addr.URL.Path == "" || addr.URL.Path == "/" {
 			return addr.URL.String()
 		}
 		if fallbackURL == "" {
 			fallbackURL = addr.URL.String()
 		}
 	}
-	// Check Status.URL before falling back to base URL from Addresses
-	// Status.URL might have the full path even when Addresses[] only has base URLs
+	// Check Status.URL as a base-URL candidate.
 	if llmisvc.Status.URL != nil {
-		if len(llmisvc.Status.URL.Path) > 1 && llmisvc.Status.URL.Path != "/" {
+		if llmisvc.Status.URL.Path == "" || llmisvc.Status.URL.Path == "/" {
 			return llmisvc.Status.URL.String()
 		}
 	}
@@ -259,7 +289,7 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha1.LLMInfer
 	return ""
 }
 
-func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha1.LLMInferenceService, targetName string, hostSet map[string]struct{}, filtering bool) string {
+func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceService, targetName string, hostSet map[string]struct{}, filtering bool) string {
 	var urls []string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.Name == nil || *addr.Name != targetName || addr.URL == nil {
@@ -286,6 +316,32 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha1.LLMInferenceServi
 		return urls[0]
 	}
 	return ""
+}
+
+// ResolveModelAlias returns the canonical BBR model ID for the referenced LLMInferenceService.
+//
+// It reads from LLMInferenceService.status.addresses[*].models[0].name, which KServe populates
+// as the authoritative canonical ID in the format publishers/{namespace}/models/{model-name}.
+// KServe is the source of truth for this value; MaaS reads and mirrors it.
+//
+// Return semantics:
+//   - (alias, nil)  — alias resolved; caller should update status.resolvedModelAlias.
+//   - ("", nil)     — LLMISVC found but addresses not yet populated; caller must preserve
+//     the existing alias rather than clearing it.
+//   - ("", err)     — transient API failure (e.g. API server unreachable); caller must
+//     preserve the existing alias rather than clearing it.
+func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	llmisvc := &kservev1alpha2.LLMInferenceService{}
+	key := client.ObjectKey{Name: model.Spec.ModelRef.Name, Namespace: model.Namespace}
+	if err := h.r.Get(ctx, key, llmisvc); err != nil {
+		return "", err
+	}
+	for _, addr := range llmisvc.Status.Addresses {
+		if len(addr.Models) > 0 && addr.Models[0].Name != "" {
+			return addr.Models[0].Name, nil
+		}
+	}
+	return "", nil
 }
 
 func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {

@@ -122,21 +122,13 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 		return
 	}
 
-	if errors.As(err, &accessDeniedErr) {
-		h.logger.Debug("Access denied to subscription")
+	// Unify "access denied" and "not found" responses to prevent callers from
+	// probing whether a subscription exists. (CWE-639 / FIND-009)
+	if errors.As(err, &accessDeniedErr) || errors.As(err, &notFoundErr) {
+		h.logger.Debug("Subscription access denied or not found")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{
-				"message": err.Error(),
-				"type":    "permission_error",
-			}})
-		return
-	}
-
-	if errors.As(err, &notFoundErr) {
-		h.logger.Debug("Subscription not found")
-		c.JSON(http.StatusForbidden, gin.H{
-			"error": gin.H{
-				"message": err.Error(),
+				"message": "access denied to requested subscription",
 				"type":    "permission_error",
 			}})
 		return
@@ -185,7 +177,8 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 		return "", "", false, errors.New("missing authorization")
 	}
 
-	// Extract x-maas-subscription header.
+	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
+
 	requestedSubscription := ""
 	headerValues := c.Request.Header.Values("X-Maas-Subscription")
 	for i := len(headerValues) - 1; i >= 0; i-- {
@@ -195,7 +188,6 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 			break
 		}
 	}
-	isAPIKeyRequest := strings.HasPrefix(authHeader, "Bearer sk-oai-")
 
 	// Fail closed: API keys without a bound subscription must be rejected
 	if isAPIKeyRequest && requestedSubscription == "" {
@@ -357,6 +349,24 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
+	// When no user identity was extracted by the ExtractUserInfoOptional
+	// middleware, return an empty model list.  This covers the case where no
+	// LLMInferenceService is deployed (Authorino has no auth policy and does
+	// not inject identity headers) regardless of whether the caller sent an
+	// Authorization header.
+	_, hasUserContext := c.Get("user")
+	if !hasUserContext {
+		h.logger.Debug("No auth context present, returning empty model list")
+		c.Header("Cache-Control", "no-store")
+		c.Header("X-Access-Checked-At", time.Now().UTC().Format(time.RFC3339))
+		h.logger.Debug("GET /v1/models returning models", "count", 0)
+		c.JSON(http.StatusOK, pagination.Page[models.Model]{
+			Object: "list",
+			Data:   []models.Model{},
+		})
+		return
+	}
+
 	// Validate and extract authentication details
 	authHeader, requestedSubscription, isAPIKeyRequest, err := h.extractAndValidateAuth(c)
 	if err != nil {

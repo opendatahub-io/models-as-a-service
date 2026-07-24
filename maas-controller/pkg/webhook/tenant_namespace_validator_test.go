@@ -37,34 +37,46 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 		name           string
 		namespace      string
 		namespaceObj   *corev1.Namespace
-		tenantObj      *maasv1alpha1.Tenant
+		configObj      *maasv1alpha1.MaasTenantConfig
+		legacyObj      *maasv1alpha1.Tenant
 		expectedAllow  bool
 		expectedErrMsg string
 	}{
 		{
-			name:      "allow namespace with Tenant CR",
+			name:      "allow namespace with MaasTenantConfig CR",
 			namespace: "ai-tenant-redteam",
-			tenantObj: &maasv1alpha1.Tenant{
+			configObj: &maasv1alpha1.MaasTenantConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "default-tenant",
+					Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 					Namespace: "ai-tenant-redteam",
 				},
 			},
 			expectedAllow: true,
 		},
 		{
-			name:      "allow ai-tenant-default with Tenant CR",
+			name:      "allow ai-tenant-default with MaasTenantConfig CR",
 			namespace: "ai-tenant-default",
-			tenantObj: &maasv1alpha1.Tenant{
+			configObj: &maasv1alpha1.MaasTenantConfig{
 				ObjectMeta: metav1.ObjectMeta{
-					Name:      "default-tenant",
+					Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 					Namespace: "ai-tenant-default",
 				},
 			},
 			expectedAllow: true,
 		},
 		{
-			name:           "reject namespace without Tenant CR",
+			name:      "allow namespace with legacy Tenant CR",
+			namespace: "legacy-tenant",
+			legacyObj: &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      maasv1alpha1.TenantInstanceName,
+					Namespace: "legacy-tenant",
+				},
+			},
+			expectedAllow: true,
+		},
+		{
+			name:           "reject namespace without MaasTenantConfig CR",
 			namespace:      "random-namespace",
 			expectedAllow:  false,
 			expectedErrMsg: "not enabled for MaaS tenant resources",
@@ -73,13 +85,16 @@ func TestTenantNamespaceValidator_ValidateNamespace(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			// Create fake client with the namespace and Tenant if provided
+			// Create fake client with the namespace and tenant config if provided.
 			var objs []runtime.Object
 			if tt.namespaceObj != nil {
 				objs = append(objs, tt.namespaceObj)
 			}
-			if tt.tenantObj != nil {
-				objs = append(objs, tt.tenantObj)
+			if tt.configObj != nil {
+				objs = append(objs, tt.configObj)
+			}
+			if tt.legacyObj != nil {
+				objs = append(objs, tt.legacyObj)
 			}
 			client := fake.NewClientBuilder().WithScheme(scheme).WithRuntimeObjects(objs...).Build()
 
@@ -118,7 +133,7 @@ func TestTenantNamespaceValidator_ErrorMessageContent(t *testing.T) {
 
 	_, errMsg := validator.ValidateNamespace(context.Background(), "test-namespace")
 
-	expectedPhrase := "Create a Tenant CR"
+	expectedPhrase := "Create a MaasTenantConfig CR"
 	if !contains(errMsg, expectedPhrase) {
 		t.Errorf("Error message missing expected phrase %q. Full message: %q", expectedPhrase, errMsg)
 	}

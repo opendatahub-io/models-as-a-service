@@ -1218,3 +1218,78 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 		})
 	}
 }
+
+func TestSelector_ResolvedModelFromAlias(t *testing.T) {
+	cases := []struct {
+		name         string
+		alias        string
+		canonicalRef string
+		subName      string
+		modelName    string
+		modelNS      string
+		modelKind    string
+	}{
+		{
+			name:         "publisher alias (LLMInferenceService)",
+			alias:        "publishers/llm/models/facebook/opt-125m",
+			canonicalRef: "llm/facebook-opt-125m-simulated",
+			subName:      "simulator-subscription",
+			modelName:    "facebook-opt-125m-simulated",
+			modelNS:      "llm",
+			modelKind:    "LLMInferenceService",
+		},
+		{
+			name:         "external model alias (ExternalModel)",
+			alias:        "gpt-3.5-turbo",
+			canonicalRef: "llm/e2e-external-model",
+			subName:      "external-subscription",
+			modelName:    "e2e-external-model",
+			modelNS:      "llm",
+			modelKind:    "ExternalModel",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			log := logger.New(false)
+
+			sub := createSubscriptionWithModelRefs(tc.subName, []string{"g1"}, []map[string]any{
+				{"name": tc.modelName, "namespace": tc.modelNS},
+			})
+
+			modelRef := createMaaSModelRef(tc.modelName, tc.modelNS, tc.modelKind)
+			if err := unstructured.SetNestedField(modelRef.Object, tc.alias, "status", "resolvedModelAlias"); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+
+			selector := subscription.NewSelector(
+				log,
+				&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+				&fakeModelLister{items: []*unstructured.Unstructured{modelRef}},
+				nil,
+			)
+
+			t.Run("alias resolves to MaaSModelRef identity", func(t *testing.T) {
+				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+				result, err := selector.Select([]string{"g1"}, "", "", tc.alias)
+				if err != nil {
+					t.Fatalf("Select: %v", err)
+				}
+				if result.ResolvedModel != tc.canonicalRef {
+					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
+				}
+			})
+
+			t.Run("path-style identity is returned unchanged", func(t *testing.T) {
+				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+				result, err := selector.Select([]string{"g1"}, "", "", tc.canonicalRef)
+				if err != nil {
+					t.Fatalf("Select: %v", err)
+				}
+				if result.ResolvedModel != tc.canonicalRef {
+					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
+				}
+			})
+		})
+	}
+}

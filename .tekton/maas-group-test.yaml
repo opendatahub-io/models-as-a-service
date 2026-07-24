@@ -9,7 +9,8 @@ metadata:
     build.appstudio.redhat.com/pull_request_number: '{{pull_request_number}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "group-test"
+    pipelinesascode.tekton.dev/on-cel-expression: event == "group-test" || (event ==
+      "pull_request" && target_branch == "stable")
     pipelinesascode.tekton.dev/on-comment: "^/group-test"
   name: maas-group-test
   namespace: open-data-hub-tenant

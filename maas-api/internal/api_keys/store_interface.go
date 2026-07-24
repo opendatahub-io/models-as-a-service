@@ -74,6 +74,10 @@ type MetadataStore interface {
 	// Returns the count of keys that were revoked.
 	InvalidateAll(ctx context.Context, username string, tenant string) (int, error)
 
+	// InvalidateTenant marks all active tokens within a tenant as revoked.
+	// Returns the count of keys that were revoked.
+	InvalidateTenant(ctx context.Context, tenant string) (int, error)
+
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error
 

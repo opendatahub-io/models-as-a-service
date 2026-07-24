@@ -29,12 +29,12 @@ This provides better security isolation and simpler upgrades.
 - CRDs and RBAC
 - Webhook
 
-## Disabling Namespace Separation (ROSA Only)
+## Disabling Namespace Separation
 
-!!! warning "ROSA Clusters Only"
-    **ODH on ROSA does not support namespace separation** due to OpenShift webhook restrictions that block namespace creation.
+!!! warning "Clusters with Namespace Creation Restrictions"
+    Some clusters (including ROSA) have webhook restrictions that block namespace creation.
     
-    On ROSA clusters, you **must disable** namespace separation by setting `INFRA_NAMESPACE=""` (empty string).
+    On such clusters, you **must disable** namespace separation by setting `INFRA_NAMESPACE=""` (empty string).
 
 ### Disable via Script
 
@@ -85,6 +85,20 @@ Migration happens **automatically** when switching between modes:
 3. New maas-api deployed to infra namespace  
 4. **Controller automatically deletes old maas-api** from controller namespace
 5. Services use FQDN for cross-namespace communication
+
+!!! warning "Credential Rotation After Migration"
+    After migration, the `maas-db-config` secret in the **infrastructure namespace** is the
+    source of truth. If you rotate database credentials, you must update the secret in the
+    infrastructure namespace (e.g., `odh-ai-gateway-infra` or `redhat-ai-gateway-infra`).
+
+    The original secret in the controller namespace is **not** synced. Updating only the
+    controller-namespace copy will cause maas-api to crash-loop with authentication failures.
+
+    To check which namespace is active for a tenant:
+
+    ```bash
+    kubectl get maastenantconfig default-tenant -o jsonpath='{.status.infraNamespace}'
+    ```
 
 ## Verification
 

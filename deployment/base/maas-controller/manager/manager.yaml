@@ -74,6 +74,12 @@ spec:
                 key: maas-api-key-cleanup-image
                 name: maas-parameters
                 optional: true
+          - name: RELATED_IMAGE_ODH_PYTHON_312_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: usage-logs-tenancy-proxy-image
+                name: maas-parameters
+                optional: true
           - name: MONITORING_NAMESPACE
             valueFrom:
               configMapKeyRef:
@@ -91,6 +97,9 @@ spec:
           allowPrivilegeEscalation: false
           capabilities:
             drop: ["ALL"]
+          readOnlyRootFilesystem: true
+          seccompProfile:
+            type: RuntimeDefault
         livenessProbe:
           httpGet:
             path: /healthz

@@ -427,6 +427,73 @@ func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
 	}
 }
 
+func TestRevokeTenantAPIKeys(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("RevokesOnlyRequestedTenant", func(t *testing.T) {
+		svc, store := createTestService(t)
+
+		tenantAIDs := []string{"tenant-revoke-a1", "tenant-revoke-a2", "tenant-revoke-a3"}
+		for _, id := range tenantAIDs {
+			_, hash := createTestAPIKey(t)
+			err := store.AddKey(ctx, "alice", id, hash, "Key "+id, "", []string{"users"}, "default-sub", "tenant-a", nil, false)
+			require.NoError(t, err)
+		}
+
+		_, hash := createTestAPIKey(t)
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-revoke-b1", hash, "Tenant B", "", []string{"users"}, "default-sub", "tenant-b", nil, false))
+
+		count, err := svc.RevokeTenantAPIKeys(ctx, "tenant-a")
+		require.NoError(t, err)
+		assert.Equal(t, 3, count)
+
+		for _, id := range tenantAIDs {
+			meta, err := store.Get(ctx, id)
+			require.NoError(t, err)
+			assert.Equal(t, api_keys.StatusRevoked, meta.Status, "key %s should be revoked", id)
+		}
+
+		meta, err := store.Get(ctx, "tenant-revoke-b1")
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusActive, meta.Status, "tenant-b key should remain active")
+	})
+
+	t.Run("Idempotent", func(t *testing.T) {
+		svc, store := createTestService(t)
+
+		_, hash := createTestAPIKey(t)
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-revoke-idem", hash, "Idempotent", "", []string{"users"}, "default-sub", "tenant-a", nil, false))
+
+		count, err := svc.RevokeTenantAPIKeys(ctx, "tenant-a")
+		require.NoError(t, err)
+		assert.Equal(t, 1, count)
+
+		count, err = svc.RevokeTenantAPIKeys(ctx, "tenant-a")
+		require.NoError(t, err)
+		assert.Equal(t, 0, count)
+	})
+
+	t.Run("ConfiguredTenantMismatch", func(t *testing.T) {
+		store := api_keys.NewMockStore()
+		cfg := &config.Config{TenantName: "tenant-a"}
+		svc := api_keys.NewServiceWithLogger(store, cfg, serviceTestSubSelector{}, logger.Development())
+
+		_, err := svc.RevokeTenantAPIKeys(ctx, "tenant-b")
+		require.Error(t, err)
+		require.ErrorIs(t, err, api_keys.ErrTenantMismatch)
+		assert.Contains(t, err.Error(), "tenant mismatch")
+	})
+
+	t.Run("EmptyTenant", func(t *testing.T) {
+		svc, _ := createTestService(t)
+
+		_, err := svc.RevokeTenantAPIKeys(ctx, " ")
+		require.Error(t, err)
+		require.ErrorIs(t, err, api_keys.ErrTenantRequired)
+		assert.Contains(t, err.Error(), "tenant is required")
+	})
+}
+
 // ============================================================
 // SERVICE LAYER PASS-THROUGH TESTS
 // ============================================================

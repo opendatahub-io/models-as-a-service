@@ -38,7 +38,7 @@ Environment variables:
   (GATEWAY_HOST, MAAS_API_BASE_URL, MAAS_SUBSCRIPTION_NAMESPACE, etc.).
 
   File-specific variables (all optional, with defaults):
-  - E2E_PREMIUM_MODEL_PATH: Gateway path for premium model (default: /llm/premium-simulated-simulated-premium)
+  None — premium path/name constants live in test_helper.py.
 """
 
 import copy
@@ -57,6 +57,7 @@ from test_helper import (
     MODEL_NAMESPACE,
     MODEL_PATH,
     MODEL_REF,
+    PREMIUM_MODEL_PATH,
     PREMIUM_MODEL_REF,
     SIMULATOR_ACCESS_POLICY,
     SIMULATOR_SUBSCRIPTION,
@@ -97,9 +98,6 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-
-# Constants specific to test_subscription.py (not shared)
-PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
 
 # Generated resource names (for TestManagedAnnotation)
 AUTH_POLICY_NAME = f"maas-auth-{MODEL_REF}"

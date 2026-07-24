@@ -53,6 +53,35 @@ make test
 
 If you change any file under `maas-controller/api/` or modify `//+kubebuilder:rbac:` markers anywhere in `maas-controller/`, you **must** run `make -C maas-controller generate manifests` and include the generated files in your commit. CI will reject PRs with stale generated code.
 
+## RBAC changes: parent operator repos (required)
+
+RBAC for maas-controller is also consumed by parent operators. Any change that affects ClusterRole/Role rules, bindings, or `//+kubebuilder:rbac:` markers (including regenerated `deployment/base/maas-controller/rbac/` manifests) **must** be mirrored in both:
+
+- https://github.com/opendatahub-io/ai-gateway-operator/
+- https://github.com/opendatahub-io/opendatahub-operator
+
+### Before opening a PR in this repo
+
+If the developer asks an agent to create a PR and the branch includes RBAC changes:
+
+1. **Stop and remind them** that companion PRs are required in both parent repos above.
+2. Ask whether those PRs already exist (or whether the agent should help prepare them).
+3. Do **not** open this repo's PR until the developer confirms how to proceed.
+
+### This repo's PR body
+
+- When companion PRs exist, link both URLs in the PR description (e.g. under a **Parent operator PRs** section).
+- When companion PRs **cannot** be created yet, put this notice at the **very top** of the PR body (above Summary):
+
+```markdown
+> [!IMPORTANT]
+> **Parent operator RBAC not yet updated.** This PR changes maas-controller RBAC.
+> Companion PRs are still needed in:
+> - https://github.com/opendatahub-io/ai-gateway-operator/
+> - https://github.com/opendatahub-io/opendatahub-operator
+> Do not merge until those repos reflect the same RBAC changes (link the PRs here when ready).
+```
+
 ## Kustomize / deployment
 
 - `deployment/base/maas-controller/default` — operator bootstrap (CRDs, RBAC, Deployment, default CRs such as `Config`). `./scripts/deploy.sh` applies `deployment/base/maas-controller/crd` first and waits **Established**, then applies this bundle unchanged (avoids CRD/CR ordering issues on install).
@@ -71,6 +100,8 @@ Allowed types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `buil
 ## PR review process
 
 After creating a PR, immediately add a comment with `@coderabbitai review` to trigger automated code review.
+
+If the PR includes RBAC changes, follow **RBAC changes: parent operator repos** above: remind the developer before creating the PR, link companion parent-operator PRs when available, or put the `[!IMPORTANT]` notice at the top of the PR body if those PRs do not exist yet.
 
 ## PR description: risk analysis
 

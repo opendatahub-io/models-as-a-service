@@ -3,6 +3,7 @@ package api_keys //nolint:testpackage // Testing private helper methods requires
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -56,6 +57,16 @@ func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscripti
 		return nil, e.highestPriorityErr
 	}
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
+}
+
+type failingInvalidateTenantStore struct {
+	*MockStore
+
+	err error
+}
+
+func (s failingInvalidateTenantStore) InvalidateTenant(_ context.Context, _ string) (int, error) {
+	return 0, s.err
 }
 
 // Test constants.
@@ -1707,6 +1718,86 @@ func TestCleanupExpiredEphemeralKeys(t *testing.T) {
 	})
 }
 
+func TestRevokeTenantAPIKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+
+	t.Run("RevokesTenantKeys", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false))
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
+
+		//nolint:contextcheck // Gin handlers receive *gin.Context which contains the context.
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response TenantRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 2, response.RevokedCount)
+
+		key, err := store.Get(ctx, "tenant-delete-1")
+		require.NoError(t, err)
+		assert.Equal(t, StatusRevoked, key.Status)
+		key, err = store.Get(ctx, "tenant-delete-2")
+		require.NoError(t, err)
+		assert.Equal(t, StatusRevoked, key.Status)
+		key, err = store.Get(ctx, "other-tenant-key")
+		require.NoError(t, err)
+		assert.Equal(t, StatusActive, key.Status)
+	})
+
+	t.Run("TenantMismatchReturnsBadRequest", func(t *testing.T) {
+		store := NewMockStore()
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/other-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "other-tenant"}}
+
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+		assert.Contains(t, w.Body.String(), "tenant mismatch")
+		assert.NotContains(t, w.Body.String(), "other-tenant")
+	})
+
+	t.Run("StoreFailureReturnsInternalServerError", func(t *testing.T) {
+		store := failingInvalidateTenantStore{
+			MockStore: NewMockStore(),
+			err:       errors.New("database unavailable: internal dsn details"),
+		}
+		cfg := &config.Config{TenantName: "test-tenant"}
+		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/api-keys", nil)
+		c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}}
+
+		handler.RevokeTenantAPIKeys(c)
+
+		assert.Equal(t, http.StatusInternalServerError, w.Code)
+		assert.Contains(t, w.Body.String(), "Failed to revoke tenant API keys")
+		assert.NotContains(t, w.Body.String(), "database unavailable")
+		assert.NotContains(t, w.Body.String(), "internal dsn details")
+	})
+}
+
 func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
@@ -2210,6 +2301,84 @@ func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
 	assert.Equal(t, "list", response.Object)
 	assert.Empty(t, response.Data, "tenant-c user should see no keys")
 	assert.False(t, response.HasMore)
+}
+
+// ============================================================
+// NO AUTH CONTEXT TESTS (optional auth for /v1/api-keys)
+// ============================================================
+
+// TestSearchAPIKeys_NoAuthContext verifies that POST /v1/api-keys/search returns
+// an empty list when no user context is present (ExtractUserInfoOptional did not
+// set one). This covers the case where no LLMInferenceService is deployed.
+func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	log := logger.Development()
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, log)
+	handler := NewHandler(log, service, newMockAdminChecker(), nil)
+
+	tokenHandler := token.NewHandler(log, "test-tenant")
+
+	// Wire up with ExtractUserInfoOptional — same as production wiring.
+	router := gin.New()
+	router.POST("/v1/api-keys/search", tokenHandler.ExtractUserInfoOptional(), handler.SearchAPIKeys)
+
+	// Seed data so we can verify no keys leak when there is no auth context.
+	ctx := context.Background()
+	err := store.AddKey(ctx, "alice", "key-1", "hash-1", "Key 1", "",
+		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	require.NoError(t, err)
+
+	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "should return empty list when no auth context")
+		assert.False(t, response.HasMore)
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"),
+			"expected Cache-Control: no-store to prevent caching of personalized listings")
+	})
+
+	t.Run("returns empty list when Authorization present but no identity headers", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer some-token")
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "should return empty list when no identity headers")
+		assert.False(t, response.HasMore)
+	})
+
+	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(`{}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("X-Maas-Username", "alice")
+		req.Header.Set("X-Maas-Group", `["system:authenticated"]`)
+		w := httptest.NewRecorder()
+		router.ServeHTTP(w, req)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response SearchAPIKeysResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, "list", response.Object)
+		assert.Len(t, response.Data, 1, "should return keys when auth context is present")
+	})
 }
 
 func TestCreateAPIKey_NameValidation(t *testing.T) {

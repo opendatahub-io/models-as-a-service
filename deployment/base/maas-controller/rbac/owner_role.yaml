@@ -20,3 +20,16 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - inference.opendatahub.io
+  resources:
+  - externalproviders
+  - externalmodels
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch

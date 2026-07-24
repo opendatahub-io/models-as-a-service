@@ -76,6 +76,26 @@ func (s *Selector) buildModelIndex() map[string]*unstructured.Unstructured {
 	return index
 }
 
+// resolveModelAlias maps a body-based-routing model identity (e.g. publisher ID
+// or targetModel) back to canonical "namespace/name" using MaaSModelRef
+// status.resolvedModelAlias. Returns the input unchanged when no alias matches.
+func (s *Selector) resolveModelAlias(requestedModel string) string {
+	if s.modelLister == nil || requestedModel == "" {
+		return requestedModel
+	}
+	items, err := s.modelLister.List()
+	if err != nil {
+		return requestedModel
+	}
+	for _, u := range items {
+		alias, found, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias")
+		if found && alias == requestedModel {
+			return u.GetNamespace() + "/" + u.GetName()
+		}
+	}
+	return requestedModel
+}
+
 // subscription represents a parsed MaaSSubscription for selection.
 type subscription struct {
 	Name                   string
@@ -166,6 +186,8 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		return nil, errors.New("either groups or username must be provided")
 	}
 
+	requestedModel = s.resolveModelAlias(requestedModel)
+
 	subscriptions, err := s.loadSubscriptions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
@@ -196,7 +218,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponse(&sub), nil
+				return toResponseWithResolvedModel(&sub, requestedModel), nil
 			}
 		}
 
@@ -216,7 +238,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponse(&sub), nil
+				return toResponseWithResolvedModel(&sub, requestedModel), nil
 			}
 		}
 
@@ -245,7 +267,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
 			return nil, err
 		}
-		return toResponse(&accessibleSubs[0]), nil
+		return toResponseWithResolvedModel(&accessibleSubs[0], requestedModel), nil
 	}
 
 	// User has multiple subscriptions - require explicit selection
@@ -806,6 +828,14 @@ func toResponse(sub *subscription) *SelectResponse {
 	if sub.DeletionTimestamp != nil {
 		resp.DeletionTimestamp = *sub.DeletionTimestamp
 	}
+	return resp
+}
+
+// toResponseWithResolvedModel converts a subscription and attaches the resolved
+// MaaSModelRef identity (namespace/name) used for TokenRateLimitPolicy matching.
+func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
+	resp := toResponse(sub)
+	resp.ResolvedModel = resolvedModel
 	return resp
 }
 

@@ -61,7 +61,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 	}
 
 	h.logger.Debug("Processing subscription selection",
-		"username", req.Username,
+		"username", logger.RedactValue(req.Username),
 		"groups", req.Groups,
 		"requestedSubscription", req.RequestedSubscription,
 		"requestedModel", req.RequestedModel,
@@ -81,7 +81,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &noSubErr) {
 			h.logger.Debug("No subscription found for user",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"groups", req.Groups,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -104,7 +104,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &accessDeniedErr) {
 			h.logger.Debug("Access denied to subscription",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"subscription", req.RequestedSubscription,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -116,7 +116,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 		if errors.As(err, &multipleSubsErr) {
 			h.logger.Debug("Multiple subscriptions found, explicit selection required",
-				"username", req.Username,
+				"username", logger.RedactValue(req.Username),
 				"subscriptions", multipleSubsErr.Subscriptions,
 			)
 			c.JSON(http.StatusOK, SelectResponse{
@@ -156,7 +156,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		// All other errors are internal server errors
 		h.logger.Error("Subscription selection failed",
 			"error", err.Error(),
-			"username", req.Username,
+			"username", logger.RedactValue(req.Username),
 		)
 		c.JSON(http.StatusOK, SelectResponse{
 			Error:   "internal_error",
@@ -166,7 +166,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 	}
 
 	h.logger.Debug("Subscription selected successfully",
-		"username", req.Username,
+		"username", logger.RedactValue(req.Username),
 		"subscription", response.Name,
 		"organizationId", response.OrganizationID,
 	)
@@ -175,15 +175,17 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 
 // ListSubscriptions handles GET /v1/subscriptions.
 // Returns all subscriptions the authenticated user has access to.
+// When no user context is present (ExtractUserInfoOptional did not set one),
+// an empty list is returned gracefully.
 func (h *Handler) ListSubscriptions(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
-		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Internal server error",
-				"type":    "server_error",
-			}})
+		// No identity headers from Authorino — return an empty list instead
+		// of failing.  This mirrors the /v1/models behaviour when no
+		// LLMInferenceService is deployed.
+		h.logger.Debug("No auth context present, returning empty subscription list")
+		c.JSON(http.StatusOK, []SubscriptionInfo{})
 		return
 	}
 	userContext, ok := userContextVal.(*token.UserContext)
@@ -218,15 +220,15 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 
 // ListSubscriptionsForModel handles GET /v1/model/:model-id/subscriptions.
 // Returns subscriptions the user has access to that include the specified model.
+// When no user context is present (ExtractUserInfoOptional did not set one),
+// an empty list is returned gracefully.
 func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
+	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
-		h.logger.Error("User context not found - ExtractUserInfo middleware not called")
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": gin.H{
-				"message": "Internal server error",
-				"type":    "server_error",
-			}})
+		// No identity headers from Authorino — return an empty list.
+		h.logger.Debug("No auth context present, returning empty subscription list for model")
+		c.JSON(http.StatusOK, []SubscriptionInfo{})
 		return
 	}
 	userContext, ok := userContextVal.(*token.UserContext)

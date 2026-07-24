@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -99,12 +100,18 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	return []*unstructured.Unstructured{sub}, nil
 }
 
-// fakeMultiSubscriptionLister returns multiple subscriptions by name -> groups mapping.
-type fakeMultiSubscriptionLister map[string][]string
+// fakeSubDef holds a subscription's owner groups and optional model refs (name/namespace).
+type fakeSubDef struct {
+	groups    []string
+	modelRefs []struct{ name, namespace string }
+}
+
+// fakeMultiSubscriptionLister returns multiple subscriptions keyed by subscription name.
+type fakeMultiSubscriptionLister map[string]fakeSubDef
 
 func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	result := make([]*unstructured.Unstructured, 0, len(f))
-	for subName, groups := range f {
+	for subName, def := range f {
 		sub := &unstructured.Unstructured{}
 		sub.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "maas.opendatahub.io",
@@ -115,11 +122,20 @@ func (f fakeMultiSubscriptionLister) List() ([]*unstructured.Unstructured, error
 		sub.SetNamespace(fixtures.TestNamespace)
 
 		// Set spec.owner.groups
-		groupSlice := make([]any, len(groups))
-		for i, g := range groups {
+		groupSlice := make([]any, len(def.groups))
+		for i, g := range def.groups {
 			groupSlice[i] = map[string]any{"name": g}
 		}
 		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+
+		// Set spec.modelRefs when provided (scopes which models this subscription can see).
+		if len(def.modelRefs) > 0 {
+			refs := make([]any, len(def.modelRefs))
+			for i, r := range def.modelRefs {
+				refs[i] = map[string]any{"name": r.name, "namespace": r.namespace}
+			}
+			_ = unstructured.SetNestedSlice(sub.Object, refs, "spec", "modelRefs")
+		}
 
 		// Set status.phase to Active (required for subscription filtering)
 		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
@@ -349,7 +365,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "")
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -394,8 +410,14 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	require.NoError(t, err, "Failed to unmarshal response body")
 
 	assert.Equal(t, "list", response.Object, "Expected object type to be 'list'")
-	// With authorization, we expect 8 models (excluding the one without URL)
-	require.Len(t, response.Data, len(llmTestScenarios)-1, "Mismatched number of models returned")
+	// Count scenarios that are Ready — FilterModelsByAccess includes models based on readiness.
+	readyCount := 0
+	for _, s := range llmTestScenarios {
+		if s.Ready {
+			readyCount++
+		}
+	}
+	require.Len(t, response.Data, readyCount, "Mismatched number of models returned")
 
 	modelsByName := make(map[string]models.Model)
 	for _, model := range response.Data {
@@ -403,8 +425,8 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 
 	for _, scenario := range llmTestScenarios {
-		// Skip the model without URL as it should be filtered out by authorization
-		if scenario.Name == "model-without-url" {
+		// Skip models that are not Ready — they are excluded by FilterModelsByAccess.
+		if !scenario.Ready {
 			continue
 		}
 
@@ -464,16 +486,24 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "")
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
 	defer cleanup()
 
-	// Create subscription lister with premium and free subscriptions
+	// Create subscriptions with modelRefs so each subscription only sees its own model.
+	// Since FilterModelsByAccess no longer probes backends, model scoping is done exclusively
+	// via subscription ModelRefs (the primary access boundary).
 	multiSubLister := fakeMultiSubscriptionLister{
-		"premium": []string{"premium-users"},
-		"free":    []string{"free-users"},
+		"premium": {
+			groups:    []string{"premium-users"},
+			modelRefs: []struct{ name, namespace string }{{"premium-model", fixtures.TestNamespace}},
+		},
+		"free": {
+			groups:    []string{"free-users"},
+			modelRefs: []struct{ name, namespace string }{{"free-model", fixtures.TestNamespace}},
+		},
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
 
@@ -581,19 +611,20 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 		assert.True(t, modelIDs["free-model"], "Should include free model")
 	})
 
-	// Table-driven tests for API key subscription error scenarios
+	// FIND-009: Subscription error responses are unified so callers cannot
+	// distinguish "not found" from "access denied" (prevents existence probing).
 	subscriptionErrorTests := []struct {
 		name         string
 		subscription string
 		userGroups   string
 	}{
 		{
-			name:         "API key - unknown subscription - returns 403",
+			name:         "user token - unknown subscription - returns 403",
 			subscription: "nonexistent-subscription",
 			userGroups:   `["free-users"]`,
 		},
 		{
-			name:         "API key - no access to subscription - returns 403",
+			name:         "user token - no access to subscription - returns 403",
 			subscription: "premium",
 			userGroups:   `["free-users"]`,
 		},
@@ -620,6 +651,8 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 			errorObj, ok := errorResponse["error"].(map[string]any)
 			require.True(t, ok, "Expected error object")
 			assert.Equal(t, "permission_error", errorObj["type"])
+			// Both cases return the same message to prevent subscription existence probing
+			assert.Equal(t, "access denied to requested subscription", errorObj["message"])
 		})
 	}
 }
@@ -692,7 +725,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -881,7 +914,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -999,7 +1032,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1035,9 +1068,10 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		// Should have 2 entries because URLs are different (deduplication by model ID + URL)
 		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
 
-		// Both should have model ID "gpt-4" and subscription "sub-a"
+		// Both should have model ID "gpt-4-ref" (MaaSModelRef metadata.name) and subscription "sub-a".
+		// The backend probe is no longer used; the model ID comes from the MaaSModelRef name.
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID)
+			assert.Equal(t, "gpt-4-ref", model.ID)
 			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
 			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
 		}
@@ -1106,7 +1140,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1143,9 +1177,10 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		// even though they have the same URL and model ID
 		assert.Len(t, response.Data, 2, "Different MaaSModelRef resources should remain separate entries")
 
-		// Both should have model ID "gpt-4" and same URL but different ownedBy
+		// Model IDs come from MaaSModelRef metadata.name (no backend probe).
+		// The two refs have different names, so they produce different IDs.
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID)
+			assert.Contains(t, []string{"gpt-4-ref", "gpt-4-another-ref"}, model.ID)
 			assert.Equal(t, sharedModelServer.URL, model.URL.String())
 			require.Len(t, model.Subscriptions, 1, "Each model should have 1 subscription")
 			assert.Equal(t, "sub-a", model.Subscriptions[0].Name)
@@ -1174,8 +1209,9 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	// Setup two subscriptions
-	createSubscription := func(name string, groups []string) *unstructured.Unstructured {
+	// Setup two subscriptions. Each subscription has a ModelRef scoping it to a single
+	// namespace so FilterModelsByAccess (readiness-based) returns only the expected model.
+	createSubscription := func(name, modelNamespace string, groups []string) *unstructured.Unstructured {
 		sub := &unstructured.Unstructured{}
 		sub.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "maas.opendatahub.io",
@@ -1190,11 +1226,10 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 			groupSlice[i] = map[string]any{"name": g}
 		}
 
-		_ = unstructured.SetNestedMap(sub.Object, map[string]any{
-			"owner": map[string]any{
-				"groups": groupSlice,
-			},
-		}, "spec")
+		_ = unstructured.SetNestedSlice(sub.Object, groupSlice, "spec", "owner", "groups")
+		_ = unstructured.SetNestedSlice(sub.Object, []any{
+			map[string]any{"name": "gpt-4-ref", "namespace": modelNamespace},
+		}, "spec", "modelRefs")
 
 		// Set status.phase to Active (required for subscription filtering)
 		_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
@@ -1207,12 +1242,12 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 
 	subscriptionLister := &fakeSubscriptionListerWithMeta{
 		subscriptions: []*unstructured.Unstructured{
-			createSubscription("sub-a", []string{"user-group"}),
-			createSubscription("sub-b", []string{"user-group"}),
+			createSubscription("sub-a", "namespace-a", []string{"user-group"}),
+			createSubscription("sub-b", "namespace-b", []string{"user-group"}),
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1248,10 +1283,11 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		// Should have 2 entries because URLs are different (even though model ID is same)
 		assert.Len(t, response.Data, 2, "Different URLs should create separate entries even with same model ID")
 
-		// Both should have model ID "gpt-4" but different URLs and subscriptions
+		// Model ID comes from MaaSModelRef metadata.name ("gpt-4-ref").
+		// Each model is scoped to a single subscription via ModelRefs.
 		modelsByURL := make(map[string]models.Model)
 		for _, model := range response.Data {
-			assert.Equal(t, "gpt-4", model.ID, "Both entries should have model ID gpt-4")
+			assert.Equal(t, "gpt-4-ref", model.ID, "Both entries should have model ID gpt-4-ref")
 			require.Len(t, model.Subscriptions, 1, "Each model should have exactly 1 subscription")
 			modelsByURL[model.URL.String()] = model
 		}
@@ -1305,7 +1341,7 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "")
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister, nil)
@@ -1342,4 +1378,145 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 	assert.Equal(t, "ExternalModel", response.Data[0].Kind)
 	assert.Equal(t, fixtures.TestNamespace+"/"+maasModelRefName, response.Data[0].OwnedBy,
 		"OwnedBy should still reference the MaaSModelRef for dashboard display")
+}
+
+// TestListModels_NoAuthContext verifies that /v1/models returns an empty list
+// when no auth context is present (no Authorization header and no identity
+// headers). This reproduces the scenario where no LLMInferenceService is
+// deployed and Authorino has no auth policy.
+func TestListModels_NoAuthContext(t *testing.T) {
+	testLogger := logger.Development()
+
+	// Setup with models that would normally be returned
+	modelServer := createMockModelServer(t, "some-model")
+
+	lister := fakeMaaSModelRefLister{
+		fixtures.TestNamespace: []*unstructured.Unstructured{
+			maasModelRefUnstructured("some-model", fixtures.TestNamespace, modelServer.URL, true, nil),
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+
+	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, cfg)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
+	defer cleanup()
+
+	// Use ExtractUserInfoOptional (the production middleware for /v1/models)
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfoOptional(), modelsHandler.ListLLMs)
+
+	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// No Authorization, no username, no group headers
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with empty list")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty model list when no auth context")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+	})
+
+	t.Run("returns empty list when Authorization header present but no identity headers", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// User sends a Bearer token, but Authorino doesn't inject identity
+		// headers because no LLMInferenceService/auth policy is active.
+		req.Header.Set("Authorization", "Bearer some-token")
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with empty list when identity headers absent")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		assert.Empty(t, response.Data, "Should return empty model list when no identity context")
+		assert.Equal(t, "no-store", w.Header().Get("Cache-Control"))
+		assert.NotEmpty(t, w.Header().Get("X-Access-Checked-At"))
+	})
+
+	t.Run("returns 401 when Authorization header missing but identity headers present", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		// Identity headers present but no Authorization
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusUnauthorized, w.Code, "Should return 401 when Authorization missing but identity present")
+	})
+
+	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code, "Should return 200 OK with models")
+
+		var response pagination.Page[models.Model]
+		err = json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+
+		assert.Equal(t, "list", response.Object)
+		// With valid auth, models should be returned (filtered by access)
+	})
+}
+
+// TestListModels_StrictAuthOnOtherEndpoints verifies that the strict
+// ExtractUserInfo middleware still aborts for endpoints other than /v1/models.
+// This is a regression test to ensure the optional auth change doesn't weaken
+// authentication on subscription or API key endpoints.
+func TestListModels_StrictAuthOnOtherEndpoints(t *testing.T) {
+	testLogger := logger.Development()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+
+	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, cfg)
+
+	// Use the strict ExtractUserInfo for a non-models endpoint
+	v1 := router.Group("/v1")
+	v1.GET("/strict-endpoint", tokenHandler.ExtractUserInfo(), func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"status": "ok"})
+	})
+
+	t.Run("strict middleware aborts when no auth headers", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/strict-endpoint", nil)
+		require.NoError(t, err)
+		// No headers at all
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusInternalServerError, w.Code,
+			"Strict middleware should abort with 500 when auth headers are missing")
+
+		var body map[string]any
+		err = json.Unmarshal(w.Body.Bytes(), &body)
+		require.NoError(t, err)
+		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"],
+			"Should return AUTH_FAILURE for missing headers on strict endpoints")
+	})
 }

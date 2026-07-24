@@ -27,6 +27,10 @@ type SelectResponse struct {
 	OrganizationID string            `json:"organizationId,omitempty"` // Organization ID for billing
 	CostCenter     string            `json:"costCenter,omitempty"`     // Cost center for attribution
 	Labels         map[string]string `json:"labels,omitempty"`         // Additional tracking labels
+	// ResolvedModel is the MaaSModelRef identity (namespace/name) after resolving
+	// body-based aliases such as publishers/{ns}/models/{served-id}. Used by the
+	// gateway AuthPolicy to build selected_subscription_key for TokenRateLimitPolicy.
+	ResolvedModel string `json:"resolvedModel,omitempty"`
 
 	// Health fields (populated from status and metadata)
 	Phase             string `json:"phase"`                       // Subscription phase: "Active", "Degraded", "Failed", "Pending", or "" (always serialized for Authorino OPA rules)

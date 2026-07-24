@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -428,5 +429,24 @@ func TestExternalModelRouteResolver_FromInferenceStatus(t *testing.T) {
 	}
 	if routeNS != "default" {
 		t.Errorf("routeNS = %q, want %q", routeNS, "default")
+	}
+}
+
+func TestExternalModelRouteResolver_InferenceStatusEmpty_ReturnsNotReady(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "", "")
+
+	// Inference ExternalModel exists but status.httpRouteName is not set yet
+	inferenceEM := newInferenceExternalModelCR("gpt-4o", "default", "openai-provider")
+	inferenceEM.Object["status"] = map[string]any{}
+
+	_, c := newTestReconcilerWithMapper(model, inferenceEM)
+	resolver := externalModelRouteResolver{}
+
+	_, _, err := resolver.HTTPRouteForModel(context.Background(), c, model)
+	if err == nil {
+		t.Fatal("HTTPRouteForModel: expected ErrHTTPRouteNotFound when status.httpRouteName is empty, got nil")
+	}
+	if !errors.Is(err, ErrHTTPRouteNotFound) {
+		t.Errorf("HTTPRouteForModel: want ErrHTTPRouteNotFound, got %v", err)
 	}
 }

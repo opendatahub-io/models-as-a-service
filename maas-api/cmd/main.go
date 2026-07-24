@@ -98,6 +98,7 @@ func serve() error {
 
 	// Recovery must be first to catch panics from subsequent middleware
 	router.Use(gin.Recovery())
+	router.Use(middleware.BodyLimit())
 	accessLogCfg := middleware.TenantLoggerConfig{
 		DefaultTenant:   cfg.TenantName,
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
@@ -226,14 +227,12 @@ func registerHandlers(
 		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
 	}
 	if gatewayInternalHost == "" {
-		log.Warn("No gateway service found - model access checks will be disabled",
-			"gateway", cfg.GatewayName,
-			"namespace", cfg.GatewayNamespace)
-	} else {
-		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
+			cfg.GatewayNamespace, cfg.GatewayName)
 	}
+	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
@@ -251,22 +250,31 @@ func registerHandlers(
 		TenantNamespace: cfg.MaaSSubscriptionNamespace,
 		GatewayName:     cfg.GatewayName,
 	}
-	authMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+	// Optional-auth middleware lets handlers return graceful responses (e.g.
+	// empty lists) when no LLMInferenceService is deployed and Authorino has
+	// no auth policy to inject identity headers.
+	optionalAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
+	v1Routes.GET("/models", append(optionalAuthMiddleware, modelsHandler.ListLLMs)...)
 
-	v1Routes.GET("/models", append(authMiddleware, modelsHandler.ListLLMs)...)
+	// Subscription listing routes use optional auth so they can return an empty
+	// list when no LLMInferenceService is deployed (same rationale as /v1/models).
+	v1Routes.GET("/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptions)...)
+	v1Routes.GET("/model/:model-id/subscriptions", append(optionalAuthMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
 
-	// Subscription listing routes
-	v1Routes.GET("/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptions)...)
-	v1Routes.GET("/model/:model-id/subscriptions", append(authMiddleware, subscriptionHandler.ListSubscriptionsForModel)...)
-
-	// API Key routes - Complete CRUD for hash-based key architecture
-	apiKeyRoutes := v1Routes.Group("/api-keys", authMiddleware...)
+	// API Key routes use strict auth for mutating operations.
+	// Only the search/listing endpoint uses optional auth so it can return
+	// an empty result when no LLMInferenceService is deployed (same rationale
+	// as /v1/models and /v1/subscriptions).
+	strictAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+	apiKeyRoutes := v1Routes.Group("/api-keys", strictAuthMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
-	apiKeyRoutes.POST("/search", apiKeyHandler.SearchAPIKeys)          // Search keys with filtering, sorting, and pagination
 	apiKeyRoutes.POST("/bulk-revoke", apiKeyHandler.BulkRevokeAPIKeys) // Bulk revoke keys
 	apiKeyRoutes.GET("/:id", apiKeyHandler.GetAPIKey)                  // Get specific key
 	apiKeyRoutes.DELETE("/:id", apiKeyHandler.RevokeAPIKey)            // Revoke specific key
+
+	// API key search uses optional auth — returns empty list when no auth context
+	v1Routes.POST("/api-keys/search", append(optionalAuthMiddleware, apiKeyHandler.SearchAPIKeys)...)
 
 	// Tenant/Gateway discovery route - authenticated via TokenReview + SubjectAccessReview (system:authenticated)
 	tenantHandler := tenant.NewHandler(log, cluster.DynamicClient, cfg.TenantName, cfg.GatewayName, cfg.GatewayNamespace)
@@ -278,36 +286,40 @@ func registerHandlers(
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
 	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil
 }
 
-// isLocalhostOrigin reports whether the origin is a localhost address,
-// used by the debug-mode CORS policy to restrict cross-origin access to
-// local development only. Accepts both ported (http://localhost:3000)
-// and default-port (http://localhost) forms.
+// isLocalhostOrigin reports whether the origin is an http://localhost or
+// http://127.0.0.1 address, used by the debug-mode CORS policy to restrict
+// cross-origin access to local development only.
+// Only plain HTTP is accepted — local dev servers do not use HTTPS.
+// (CWE-942 / FIND-Debug-CORS.)
 func isLocalhostOrigin(origin string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
 	}
-	if u.Scheme != "http" && u.Scheme != "https" {
+	if u.Scheme != "http" {
 		return false
 	}
-	if u.Hostname() == "localhost" {
+	host := u.Hostname()
+	if host == "localhost" {
 		return true
 	}
-	ip := net.ParseIP(u.Hostname())
+	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
 }
 
 func debugCORSConfig() cors.Config {
 	return cors.Config{
-		AllowMethods:    []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
-		AllowHeaders:    []string{"Authorization", "Content-Type", "Accept"},
-		ExposeHeaders:   []string{"Content-Type"},
-		AllowOriginFunc: isLocalhostOrigin,
-		MaxAge:          12 * time.Hour,
+		AllowMethods:     []string{"GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"},
+		AllowHeaders:     []string{"Authorization", "Content-Type", "Accept"},
+		ExposeHeaders:    []string{"Content-Type"},
+		AllowOriginFunc:  isLocalhostOrigin,
+		AllowCredentials: false,
+		MaxAge:           12 * time.Hour,
 	}
 }

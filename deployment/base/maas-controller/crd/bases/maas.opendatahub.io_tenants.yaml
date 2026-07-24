@@ -30,10 +30,10 @@ spec:
     schema:
       openAPIV3Schema:
         description: |-
-          Tenant is the namespace-scoped API for the MaaS platform tenant.
-          The CEL validation above enforces a singleton (name == "default-tenant") during v1alpha1.
-          To enable multi-tenancy later, remove the XValidation rule — no CRD migration required
-          because removing a validation is a non-breaking schema change.
+          Tenant is the deprecated namespace-scoped API used before the MaasTenantConfig
+          rename. It remains registered during the migration window so existing clusters
+          can copy MaaS-owned settings into MaasTenantConfig/default-tenant and preserve
+          legacy Gateway/OIDC values for AITenant bootstrap.
         properties:
           apiVersion:
             description: |-

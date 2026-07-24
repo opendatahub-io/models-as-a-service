@@ -77,8 +77,8 @@ func TestRedactHeaders(t *testing.T) {
 		"Content-Type should pass through")
 	assert.Equal(t, "abc-123", redacted["X-Request-Id"],
 		"X-Request-ID should pass through")
-	assert.Equal(t, "user@example.com", redacted["X-Maas-Username"],
-		"X-MaaS-Username should pass through")
+	assert.Equal(t, "present", redacted["X-Maas-Username"],
+		"X-MaaS-Username should be redacted (PII)")
 }
 
 func TestRedactHeaders_WithHashPrefix(t *testing.T) {

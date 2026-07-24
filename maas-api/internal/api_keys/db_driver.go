@@ -32,9 +32,8 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 	databaseURL = strings.TrimSpace(databaseURL)
 
 	if !strings.HasPrefix(databaseURL, "postgresql://") && !strings.HasPrefix(databaseURL, "postgres://") {
-		return nil, fmt.Errorf(
-			"invalid database URL: %q. Expected format: postgresql://user:password@host:port/database",
-			databaseURL)
+		return nil, errors.New(
+			"invalid database URL: must start with postgresql:// or postgres://")
 	}
 
 	db, err := sql.Open("pgx", databaseURL)

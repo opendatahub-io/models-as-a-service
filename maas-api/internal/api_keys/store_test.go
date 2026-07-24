@@ -320,3 +320,31 @@ func TestInvalidateAll_TenantScoped(t *testing.T) {
 		assert.Equal(t, api_keys.StatusActive, key.Status, "tenant-b key %s should remain active", id)
 	}
 }
+
+func TestInvalidateTenant(t *testing.T) {
+	ctx := t.Context()
+	store := createTestStore(t)
+	defer store.Close()
+
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-a-1", "tenant-ah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "bob", "tenant-a-2", "tenant-ah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-b-1", "tenant-bh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false))
+
+	count, err := store.InvalidateTenant(ctx, "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	for _, id := range []string{"tenant-a-1", "tenant-a-2"} {
+		key, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusRevoked, key.Status, "tenant-a key %s should be revoked", id)
+	}
+
+	key, err := store.Get(ctx, "tenant-b-1")
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.StatusActive, key.Status, "tenant-b key should remain active")
+
+	count, err = store.InvalidateTenant(ctx, "tenant-a")
+	require.NoError(t, err)
+	assert.Equal(t, 0, count)
+}
