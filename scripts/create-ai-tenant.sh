@@ -13,14 +13,37 @@
 #   - Gateway with LoadBalancer service and TLS certificate
 #   - AITenant CR (triggers controller to create Tenant, maas-api, etc.)
 #
+# AllowedRoutes configuration (controls which namespaces can attach HTTPRoutes):
+#   ALLOWED_ROUTE_NAMESPACES  - Comma-separated namespace names allowed to attach HTTPRoutes.
+#                               e.g. "opendatahub" or "redhat-ods-applications,llm"
+#                               Uses 'from: Selector' with matchExpressions on
+#                               kubernetes.io/metadata.name.
+#   NAMESPACE_SELECTOR_LABELS - Comma-separated key=value label pairs for namespace selection.
+#                               e.g. "gateway-access=true"
+#                               Uses 'from: Selector' with matchLabels.
+#                               Ignored if ALLOWED_ROUTE_NAMESPACES is set.
+#   (neither set)             - Defaults to 'from: Same' (secure default; only
+#                               openshift-ingress can attach HTTPRoutes).
+#
+# Examples:
+#   ALLOWED_ROUTE_NAMESPACES="opendatahub" ./scripts/create-ai-tenant.sh myteam
+#   ALLOWED_ROUTE_NAMESPACES="redhat-ods-applications,llm" ./scripts/create-ai-tenant.sh myteam
+#   NAMESPACE_SELECTOR_LABELS="gateway-access=true" ./scripts/create-ai-tenant.sh myteam
+#
 
 set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=deployment-helpers.sh
+source "${SCRIPT_DIR}/deployment-helpers.sh"
 
 TENANT_NAME=${1:-}
 GATEWAY_HOSTNAME=${2:-}
 GATEWAY_NAMESPACE="openshift-ingress"
 AITENANT_NAMESPACE="ai-tenants"
 HOSTNAME_AUTO_DETECTED=false
+ALLOWED_ROUTE_NAMESPACES="${ALLOWED_ROUTE_NAMESPACES:-}"
+NAMESPACE_SELECTOR_LABELS="${NAMESPACE_SELECTOR_LABELS:-}"
 
 validate_dns1123_subdomain() {
     local value="$1"
@@ -97,8 +120,15 @@ fi
 
 echo "Using TLS certificate: $TLS_SECRET_NAME"
 
+if [[ -z "$ALLOWED_ROUTE_NAMESPACES" && -z "$NAMESPACE_SELECTOR_LABELS" ]]; then
+    log_warn "No ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS set; using from: Same."
+    log_warn "MaaS HTTPRoutes attach from the app/model namespaces — set ALLOWED_ROUTE_NAMESPACES (e.g. opendatahub,llm) or NAMESPACE_SELECTOR_LABELS."
+fi
+
 # Create Gateway with LoadBalancer service (default Gateway API pattern)
 # Note: Gateway name must match tenant name (AITenant controller defaults gatewayRef.name to tenant name)
+# Indent 4: listener content level in this heredoc
+allowed_routes_yaml="$(build_allowed_routes_yaml 4)"
 oc apply -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
 kind: Gateway
@@ -120,9 +150,7 @@ spec:
     hostname: ${GATEWAY_HOSTNAME}
     port: 443
     protocol: HTTPS
-    allowedRoutes:
-      namespaces:
-        from: All
+${allowed_routes_yaml}
     tls:
       mode: Terminate
       certificateRefs:

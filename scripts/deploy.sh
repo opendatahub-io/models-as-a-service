@@ -1313,12 +1313,25 @@ apply_kuadrant_cr() {
   # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
   # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
   # and waits for Gateway to be Programmed before returning.
+  # Default allowedRoutes to the app namespace so maas-api HTTPRoutes can attach.
+  # Include MODEL_NAMESPACE when set (e2e/demos deploy models outside the app ns).
+  # Override with ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS as needed.
+  local gateway_allowed_namespaces="${ALLOWED_ROUTE_NAMESPACES:-}"
+  if [[ -z "$gateway_allowed_namespaces" && -z "${NAMESPACE_SELECTOR_LABELS:-}" ]]; then
+    gateway_allowed_namespaces="$NAMESPACE"
+    if [[ -n "${MODEL_NAMESPACE:-}" && "${MODEL_NAMESPACE}" != "$NAMESPACE" ]]; then
+      gateway_allowed_namespaces="${NAMESPACE},${MODEL_NAMESPACE}"
+    fi
+  fi
+
   INGRESS_MODE="${INGRESS_MODE:-route}" \
   DISCONNECTED="${DISCONNECTED:-false}" \
   CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
   CERT_NAME="${CERT_NAME:-}" \
   DRY_RUN="${DRY_RUN:-false}" \
   MAAS_MANIFEST_REF="${MAAS_MANIFEST_REF:-}" \
+  ALLOWED_ROUTE_NAMESPACES="${gateway_allowed_namespaces}" \
+  NAMESPACE_SELECTOR_LABELS="${NAMESPACE_SELECTOR_LABELS:-}" \
   "${SCRIPT_DIR}/setup-gateway.sh" || {
     log_error "Gateway setup failed"
     return 1
