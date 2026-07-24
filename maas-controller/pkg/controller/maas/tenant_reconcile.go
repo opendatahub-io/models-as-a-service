@@ -244,6 +244,9 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 
 	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
 	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackGatewayRef)
+	if err == nil {
+		platformContext.IsOpenShift = r.IsOpenShift
+	}
 	if err != nil {
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2

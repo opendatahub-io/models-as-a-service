@@ -77,6 +77,9 @@ type TenantReconciler struct {
 	// MetadataCacheTTL is the TTL in seconds for Authorino metadata HTTP caching.
 	// Applies to apiKeyValidation and subscription-info metadata evaluators.
 	MetadataCacheTTL int64
+	// IsOpenShift is true when the cluster has the config.openshift.io API.
+	// Controls whether OpenShift-specific cert mounts and annotations are applied.
+	IsOpenShift bool
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.

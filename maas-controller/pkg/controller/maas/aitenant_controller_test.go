@@ -1813,6 +1813,7 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 		AppNamespace:     "odh-ai-gateway-infra",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		IsOpenShift:      true,
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
@@ -1878,6 +1879,28 @@ func containerHasVolumeMount(container *corev1.Container, name, mountPath string
 	return false
 }
 
+func TestTenantAPIKeyRevocationJob_xKS(t *testing.T) {
+	g := NewWithT(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-xks",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			UID:       "test-uid",
+		},
+	}
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", false)
+
+	g.Expect(job.Spec.Template.Spec.Volumes).To(BeEmpty())
+	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
+	container := job.Spec.Template.Spec.Containers[0]
+	g.Expect(container.VolumeMounts).To(BeEmpty())
+	g.Expect(container.Args).To(ContainElement("-k"))
+	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring("--cacert"))
+	g.Expect(strings.Join(container.Args, " ")).To(ContainSubstring(
+		"https://maas-api-team-xks.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-xks/api-keys"))
+}
+
 func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndKeepsJob(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
@@ -1889,7 +1912,7 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndKeepsJob(t *testi
 			Namespace: tenantreconcile.DefaultAITenantNamespace,
 		},
 	}
-	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", true)
 	job.Status.Conditions = []batcv1.JobCondition{
 		{
 			Type:               batcv1.JobComplete,
@@ -1908,6 +1931,7 @@ func TestEnsureTenantAPIKeysRevoked_CompletedJobMarksRevokedAndKeepsJob(t *testi
 		Scheme:       s,
 		APIReader:    cl,
 		AppNamespace: "odh-ai-gateway-infra",
+		IsOpenShift:  true,
 	}
 
 	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
@@ -1935,7 +1959,7 @@ func TestEnsureTenantAPIKeysRevoked_UsesAPIReaderForJobLookup(t *testing.T) {
 			Namespace: tenantreconcile.DefaultAITenantNamespace,
 		},
 	}
-	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", true)
 	job.Status.Conditions = []batcv1.JobCondition{
 		{
 			Type:               batcv1.JobComplete,
@@ -1966,6 +1990,7 @@ func TestEnsureTenantAPIKeysRevoked_UsesAPIReaderForJobLookup(t *testing.T) {
 		Scheme:       s,
 		APIReader:    apiReader,
 		AppNamespace: "odh-ai-gateway-infra",
+		IsOpenShift:  true,
 	}
 
 	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
@@ -1995,7 +2020,7 @@ func TestEnsureTenantAPIKeysRevoked_RejectsCompletedJobFromPreviousAITenantUID(t
 	}
 	previousAITenant := aitenant.DeepCopy()
 	previousAITenant.UID = types.UID("old-uid")
-	job := tenantAPIKeyRevocationJob(previousAITenant, "odh-ai-gateway-infra")
+	job := tenantAPIKeyRevocationJob(previousAITenant, "odh-ai-gateway-infra", true)
 	job.Status.Conditions = []batcv1.JobCondition{{
 		Type:   batcv1.JobComplete,
 		Status: corev1.ConditionTrue,
@@ -2010,6 +2035,7 @@ func TestEnsureTenantAPIKeysRevoked_RejectsCompletedJobFromPreviousAITenantUID(t
 		Scheme:       s,
 		APIReader:    cl,
 		AppNamespace: "odh-ai-gateway-infra",
+		IsOpenShift:  true,
 	}
 
 	revoked, err := r.ensureTenantAPIKeysRevoked(ctx, aitenant)
@@ -2050,7 +2076,7 @@ func TestAITenantReconcile_CompletedRevocationJobSurvivesPendingTenantCleanup(t 
 			},
 		},
 	}
-	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", true)
 	job.Status.Conditions = []batcv1.JobCondition{{
 		Type:   batcv1.JobComplete,
 		Status: corev1.ConditionTrue,
@@ -2067,6 +2093,7 @@ func TestAITenantReconcile_CompletedRevocationJobSurvivesPendingTenantCleanup(t 
 		AppNamespace:     "odh-ai-gateway-infra",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		IsOpenShift:      true,
 	}
 	key := client.ObjectKeyFromObject(aitenant)
 	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
@@ -2134,7 +2161,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 			},
 		},
 	}
-	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra")
+	job := tenantAPIKeyRevocationJob(aitenant, "odh-ai-gateway-infra", true)
 	job.Status.Conditions = []batcv1.JobCondition{
 		{
 			Type:               batcv1.JobFailed,
@@ -2167,6 +2194,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		AppNamespace:     "odh-ai-gateway-infra",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		IsOpenShift:      true,
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}

@@ -27,6 +27,10 @@ type PlatformContext struct {
 	GatewayRef   maasv1alpha1.TenantGatewayRef
 	ExternalOIDC *maasv1alpha1.TenantExternalOIDCConfig
 	Source       string
+	// IsOpenShift is true when the cluster has the config.openshift.io API
+	// (OpenShift service-ca operator, serving cert annotations, etc.).
+	// When false, OpenShift-specific cert mounts and annotations are skipped.
+	IsOpenShift bool
 }
 
 // ResolvePlatformContext resolves gateway and OIDC values for a tenant config object.

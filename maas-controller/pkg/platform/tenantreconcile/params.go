@@ -39,6 +39,10 @@ type PlatformParams struct {
 	// PayloadProcessingReplicas overrides the payload-processing Deployment replica count when non-nil.
 	PayloadProcessingReplicas *int32
 
+	// IsOpenShift is true when the cluster runs OpenShift (service-ca operator,
+	// serving cert annotations). When false, OpenShift-specific cert mounts are omitted.
+	IsOpenShift bool
+
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
 }
@@ -64,6 +68,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
+		IsOpenShift:             platformContext.IsOpenShift,
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)

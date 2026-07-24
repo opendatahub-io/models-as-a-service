@@ -1055,6 +1055,8 @@ func main() {
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
 	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
+	isOpenShift := tlsConfig.available
+	setupLog.Info("Platform detection", "isOpenShift", isOpenShift)
 	nextProtosOpt := func(c *tls.Config) {
 		c.NextProtos = []string{"h2", "http/1.1"}
 	}
@@ -1133,6 +1135,7 @@ func main() {
 		AITenantNamespace: aitenantNamespace,
 		GatewayName:       gatewayName,
 		GatewayNamespace:  gatewayNamespace,
+		IsOpenShift:       isOpenShift,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
 		os.Exit(1)
@@ -1193,6 +1196,7 @@ func main() {
 		ClusterAudience:                 clusterAudience,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
+		IsOpenShift:                     isOpenShift,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaasTenantConfig")
 		os.Exit(1)

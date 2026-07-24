@@ -94,6 +94,9 @@ type AITenantReconciler struct {
 	GatewayName string
 	// GatewayNamespace is where tenant Gateway resources are expected to exist.
 	GatewayNamespace string
+	// IsOpenShift is true when the cluster has the config.openshift.io API.
+	// Controls whether cleanup Jobs mount the OpenShift service-ca CA bundle.
+	IsOpenShift bool
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -716,7 +719,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		return false, errors.New("app namespace is required to revoke tenant API keys")
 	}
 
-	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
+	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace, r.IsOpenShift)
 	var existing batcv1.Job
 	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
 		if !isNotFoundError(err) {
@@ -752,7 +755,7 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 }
 
 func (r *AITenantReconciler) deleteTenantAPIKeyRevocationJob(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
-	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
+	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace, r.IsOpenShift)
 	var existing batcv1.Job
 	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
 		if isNotFoundError(err) {
@@ -794,7 +797,7 @@ func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1a
 	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
 }
 
-func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
+func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string, isOpenShift bool) *batcv1.Job {
 	tenantID := aitenant.Name
 	if tenantID == tenantreconcile.DefaultAITenantName {
 		tenantID = ""
@@ -811,6 +814,41 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
 	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
+
+	var curlArgs []string
+	var volumes []corev1.Volume
+	var volumeMounts []corev1.VolumeMount
+
+	if isOpenShift {
+		curlArgs = []string{
+			"--fail", "--silent", "--show-error", "--max-time", "30",
+			"--cacert", aitenantAPIKeyCleanupCABundlePath,
+			"-X", "DELETE", endpoint,
+		}
+		volumes = []corev1.Volume{{
+			Name: "maas-api-service-ca",
+			VolumeSource: corev1.VolumeSource{
+				ConfigMap: &corev1.ConfigMapVolumeSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: aitenantAPIKeyCleanupCABundleName,
+					},
+					Items: []corev1.KeyToPath{
+						{Key: "service-ca.crt", Path: "service-ca.crt"},
+					},
+				},
+			},
+		}}
+		volumeMounts = []corev1.VolumeMount{{
+			Name:      "maas-api-service-ca",
+			MountPath: "/etc/pki/maas-api",
+			ReadOnly:  true,
+		}}
+	} else {
+		curlArgs = []string{
+			"--fail", "--silent", "--show-error", "--max-time", "30",
+			"-k", "-X", "DELETE", endpoint,
+		}
+	}
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -850,45 +888,14 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
 					},
-					Volumes: []corev1.Volume{
-						{
-							Name: "maas-api-service-ca",
-							VolumeSource: corev1.VolumeSource{
-								ConfigMap: &corev1.ConfigMapVolumeSource{
-									LocalObjectReference: corev1.LocalObjectReference{
-										Name: aitenantAPIKeyCleanupCABundleName,
-									},
-									Items: []corev1.KeyToPath{
-										{Key: "service-ca.crt", Path: "service-ca.crt"},
-									},
-								},
-							},
-						},
-					},
+					Volumes: volumes,
 					Containers: []corev1.Container{
 						{
-							Name:    "revoke-keys",
-							Image:   image,
-							Command: []string{"curl"},
-							Args: []string{
-								"--fail",
-								"--silent",
-								"--show-error",
-								"--max-time",
-								"30",
-								"--cacert",
-								aitenantAPIKeyCleanupCABundlePath,
-								"-X",
-								"DELETE",
-								endpoint,
-							},
-							VolumeMounts: []corev1.VolumeMount{
-								{
-									Name:      "maas-api-service-ca",
-									MountPath: "/etc/pki/maas-api",
-									ReadOnly:  true,
-								},
-							},
+							Name:         "revoke-keys",
+							Image:        image,
+							Command:      []string{"curl"},
+							Args:         curlArgs,
+							VolumeMounts: volumeMounts,
 							Resources: corev1.ResourceRequirements{
 								Requests: corev1.ResourceList{
 									corev1.ResourceMemory: resourceQuantity("16Mi"),

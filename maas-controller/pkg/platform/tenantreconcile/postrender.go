@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -32,6 +33,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 		}
 
 		gvk := resource.GroupVersionKind()
+
+		if !params.IsOpenShift && gvk.Group == "" && gvk.Kind == "ConfigMap" && resource.GetName() == "openshift-service-ca.crt" {
+			log.V(2).Info("Skipping OpenShift service-ca ConfigMap on non-OpenShift cluster")
+			continue
+		}
+
 		switch {
 		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == baseGatewayTokenRateLimitDefaultDenyPolicyName:
 			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName, tenantID); err != nil {
@@ -40,14 +47,17 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 		case gvk == GVKDestinationRule && resource.GetName() == baseGatewayDestinationRuleName:
 			configureDestinationRule(log, resource, gatewayNamespace)
 		case gvk.Group == "" && gvk.Kind == "Service" && resource.GetName() == "maas-api":
-			// Make TLS secret name unique per tenant
-			if err := configureMaaSAPIService(log, resource, tenantID); err != nil {
+			if err := configureMaaSAPIService(log, resource, tenantID, params.IsOpenShift); err != nil {
 				return nil, err
 			}
 		case gvk.Group == "apps" && gvk.Kind == "Deployment" && resource.GetName() == "maas-api":
-			// Update Deployment to mount tenant-specific TLS secret
 			if err := configureMaaSAPIDeployment(log, resource, tenantID); err != nil {
 				return nil, err
+			}
+			if !params.IsOpenShift {
+				if err := stripOpenShiftTLSFromDeployment(log, resource); err != nil {
+					return nil, err
+				}
 			}
 		case gvk == GVKHTTPRoute && resource.GetName() == "maas-api-route":
 			// Configure per-tenant HTTPRoute
@@ -97,9 +107,7 @@ func configureDestinationRule(log logr.Logger, resource *unstructured.Unstructur
 	resource.SetNamespace(gatewayNamespace)
 }
 
-func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructured, tenantID string) error {
-	// For default tenant (tenantID=""), use "maas-api-serving-cert"
-	// For other tenants, use "maas-api-{tenantID}-serving-cert"
+func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructured, tenantID string, isOpenShift bool) error {
 	secretName := "maas-api-serving-cert"
 	if tenantID != "" {
 		secretName = fmt.Sprintf("maas-api-%s-serving-cert", tenantID)
@@ -109,10 +117,15 @@ func configureMaaSAPIService(log logr.Logger, resource *unstructured.Unstructure
 	if annotations == nil {
 		annotations = make(map[string]string)
 	}
-	annotations["service.beta.openshift.io/serving-cert-secret-name"] = secretName
+
+	if isOpenShift {
+		annotations["service.beta.openshift.io/serving-cert-secret-name"] = secretName
+	} else {
+		delete(annotations, "service.beta.openshift.io/serving-cert-secret-name")
+	}
 	resource.SetAnnotations(annotations)
 
-	log.V(4).Info("Configured maas-api Service TLS secret", "tenantID", tenantID, "secretName", secretName)
+	log.V(4).Info("Configured maas-api Service TLS secret", "tenantID", tenantID, "secretName", secretName, "isOpenShift", isOpenShift)
 	return nil
 }
 
@@ -153,6 +166,91 @@ func configureMaaSAPIDeployment(log logr.Logger, resource *unstructured.Unstruct
 	}
 
 	log.V(4).Info("Configured maas-api Deployment TLS secret volume", "tenantID", tenantID, "secretName", secretName)
+	return nil
+}
+
+func stripOpenShiftTLSFromDeployment(log logr.Logger, resource *unstructured.Unstructured) error {
+	volumes, found, err := unstructured.NestedSlice(resource.Object, "spec", "template", "spec", "volumes")
+	if err != nil {
+		return fmt.Errorf("failed to get volumes: %w", err)
+	}
+	if found {
+		var filtered []any
+		for _, vol := range volumes {
+			volMap, ok := vol.(map[string]any)
+			if !ok {
+				filtered = append(filtered, vol)
+				continue
+			}
+			name, _, _ := unstructured.NestedString(volMap, "name")
+			if name == "openshift-service-ca" {
+				continue
+			}
+			filtered = append(filtered, vol)
+		}
+		if err := unstructured.SetNestedSlice(resource.Object, filtered, "spec", "template", "spec", "volumes"); err != nil {
+			return fmt.Errorf("failed to set volumes: %w", err)
+		}
+	}
+
+	containers, found, err := unstructured.NestedSlice(resource.Object, "spec", "template", "spec", "containers")
+	if err != nil {
+		return fmt.Errorf("failed to get containers: %w", err)
+	}
+	if found {
+		for i, c := range containers {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			mounts, ok := cm["volumeMounts"].([]any)
+			if ok {
+				var filteredMounts []any
+				for _, m := range mounts {
+					mm, ok := m.(map[string]any)
+					if ok {
+						name, _, _ := unstructured.NestedString(mm, "name")
+						if name == "openshift-service-ca" {
+							continue
+						}
+					}
+					filteredMounts = append(filteredMounts, m)
+				}
+				cm["volumeMounts"] = filteredMounts
+			}
+
+			envSlice, ok := cm["env"].([]any)
+			if ok {
+				for j, e := range envSlice {
+					em, ok := e.(map[string]any)
+					if !ok {
+						continue
+					}
+					if em["name"] == "SSL_CERT_DIR" {
+						if val, ok := em["value"].(string); ok {
+							parts := strings.Split(val, ":")
+							var kept []string
+							for _, p := range parts {
+								if p != "/etc/ssl/certs/openshift-service-ca" {
+									kept = append(kept, p)
+								}
+							}
+							em["value"] = strings.Join(kept, ":")
+							envSlice[j] = em
+						}
+					}
+				}
+				cm["env"] = envSlice
+			}
+
+			containers[i] = cm
+		}
+		if err := unstructured.SetNestedSlice(resource.Object, containers, "spec", "template", "spec", "containers"); err != nil {
+			return fmt.Errorf("failed to set containers: %w", err)
+		}
+	}
+
+	log.V(2).Info("Stripped OpenShift-specific TLS volumes and mounts from maas-api Deployment")
 	return nil
 }
 
