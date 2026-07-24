@@ -19,16 +19,31 @@
 #                               Uses 'from: Selector' with matchExpressions on
 #                               kubernetes.io/metadata.name.
 #   NAMESPACE_SELECTOR_LABELS - Comma-separated key=value label pairs for namespace selection.
-#                               e.g. "gateway-access=true"
 #                               Uses 'from: Selector' with matchLabels.
 #                               Ignored if ALLOWED_ROUTE_NAMESPACES is set.
 #   (neither set)             - Defaults to 'from: Same' (secure default; only
 #                               openshift-ingress can attach HTTPRoutes).
 #
-# Examples:
-#   ALLOWED_ROUTE_NAMESPACES="opendatahub" ./scripts/create-ai-tenant.sh myteam
-#   ALLOWED_ROUTE_NAMESPACES="redhat-ods-applications,llm" ./scripts/create-ai-tenant.sh myteam
-#   NAMESPACE_SELECTOR_LABELS="gateway-access=true" ./scripts/create-ai-tenant.sh myteam
+# Multi-tenant deployments:
+#   Per-tenant Gateways receive HTTPRoutes from the infrastructure namespace (where
+#   maas-api is deployed) and from any model namespaces (where LLMInferenceServices
+#   run). Since these namespaces vary per cluster, the recommended approach is a
+#   per-gateway label selector. After running this script, label each namespace that
+#   needs to attach HTTPRoutes:
+#
+#   NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-myteam=true" \
+#     ./scripts/create-ai-tenant.sh myteam
+#
+#   # Then label the infra namespace and any model namespaces:
+#   oc label namespace odh-ai-gateway-infra \
+#     maas.opendatahub.io/gateway-access-myteam=true --overwrite
+#   oc label namespace llm \
+#     maas.opendatahub.io/gateway-access-myteam=true --overwrite
+#
+# Simple / single-namespace examples:
+#   ALLOWED_ROUTE_NAMESPACES="opendatahub,llm" ./scripts/create-ai-tenant.sh myteam
+#   NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-myteam=true" \
+#     ./scripts/create-ai-tenant.sh myteam
 #
 
 set -euo pipefail
