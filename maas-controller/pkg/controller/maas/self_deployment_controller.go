@@ -397,6 +397,35 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 }
 
 func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	if r.MonitoringNamespace == "" {
+		log.Info("monitoring namespace not configured; skipping monitoring setup")
+		return nil
+	}
+	// Verify the monitoring namespace exists before attempting to create resources in it.
+	// On xKS (non-OCP) clusters the ai-gateway-operator may pass
+	// --monitoring-namespace=redhat-ods-monitoring even though that namespace does not
+	// exist, so we skip monitoring gracefully instead of hard-failing.
+	var ns corev1.Namespace
+	if err := r.Get(ctx, client.ObjectKey{Name: r.MonitoringNamespace}, &ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("monitoring namespace does not exist; skipping monitoring setup",
+				"namespace", r.MonitoringNamespace)
+			return nil
+		}
+		if apierrors.IsForbidden(err) {
+			log.Info("insufficient permissions to check monitoring namespace existence, proceeding with monitoring setup",
+				"namespace", r.MonitoringNamespace, "error", err)
+			// Fall through — the namespace may exist and the individual apply calls
+			// will surface clearer errors if it does not.
+		} else {
+			return fmt.Errorf("check monitoring namespace %q: %w", r.MonitoringNamespace, err)
+		}
+	} else if ns.Status.Phase == corev1.NamespaceTerminating {
+		log.Info("monitoring namespace is terminating; skipping monitoring setup",
+			"namespace", r.MonitoringNamespace)
+		return nil
+	}
+
 	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
 		return err
 	}

@@ -1225,3 +1225,124 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 		g.Expect(err).NotTo(HaveOccurred())
 	})
 }
+
+func TestEnsureObservability_SkipsWhenMonitoringNamespaceAbsent(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-obs"),
+		},
+	}
+
+	// No monitoring namespace object exists in the fake client.
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		MonitoringNamespace:   "redhat-ods-monitoring",
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+	}
+
+	err := r.ensureObservability(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred(), "should skip gracefully when monitoring namespace does not exist")
+
+	// Verify that no ServiceMonitor was created (monitoring was skipped).
+	sm := &unstructured.Unstructured{}
+	sm.SetAPIVersion("monitoring.coreos.com/v1")
+	sm.SetKind("ServiceMonitor")
+	err = cl.Get(context.Background(), client.ObjectKey{
+		Name:      "limitador-metrics",
+		Namespace: "redhat-ods-monitoring",
+	}, sm)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue(),
+		"ServiceMonitor should not be created when monitoring namespace is absent")
+}
+
+func TestEnsureObservability_SkipsWhenMonitoringNamespaceEmpty(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	cl := fake.NewClientBuilder().WithScheme(s).Build()
+	r := &LifecycleReconciler{
+		Client:              cl,
+		Scheme:              s,
+		MonitoringNamespace: "",
+	}
+
+	err := r.ensureObservability(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred(), "should skip gracefully when monitoring namespace is empty")
+}
+
+func TestEnsureObservability_SkipsWhenMonitoringNamespaceTerminating(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-obs-term"),
+		},
+	}
+
+	// Create the monitoring namespace in Terminating phase.
+	monNS := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "redhat-ods-monitoring",
+		},
+		Status: corev1.NamespaceStatus{
+			Phase: corev1.NamespaceTerminating,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, monNS).Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		MonitoringNamespace:   "redhat-ods-monitoring",
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+	}
+
+	err := r.ensureObservability(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred(), "should skip gracefully when monitoring namespace is terminating")
+}
+
+func TestEnsureObservability_ProceedsWhenMonitoringNamespaceExists(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const monitoringNS = "redhat-ods-monitoring"
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			UID:  types.UID("cfg-uid-obs-ok"),
+		},
+	}
+
+	// Create the monitoring namespace in Active phase.
+	monNSObj := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: monitoringNS,
+		},
+		Status: corev1.NamespaceStatus{
+			Phase: corev1.NamespaceActive,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, monNSObj).Build()
+	r := &LifecycleReconciler{
+		Client:                cl,
+		Scheme:                s,
+		MonitoringNamespace:   monitoringNS,
+		UsageLogsManifestPath: lifecycleUsageLogsPath(t),
+	}
+
+	// ensureObservability should proceed without error when the namespace exists.
+	// Individual sub-functions may still no-op gracefully (e.g. missing CRDs),
+	// but the namespace gate itself should not block.
+	err := r.ensureObservability(context.Background(), ctrl.Log)
+	g.Expect(err).NotTo(HaveOccurred(), "should proceed when monitoring namespace exists")
+}
