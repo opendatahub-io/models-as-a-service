@@ -2891,6 +2891,14 @@ func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
 	default:
 		t.Fatal("expected a Warning event but none was emitted")
 	}
+
+	var updatedNS corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-timeout"}, &updatedNS)).To(Succeed())
+	g.Expect(updatedNS.Labels).NotTo(HaveKey(aitenantManagedLabel),
+		"best-effort releaseTenantNamespace must strip ownership labels during forced cleanup")
+	g.Expect(updatedNS.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
+	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
+	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNamespaceAnnotation))
 }
 
 func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {

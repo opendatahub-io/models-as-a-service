@@ -614,10 +614,29 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 			r.DeletionTimeout, aitenant.Namespace, aitenant.Name)
 	}
 
+	if _, err := r.deleteTenantConfig(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort deleteTenantConfig failed during forced finalizer removal")
+	}
+	if err := r.deleteAITenantScopedChildren(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort deleteAITenantScopedChildren failed during forced finalizer removal")
+	}
+	if err := r.releaseTenantNamespace(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort releaseTenantNamespace failed during forced finalizer removal")
+	}
+	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort deleteTenantGatewayAuthPolicy failed during forced finalizer removal")
+	}
+	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort deleteGatewayClaim failed during forced finalizer removal")
+	}
+
 	base := aitenant.DeepCopy()
 	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, err
+	}
+	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort deleteTenantAPIKeyRevocationJob failed during forced finalizer removal")
 	}
 	return ctrl.Result{}, nil
 }
