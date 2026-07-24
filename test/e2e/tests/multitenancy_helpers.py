@@ -766,15 +766,6 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
             INFRA_NAMESPACE,
             case["gateway_name"],
         )
-        gateway_names = per_tenant_gateway_policy_names(case["tenant_label_name"], case["gateway_name"])
-        wait_for_status_condition(
-            "authpolicy",
-            gateway_names["gateway_authpolicy"],
-            GATEWAY_NAMESPACE,
-            condition_type="Enforced",
-            expected_status="True",
-            timeout=120,
-        )
 
 
 def apply_maas_auth_policy(name: str, namespace: str, model_ref: str = MODEL_REF, model_namespace: str = MODEL_NAMESPACE) -> None:
@@ -908,6 +899,8 @@ def make_tenant_model_accessible(
     window: str = "1m",
     priority: Optional[int] = None,
     trlp_timeout: int = 120,
+    gateway_name: str | None = None,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
 ) -> None:
     """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
 
@@ -929,6 +922,16 @@ def make_tenant_model_accessible(
         tenant_namespace,
         expected_phase="Active",
     )
+    if gateway_name is not None:
+        gateway_auth_names = per_tenant_gateway_policy_names(gateway_name, gateway_name)
+        wait_for_status_condition(
+            "authpolicy",
+            gateway_auth_names["gateway_authpolicy"],
+            gateway_namespace,
+            condition_type="Enforced",
+            expected_status="True",
+            timeout=120,
+        )
     apply_maas_subscription(
         subscription_name,
         tenant_namespace,

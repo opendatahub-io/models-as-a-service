@@ -308,6 +308,7 @@ class TestPerTenantIPPRouting:
             case_a["tenant_ns"],
             f"{model_name}-auth",
             f"{model_name}-sub",
+            gateway_name=case_a["gateway_name"],
         )
         _wait_reconcile()
         return case_a
