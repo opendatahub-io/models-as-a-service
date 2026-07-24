@@ -986,8 +986,8 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &LifecycleReconciler{
-			Client:             cl,
-			Scheme:             s,
+			Client:              cl,
+			Scheme:              s,
 			MonitoringNamespace: "",
 		}
 
@@ -1001,8 +1001,8 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 
 		cl := fake.NewClientBuilder().WithScheme(s).Build()
 		r := &LifecycleReconciler{
-			Client:             cl,
-			Scheme:             s,
+			Client:              cl,
+			Scheme:              s,
 			MonitoringNamespace: "nonexistent-ns",
 		}
 
