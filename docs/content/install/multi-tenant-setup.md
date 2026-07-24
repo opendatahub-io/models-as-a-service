@@ -125,8 +125,9 @@ oc get gateway ${TENANT_NAME} -n ${GATEWAY_NAMESPACE}
     ```bash
     NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-red-team=true" \
       ./scripts/create-ai-tenant.sh red-team
-
-    # Label the infra namespace and any model namespaces after the Gateway is created
+    ```
+    Then label the infra namespace and any model namespaces:
+    ```bash
     oc label namespace odh-ai-gateway-infra \
       maas.opendatahub.io/gateway-access-red-team=true --overwrite
     # oc label namespace llm maas.opendatahub.io/gateway-access-red-team=true --overwrite
