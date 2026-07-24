@@ -117,8 +117,19 @@ kind: AITenant
 metadata:
   name: ${TENANT_NAME}
   namespace: ai-tenants
+spec:
+  gateway:
+    name: ${TENANT_NAME}
+  # Optional: configure an external OIDC provider for this tenant.
+  # Each tenant can use a different IdP realm/client. Omit to rely on OpenShift TokenReview only.
+  # oidc:
+  #   issuerUrl: "https://keycloak.example.com/realms/${TENANT_NAME}"
+  #   clientId: ${TENANT_NAME}-maas
+  #   ttl: 300
 EOF
 ```
+
+For OIDC configuration details, per-tenant isolation, and verification steps, see [External OIDC Configuration](../advanced-administration/external-oidc.md).
 
 The controller bootstraps the following resources:
 

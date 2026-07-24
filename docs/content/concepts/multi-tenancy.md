@@ -12,6 +12,7 @@ Multi-tenancy separates **platform context** from **MaaS runtime configuration**
 **AITenant** (platform context):
 - Lives in `ai-tenants` namespace (cluster tenant registry)
 - Defines Gateway, OIDC, tenant namespace lifecycle
+- Each tenant can use a dedicated OIDC provider (`spec.oidc`); tokens from one tenant's IdP are not valid on another tenant's gateway
 - Owned by platform administrators
 - Bootstraps the tenant environment
 
@@ -58,6 +59,7 @@ See [Multi-Tenant Setup](../install/multi-tenant-setup.md) for procedures.
 ## Related Documentation
 
 - [Multi-Tenant Setup](../install/multi-tenant-setup.md) - Creating and configuring tenants
+- [External OIDC Configuration](../advanced-administration/external-oidc.md) - Per-tenant OIDC configuration and verification
 - [Multi-Tenant Validation](../install/multi-tenant-validation.md) - Verification procedures
 - [Tenant RBAC](../configuration-and-management/tenant-rbac.md) - Access control
 - [AITenant CRD](../reference/crds/ai-tenant.md) - Platform context reference
