@@ -201,6 +201,8 @@ echo $TOKEN | cut -d'.' -f2 | base64 -d 2>/dev/null | jq .
 
 Look for the `groups` array in the decoded token payload.
 
+To verify the token against the MaaS management API, see [External OIDC Configuration — Verify configuration](../../../content/advanced-administration/external-oidc.md#verify-configuration).
+
 ## Troubleshooting
 
 ### Can't Access Admin Console
@@ -246,7 +248,7 @@ After configuring Keycloak realms:
 1. Configure MaaS to use Keycloak as OIDC provider — see [External OIDC Configuration](../../../content/advanced-administration/external-oidc.md)
 2. Create MaaSSubscription resources with groups matching Keycloak groups
 3. Create MaaSAuthPolicy resources to grant access to models
-4. Test authentication with OIDC tokens
+4. Test authentication with OIDC tokens — see [Verify configuration](../../../content/advanced-administration/external-oidc.md#verify-configuration)
 
 ## Additional Resources
 
