@@ -558,7 +558,9 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 		// Terminating (e.g. stuck on a finalizer) or not yet ready, we must not
 		// set the annotation so that bootstrap can create a healthy replacement
 		// once the stuck resource is cleaned up.
-		if !existing.DeletionTimestamp.IsZero() || !apimeta.IsStatusConditionTrue(existing.Status.Conditions, maasv1alpha1.AITenantConditionReady) {
+		isTerminating := !existing.DeletionTimestamp.IsZero() ||
+			existing.Status.Phase == "Terminating"
+		if isTerminating || !apimeta.IsStatusConditionTrue(existing.Status.Conditions, maasv1alpha1.AITenantConditionReady) {
 			return false, nil
 		}
 		if err := markDefaultAITenantBootstrapped(ctx, c, &ct); err != nil {

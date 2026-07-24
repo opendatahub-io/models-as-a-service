@@ -464,6 +464,73 @@ func TestEnsureDefaultAITenantBootstrapSkipsTerminatingAITenant(t *testing.T) {
 	}
 }
 
+func TestEnsureDefaultAITenantBootstrapSkipsTerminatingPhaseAITenant(t *testing.T) {
+	ctx := context.Background()
+	s := managerTestScheme(t)
+	cl := controllerfake.NewClientBuilder().
+		WithScheme(s).
+		WithObjects(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantreconcile.MaaSControllerDeploymentName,
+					Namespace: "opendatahub",
+				},
+			},
+			&maasv1alpha1.Config{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: maasv1alpha1.ConfigInstanceName,
+					UID:  types.UID("cfg-default"),
+				},
+			},
+			&maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      tenantreconcile.DefaultAITenantName,
+					Namespace: tenantreconcile.DefaultAITenantNamespace,
+				},
+				Spec: maasv1alpha1.AITenantSpec{
+					Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "gw"},
+				},
+				Status: maasv1alpha1.AITenantStatus{
+					Phase: "Terminating",
+					Conditions: []metav1.Condition{
+						{
+							Type:               maasv1alpha1.AITenantConditionReady,
+							Status:             metav1.ConditionTrue,
+							LastTransitionTime: metav1.Now(),
+							Reason:             "Ready",
+						},
+					},
+				},
+			},
+		).
+		Build()
+
+	created, err := ensureDefaultAITenantBootstrap(
+		ctx,
+		cl,
+		"models-as-a-service",
+		tenantreconcile.DefaultAITenantNamespace,
+		"opendatahub",
+		tenantreconcile.MaaSControllerDeploymentName,
+		"maas-default-gateway",
+		"openshift-ingress",
+	)
+	if err != nil {
+		t.Fatalf("ensure default AITenant: %v", err)
+	}
+	if created {
+		t.Fatalf("created = true, want false when AITenant phase is Terminating")
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		t.Fatalf("get Config: %v", err)
+	}
+	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got == "true" {
+		t.Fatalf("Config bootstrap annotation = %q, want empty when AITenant phase is Terminating", got)
+	}
+}
+
 func TestEnsureDefaultAITenantBootstrapSkipsNotReadyAITenant(t *testing.T) {
 	ctx := context.Background()
 	s := managerTestScheme(t)
