@@ -1887,9 +1887,9 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	if !ok {
 		t.Fatalf("api-keys-x-api-key is not a map: %T", xAPIKey)
 	}
-	expr, _, _ := unstructured.NestedString(xAPIKeyMap, "plain", "expression")
-	if !contains(expr, "x-api-key") {
-		t.Errorf("api-keys-x-api-key plain.expression should reference x-api-key header, got: %s", expr)
+	sel, _, _ := unstructured.NestedString(xAPIKeyMap, "plain", "selector")
+	if sel != "request.headers.x-api-key" {
+		t.Errorf("api-keys-x-api-key plain.selector should be request.headers.x-api-key, got: %s", sel)
 	}
 
 	priority, ok := xAPIKeyMap["priority"].(int64)
