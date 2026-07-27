@@ -52,10 +52,11 @@ derive_infra_namespace() {
 # Infrastructure namespace where maas-api and postgres deploy
 # Defaults to AUTO (namespace separation enabled). Set to empty string to disable for ROSA.
 INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE-AUTO}"
+CONTROLLER_NS="${NAMESPACE:-opendatahub}"
 if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
-  # Derive from NAMESPACE (controller namespace) or default to opendatahub
-  CONTROLLER_NS="${NAMESPACE:-opendatahub}"
   INFRA_NAMESPACE=$(derive_infra_namespace "$CONTROLLER_NS")
+elif [ -z "$INFRA_NAMESPACE_RAW" ]; then
+  INFRA_NAMESPACE="$CONTROLLER_NS"
 else
   INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
 fi

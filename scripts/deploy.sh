@@ -727,6 +727,8 @@ EOF
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
@@ -916,6 +918,8 @@ wait_for_operator_maas_api() {
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
@@ -948,6 +952,8 @@ deploy_postgresql() {
   local infra_ns
   if [ "$infra_ns_raw" = "AUTO" ]; then
     infra_ns=$(derive_infra_namespace "$controller_ns")
+  elif [ -z "$infra_ns_raw" ]; then
+    infra_ns="$controller_ns"
   else
     infra_ns="$infra_ns_raw"
   fi
@@ -1762,6 +1768,8 @@ configure_tls_backend() {
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
