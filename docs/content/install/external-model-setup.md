@@ -5,6 +5,15 @@
 
 This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthropic) through the MaaS gateway. External models are hosted outside the cluster — MaaS handles authentication, rate limiting, and API key management while routing inference requests to the external provider.
 
+## Multi-Tenant Limitation
+
+!!! danger "External models are not supported in multi-tenant deployments"
+    When multiple AITenants are deployed, each tenant gets a dedicated Gateway and Inference Payload Processor (IPP) stack. The ExternalModel reconciler is not tenant-aware — it always creates HTTPRoutes pointing to the default tenant's gateway (`--gateway-name` / `--gateway-namespace` controller flags). Each tenant's IPP EnvoyFilter targets its own gateway, which conflicts with the ExternalModel HTTPRoute's static gateway reference.
+
+    **Result:** External models do not work for any tenant — including the default tenant — when multiple IPP instances are running.
+
+    External models are only supported in single-tenant deployments. This limitation is tracked for a future fix.
+
 ## Prerequisites
 
 - MaaS platform deployed per the [Installation Guide](maas-setup.md)

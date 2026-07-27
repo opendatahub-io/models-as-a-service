@@ -20,6 +20,7 @@ from multitenancy_helpers import (
     redact_sensitive,
     response_summary,
     select_subscription_at,
+    wait_for_gateway_authpolicy_ready,
     wait_for_status_phase,
 )
 from test_helper import _get_cluster_token, _delete_cr, _wait_for_subscription_trlp_status
@@ -68,6 +69,9 @@ def tenant_subscriptions(tenant_env):
                 tenant["namespace"],
                 expected_phase="Active",
             )
+
+        for tenant in (tenant_a, tenant_b):
+            wait_for_gateway_authpolicy_ready(tenant["gateway_name"])
 
         apply_maas_subscription(
             shared_name,

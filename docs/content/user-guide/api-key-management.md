@@ -197,7 +197,7 @@ When passed as a JSON number (not a string), the value is interpreted as **secon
 - **Omitted** (i.e. `expiresIn` not sent): Keys still expire; there is no indefinite default.
   - **Ephemeral keys**: **1 hour**.
   - **Regular keys**: Omitting `expiresIn` will default to the maximum expiration days value. The maximum expiration value is set by either:
-    - Setting the value in [`Tenant.spec.apiKeys.maxExpirationDays`](../install/maas-setup.md#tenant-cr), or 
+    - Setting the value in [`MaasTenantConfig.spec.apiKeys.maxExpirationDays`](../install/maas-setup.md#maastenantconfig-cr), or 
     - When deploying a standalone maas-api instance you can also set this maximum allowed lifetime via the `API_KEY_MAX_EXPIRATION_DAYS` environment variable.
 
 ### Examples:

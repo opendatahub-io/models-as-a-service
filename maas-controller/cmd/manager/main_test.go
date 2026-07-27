@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
 	"testing"
+	"time"
 
 	confv1 "github.com/openshift/api/config/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -669,5 +671,34 @@ func TestEnsureManagedNamespacePatchesNilLabels(t *testing.T) {
 	}
 	if _, exists := ns.Labels["app.kubernetes.io/managed-by"]; exists {
 		t.Fatalf("managed-by label was added to namespace not created by maas-controller")
+	}
+}
+
+func TestParseAITenantDeletionTimeout(t *testing.T) {
+	tests := []struct {
+		name   string
+		envVal string
+		envSet bool
+		want   time.Duration
+	}{
+		{name: "unset returns default", envSet: false, want: 10 * time.Minute},
+		{name: "valid duration", envVal: "5m", envSet: true, want: 5 * time.Minute},
+		{name: "zero is allowed", envVal: "0s", envSet: true, want: 0},
+		{name: "invalid falls back to default", envVal: "not-a-duration", envSet: true, want: 10 * time.Minute},
+		{name: "negative falls back to default", envVal: "-3m", envSet: true, want: 10 * time.Minute},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envSet {
+				t.Setenv("AITENANT_DELETION_TIMEOUT", tt.envVal)
+			} else {
+				t.Setenv("AITENANT_DELETION_TIMEOUT", "")
+				os.Unsetenv("AITENANT_DELETION_TIMEOUT")
+			}
+			got := parseAITenantDeletionTimeout()
+			if got != tt.want {
+				t.Fatalf("parseAITenantDeletionTimeout() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

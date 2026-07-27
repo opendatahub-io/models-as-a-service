@@ -103,6 +103,7 @@ def tenant_env(shared_test_tenants):
         "base_url": case_a["base_url"],
         "model_name": case_a["model_name"],
         "model_namespace": case_a["model_namespace"],
+        "gateway_name": case_a["gateway_name"],
     }
     tenant_b = {
         "name": case_b["tenant_label_name"],
@@ -110,6 +111,7 @@ def tenant_env(shared_test_tenants):
         "base_url": case_b["base_url"],
         "model_name": case_b["model_name"],
         "model_namespace": case_b["model_namespace"],
+        "gateway_name": case_b["gateway_name"],
     }
 
     yield tenant_a, tenant_b
@@ -132,6 +134,7 @@ def tenant_auth_setup(tenant_env):
                 tenant["namespace"],
                 policy_name,
                 subscription_name,
+                gateway_name=tenant["gateway_name"],
             )
         yield {
             "tenant_a": tenant_a,

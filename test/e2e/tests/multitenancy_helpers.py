@@ -298,6 +298,29 @@ def wait_for_status_condition(
     return wait_for_json(kind, name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_gateway_authpolicy_ready(
+    gateway_name: str,
+    namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 120,
+) -> dict:
+    """Wait for the gateway AuthPolicy to be both Accepted and Enforced."""
+    auth_name = per_tenant_gateway_policy_names(gateway_name, gateway_name)["gateway_authpolicy"]
+
+    def _predicate(obj: dict) -> bool:
+        conditions = (obj.get("status") or {}).get("conditions") or []
+        accepted = False
+        enforced = False
+        for c in conditions:
+            if c.get("type") == "Accepted" and c.get("status") == "True":
+                accepted = True
+            if c.get("type") == "Enforced" and c.get("status") == "True":
+                enforced = True
+        return accepted and enforced
+
+    return wait_for_json("authpolicy", auth_name, namespace, predicate=_predicate, timeout=timeout)
+
+
 def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
     def _predicate(obj: dict) -> bool:
         status = obj.get("status") or {}
@@ -899,6 +922,8 @@ def make_tenant_model_accessible(
     window: str = "1m",
     priority: Optional[int] = None,
     trlp_timeout: int = 120,
+    gateway_name: str | None = None,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
 ) -> None:
     """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
 
@@ -920,6 +945,8 @@ def make_tenant_model_accessible(
         tenant_namespace,
         expected_phase="Active",
     )
+    if gateway_name is not None:
+        wait_for_gateway_authpolicy_ready(gateway_name, namespace=gateway_namespace)
     apply_maas_subscription(
         subscription_name,
         tenant_namespace,

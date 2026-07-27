@@ -979,6 +979,38 @@ func TestEnsureUsageLogs(t *testing.T) {
 	})
 }
 
+func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
+	t.Run("skips when monitoring namespace is empty", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		r := &LifecycleReconciler{
+			Client:              cl,
+			Scheme:              s,
+			MonitoringNamespace: "",
+		}
+
+		err := r.ensureObservability(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+	})
+
+	t.Run("skips when monitoring namespace does not exist", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		r := &LifecycleReconciler{
+			Client:              cl,
+			Scheme:              s,
+			MonitoringNamespace: "nonexistent-ns",
+		}
+
+		err := r.ensureObservability(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+	})
+}
+
 func TestPatchTenancyProxyImage(t *testing.T) {
 	t.Run("patches proxy container image when RELATED_IMAGE set", func(t *testing.T) {
 		g := NewWithT(t)

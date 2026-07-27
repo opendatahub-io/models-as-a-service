@@ -1,16 +1,18 @@
 ---
-# DataScienceCluster for RHOAI 3.x and ODH with the modelsAsService DSC component enabled.
-# Requires operator version that supports modelsAsService in DSC v2 API.
+# DataScienceCluster for ODH/RHOAI 3.5+ with MaaS under AIGateway.
+# deploy.sh detects 3.4-style DSCs (kserve.modelsAsService=Managed) and migrates automatically.
 apiVersion: datasciencecluster.opendatahub.io/v2
 kind: DataScienceCluster
 metadata:
   name: default-dsc
 spec:
   components:
+    aigateway:
+      managementState: Managed
+      modelsAsAService:
+        managementState: Managed
     kserve:
       managementState: Managed
       rawDeploymentServiceConfig: Headed
-      modelsAsService:
-        managementState: Managed
     dashboard:
       managementState: Removed

@@ -21,6 +21,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2816,4 +2817,204 @@ func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) 
 		Name:      gatewayClaimName(staleRef),
 	}, &remaining)
 	g.Expect(err).NotTo(HaveOccurred(), "spoofed stale claim should survive cleanupStaleClaims")
+}
+
+func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	deletionTime := metav1.NewTime(time.Now().Add(-15 * time.Minute))
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "team-timeout",
+			Namespace:         tenantreconcile.DefaultAITenantNamespace,
+			Finalizers:        []string{aitenantFinalizer},
+			DeletionTimestamp: &deletionTime,
+		},
+		Spec: maasv1alpha1.AITenantSpec{},
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ai-tenant-team-timeout",
+			Labels: map[string]string{
+				aitenantManagedLabel: "true",
+				aiGatewayTenantLabel: "team-timeout",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-timeout",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+
+	recorder := record.NewFakeRecorder(10)
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:          cl,
+		Scheme:          s,
+		APIReader:       cl,
+		AppNamespace:    "opendatahub",
+		TenantNamespace: "models-as-a-service",
+		DeletionTimeout: 10 * time.Minute,
+		Recorder:        recorder,
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if apierrors.IsNotFound(err) {
+		// Object was fully deleted after finalizer removal — forced cleanup succeeded.
+	} else {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer),
+			"finalizer must be removed after deletion timeout")
+
+		cond := apimeta.FindStatusCondition(remaining.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Reason).To(Equal("CleanupForced"))
+		g.Expect(cond.Message).To(ContainSubstring("Deletion timeout"))
+	}
+
+	select {
+	case event := <-recorder.Events:
+		g.Expect(event).To(ContainSubstring("AITenantCleanupForced"))
+		g.Expect(event).To(ContainSubstring("API keys may still exist"))
+	default:
+		t.Fatal("expected a Warning event but none was emitted")
+	}
+
+	var updatedNS corev1.Namespace
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-timeout"}, &updatedNS)).To(Succeed())
+	g.Expect(updatedNS.Labels).NotTo(HaveKey(aitenantManagedLabel),
+		"best-effort releaseTenantNamespace must strip ownership labels during forced cleanup")
+	g.Expect(updatedNS.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
+	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
+	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNamespaceAnnotation))
+}
+
+func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-notimeout",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
+		},
+		Spec: maasv1alpha1.AITenantSpec{},
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ai-tenant-team-notimeout",
+			Labels: map[string]string{
+				aitenantManagedLabel: "true",
+				aiGatewayTenantLabel: "team-notimeout",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-notimeout",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+
+	recorder := record.NewFakeRecorder(10)
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:          cl,
+		Scheme:          s,
+		APIReader:       cl,
+		AppNamespace:    "opendatahub",
+		TenantNamespace: "models-as-a-service",
+		DeletionTimeout: 10 * time.Minute,
+		Recorder:        recorder,
+	}
+
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	if !apierrors.IsNotFound(err) {
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer),
+			"finalizer must be removed via normal cleanup path")
+	}
+
+	select {
+	case event := <-recorder.Events:
+		t.Fatalf("expected no AITenantCleanupForced event but got: %s", event)
+	default:
+	}
+}
+
+func TestAITenantReconcile_DeletionTimeoutDisabledWhenZero(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	deletionTime := metav1.NewTime(time.Now().Add(-1 * time.Hour))
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "team-noforce",
+			Namespace:         tenantreconcile.DefaultAITenantNamespace,
+			Finalizers:        []string{aitenantFinalizer},
+			DeletionTimestamp: &deletionTime,
+		},
+		Spec: maasv1alpha1.AITenantSpec{},
+	}
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "ai-tenant-team-noforce",
+			Labels: map[string]string{
+				aitenantManagedLabel: "true",
+				aiGatewayTenantLabel: "team-noforce",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-noforce",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:          cl,
+		Scheme:          s,
+		APIReader:       cl,
+		AppNamespace:    "opendatahub",
+		TenantNamespace: "models-as-a-service",
+		DeletionTimeout: 0,
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(BeNumerically(">", 0),
+		"should requeue for normal cleanup when timeout is disabled, not force-remove")
 }

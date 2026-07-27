@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +36,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -218,21 +220,9 @@ func configResourceDefault() predicate.Predicate {
 
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	authMeta := &metav1.PartialObjectMetadata{}
-	authMeta.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "config.openshift.io",
-		Version: "v1",
-		Kind:    "Authentication",
-	})
+	ctx := context.Background()
 
-	dsci := &unstructured.Unstructured{}
-	dsci.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "dscinitialization.opendatahub.io",
-		Version: "v1",
-		Kind:    "DSCInitialization",
-	})
-
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.MaasTenantConfig{}).
 		Watches(
 			&maasv1alpha1.Config{},
@@ -257,16 +247,70 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
-		).
-		WatchesMetadata(
+		)
+
+	const authCRD = "authentications.config.openshift.io"
+	authExists := crdExists(ctx, mgr.GetAPIReader(), authCRD)
+	if authExists {
+		authMeta := &metav1.PartialObjectMetadata{}
+		authMeta.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "config.openshift.io",
+			Version: "v1",
+			Kind:    "Authentication",
+		})
+		b = b.WatchesMetadata(
 			authMeta,
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(authenticationClusterSingleton()),
-		).
-		Watches(
+		)
+	} else {
+		ctrl.Log.Info("Authentication CRD not registered; skipping static watch")
+	}
+
+	const dsciCRD = "dscinitializations.dscinitialization.opendatahub.io"
+	dsciExists := crdExists(ctx, mgr.GetAPIReader(), dsciCRD)
+	if dsciExists {
+		dsci := &unstructured.Unstructured{}
+		dsci.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "dscinitialization.opendatahub.io",
+			Version: "v1",
+			Kind:    "DSCInitialization",
+		})
+		b = b.Watches(
 			dsci,
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		).
-		Complete(r)
+		)
+	} else {
+		ctrl.Log.Info("DSCInitialization CRD not registered; skipping static watch")
+	}
+
+	c, err := b.Build(r)
+	if err != nil {
+		return err
+	}
+
+	// No dynamic watch for Authentication CRD: it ships with OpenShift itself,
+	// so it is either present at boot (OCP) or will never appear (xKS).
+
+	if !dsciExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, dsciCRD, func() source.Source {
+			dsci := &unstructured.Unstructured{}
+			dsci.SetGroupVersionKind(schema.GroupVersionKind{
+				Group: "dscinitialization.opendatahub.io", Version: "v1", Kind: "DSCInitialization",
+			})
+			return source.Kind(mgr.GetCache(), dsci,
+				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+						return r.enqueueDefaultTenant(ctx, obj)
+					},
+				),
+				predicate.TypedResourceVersionChangedPredicate[*unstructured.Unstructured]{},
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for DSCInitialization: %w", err)
+		}
+	}
+
+	return nil
 }

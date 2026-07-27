@@ -356,6 +356,9 @@ func (s *Selector) enrichModelRefs(refs []ModelRefInfo, index map[string]*unstru
 			case "LLMInferenceService":
 				refs[i].Source = "internal"
 			}
+			if alias, ok, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias"); ok && alias != "" {
+				refs[i].ModelName = alias
+			}
 		}
 	}
 }
@@ -569,28 +572,40 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 }
 
 // subscriptionIncludesModel checks if the subscription's modelRefs includes the requested model.
-// requestedModel format: "namespace/name".
+// requestedModel is "namespace/name" or a raw model name (see findModelRef).
 func subscriptionIncludesModel(sub *subscription, requestedModel string) bool {
 	if requestedModel == "" {
 		return true // no model specified, so subscription is valid
 	}
+	return findModelRef(sub, requestedModel) != nil
+}
 
-	// Parse the requested model (format: "namespace/name")
+// findModelRef returns the subscription modelRef matching requestedModel, or
+// nil if none matches. requestedModel is either a "namespace/name" pair or a
+// raw model name (e.g. "claude-opus-4-8") matched against
+// ModelRefInfo.ModelName — the ExternalModel's spec.modelName — or the CRD
+// name. The raw path supports body-routed requests where X-Gateway-Model-Name
+// holds the model name from the request body, not the CRD namespace/name.
+// Raw model names may themselves contain "/", so alias matching runs even
+// when the value parses as namespace/name.
+func findModelRef(sub *subscription, requestedModel string) *ModelRefInfo {
 	parts := strings.SplitN(requestedModel, "/", 2)
-	if len(parts) != 2 {
-		return false // invalid format
-	}
-	requestedNS := parts[0]
-	requestedName := parts[1]
-
-	// Check if any modelRef in the subscription matches
-	for _, ref := range sub.ModelRefs {
-		if ref.Namespace == requestedNS && ref.Name == requestedName {
-			return true
+	if len(parts) == 2 {
+		for i := range sub.ModelRefs {
+			if sub.ModelRefs[i].Namespace == parts[0] && sub.ModelRefs[i].Name == parts[1] {
+				return &sub.ModelRefs[i]
+			}
 		}
 	}
-
-	return false
+	for i := range sub.ModelRefs {
+		if sub.ModelRefs[i].ModelName != "" && sub.ModelRefs[i].ModelName == requestedModel {
+			return &sub.ModelRefs[i]
+		}
+		if sub.ModelRefs[i].Name == requestedModel {
+			return &sub.ModelRefs[i]
+		}
+	}
+	return nil
 }
 
 // checkModelHealth validates subscription phase and model health.
@@ -646,30 +661,22 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		return nil
 	}
 
-	// For Degraded subscriptions, verify rate limits can be enforced (if defined)
-	// Parse the requested model (format: "namespace/name")
-	parts := strings.SplitN(requestedModel, "/", 2)
-	if len(parts) != 2 {
+	// For Degraded subscriptions, verify rate limits can be enforced (if defined).
+	// Resolve the requested model ("namespace/name" or a body-routed raw model
+	// name) to its canonical subscription ref so alias requests get the same
+	// TRLP check as namespace/name requests.
+	ref := findModelRef(sub, requestedModel)
+	if ref == nil {
 		return &ModelUnhealthyError{
 			Subscription: sub.Name,
 			Phase:        sub.Phase,
 			Reason:       "InvalidModelFormat",
-			Message:      "invalid model format: must be namespace/name",
+			Message:      "requested model does not match any model in the subscription",
 		}
 	}
-	requestedNS := parts[0]
-	requestedName := parts[1]
 
 	// Check if this model has tokenRateLimits defined in the subscription spec
-	hasRateLimits := false
-	for _, ref := range sub.ModelRefs {
-		if ref.Namespace == requestedNS && ref.Name == requestedName {
-			if len(ref.TokenRateLimits) > 0 {
-				hasRateLimits = true
-			}
-			break
-		}
-	}
+	hasRateLimits := len(ref.TokenRateLimits) > 0
 
 	// If model doesn't have rate limits defined, allow inference (no TRLP to check)
 	if !hasRateLimits {
@@ -678,7 +685,7 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 
 	// Model has rate limits defined - verify TRLP is ready
 	for _, trlp := range sub.TokenRateLimitStatuses {
-		if trlp.Model == requestedName {
+		if trlp.Model == ref.Name {
 			if !trlp.Ready {
 				return &ModelUnhealthyError{
 					Subscription: sub.Name,

@@ -397,6 +397,21 @@ func aitenantReferencesConfig(aitenant *maasv1alpha1.AITenant, ct *maasv1alpha1.
 }
 
 func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.Logger) error {
+	if r.MonitoringNamespace == "" {
+		log.V(1).Info("monitoring namespace not configured; skipping observability setup")
+		return nil
+	}
+
+	var ns corev1.Namespace
+	if err := r.Get(ctx, client.ObjectKey{Name: r.MonitoringNamespace}, &ns); err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("monitoring namespace does not exist; skipping observability setup",
+				"namespace", r.MonitoringNamespace)
+			return nil
+		}
+		return fmt.Errorf("checking monitoring namespace %q: %w", r.MonitoringNamespace, err)
+	}
+
 	if err := r.ensureLimitadorServiceMonitor(ctx); err != nil {
 		return err
 	}
