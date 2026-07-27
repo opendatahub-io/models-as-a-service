@@ -85,7 +85,7 @@ curl -H "Authorization: Bearer <user-access-token>" \
 
 If authentication succeeds, the API returns models available to the groups in your token. An empty list usually means the token is valid but the user has no matching subscription groups.
 
-For Keycloak-specific IdP setup and token generation examples, see [Keycloak Configuration](../../samples/install/keycloak/README.md).
+For Keycloak-specific IdP setup and token generation examples, see [Keycloak Configuration](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/install/keycloak/README.md).
 
 ## JWKS Cache TTL
 
@@ -157,6 +157,6 @@ The **OAuth2 Client Credentials** (`grant_type=client_credentials`) flow is **no
 ## See Also
 
 - [Authentication Modes](../concepts/auth-modes.md) — Dashboard vs standalone OIDC paths
-- [Keycloak Configuration](../../samples/install/keycloak/README.md) — IdP setup and token generation
+- [Keycloak Configuration](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/install/keycloak/README.md) — IdP setup and token generation
 - [AITenant CRD](../reference/crds/ai-tenant.md) — Platform context including OIDC
 - [API Key Management](../user-guide/api-key-management.md) — Minting keys after OIDC authentication

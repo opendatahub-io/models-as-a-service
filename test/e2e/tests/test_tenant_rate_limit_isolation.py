@@ -19,6 +19,7 @@ from multitenancy_helpers import (
     delete_maas_subscription,
     provision_tenant_model,
     response_summary,
+    wait_for_gateway_authpolicy_ready,
     wait_for_status_phase,
 )
 from test_helper import (
@@ -75,6 +76,9 @@ def tenant_rate_limit_setup(tenant_env):
                 tenant["namespace"],
                 expected_phase="Active",
             )
+
+        for tenant in (tenant_a, tenant_b):
+            wait_for_gateway_authpolicy_ready(tenant["gateway_name"])
 
         apply_maas_subscription(
             sub_a,

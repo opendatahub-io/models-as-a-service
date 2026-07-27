@@ -95,6 +95,7 @@ nav:
       - Model Listing Flow: configuration-and-management/model-listing-flow.md
     - Advanced Administration:
       - Subscription Cardinality: advanced-administration/subscription-cardinality.md
+      - Telemetry Defaults and Cardinality: advanced-administration/telemetry-defaults-and-cardinality.md
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
       - External OIDC: advanced-administration/external-oidc.md

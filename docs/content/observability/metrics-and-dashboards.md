@@ -25,7 +25,7 @@
 | `vllm:time_to_first_token_seconds` | `model_name` | Time to First Token (TTFT) |
 | `vllm:inter_token_latency_seconds` | `model_name` | Inter-Token Latency (ITL) |
 
-**Per-Subscription Latency Tracking:**
+#### Per-Subscription Latency Tracking
 
 Istio Telemetry adds `subscription` dimension to gateway latency via `X-MaaS-Subscription` header injected by AuthPolicy:
 
