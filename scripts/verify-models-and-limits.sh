@@ -127,7 +127,7 @@ echo -e "${GREEN}✓ API key created successfully (name: $KEY_NAME)${NC}"
 
 echo -e "${BLUE}Discovering available models...${NC}"
 MODELS_RESPONSE=$(curl -sSk \
-    -H "Authorization: Bearer $TOKEN" \
+    -H "Authorization: Bearer $OC_TOKEN" \
     -H "Content-Type: application/json" \
     -w "\nHTTP_STATUS:%{http_code}\n" \
     "${API_BASE}/maas-api/v1/models" 2>&1)
@@ -202,7 +202,7 @@ EOF
 )
         
         response=$(curl -sSk \
-            -H "Authorization: Bearer $TOKEN" \
+            -H "Authorization: Bearer $OC_TOKEN" \
             -H "Content-Type: application/json" \
             -X POST \
             -d "$REQUEST_BODY" \
@@ -273,7 +273,7 @@ EOF
     echo -n "Request status: "
     for i in {1..25}; do
         response=$(curl -sSk \
-            -H "Authorization: Bearer $TOKEN" \
+            -H "Authorization: Bearer $OC_TOKEN" \
             -H "Content-Type: application/json" \
             -X POST \
             -d "$REQUEST_BODY_SIMPLE" \
