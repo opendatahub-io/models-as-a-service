@@ -941,7 +941,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	}
 	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
 	tenantName := aitenant.Name
-	image := tenantreconcile.DefaultMaaSAPIKeyCleanupImage
+	image := tenantreconcile.DefaultTenantKeyRevocationImage
 	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
 		image = related
 	}
