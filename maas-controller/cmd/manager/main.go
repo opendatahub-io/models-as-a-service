@@ -69,8 +69,6 @@ var (
 	setupLog = ctrl.Log.WithName("setup")
 )
 
-const defaultAITenantBootstrappedAnnotation = "maas.opendatahub.io/default-aitenant-bootstrapped"
-
 const (
 	tlsProfileFetchMaxRetries = 3
 	tlsProfileFetchTimeout    = 10 * time.Second
@@ -569,7 +567,7 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 		return false, nil
 	}
 
-	if ct.Annotations[defaultAITenantBootstrappedAnnotation] == "true" {
+	if ct.Annotations[maas.DefaultAITenantBootstrappedAnnotation] == "true" {
 		return false, nil
 	}
 
@@ -620,14 +618,11 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 		}
 		return false, fmt.Errorf("create default AITenant: %w", err)
 	}
-	if err := markDefaultAITenantBootstrapped(ctx, c, &ct); err != nil {
-		return true, err
-	}
 	return true, nil
 }
 
 func markDefaultAITenantBootstrapped(ctx context.Context, c client.Client, ct *maasv1alpha1.Config) error {
-	if ct == nil || ct.Annotations[defaultAITenantBootstrappedAnnotation] == "true" {
+	if ct == nil || ct.Annotations[maas.DefaultAITenantBootstrappedAnnotation] == "true" {
 		return nil
 	}
 	base := ct.DeepCopy()
@@ -635,7 +630,7 @@ func markDefaultAITenantBootstrapped(ctx context.Context, c client.Client, ct *m
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations[defaultAITenantBootstrappedAnnotation] = "true"
+	annotations[maas.DefaultAITenantBootstrappedAnnotation] = "true"
 	ct.SetAnnotations(annotations)
 	if err := c.Patch(ctx, ct, client.MergeFrom(base)); err != nil {
 		return fmt.Errorf("mark default AITenant bootstrap on Config/default: %w", err)

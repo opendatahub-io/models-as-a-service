@@ -60,6 +60,10 @@ var resourceTypesToRemove = []schema.GroupVersionKind{
 // If the process crashes between the two steps, the next reconcile finds nothing pending
 // and no Config, and simply (idempotently) marks completion.
 func (r *LifecycleReconciler) handleRequestedTeardown(ctx context.Context, dep *appsv1.Deployment, cfg *maasv1alpha1.Config) (ctrl.Result, error) {
+	if err := r.clearDefaultAITenantBootstrapMarker(ctx, cfg); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	pending, err := r.cleanupTeardownResources(ctx)
 	if err != nil {
 		return ctrl.Result{}, err
@@ -79,6 +83,22 @@ func (r *LifecycleReconciler) handleRequestedTeardown(ctx context.Context, dep *
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// clearDefaultAITenantBootstrapMarker allows a later install to recreate the default
+// AITenant if teardown is interrupted after deleting AITenants but before deleting
+// Config/default. Bootstrap remains disabled while teardown is requested.
+func (r *LifecycleReconciler) clearDefaultAITenantBootstrapMarker(ctx context.Context, cfg *maasv1alpha1.Config) error {
+	if cfg == nil || cfg.GetAnnotations()[DefaultAITenantBootstrappedAnnotation] == "" {
+		return nil
+	}
+
+	base := cfg.DeepCopy()
+	delete(cfg.Annotations, DefaultAITenantBootstrappedAnnotation)
+	if err := r.Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("clear default AITenant bootstrap marker during teardown: %w", err)
+	}
+	return nil
 }
 
 // markTeardownCompleted sets TeardownCompletedAnnotation on the Deployment so external

@@ -184,7 +184,8 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	if err := r.ensureTenantConfig(ctx, &aitenant); err != nil {
+	tenantConfigReady, err := r.ensureTenantConfig(ctx, &aitenant)
+	if err != nil {
 		setAITenantPhase(&aitenant, "Failed", "TenantConfigReconcileFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
@@ -196,6 +197,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		setAITenantPhase(&aitenant, "Failed", "RBACReconcileFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if !tenantConfigReady {
+		setAITenantPhase(&aitenant, "Pending", "TenantConfigNotReady", "waiting for MaasTenantConfig to report Ready")
+		if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -219,9 +228,6 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
-			builder.WithPredicates(
-				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
-			),
 		).
 		Complete(r)
 }
@@ -404,7 +410,7 @@ func (r *AITenantReconciler) legacyGatewayNameIsSharedDefault(aitenant *maasv1al
 	return aitenant.Name != tenantreconcile.DefaultAITenantName && gatewayName == defaultGatewayName
 }
 
-func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 
 	config := &maasv1alpha1.MaasTenantConfig{
@@ -431,9 +437,18 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		}
 		return nil
 	}); err != nil {
-		return err
+		return false, err
 	}
-	return r.markLegacyTenantDeprecated(ctx, tenantNamespace)
+	if err := r.markLegacyTenantDeprecated(ctx, tenantNamespace); err != nil {
+		return false, err
+	}
+	if err := r.get(ctx, client.ObjectKeyFromObject(config), config); err != nil {
+		return false, fmt.Errorf("get MaasTenantConfig %s/%s readiness: %w", config.Namespace, config.Name, err)
+	}
+	ready := apimeta.FindStatusCondition(config.Status.Conditions, tenantreconcile.ReadyConditionType)
+	return ready != nil &&
+		ready.Status == metav1.ConditionTrue &&
+		ready.ObservedGeneration == config.Generation, nil
 }
 
 func (r *AITenantReconciler) copyLegacyTenantConfig(ctx context.Context, config *maasv1alpha1.MaasTenantConfig) error {
