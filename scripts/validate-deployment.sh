@@ -51,7 +51,7 @@ detect_controller_namespace() {
 }
 
 # Infrastructure namespace - defaults to AUTO (namespace separation enabled)
-INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-AUTO}"
+INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE-AUTO}"
 if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
   # Derive from NAMESPACE (controller namespace) or auto-detect platform
   CONTROLLER_NS="${NAMESPACE:-$(detect_controller_namespace)}"
