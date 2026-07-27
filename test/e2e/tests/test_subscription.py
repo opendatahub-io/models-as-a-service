@@ -87,6 +87,7 @@ from test_helper import (
     _revoke_api_key,
     _sa_to_user,
     _snapshot_cr,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
@@ -1980,9 +1981,17 @@ class TestStatusReporting:
             _create_test_subscription(subscription_name, TRLP_TEST_MODEL_REF, users=[sa_user])
 
             # Wait for auth policy to reconcile. In gateway-only mode, it remains Active even when
-            # Kuadrant TRLP reconciliation is degraded.
-            log.info("Waiting for MaaSAuthPolicy to reconcile...")
-            _wait_for_maas_auth_policy_phase(auth_name, "Active", timeout=60, require_auth_policies=False)
+            # Kuadrant TRLP reconciliation is degraded. Do NOT wait for gateway AuthPolicy Enforced
+            # here — Kuadrant is intentionally down, so Enforced can never become True
+            # (AuthConfigs pile up "waiting … to sync").
+            log.info("Waiting for MaaSAuthPolicy to reconcile (Kuadrant down; skip Enforced wait)...")
+            _wait_for_maas_auth_policy_phase(
+                auth_name,
+                "Active",
+                timeout=60,
+                require_auth_policies=False,
+                require_enforced=False,
+            )
 
             # Step 3: Wait for subscription to reach Degraded phase with TRLP not ready
             log.info("Step 3: Waiting for subscription to enter Degraded phase (TRLP not ready)...")
@@ -2014,6 +2023,8 @@ class TestStatusReporting:
             log.info("Step 6: Waiting for subscription to reach Active phase (TRLP ready)...")
             _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=120)
             _wait_for_subscription_trlp_status(subscription_name, expected_ready=True, timeout=120)
+            # Drain AuthConfig backlog from the Kuadrant-down window before HTTP checks.
+            _wait_for_gateway_auth_enforced()
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             status = cr.get("status", {})

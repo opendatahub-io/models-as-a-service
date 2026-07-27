@@ -275,8 +275,52 @@ DRY_RUN=true ./scripts/setup-gateway.sh
 - `DISCONNECTED` - Disable GitHub manifest fallback (`true`/`false`, default: false)
 - `DRY_RUN` - Preview changes without applying (`true`/`false`, default: false)
 - `MAAS_MANIFEST_REF` - Git tag or commit SHA for remote kustomize fallback (defaults to current repo `HEAD` when run from a clone; required when fetching without a local tree)
+- `ALLOWED_ROUTE_NAMESPACES` - Comma-separated list of namespaces allowed to attach HTTPRoutes to the Gateway (e.g. `"opendatahub,odh-ai-gateway-infra,llm"`). Uses `from: Selector` with `matchExpressions` on `kubernetes.io/metadata.name`. Takes precedence over `NAMESPACE_SELECTOR_LABELS`.
+- `NAMESPACE_SELECTOR_LABELS` - Comma-separated `key=value` label pairs for namespace selection (e.g. `"gateway-access=true"`). Uses `from: Selector` with `matchLabels`. Ignored when `ALLOWED_ROUTE_NAMESPACES` is set.
+
+When neither is set, the Gateway defaults to `allowedRoutes: namespaces: from: Same`, which restricts HTTPRoute attachment to the Gateway's own namespace (`openshift-ingress`).
+
+> **Important for MaaS:** The infra namespace (`odh-ai-gateway-infra` / `redhat-ai-gateway-infra`) hosts `maas-api-route` — omitting it causes 404 on all MaaS API calls. `deploy.sh` sets `ALLOWED_ROUTE_NAMESPACES` automatically to `<app-ns>,<infra-ns>[,<model-ns>]`; set `MODEL_NAMESPACE` to also include the model namespace.
 
 **Note:** Route mode auto-detects cluster TLS certificates. Override with `CERT_NAME` if needed.
+
+---
+
+### `create-ai-tenant.sh`
+Creates a new AITenant with an isolated Gateway and infrastructure for multi-tenant deployments.
+
+**Usage:**
+```bash
+# Auto-detect cluster domain (creates <tenant>-maas.<cluster-domain> hostname)
+./scripts/create-ai-tenant.sh <tenant-name>
+
+# Specify a custom gateway hostname
+./scripts/create-ai-tenant.sh <tenant-name> <gateway-hostname>
+
+# MaaS on ODH — allow app, infra, and model namespaces to attach HTTPRoutes
+ALLOWED_ROUTE_NAMESPACES="opendatahub,odh-ai-gateway-infra,llm" \
+  ./scripts/create-ai-tenant.sh myteam
+
+# MaaS on RHOAI
+ALLOWED_ROUTE_NAMESPACES="redhat-ods-applications,redhat-ai-gateway-infra,llm" \
+  ./scripts/create-ai-tenant.sh myteam
+
+# Restrict by label selector
+NAMESPACE_SELECTOR_LABELS="gateway-access=true" \
+  ./scripts/create-ai-tenant.sh myteam
+```
+
+**What it does:**
+- Creates a Gateway in `openshift-ingress` with LoadBalancer service and auto-detected TLS certificate
+- Creates an AITenant CR (triggers controller to create MaasTenantConfig, maas-api, etc.)
+
+**Environment Variables:**
+- `ALLOWED_ROUTE_NAMESPACES` - Comma-separated list of namespaces allowed to attach HTTPRoutes. Uses `from: Selector` with `matchExpressions` on `kubernetes.io/metadata.name`.
+- `NAMESPACE_SELECTOR_LABELS` - Comma-separated `key=value` label pairs for namespace selection (e.g. `"gateway-access=true"`). Uses `from: Selector` with `matchLabels`. Ignored when `ALLOWED_ROUTE_NAMESPACES` is set.
+
+When neither is set, the Gateway defaults to `allowedRoutes: namespaces: from: Same`.
+
+> **Important for MaaS deployments:** HTTPRoutes are created in the application namespace (`opendatahub` / `redhat-ods-applications`) and often in model namespaces (e.g. `llm`), not in `openshift-ingress`. Set `ALLOWED_ROUTE_NAMESPACES` (or a label selector) accordingly, otherwise the tenant Gateway will block HTTPRoute attachment.
 
 ---
 

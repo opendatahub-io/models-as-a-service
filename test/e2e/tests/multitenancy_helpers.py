@@ -16,6 +16,8 @@ import requests
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
+    GATEWAY_PROPAGATION_DELAY,
+    GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -24,6 +26,7 @@ from test_helper import (
     _apply_cr,
     _delete_cr,
     _ns,
+    _request_with_gateway_retry,
     _wait_reconcile,
 )
 
@@ -1281,13 +1284,21 @@ def bearer_headers(token: str) -> dict[str, str]:
 
 
 def create_api_key_at(base_url: str, oc_token: str, name: str, *, subscription: Optional[str] = None) -> requests.Response:
+    """Create an API key against a tenant-scoped maas-api URL.
+
+    Retries empty 403 / Authorino AUTH_FAILURE while per-tenant gateway
+    AuthPolicy enforcement catches up (same flake mode as single-tenant helpers).
+    """
     body: dict[str, str] = {"name": name}
     if subscription:
         body["subscription"] = subscription
-    return requests.post(
+    return _request_with_gateway_retry(
+        requests.post,
         f"{base_url}/v1/api-keys",
         headers=bearer_headers(oc_token),
         json=body,
+        retries=GATEWAY_PROPAGATION_RETRIES,
+        delay=GATEWAY_PROPAGATION_DELAY,
         timeout=TIMEOUT,
         verify=TLS_VERIFY,
     )

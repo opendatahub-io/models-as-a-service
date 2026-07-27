@@ -57,57 +57,27 @@ from test_helper import (
     _get_cr,
     _maas_api_url,
     _ns,
+    _request_with_gateway_retry,
     _sa_to_user,
     _scale_controller_down,
     _scale_controller_up,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_subscription_phase,
     _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Gateway propagation retry helper
-# ---------------------------------------------------------------------------
-# Kuadrant gateway propagation can lag behind MaaS CR readiness.
-# MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
-# but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
-GATEWAY_PROPAGATION_RETRIES = 6
-GATEWAY_PROPAGATION_DELAY = 5  # seconds
-
-
-def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on transient gateway/auth errors.
-
-    Retries on:
-    - Empty 403: Envoy hasn't loaded the AuthPolicy yet.
-    - 500 with AUTH_FAILURE: Authorino race condition during AuthConfig updates
-      (metadata evaluators not yet linked after policy reconciliation).
-
-    Returns the last response — the caller's assertion will surface the
-    failure clearly if the gateway never becomes ready.
-    """
-    for attempt in range(1, retries + 1):
-        r = method(url, timeout=kwargs.pop("timeout", 30), verify=kwargs.pop("verify", TLS_VERIFY), **kwargs)
-        retryable = (r.status_code == 403 and not r.text.strip()) or (
-            r.status_code == 500 and "AUTH_FAILURE" in r.text
-        )
-        if retryable and attempt < retries:
-            log.info("Gateway returned %d (attempt %d/%d), retrying in %ds...",
-                     r.status_code, attempt, retries, GATEWAY_PROPAGATION_DELAY)
-            time.sleep(GATEWAY_PROPAGATION_DELAY)
-            continue
-        return r
-    return r  # last attempt's response — assertion will catch the failure
-
 
 @pytest.fixture(scope="session", autouse=True)
 def _warm_gateway(api_keys_base_url: str, headers: dict):
-    """Wait for the gateway to start forwarding requests before running tests.
+    """Wait for gateway AuthPolicy enforcement before running API key tests.
 
-    Makes a single request with gateway retry to absorb the propagation delay.
-    All subsequent tests can then make requests directly without retry logic.
+    MaaSAuthPolicy churn in earlier modules (or this session) can leave
+    maas-gateway-auth reconciling; empty 403s follow until Enforced=True and
+    Envoy loads the config.
     """
+    _wait_for_gateway_auth_enforced()
     r = _request_with_gateway_retry(
         requests.post,
         api_keys_base_url,
@@ -1558,26 +1528,36 @@ class TestAPIKeySubscriptionFilter:
             _delete_cr("maassubscription", sub_a, namespace=ns)
             _delete_cr("maasauthpolicy", f"{sub_a}-auth", namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            # Deleting MaaSAuthPolicies rewrites maas-gateway-auth; wait until
+            # Kuadrant reports Enforced again before the next test hits maas-api.
+            _wait_for_gateway_auth_enforced()
 
     def test_search_without_subscription_returns_all(self, api_keys_base_url: str, headers: dict):
         """Search without subscription filter returns keys across all subscriptions."""
+        # Prior tests may have just mutated MaaSAuthPolicies; ensure gateway auth
+        # is Enforced before minting keys (avoids empty 403 flakes).
+        _wait_for_gateway_auth_enforced()
         key_ids = []
         try:
             # Create keys with explicit subscription binding
             for i in range(2):
-                r = requests.post(
+                r = _request_with_gateway_retry(
+                    requests.post,
                     api_keys_base_url,
                     headers=headers,
                     json={"name": f"e2e-nofilter-{i}", "subscription": SIMULATOR_SUBSCRIPTION},
                     timeout=TIMEOUT,
                     verify=TLS_VERIFY,
                 )
-                assert r.status_code in (200, 201), f"Failed to create key: {r.text}"
+                assert r.status_code in (200, 201), (
+                    f"Failed to create key: {r.status_code} "
+                    f"{r.text.strip() or '(empty body — gateway AuthPolicy not ready)'}"
+                )
                 key_ids.append(r.json()["id"])
 
             # Search without subscription filter
-            r_search = requests.post(
+            r_search = _request_with_gateway_retry(
+                requests.post,
                 f"{api_keys_base_url}/search",
                 headers=headers,
                 json={
@@ -1587,7 +1567,10 @@ class TestAPIKeySubscriptionFilter:
                 timeout=TIMEOUT,
                 verify=TLS_VERIFY,
             )
-            assert r_search.status_code == 200, f"Search failed: {r_search.status_code} {r_search.text}"
+            assert r_search.status_code == 200, (
+                f"Search failed: {r_search.status_code} "
+                f"{r_search.text.strip() or '(empty body — gateway AuthPolicy not ready)'}"
+            )
             items = r_search.json().get("items") or r_search.json().get("data") or []
             result_ids = [item["id"] for item in items]
 

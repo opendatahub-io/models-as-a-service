@@ -23,12 +23,19 @@
 # manifests are missing.
 #
 # Environment variables:
-#   INGRESS_MODE       "route" (default) or "clusterip"
-#   DISCONNECTED       "true" to disable GitHub manifest fallback (default: false)
-#   CLUSTER_DOMAIN     Override cluster domain auto-detection
-#   CERT_NAME          Override TLS certificate secret name (route mode only)
-#   DRY_RUN            "true" to preview without applying (default: false)
-#   MAAS_MANIFEST_REF  Git tag or commit SHA for remote kustomize fallback (route mode)
+#   INGRESS_MODE                "route" (default) or "clusterip"
+#   DISCONNECTED                "true" to disable GitHub manifest fallback (default: false)
+#   CLUSTER_DOMAIN              Override cluster domain auto-detection
+#   CERT_NAME                   Override TLS certificate secret name (route mode only)
+#   DRY_RUN                     "true" to preview without applying (default: false)
+#   MAAS_MANIFEST_REF           Git tag or commit SHA for remote kustomize fallback (route mode)
+#   ALLOWED_ROUTE_NAMESPACES    Comma-separated list of namespaces allowed to attach HTTPRoutes,
+#                               e.g. "opendatahub,llm". When set, uses 'from: Selector' with
+#                               matchExpressions on kubernetes.io/metadata.name.
+#   NAMESPACE_SELECTOR_LABELS   Comma-separated key=value label pairs for namespace selection,
+#                               e.g. "gateway-access=true". When set, uses 'from: Selector'
+#                               with matchLabels. Ignored if ALLOWED_ROUTE_NAMESPACES is set.
+#                               When neither is set, defaults to 'from: Same' (secure default).
 #
 # Usage:
 #   # Route mode (ROSA, OSD, cloud)
@@ -39,6 +46,12 @@
 #
 #   # Disconnected environment (no GitHub fetch)
 #   DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+#
+#   # Restrict HTTPRoute attachment to app + model namespaces (typical MaaS)
+#   ALLOWED_ROUTE_NAMESPACES="opendatahub,llm" ./scripts/setup-gateway.sh
+#
+#   # Restrict HTTPRoute attachment by label selector
+#   NAMESPACE_SELECTOR_LABELS="gateway-access=true" ./scripts/setup-gateway.sh
 #
 
 set -euo pipefail
@@ -58,6 +71,8 @@ CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}"
 CERT_NAME="${CERT_NAME:-}"
 DRY_RUN="${DRY_RUN:-false}"
 MAAS_MANIFEST_REF="${MAAS_MANIFEST_REF:-}"
+ALLOWED_ROUTE_NAMESPACES="${ALLOWED_ROUTE_NAMESPACES:-}"
+NAMESPACE_SELECTOR_LABELS="${NAMESPACE_SELECTOR_LABELS:-}"
 
 # Constants
 GATEWAY_NAMESPACE="openshift-ingress"
@@ -105,6 +120,15 @@ validate_configuration() {
   log_info "Configuration validated"
   log_info "  Ingress mode: $INGRESS_MODE"
   log_info "  Disconnected: $DISCONNECTED"
+  if [[ -n "$ALLOWED_ROUTE_NAMESPACES" ]]; then
+    log_info "  AllowedRoutes: namespaces=$ALLOWED_ROUTE_NAMESPACES"
+  elif [[ -n "$NAMESPACE_SELECTOR_LABELS" ]]; then
+    log_info "  AllowedRoutes: labels=$NAMESPACE_SELECTOR_LABELS"
+  else
+    log_info "  AllowedRoutes: from: Same (secure default)"
+    log_warn "  MaaS HTTPRoutes attach from the app/model namespaces, not openshift-ingress."
+    log_warn "  Set ALLOWED_ROUTE_NAMESPACES (e.g. opendatahub,llm) or NAMESPACE_SELECTOR_LABELS for MaaS."
+  fi
 }
 
 #──────────────────────────────────────────────────────────────
@@ -269,6 +293,7 @@ setup_route_mode() {
 
       if [[ "$managed_anno" == "false" ]] && [[ "$authorino_anno" == "true" ]] && [[ -z "$params_ref" ]]; then
         log_info "  Gateway is Programmed with required annotations and route mode spec"
+        patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
         return 0
       else
         if [[ -n "$params_ref" ]]; then
@@ -320,6 +345,9 @@ setup_route_mode() {
       CLUSTER_DOMAIN="$CLUSTER_DOMAIN" CERT_NAME="$CERT_NAME" envsubst '$CLUSTER_DOMAIN $CERT_NAME' | \
       kubectl apply --server-side=true -f -
   fi
+
+  # Apply configured allowedRoutes, or upgrade any pre-existing 'from: All' to the secure default
+  patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
 
   # Wait for Gateway to be Programmed
   # Note: In route mode, we warn but don't exit if the Gateway is not Programmed.
@@ -410,6 +438,7 @@ create_clusterip_gateway() {
 
       if [[ "$managed_anno" == "false" ]] && [[ "$authorino_anno" == "true" ]] && [[ "$params_ref" == "$GW_OPTIONS_CONFIGMAP" ]]; then
         log_info "  Gateway is Programmed with required annotations and clusterip mode spec"
+        patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
         return 0
       else
         if [[ "$params_ref" != "$GW_OPTIONS_CONFIGMAP" ]]; then
@@ -429,6 +458,9 @@ create_clusterip_gateway() {
   fi
 
   log_info "  Creating/updating Gateway $GATEWAY_NAME (clusterip mode)..."
+
+  local allowed_routes_yaml
+  allowed_routes_yaml="$(build_allowed_routes_yaml 6)"
 
   kubectl apply --server-side=true -f - <<EOF
 apiVersion: gateway.networking.k8s.io/v1
@@ -455,9 +487,7 @@ spec:
     - name: https
       port: 443
       protocol: HTTPS
-      allowedRoutes:
-        namespaces:
-          from: All
+${allowed_routes_yaml}
       tls:
         certificateRefs:
           - group: ""
