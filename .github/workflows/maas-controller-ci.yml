@@ -38,6 +38,11 @@ jobs:
         with:
           version: ${{ steps.golangci-version.outputs.version }}
           working-directory: ${{ env.PROJECT_DIR }}
+          # Do not restore golangci-lint's analysis cache: it has produced phantom
+          # findings against stale line numbers after code moved/changed (the Go
+          # build cache from setup-go still applies, so this only skips the lint
+          # results cache).
+          skip-cache: true
 
   govulncheck:
     runs-on: ubuntu-latest
