@@ -37,13 +37,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -213,7 +216,33 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
 		)).
+		Watches(
+			&maasv1alpha1.MaasTenantConfig{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
+			builder.WithPredicates(
+				predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
+			),
+		).
 		Complete(r)
+}
+
+// enqueueAITenantForTenantConfig maps MaasTenantConfig events back to the
+// owning AITenant. This ensures the AITenant reconciler re-creates the
+// MaasTenantConfig when a ghost from a previous install cycle finishes deleting.
+func (r *AITenantReconciler) enqueueAITenantForTenantConfig(_ context.Context, obj client.Object) []reconcile.Request {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	name := annotations[aitenantNameAnnotation]
+	ns := annotations[aitenantNamespaceAnnotation]
+	if name == "" || ns == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      name,
+		Namespace: ns,
+	}}}
 }
 
 func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AITenant) error {
@@ -377,6 +406,18 @@ func (r *AITenantReconciler) legacyGatewayNameIsSharedDefault(aitenant *maasv1al
 
 func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
+
+	// Guard against upserting a MaasTenantConfig that is mid-deletion (ghost from
+	// a previous install cycle). The upsert would succeed on a deleting object,
+	// but the cleanup finalizer would subsequently destroy the runtime stack while
+	// the AITenant falsely reports Active. Block until the old object is fully gone;
+	// the MaasTenantConfig watch re-enqueues this AITenant when it disappears.
+	var existing maasv1alpha1.MaasTenantConfig
+	existKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNamespace}
+	if err := r.get(ctx, existKey, &existing); err == nil && !existing.DeletionTimestamp.IsZero() {
+		return fmt.Errorf("MaasTenantConfig %s/%s is being deleted; waiting for cleanup to finish before recreating", existKey.Namespace, existKey.Name)
+	}
+
 	config := &maasv1alpha1.MaasTenantConfig{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: maasv1alpha1.GroupVersion.String(),

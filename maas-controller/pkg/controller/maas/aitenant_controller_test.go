@@ -899,6 +899,88 @@ func TestAITenantReconcile_IdempotentWhenActive(t *testing.T) {
 	g.Expect(afterRepeat.Status).To(Equal(afterActive.Status))
 }
 
+func TestAITenantReconcile_DeletingTenantConfigBlocksActive(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-ghost",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+		Spec: maasv1alpha1.AITenantSpec{},
+	}
+	// Simulate a ghost MaasTenantConfig that is mid-deletion (has DeletionTimestamp
+	// and a cleanup finalizer). This happens during reinstall when the old tenant
+	// config is still cleaning up while a new AITenant is created.
+	now := metav1.Now()
+	ghostTenantConfig := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         "ai-tenant-team-ghost",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      "team-ghost",
+				aitenantNamespaceAnnotation: tenantreconcile.DefaultAITenantNamespace,
+			},
+		},
+	}
+	ns := &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ai-tenant-team-ghost"}}
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ghostTenantConfig, ns, existingAITenantGateway("team-ghost")).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+
+	// First reconcile adds the finalizer.
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(time.Second))
+
+	// Second reconcile should detect the deleting MaasTenantConfig and NOT go Active.
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+
+	var updated maasv1alpha1.AITenant
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Failed"))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("TenantConfigReconcileFailed"))
+	g.Expect(ready.Message).To(ContainSubstring("being deleted"))
+
+	// Simulate the ghost finalizer completing: remove finalizer so the object can be deleted.
+	var ghost maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-ghost"}, &ghost)).To(Succeed())
+	controllerutil.RemoveFinalizer(&ghost, tenantFinalizer)
+	g.Expect(cl.Update(ctx, &ghost)).To(Succeed())
+
+	// After the ghost is gone, reconciliation should succeed and create a new MaasTenantConfig.
+	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Active"))
+	readyAfter := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+	g.Expect(readyAfter).NotTo(BeNil())
+	g.Expect(readyAfter.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(readyAfter.Reason).To(Equal("Reconciled"))
+}
+
 func TestAITenantReconcile_RejectsNamespaceOwnedByAnotherAITenant(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
