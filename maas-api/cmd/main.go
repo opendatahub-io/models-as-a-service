@@ -162,29 +162,7 @@ func serve() error {
 		}
 	}()
 
-	if cfg.CleanupIntervalMinutes > 0 {
-		interval := time.Duration(cfg.CleanupIntervalMinutes) * time.Minute
-		log.Info("Ephemeral key cleanup enabled", "interval", cfg.CleanupIntervalMinutes)
-		cleanupWg.Go(func() {
-			ticker := time.NewTicker(interval)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ticker.C:
-					count, err := store.DeleteExpiredEphemeral(ctx)
-					if err != nil {
-						log.Error("Failed to cleanup expired ephemeral keys", "error", err)
-					} else if count > 0 {
-						log.Info("Ephemeral key cleanup completed", "deletedCount", count)
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		})
-	} else {
-		log.Info("Ephemeral key cleanup disabled")
-	}
+	startEphemeralCleanup(ctx, log, cfg, store, &cleanupWg)
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
@@ -245,6 +223,36 @@ func serve() error {
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+}
+
+// startEphemeralCleanup launches a background goroutine that periodically deletes
+// expired ephemeral API keys. When cleanup is disabled (interval <= 0) it logs and
+// returns without starting a goroutine. The goroutine stops when ctx is cancelled.
+func startEphemeralCleanup(ctx context.Context, log *logger.Logger, cfg *config.Config, store api_keys.MetadataStore, wg *sync.WaitGroup) {
+	if cfg.CleanupIntervalMinutes <= 0 {
+		log.Info("Ephemeral key cleanup disabled")
+		return
+	}
+
+	interval := time.Duration(cfg.CleanupIntervalMinutes) * time.Minute
+	log.Info("Ephemeral key cleanup enabled", "interval", cfg.CleanupIntervalMinutes)
+	wg.Go(func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				count, err := store.DeleteExpiredEphemeral(ctx)
+				if err != nil {
+					log.Error("Failed to cleanup expired ephemeral keys", "error", err)
+				} else if count > 0 {
+					log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
 }
 
 func registerHandlers(
