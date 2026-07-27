@@ -1968,12 +1968,13 @@ build_allowed_routes_json() {
 }
 
 # patch_gateway_allowed_routes <gateway_name> <gateway_namespace>
-#   Ensures the first listener's allowedRoutes on an existing Gateway matches the
-#   desired configuration. Patches when:
-#     - Current from is "All" (upgrades insecure default to secure Same, or to
-#       the configured selector when env vars are set), OR
+#   Ensures ALL listeners' allowedRoutes on an existing Gateway match the desired
+#   configuration. Patches when:
+#     - Any listener has from: All (upgrades insecure default), OR
 #     - ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS is set (applies user config)
-#   Skips when already at a secure non-All state and no custom config is requested.
+#   Skips when all listeners are already at a secure non-All state and no custom
+#   config is requested. Applies the same allowedRoutes to every listener so that
+#   multi-listener Gateways (e.g. HTTP + HTTPS) are patched consistently.
 #
 # Arguments:
 #   gateway_name      - Name of the Gateway resource
@@ -1982,33 +1983,50 @@ patch_gateway_allowed_routes() {
   local gateway_name="$1"
   local gateway_namespace="$2"
 
-  local current_from
-  # Distinguish kubectl/API failures from a successfully-read empty/missing from field.
-  if ! current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
-    -o jsonpath='{.spec.listeners[0].allowedRoutes.namespaces.from}' 2>/dev/null); then
+  # Count listeners without requiring jq: emit one 'x' per listener then count chars.
+  local listener_count
+  if ! listener_count=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+    -o jsonpath='{range .spec.listeners[*]}x{end}' 2>/dev/null | wc -c | tr -d ' '); then
     log_error "Unable to read Gateway ${gateway_namespace}/${gateway_name} for allowedRoutes update"
     return 1
+  fi
+  if [[ "$listener_count" -eq 0 ]]; then
+    log_debug "  Gateway ${gateway_namespace}/${gateway_name} has no listeners — skipping allowedRoutes patch"
+    return 0
   fi
 
   local has_custom_config=false
   [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" || -n "${NAMESPACE_SELECTOR_LABELS:-}" ]] && has_custom_config=true
 
-  # Skip if already at a secure non-All state and no custom config to apply
-  if [[ "$current_from" != "All" && "$has_custom_config" == "false" ]]; then
-    log_debug "  Gateway allowedRoutes is already secure (from: ${current_from:-unset})"
+  # Check whether any listener still carries the insecure from: All default.
+  local any_all=false
+  local i current_from
+  for ((i=0; i<listener_count; i++)); do
+    current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null || echo "")
+    [[ "$current_from" == "All" ]] && any_all=true && break
+  done
+
+  # Skip if all listeners are already secure and no custom config is requested.
+  if [[ "$any_all" == "false" && "$has_custom_config" == "false" ]]; then
+    log_debug "  Gateway allowedRoutes already secure on all listeners — skipping"
     return 0
   fi
 
   if [[ "${DRY_RUN:-false}" == "true" ]]; then
-    log_info "  [DRY RUN] Would update Gateway allowedRoutes (current: ${current_from:-unset})"
+    log_info "  [DRY RUN] Would update allowedRoutes on ${listener_count} listener(s)"
     return 0
   fi
 
-  log_info "  Updating Gateway allowedRoutes (current: ${current_from:-unset})..."
-  local json
+  log_info "  Updating Gateway allowedRoutes on ${listener_count} listener(s)..."
+  local json patch_ops="" sep=""
   json="$(build_allowed_routes_json)"
-  # Use op:add — safe for both present and absent allowedRoutes fields (RFC 6902 §4.1:
-  # add on an existing object member replaces its value; op:replace would fail if absent).
+  # Build a single JSON patch array covering every listener.
+  # op:add is safe for both present and absent allowedRoutes fields (RFC 6902 §4.1).
+  for ((i=0; i<listener_count; i++)); do
+    patch_ops+="${sep}{\"op\":\"add\",\"path\":\"/spec/listeners/${i}/allowedRoutes\",\"value\":${json}}"
+    sep=","
+  done
   kubectl patch gateway "$gateway_name" -n "$gateway_namespace" --type='json' \
-    -p="[{\"op\":\"add\",\"path\":\"/spec/listeners/0/allowedRoutes\",\"value\":${json}}]"
+    -p="[${patch_ops}]"
 }
