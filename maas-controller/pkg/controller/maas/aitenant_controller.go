@@ -407,17 +407,6 @@ func (r *AITenantReconciler) legacyGatewayNameIsSharedDefault(aitenant *maasv1al
 func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 
-	// Guard against upserting a MaasTenantConfig that is mid-deletion (ghost from
-	// a previous install cycle). The upsert would succeed on a deleting object,
-	// but the cleanup finalizer would subsequently destroy the runtime stack while
-	// the AITenant falsely reports Active. Block until the old object is fully gone;
-	// the MaasTenantConfig watch re-enqueues this AITenant when it disappears.
-	var existing maasv1alpha1.MaasTenantConfig
-	existKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNamespace}
-	if err := r.get(ctx, existKey, &existing); err == nil && !existing.DeletionTimestamp.IsZero() {
-		return fmt.Errorf("MaasTenantConfig %s/%s is being deleted; waiting for cleanup to finish before recreating", existKey.Namespace, existKey.Name)
-	}
-
 	config := &maasv1alpha1.MaasTenantConfig{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: maasv1alpha1.GroupVersion.String(),
@@ -432,6 +421,9 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		t, ok := obj.(*maasv1alpha1.MaasTenantConfig)
 		if !ok {
 			return fmt.Errorf("expected MaasTenantConfig, got %T", obj)
+		}
+		if !t.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("MaasTenantConfig %s/%s is being deleted; waiting for cleanup to finish before recreating", t.Namespace, t.Name)
 		}
 		applyAITenantMetadata(t, aitenant, tenantNamespace)
 		if err := r.copyLegacyTenantConfig(ctx, t); err != nil {
