@@ -553,6 +553,16 @@ func ensureDefaultAITenantBootstrap(ctx context.Context, c client.Client, tenant
 			return false, fmt.Errorf("get default AITenant: %w", err)
 		}
 	} else {
+		// Only mark bootstrap complete when the default AITenant is not being
+		// deleted and has a Ready condition set to True.  If the AITenant is
+		// Terminating (e.g. stuck on a finalizer) or not yet ready, we must not
+		// set the annotation so that bootstrap can create a healthy replacement
+		// once the stuck resource is cleaned up.
+		isTerminating := !existing.DeletionTimestamp.IsZero() ||
+			existing.Status.Phase == "Terminating"
+		if isTerminating || !apimeta.IsStatusConditionTrue(existing.Status.Conditions, maasv1alpha1.AITenantConditionReady) {
+			return false, nil
+		}
 		if err := markDefaultAITenantBootstrapped(ctx, c, &ct); err != nil {
 			return false, err
 		}
