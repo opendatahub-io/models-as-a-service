@@ -323,6 +323,8 @@ deploy_maas_platform() {
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
     # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
     export DB_SSLMODE="${DB_SSLMODE:-disable}"
+    # deploy.sh includes MODEL_NAMESPACE in Gateway allowedRoutes when exported
+    export MODEL_NAMESPACE
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode "${DEPLOY_MODE}"

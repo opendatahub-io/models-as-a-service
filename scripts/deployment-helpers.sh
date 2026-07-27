@@ -1783,3 +1783,250 @@ dump_llmis_diagnostics() {
     echo "End of diagnostics for: $llmis_name"
     echo "=========================================="
 }
+
+# ==========================================
+# Gateway AllowedRoutes Helpers
+# ==========================================
+
+# _allowed_routes_same_yaml <indent_string>
+#   Emits the secure-default allowedRoutes YAML block (from: Same).
+_allowed_routes_same_yaml() {
+  local I="$1"
+  printf '%s' \
+"${I}allowedRoutes:
+${I}  namespaces:
+${I}    from: Same"
+}
+
+# _is_valid_dns1123_label <value>
+#   Returns 0 if value is a DNS-1123 label (safe to embed in YAML/JSON quotes).
+_is_valid_dns1123_label() {
+  local v="$1"
+  [[ ${#v} -le 63 ]] && [[ "$v" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]
+}
+
+# _is_valid_k8s_label_key <key>
+#   Returns 0 if key is a valid Kubernetes label key (name or prefix/name).
+_is_valid_k8s_label_key() {
+  local key="$1" name prefix
+  [[ -z "$key" || ${#key} -gt 253 ]] && return 1
+  if [[ "$key" == */* ]]; then
+    prefix="${key%/*}"
+    name="${key##*/}"
+    [[ -z "$prefix" || -z "$name" ]] && return 1
+    # Prefix: DNS subdomain; name: DNS-1123 label with optional dots/underscores mid-segment
+    [[ "$prefix" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$ ]] || return 1
+    [[ ${#name} -le 63 && "$name" =~ ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$ ]] || return 1
+    return 0
+  fi
+  [[ ${#key} -le 63 && "$key" =~ ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$ ]]
+}
+
+# _is_valid_k8s_label_value <value>
+#   Returns 0 if value is a valid Kubernetes label value (or empty).
+_is_valid_k8s_label_value() {
+  local v="$1"
+  [[ -z "$v" ]] && return 0
+  [[ ${#v} -le 63 && "$v" =~ ^[a-zA-Z0-9]([-_.a-zA-Z0-9]*[a-zA-Z0-9])?$ ]]
+}
+
+# build_allowed_routes_yaml <indent>
+#   Generates the allowedRoutes YAML block for a Gateway listener at the given
+#   indentation level. Designed for embedding directly into heredoc manifests.
+#
+#   Uses env vars (see below) to pick a mode:
+#     ALLOWED_ROUTE_NAMESPACES  → from: Selector with matchExpressions on
+#                                  kubernetes.io/metadata.name (namespace name list)
+#     NAMESPACE_SELECTOR_LABELS → from: Selector with matchLabels (label filter)
+#     (neither / invalid)       → from: Same (secure default; only the Gateway's
+#                                  own namespace can attach HTTPRoutes)
+#
+# Arguments:
+#   indent - Number of spaces for the 'allowedRoutes:' key (default: 6)
+#
+# Environment:
+#   ALLOWED_ROUTE_NAMESPACES  - Comma-separated namespace names, e.g. "opendatahub,llm"
+#   NAMESPACE_SELECTOR_LABELS - Comma-separated key=value pairs, e.g. "gateway-access=true"
+build_allowed_routes_yaml() {
+  local indent="${1:-6}"
+  local I
+  I="$(printf '%*s' "$indent" '')"
+
+  if [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" ]]; then
+    local values_lines="" _ns
+    IFS=',' read -ra _ns_arr <<< "$ALLOWED_ROUTE_NAMESPACES"
+    for _ns in "${_ns_arr[@]}"; do
+      _ns="${_ns//[[:space:]]/}"
+      [[ -z "$_ns" ]] && continue
+      if ! _is_valid_dns1123_label "$_ns"; then
+        log_warn "Ignoring invalid namespace name in ALLOWED_ROUTE_NAMESPACES: ${_ns}"
+        continue
+      fi
+      values_lines+="${I}        - \"${_ns}\""$'\n'
+    done
+    if [[ -z "$values_lines" ]]; then
+      # Empty/invalid list would emit values:[] which matches nothing and is not
+      # a useful config — fall back to the secure default instead.
+      log_warn "ALLOWED_ROUTE_NAMESPACES has no valid namespace names; falling back to from: Same"
+      _allowed_routes_same_yaml "$I"
+      return 0
+    fi
+    printf '%s' \
+"${I}allowedRoutes:
+${I}  namespaces:
+${I}    from: Selector
+${I}    selector:
+${I}      matchExpressions:
+${I}      - key: kubernetes.io/metadata.name
+${I}        operator: In
+${I}        values:
+${values_lines}"
+  elif [[ -n "${NAMESPACE_SELECTOR_LABELS:-}" ]]; then
+    local labels_lines="" _pair _key _val
+    IFS=',' read -ra _pairs <<< "$NAMESPACE_SELECTOR_LABELS"
+    for _pair in "${_pairs[@]}"; do
+      _pair="${_pair//[[:space:]]/}"
+      [[ -z "$_pair" || "$_pair" != *=* ]] && continue
+      _key="${_pair%%=*}"
+      _val="${_pair#*=}"
+      if [[ -z "$_key" ]] || ! _is_valid_k8s_label_key "$_key" || ! _is_valid_k8s_label_value "$_val"; then
+        log_warn "Ignoring invalid label selector pair in NAMESPACE_SELECTOR_LABELS: ${_pair}"
+        continue
+      fi
+      labels_lines+="${I}        ${_key}: \"${_val}\""$'\n'
+    done
+    if [[ -z "$labels_lines" ]]; then
+      # No valid key=value pairs — fall back to the secure default instead of
+      # emitting an empty matchLabels selector, which would match all namespaces.
+      log_warn "NAMESPACE_SELECTOR_LABELS has no valid key=value pairs; falling back to from: Same"
+      _allowed_routes_same_yaml "$I"
+      return 0
+    fi
+    printf '%s' \
+"${I}allowedRoutes:
+${I}  namespaces:
+${I}    from: Selector
+${I}    selector:
+${I}      matchLabels:
+${labels_lines}"
+  else
+    _allowed_routes_same_yaml "$I"
+  fi
+}
+
+# build_allowed_routes_json
+#   Outputs the allowedRoutes value as JSON for use with kubectl patch --type=json.
+#   Uses the same ALLOWED_ROUTE_NAMESPACES / NAMESPACE_SELECTOR_LABELS env vars
+#   as build_allowed_routes_yaml; defaults to {"namespaces":{"from":"Same"}}.
+build_allowed_routes_json() {
+  if [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" ]]; then
+    local values="" _ns
+    IFS=',' read -ra _ns_arr <<< "$ALLOWED_ROUTE_NAMESPACES"
+    for _ns in "${_ns_arr[@]}"; do
+      _ns="${_ns//[[:space:]]/}"
+      [[ -z "$_ns" ]] && continue
+      if ! _is_valid_dns1123_label "$_ns"; then
+        log_warn "Ignoring invalid namespace name in ALLOWED_ROUTE_NAMESPACES: ${_ns}" >&2
+        continue
+      fi
+      [[ -n "$values" ]] && values+=","
+      values+="\"${_ns}\""
+    done
+    if [[ -z "$values" ]]; then
+      log_warn "ALLOWED_ROUTE_NAMESPACES has no valid namespace names; falling back to from: Same" >&2
+      printf '{"namespaces":{"from":"Same"}}'
+      return 0
+    fi
+    printf '{"namespaces":{"from":"Selector","selector":{"matchExpressions":[{"key":"kubernetes.io/metadata.name","operator":"In","values":[%s]}]}}}' "$values"
+  elif [[ -n "${NAMESPACE_SELECTOR_LABELS:-}" ]]; then
+    local labels_json="{" first=true _pair _key _val
+    IFS=',' read -ra _pairs <<< "$NAMESPACE_SELECTOR_LABELS"
+    for _pair in "${_pairs[@]}"; do
+      _pair="${_pair//[[:space:]]/}"
+      [[ -z "$_pair" || "$_pair" != *=* ]] && continue
+      _key="${_pair%%=*}"
+      _val="${_pair#*=}"
+      if [[ -z "$_key" ]] || ! _is_valid_k8s_label_key "$_key" || ! _is_valid_k8s_label_value "$_val"; then
+        log_warn "Ignoring invalid label selector pair in NAMESPACE_SELECTOR_LABELS: ${_pair}" >&2
+        continue
+      fi
+      [[ "$first" == "true" ]] && first=false || labels_json+=","
+      labels_json+="\"${_key}\":\"${_val}\""
+    done
+    labels_json+="}"
+    if [[ "$labels_json" == "{}" ]]; then
+      # No valid key=value pairs — fall back to the secure default instead of
+      # emitting matchLabels:{} which matches all namespaces (equivalent to from: All).
+      log_warn "NAMESPACE_SELECTOR_LABELS has no valid key=value pairs; falling back to from: Same" >&2
+      printf '{"namespaces":{"from":"Same"}}'
+      return 0
+    fi
+    printf '{"namespaces":{"from":"Selector","selector":{"matchLabels":%s}}}' "$labels_json"
+  else
+    printf '{"namespaces":{"from":"Same"}}'
+  fi
+}
+
+# patch_gateway_allowed_routes <gateway_name> <gateway_namespace>
+#   Ensures ALL listeners' allowedRoutes on an existing Gateway match the desired
+#   configuration. Patches when:
+#     - Any listener has from: All (upgrades insecure default), OR
+#     - ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS is set (applies user config)
+#   Skips when all listeners are already at a secure non-All state and no custom
+#   config is requested. Applies the same allowedRoutes to every listener so that
+#   multi-listener Gateways (e.g. HTTP + HTTPS) are patched consistently.
+#
+# Arguments:
+#   gateway_name      - Name of the Gateway resource
+#   gateway_namespace - Namespace of the Gateway
+patch_gateway_allowed_routes() {
+  local gateway_name="$1"
+  local gateway_namespace="$2"
+
+  # Count listeners without requiring jq: emit one 'x' per listener then count chars.
+  local listener_count
+  if ! listener_count=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+    -o jsonpath='{range .spec.listeners[*]}x{end}' 2>/dev/null | wc -c | tr -d ' '); then
+    log_error "Unable to read Gateway ${gateway_namespace}/${gateway_name} for allowedRoutes update"
+    return 1
+  fi
+  if [[ "$listener_count" -eq 0 ]]; then
+    log_debug "  Gateway ${gateway_namespace}/${gateway_name} has no listeners — skipping allowedRoutes patch"
+    return 0
+  fi
+
+  local has_custom_config=false
+  [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" || -n "${NAMESPACE_SELECTOR_LABELS:-}" ]] && has_custom_config=true
+
+  # Check whether any listener still carries the insecure from: All default.
+  local any_all=false
+  local i current_from
+  for ((i=0; i<listener_count; i++)); do
+    current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null || echo "")
+    [[ "$current_from" == "All" ]] && any_all=true && break
+  done
+
+  # Skip if all listeners are already secure and no custom config is requested.
+  if [[ "$any_all" == "false" && "$has_custom_config" == "false" ]]; then
+    log_debug "  Gateway allowedRoutes already secure on all listeners — skipping"
+    return 0
+  fi
+
+  if [[ "${DRY_RUN:-false}" == "true" ]]; then
+    log_info "  [DRY RUN] Would update allowedRoutes on ${listener_count} listener(s)"
+    return 0
+  fi
+
+  log_info "  Updating Gateway allowedRoutes on ${listener_count} listener(s)..."
+  local json patch_ops="" sep=""
+  json="$(build_allowed_routes_json)"
+  # Build a single JSON patch array covering every listener.
+  # op:add is safe for both present and absent allowedRoutes fields (RFC 6902 §4.1).
+  for ((i=0; i<listener_count; i++)); do
+    patch_ops+="${sep}{\"op\":\"add\",\"path\":\"/spec/listeners/${i}/allowedRoutes\",\"value\":${json}}"
+    sep=","
+  done
+  kubectl patch gateway "$gateway_name" -n "$gateway_namespace" --type='json' \
+    -p="[${patch_ops}]"
+}
