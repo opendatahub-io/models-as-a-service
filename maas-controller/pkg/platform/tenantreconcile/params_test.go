@@ -491,7 +491,7 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	maasReplicas := int32(3)
 	payloadReplicas := int32(2)
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:              "tenant-ns",
 		ControllerNamespace:       "controller-ns",
 		GatewayNamespace:          "gateway-ns",
@@ -522,7 +522,7 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	resources := renderOverlayResources(t, "ai-tenant-redteam")
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:            "ai-tenant-redteam",
 		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
