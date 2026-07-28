@@ -71,7 +71,8 @@ type ConfigSpec struct {
 	// a standby takes over without waiting for a new pod to start.
 	// Note: the controller uses leader election, so only one replica is active
 	// at a time; extra replicas are standby, not parallel workers.
-	// Defaults to 1 if not specified.
+	// When unset, the controller does not manage replica count — the existing
+	// Deployment value is preserved.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=10

@@ -56,7 +56,8 @@ spec:
                   a standby takes over without waiting for a new pod to start.
                   Note: the controller uses leader election, so only one replica is active
                   at a time; extra replicas are standby, not parallel workers.
-                  Defaults to 1 if not specified.
+                  When unset, the controller does not manage replica count — the existing
+                  Deployment value is preserved.
                 format: int32
                 maximum: 10
                 minimum: 1
