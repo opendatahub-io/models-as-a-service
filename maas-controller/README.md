@@ -485,7 +485,8 @@ The controller accepts the following command-line flags:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--metrics-bind-address` | `:8080` | The address the metrics endpoint binds to. |
+| `--metrics-bind-address` | `:8443` | The address the metrics endpoint binds to. |
+| `--metrics-secure` | `true` | Serve metrics over HTTPS with authn/authz. Set `false` for non-OpenShift/xKS. |
 | `--health-probe-bind-address` | `:8081` | The address the probe endpoint binds to. |
 | `--leader-elect` | `false` | Enable leader election for controller manager. |
 | `--gateway-name` | `maas-default-gateway` | The name of the Gateway resource to use for model HTTPRoutes. |
