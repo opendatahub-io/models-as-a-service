@@ -723,10 +723,12 @@ EOF
   # Infrastructure namespace is configurable via deployment overlays (params.env).
   log_info ""
   log_info "Waiting for Tenant reconciler to deploy maas-api..."
-  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace_raw="${INFRA_NAMESPACE-AUTO}"
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
@@ -912,10 +914,12 @@ validate_postgres_connection() {
 # wait_for_operator_maas_api waits for maas-api to be deployed by the Tenant
 # reconciler (maas-controller) in the infrastructure namespace.
 wait_for_operator_maas_api() {
-  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace_raw="${INFRA_NAMESPACE-AUTO}"
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
@@ -943,10 +947,13 @@ wait_for_operator_maas_api() {
 
 deploy_postgresql() {
   # Infrastructure namespace where maas-api runs (AUTO = derive from controller namespace)
-  local infra_ns_raw="${INFRA_NAMESPACE:-AUTO}"
+  local controller_ns="${NAMESPACE:-opendatahub}"
+  local infra_ns_raw="${INFRA_NAMESPACE-AUTO}"
   local infra_ns
   if [ "$infra_ns_raw" = "AUTO" ]; then
-    infra_ns=$(derive_infra_namespace "$NAMESPACE")
+    infra_ns=$(derive_infra_namespace "$controller_ns")
+  elif [ -z "$infra_ns_raw" ]; then
+    infra_ns="$controller_ns"
   else
     infra_ns="$infra_ns_raw"
   fi
@@ -965,7 +972,7 @@ deploy_postgresql() {
     log_warn "  (AWS RDS, Crunchy Operator, Azure Database, etc.)"
     log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
     # setup-database.sh handles upgrade detection and namespace selection
-    "${SCRIPT_DIR}/setup-database.sh"
+    NAMESPACE="$controller_ns" "${SCRIPT_DIR}/setup-database.sh"
   fi
 }
 
@@ -1757,10 +1764,12 @@ configure_tls_backend() {
   log_info "Restarting deployments to pick up TLS configuration..."
 
   # maas-api deploys to infrastructure namespace
-  local infra_namespace_raw="${INFRA_NAMESPACE:-AUTO}"
+  local infra_namespace_raw="${INFRA_NAMESPACE-AUTO}"
   local infra_namespace
   if [ "$infra_namespace_raw" = "AUTO" ]; then
     infra_namespace=$(derive_infra_namespace "$NAMESPACE")
+  elif [ -z "$infra_namespace_raw" ]; then
+    infra_namespace="$NAMESPACE"
   else
     infra_namespace="$infra_namespace_raw"
   fi
