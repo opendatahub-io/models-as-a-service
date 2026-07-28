@@ -57,7 +57,7 @@ spec:
               name: usage-logs-all
             labelName: subscription
             matchers:
-              - '{service_name="models-as-a-service", subscription!="-"}'
+              - '{service_name="models-as-a-service", subscription!="-", response_type!="error"}'
     - kind: ListVariable
       spec:
         name: model
@@ -75,7 +75,7 @@ spec:
               name: usage-logs-all
             labelName: model
             matchers:
-              - '{service_name="models-as-a-service", model!="-"}'
+              - '{service_name="models-as-a-service", model!="-", response_type!="error"}'
     - kind: ListVariable
       spec:
         name: view_by
