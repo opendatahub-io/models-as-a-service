@@ -605,12 +605,14 @@ func assertEnvVarAbsent(t *testing.T, r *unstructured.Unstructured, containerNam
 	require.NoError(t, err)
 	require.True(t, found)
 
+	containerFound := false
 	for _, c := range containers {
 		containerMap, ok := c.(map[string]any)
 		require.True(t, ok)
 		if containerMap["name"] != containerName {
 			continue
 		}
+		containerFound = true
 
 		envSlice, _ := containerMap["env"].([]any)
 		for _, e := range envSlice {
@@ -618,8 +620,9 @@ func assertEnvVarAbsent(t *testing.T, r *unstructured.Unstructured, containerNam
 			require.True(t, ok)
 			assert.NotEqual(t, envName, envMap["name"], "env var %q should not be present in container %q", envName, containerName)
 		}
-		return
+		break
 	}
+	require.True(t, containerFound, "container %q not found", containerName)
 }
 
 func requirePodTemplateLabel(t *testing.T, r *unstructured.Unstructured, key string) string {
