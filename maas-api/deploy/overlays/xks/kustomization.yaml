@@ -10,6 +10,7 @@ resources:
   - ../../../../deployment/base/maas-api/overlays/tls
   - ../../../../deployment/base/maas-controller/policies
   - ../../../../deployment/base/payload-processing/default
+  - certificate.yaml
 
 namespace: opendatahub
 

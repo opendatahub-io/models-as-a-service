@@ -638,3 +638,87 @@ func requireServiceSelectorLabel(t *testing.T, r *unstructured.Unstructured, key
 	require.True(t, ok, "selector label %q not found", key)
 	return value
 }
+
+func TestPatchMaaSAPIServingCert_DefaultTenant(t *testing.T) {
+	cert := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      "maas-api-serving-cert",
+			"namespace": "redhat-ai-gateway-infra",
+		},
+		"spec": map[string]any{
+			"secretName": "maas-api-serving-cert",
+			"issuerRef": map[string]any{
+				"name":  "rhai-ca-issuer",
+				"kind":  "ClusterIssuer",
+				"group": "cert-manager.io",
+			},
+			"dnsNames": []any{
+				"maas-api.opendatahub.svc",
+				"maas-api.opendatahub.svc.cluster.local",
+			},
+		},
+	}}
+
+	params := PlatformParams{
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantIdentifier: "",
+	}
+
+	err := patchMaaSAPIServingCert(logr.Discard(), cert, params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "maas-api-serving-cert", cert.GetName())
+
+	secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	assert.Equal(t, "maas-api-serving-cert", secretName)
+
+	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	assert.Equal(t, []string{
+		"maas-api.redhat-ai-gateway-infra.svc",
+		"maas-api.redhat-ai-gateway-infra.svc.cluster.local",
+	}, dnsNames)
+}
+
+func TestPatchMaaSAPIServingCert_MultiTenant(t *testing.T) {
+	cert := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      "maas-api-serving-cert",
+			"namespace": "redhat-ai-gateway-infra",
+		},
+		"spec": map[string]any{
+			"secretName": "maas-api-serving-cert",
+			"issuerRef": map[string]any{
+				"name":  "rhai-ca-issuer",
+				"kind":  "ClusterIssuer",
+				"group": "cert-manager.io",
+			},
+			"dnsNames": []any{
+				"maas-api.opendatahub.svc",
+				"maas-api.opendatahub.svc.cluster.local",
+			},
+		},
+	}}
+
+	params := PlatformParams{
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantIdentifier: "redteam",
+	}
+
+	err := patchMaaSAPIServingCert(logr.Discard(), cert, params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "maas-api-serving-cert-redteam", cert.GetName())
+
+	secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	assert.Equal(t, "maas-api-serving-cert-redteam", secretName)
+
+	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	assert.Equal(t, []string{
+		"maas-api-redteam.redhat-ai-gateway-infra.svc",
+		"maas-api-redteam.redhat-ai-gateway-infra.svc.cluster.local",
+	}, dnsNames)
+}
