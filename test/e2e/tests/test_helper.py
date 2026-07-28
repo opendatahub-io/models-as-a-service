@@ -40,7 +40,12 @@ Environment variables (all optional unless noted):
   - E2E_DISTINCT_MODEL_2_ID: Canonical BBR model ID for second distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2)
   - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
-  - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model) 
+  - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
+  - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
+  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE (default: 6)
+  - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
+  - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
+  - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
 """
 
 import base64
@@ -71,6 +76,17 @@ MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 # Clients must use this form in the "model" field when targeting the BBR gateway endpoint.
 MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODEL_NAMESPACE}/models/{MODEL_NAME}")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+# Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
+GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
+# Empty 403 / Authorino AUTH_FAILURE while Envoy catches up after AuthPolicy updates.
+GATEWAY_PROPAGATION_RETRIES = int(os.environ.get("E2E_GATEWAY_PROPAGATION_RETRIES", "6"))
+GATEWAY_PROPAGATION_DELAY = int(os.environ.get("E2E_GATEWAY_PROPAGATION_DELAY", "5"))
+# Wait for maas-gateway-auth Accepted+Enforced before minting keys / calling maas-api.
+# 180s covers AuthConfig backlog after heavy MaaSAuthPolicy churn in Konflux e2e.
+GATEWAY_ENFORCED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "180"))
+# If the AuthPolicy CR is missing this long, fail fast (misconfigured name/namespace)
+# instead of burning the full GATEWAY_ENFORCED_TIMEOUT.
+GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSING_GRACE", "30"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -244,8 +260,46 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs):
+    """Make an HTTP request, retrying transient gateway/auth propagation errors.
+
+    Retries on:
+    - Empty 403 / empty 401: Envoy has not loaded the AuthPolicy yet (common after
+      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
+    - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
+
+    Returns the last response — callers' assertions surface a permanent failure.
+    """
+    retries = GATEWAY_PROPAGATION_RETRIES if retries is None else retries
+    delay = GATEWAY_PROPAGATION_DELAY if delay is None else delay
+    timeout = kwargs.pop("timeout", TIMEOUT)
+    verify = kwargs.pop("verify", TLS_VERIFY)
+    r = None
+    for attempt in range(1, retries + 1):
+        r = method(url, timeout=timeout, verify=verify, **kwargs)
+        empty_auth_reject = r.status_code in (401, 403) and not r.text.strip()
+        retryable = empty_auth_reject or (
+            r.status_code == 500 and "AUTH_FAILURE" in r.text
+        )
+        if retryable and attempt < retries:
+            log.info(
+                "Gateway returned %d (attempt %d/%d), retrying in %ds...",
+                r.status_code,
+                attempt,
+                retries,
+                delay,
+            )
+            time.sleep(delay)
+            continue
+        return r
+    return r
+
+
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
+
+    Retries empty 403 / Authorino AUTH_FAILURE so callers see the real API
+    response after gateway AuthPolicy propagation, not a transient reject.
 
     Args:
         oc_token: OC token for authentication with maas-api
@@ -262,7 +316,8 @@ def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = Non
     if subscription:
         body["subscription"] = subscription
 
-    return requests.post(
+    return _request_with_gateway_retry(
+        requests.post,
         url,
         headers={
             "Authorization": f"Bearer {oc_token}",
@@ -287,7 +342,11 @@ def _create_api_key(oc_token: str, name: str = None, subscription: str = None) -
     """
     r = _create_api_key_raw(oc_token, name, subscription)
     if r.status_code not in (200, 201):
-        raise RuntimeError(f"Failed to create API key: {r.status_code} {r.text}")
+        detail = r.text.strip() or (
+            "empty body (likely gateway AuthPolicy not yet Enforced / Envoy not loaded; "
+            f"check: oc get authpolicy {GATEWAY_AUTH_POLICY_NAME} -n {GATEWAY_NAMESPACE})"
+        )
+        raise RuntimeError(f"Failed to create API key: {r.status_code} {detail}")
 
     data = r.json()
     api_key = data.get("key")
@@ -743,6 +802,117 @@ def _wait_reconcile(seconds=None):
     time.sleep(seconds or RECONCILE_WAIT)
 
 
+def _authpolicy_conditions(cr, *types):
+    """Return {type: (status, reason, message)} for requested condition types (single pass)."""
+    wanted = set(types)
+    result = {t: (None, None, None) for t in wanted}
+    for condition in (cr or {}).get("status", {}).get("conditions", []):
+        ctype = condition.get("type")
+        if ctype in wanted:
+            result[ctype] = (
+                condition.get("status"),
+                condition.get("reason"),
+                condition.get("message"),
+            )
+    return result
+
+
+def _authpolicy_condition(cr, condition_type: str):
+    """Return (status, reason, message) for an AuthPolicy condition type, or (None, None, None)."""
+    return _authpolicy_conditions(cr, condition_type)[condition_type]
+
+
+def _truncate_auth_message(message: Optional[str], limit: int = 240) -> str:
+    """Shrink Kuadrant Enforced messages that list dozens of pending AuthConfigs."""
+    if not message:
+        return ""
+    if len(message) <= limit:
+        return message
+    # Prefer a compact count when Kuadrant dumps AuthConfig hashes.
+    authconfig_count = message.count("AuthConfig (")
+    if authconfig_count:
+        return f"{message[:limit]}… ({authconfig_count} AuthConfigs pending sync)"
+    return message[:limit] + "…"
+
+
+def _wait_for_gateway_auth_enforced(
+    name: Optional[str] = None,
+    namespace: Optional[str] = None,
+    timeout: Optional[int] = None,
+):
+    """Wait until the gateway Kuadrant AuthPolicy is Accepted and Enforced.
+
+    MaaSAuthPolicy phase Active only means the controller reconciled CRs.
+    HTTP calls through the gateway still need Kuadrant's AuthPolicy
+    (typically maas-gateway-auth) to report Enforced=True; otherwise Envoy
+    often returns an empty 403.
+
+    Default timeout is GATEWAY_ENFORCED_TIMEOUT (env E2E_GATEWAY_ENFORCED_TIMEOUT).
+    If the AuthPolicy CR is absent for GATEWAY_ENFORCED_MISSING_GRACE seconds,
+    fail early — that usually means a wrong name/namespace, not slow enforcement.
+
+    Raises:
+        TimeoutError: with Accepted/Enforced snapshot so failures are actionable
+    """
+    name = name or GATEWAY_AUTH_POLICY_NAME
+    namespace = namespace or GATEWAY_NAMESPACE
+    timeout = GATEWAY_ENFORCED_TIMEOUT if timeout is None else timeout
+    deadline = time.time() + timeout
+    last_snapshot = "AuthPolicy not found"
+    missing_since = None
+    warned_missing = False
+    log.info(
+        "Waiting for gateway AuthPolicy %s/%s Accepted+Enforced (timeout: %ds)...",
+        namespace,
+        name,
+        timeout,
+    )
+
+    while time.time() < deadline:
+        cr = _get_cr("authpolicy", name, namespace)
+        if cr is None:
+            last_snapshot = "AuthPolicy not found"
+            now = time.time()
+            if missing_since is None:
+                missing_since = now
+                if not warned_missing:
+                    log.warning(
+                        "Gateway AuthPolicy %s/%s not found yet; will fail after %ds if it never appears "
+                        "(check E2E_GATEWAY_AUTH_POLICY_NAME / GATEWAY_NAMESPACE)",
+                        namespace,
+                        name,
+                        GATEWAY_ENFORCED_MISSING_GRACE,
+                    )
+                    warned_missing = True
+            elif now - missing_since >= GATEWAY_ENFORCED_MISSING_GRACE:
+                raise TimeoutError(
+                    f"Gateway AuthPolicy {namespace}/{name} was not found within "
+                    f"{GATEWAY_ENFORCED_MISSING_GRACE}s (misconfigured name/namespace?). "
+                    f"Empty HTTP 403 from maas-api usually means Kuadrant has not finished "
+                    f"enforcing auth on the gateway after MaaSAuthPolicy changes."
+                )
+        else:
+            missing_since = None
+            conds = _authpolicy_conditions(cr, "Accepted", "Enforced")
+            accepted, a_reason, a_msg = conds["Accepted"]
+            enforced, e_reason, e_msg = conds["Enforced"]
+            last_snapshot = (
+                f"Accepted={accepted} reason={a_reason!r} message={_truncate_auth_message(a_msg)!r}; "
+                f"Enforced={enforced} reason={e_reason!r} message={_truncate_auth_message(e_msg)!r}"
+            )
+            if accepted == "True" and enforced == "True":
+                log.info("Gateway AuthPolicy %s/%s is Accepted and Enforced", namespace, name)
+                return cr
+            log.debug("Gateway AuthPolicy %s/%s not ready: %s", namespace, name, last_snapshot)
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"Gateway AuthPolicy {namespace}/{name} was not Accepted+Enforced within {timeout}s "
+        f"(last status: {last_snapshot}). Empty HTTP 403 from maas-api usually means Kuadrant "
+        f"has not finished enforcing auth on the gateway after MaaSAuthPolicy changes."
+    )
+
+
 def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
     """Wait for TokenRateLimitPolicy to be created and enforced for a model.
 
@@ -905,8 +1075,10 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
         timeout: Maximum wait time in seconds (default: 60)
         require_auth_policies: If True, requires authPolicies to be populated (default: False).
                                Keep False for gateway-only AuthPolicy reconciliation.
-        require_enforced: If True, requires all authPolicies to have ready=True
-                          (default: True). Only applies when require_auth_policies is True.
+        require_enforced: If True (default):
+            - with require_auth_policies=True: all status.authPolicies entries must be ready
+            - with require_auth_policies=False and expected_phase Active: also wait for the
+              gateway Kuadrant AuthPolicy (maas-gateway-auth) to be Accepted+Enforced
 
     Returns:
         The auth policy CR dict when the expected phase is reached
@@ -926,8 +1098,16 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
             auth_policies = status.get("authPolicies", [])
 
             if phase == expected_phase:
-                # No auth policies required — phase match is sufficient
+                # No per-model auth policies required — phase match is sufficient for the CR,
+                # but gateway-only mode still needs Kuadrant Enforced before HTTP calls.
+                # Callers that intentionally stop Kuadrant (e.g. TRLP degraded tests) must
+                # pass require_enforced=False — Enforced cannot become True while Kuadrant is down.
                 if not require_auth_policies:
+                    if require_enforced and expected_phase == "Active":
+                        # Keep a floor so a slow phase wait does not starve Kuadrant Enforced.
+                        # AuthConfig backlog after policy churn often needs the full enforced timeout.
+                        remaining = max(GATEWAY_ENFORCED_TIMEOUT, int(deadline - time.time()))
+                        _wait_for_gateway_auth_enforced(timeout=remaining)
                     log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}'")
                     return cr
 

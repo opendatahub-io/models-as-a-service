@@ -304,6 +304,39 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 	g.Expect(updatedDep.Annotations[TeardownCompletedAnnotation]).To(BeEmpty())
 }
 
+func TestLifecycleReconciler_TeardownClearsBootstrapMarkerBeforeAITenantCleanupCompletes(t *testing.T) {
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	cfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.ConfigInstanceName,
+			Annotations: map[string]string{
+				DefaultAITenantBootstrappedAnnotation: "true",
+				"example.com/preserved":               "true",
+			},
+		},
+	}
+	aitenant := lifecycleTestUnstructured(
+		schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
+		tenantreconcile.DefaultAITenantNamespace,
+		tenantreconcile.DefaultAITenantName,
+		aitenantFinalizer,
+	)
+
+	cl := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(cfg, aitenant).Build()
+	r := &LifecycleReconciler{Client: cl, Scheme: s}
+
+	res, err := r.handleRequestedTeardown(context.Background(), nil, cfg)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res.RequeueAfter).To(Equal(teardownRequeueAfter))
+
+	var updatedCfg maasv1alpha1.Config
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updatedCfg)).To(Succeed())
+	g.Expect(updatedCfg.Annotations).NotTo(HaveKey(DefaultAITenantBootstrappedAnnotation))
+	g.Expect(updatedCfg.Annotations["example.com/preserved"]).To(Equal("true"))
+}
+
 func TestLifecycleReconciler_NormalReconcileDoesNotSetDeploymentOwnerReference(t *testing.T) {
 	g := NewWithT(t)
 	s := lifecycleTestScheme(t)
