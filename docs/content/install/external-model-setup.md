@@ -7,12 +7,10 @@ This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthro
 
 ## Multi-Tenant Limitation
 
-!!! danger "External models are not supported in multi-tenant deployments"
-    When multiple AITenants are deployed, each tenant gets a dedicated Gateway and Inference Payload Processor (IPP) stack. The ExternalModel reconciler is not tenant-aware — it always creates HTTPRoutes pointing to the default tenant's gateway (`--gateway-name` / `--gateway-namespace` controller flags). Each tenant's IPP EnvoyFilter targets its own gateway, which conflicts with the ExternalModel HTTPRoute's static gateway reference.
+!!! warning "External models are only supported for the default tenant"
+    In multi-tenant deployments, external models work for the **default tenant only**. Non-default tenant IPP (Inference Payload Processor) instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts between tenants.
 
-    **Result:** External models do not work for any tenant — including the default tenant — when multiple IPP instances are running.
-
-    External models are only supported in single-tenant deployments. This limitation is tracked for a future fix.
+    External model support for non-default tenants is planned for a future release.
 
 ## Prerequisites
 

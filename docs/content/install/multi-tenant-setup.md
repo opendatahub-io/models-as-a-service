@@ -338,8 +338,8 @@ The controller finalizer cleans up:
 
 ## Known Limitations
 
-!!! danger "External models are not supported in multi-tenant deployments"
-    The ExternalModel reconciler is not tenant-aware — it hardcodes HTTPRoutes to the default tenant's gateway. When multiple tenants are running, each tenant's IPP stack conflicts with these routes, breaking external models for all tenants including the default. See [External Model Setup — Multi-Tenant Limitation](external-model-setup.md#multi-tenant-limitation) for details.
+!!! warning "External models are only supported for the default tenant"
+    External models work for the default tenant only. Non-default tenant IPP instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts. See [External Model Setup — Multi-Tenant Limitation](external-model-setup.md#multi-tenant-limitation) for details.
 
 ## See Also
 
