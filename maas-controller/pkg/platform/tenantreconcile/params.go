@@ -361,6 +361,11 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
 		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
 	}
+	if params.TenantIdentifier != "" {
+		if err := setOrAddEnvVar(r, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
+		}
+	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)
 	}

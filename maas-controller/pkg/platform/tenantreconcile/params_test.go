@@ -260,6 +260,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.SubscriptionNamespace, requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
 	assertDeploymentSelectorLabelAbsent(t, payloadDeployment, LabelTenantInstance)
 	assert.Equal(t, PayloadProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadDeployment, LabelTenantInstance))
+	// Default tenant (empty TenantIdentifier) must NOT have DISABLE_EXTERNAL_MODEL_CONTROLLER
+	assertEnvVarAbsent(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER")
 
 	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
 		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
@@ -504,6 +506,8 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	payloadDeployment := requireResource(t, resources, GVKDeployment, "payload-processing-redteam")
 	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadDeployment, "payload-processing", "GATEWAY_NAME"))
 	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
+	// Non-default tenant must have DISABLE_EXTERNAL_MODEL_CONTROLLER=true
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 	assert.Equal(t, "payload-processing-redteam", requireDeploymentSelectorLabel(t, payloadDeployment, LabelTenantInstance))
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
@@ -592,6 +596,30 @@ func requireEnvVarValue(t *testing.T, r *unstructured.Unstructured, containerNam
 
 	t.Fatalf("env var %q not found in container %q", envName, containerName)
 	return ""
+}
+
+func assertEnvVarAbsent(t *testing.T, r *unstructured.Unstructured, containerName, envName string) {
+	t.Helper()
+
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	for _, c := range containers {
+		containerMap, ok := c.(map[string]any)
+		require.True(t, ok)
+		if containerMap["name"] != containerName {
+			continue
+		}
+
+		envSlice, _ := containerMap["env"].([]any)
+		for _, e := range envSlice {
+			envMap, ok := e.(map[string]any)
+			require.True(t, ok)
+			assert.NotEqual(t, envName, envMap["name"], "env var %q should not be present in container %q", envName, containerName)
+		}
+		return
+	}
 }
 
 func requirePodTemplateLabel(t *testing.T, r *unstructured.Unstructured, key string) string {
