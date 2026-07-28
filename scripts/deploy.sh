@@ -239,8 +239,7 @@ ADVANCED OPTIONS (PR Testing):
 
   --external-oidc
       Enable external OIDC on the maas-api AuthPolicy.
-      Requires OIDC_ISSUER_URL or deployment/overlays/odh/params.env to provide
-      a real oidc-issuer-url value.
+      Requires OIDC_ISSUER_URL (and OIDC_CLIENT_ID) to be set.
 
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
@@ -251,8 +250,9 @@ ENVIRONMENT VARIABLES:
   OPERATOR_STARTING_CSV     ODH Subscription startingCSV (optional; when unset, follows the channel head)
   OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
-  EXTERNAL_OIDC            Enable external OIDC on maas-api (true/false)
-  OIDC_ISSUER_URL          External OIDC issuer URL for maas-api AuthPolicy patching
+  EXTERNAL_OIDC             Enable external OIDC on maas-api (true/false)
+  OIDC_ISSUER_URL           External OIDC issuer URL for maas-api AuthPolicy patching
+  OIDC_CLIENT_ID            External OIDC client ID for maas-api AuthPolicy patching (required with EXTERNAL_OIDC)
   LOG_LEVEL                 Logging verbosity (DEBUG, INFO, WARN, ERROR)
   FORCE_OVERWRITE           When true, re-apply manifests even if the resource already exists (default: false)
   POSTGRES_CONNECTION       External PostgreSQL connection string (same as --postgres-connection)
@@ -627,9 +627,12 @@ main() {
   else
     # Direct-install path used when maas-controller is absent, or when
     # FORCE_OVERWRITE=true requests a full local re-apply and restart.
-    # Ensure maas-parameters ConfigMap exists with image defaults before the
-    # controller starts; maas-controller reads these via configMapKeyRef
-    # (RELATED_IMAGE_* env vars).
+    # deployment/base/maas-controller/default now generates its own
+    # maas-parameters ConfigMap (see its kustomization.yaml), so image
+    # overrides below are injected via a `behavior: merge` configMapGenerator
+    # in the temporary overlay (Phase 2) instead of a separate kubectl-create
+    # step -- a standalone create here would just be overwritten by Phase 2's
+    # apply and silently drop PR-testing image overrides.
     local default_tag="odh-stable"
     [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
     local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
@@ -637,18 +640,6 @@ main() {
     local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
     local cm_monitoring_namespace="${MONITORING_NAMESPACE:-opendatahub}"
-
-    log_info "  Ensuring maas-parameters ConfigMap..."
-    kubectl create configmap maas-parameters -n "$NAMESPACE" \
-      --from-literal="maas-api-image=${cm_maas_api_image}" \
-      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
-      --from-literal="payload-processing-image=${cm_payload_processing_image}" \
-      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
-      --from-literal="monitoring-namespace=${cm_monitoring_namespace}" \
-      --dry-run=client -o yaml | kubectl apply -f - || {
-      log_error "Failed to create/update maas-parameters ConfigMap"
-      return 1
-    }
 
     log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
     if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
@@ -667,6 +658,22 @@ kind: Kustomization
 namespace: ${NAMESPACE}
 resources:
   - ../deployment/base/maas-controller/default
+# Overrides deployment/base/maas-controller/default's own maas-parameters
+# ConfigMap (merge, not create) with this run's resolved image/namespace
+# values, so PR-testing overrides (--maas-api-image, --payload-processing-image,
+# MONITORING_NAMESPACE, etc.) reach both the Deployment env vars and any
+# tenant-reconciler code that reads this ConfigMap.
+configMapGenerator:
+  - name: maas-parameters
+    behavior: merge
+    literals:
+      - maas-api-image=${cm_maas_api_image}
+      - maas-controller-image=${cm_maas_controller_image}
+      - payload-processing-image=${cm_payload_processing_image}
+      - maas-api-key-cleanup-image=${cm_cleanup_image}
+      - monitoring-namespace=${cm_monitoring_namespace}
+generatorOptions:
+  disableNameSuffixHash: true
 EOF
     (
       cd "${controller_overlay_dir}" && \
@@ -1575,15 +1582,13 @@ patch_operator_csv() {
 #──────────────────────────────────────────────────────────────
 
 # get_odh_overlay_param
-#   Reads a value from the active overlay's params.env.
+#   Reads a value from the canonical maas-controller params.env.
 get_odh_overlay_param() {
   local key="$1"
   local project_root
   project_root="$(find_project_root)" || return 1
 
-  local overlay="odh"
-  [[ "${DEV_MODE:-false}" == "true" ]] && overlay="dev"
-  local params_file="$project_root/deployment/overlays/$overlay/params.env"
+  local params_file="$project_root/deployment/base/maas-controller/default/params.env"
   [[ -f "$params_file" ]] || return 1
 
   awk -F= -v key="$key" '$1 == key { print substr($0, index($0, "=") + 1); exit }' "$params_file"
@@ -1591,9 +1596,6 @@ get_odh_overlay_param() {
 
 resolve_external_oidc_issuer() {
   local oidc_issuer_url="${OIDC_ISSUER_URL:-}"
-  if [[ -z "$oidc_issuer_url" ]]; then
-    oidc_issuer_url=$(get_odh_overlay_param "oidc-issuer-url" 2>/dev/null || echo "")
-  fi
 
   if [[ -z "$oidc_issuer_url" || "$oidc_issuer_url" == "https://oidc.example.invalid/realms/maas" ]]; then
     return 1
@@ -1604,9 +1606,6 @@ resolve_external_oidc_issuer() {
 
 resolve_external_oidc_client_id() {
   local oidc_client_id="${OIDC_CLIENT_ID:-}"
-  if [[ -z "$oidc_client_id" ]]; then
-    oidc_client_id=$(get_odh_overlay_param "oidc-client-id" 2>/dev/null || echo "")
-  fi
 
   if [[ -z "$oidc_client_id" ]]; then
     return 1

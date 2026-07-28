@@ -52,10 +52,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          IMAGE="$(grep '^payload-processing-image=' deployment/overlays/odh/params.env | cut -d= -f2-)"
+          IMAGE="$(grep '^payload-processing-image=' deployment/base/maas-controller/default/params.env | cut -d= -f2-)"
           CURRENT="${IMAGE##*:}"
           if ! [[ "$CURRENT" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "::error::Invalid current commit in deployment/overlays/odh/params.env payload-processing-image: '$CURRENT'"
+            echo "::error::Invalid current commit in deployment/base/maas-controller/default/params.env payload-processing-image: '$CURRENT'"
             exit 1
           fi
 
@@ -100,8 +100,7 @@ jobs:
           IMAGE="quay.io/opendatahub/odh-ai-gateway-payload-processing:${LATEST}"
 
           git checkout -b "$BRANCH"
-          git add deployment/overlays/odh/params.env \
-            deployment/base/maas-controller/default/params.env \
+          git add deployment/base/maas-controller/default/params.env \
             deployment/base/payload-processing/manager/kustomization.yaml \
             maas-controller/pkg/platform/tenantreconcile/constants.go \
             test/e2e/scripts/local-deploy.sh

@@ -42,7 +42,7 @@ No other repos need to be cloned. The script auto-clones what it needs.
 > **How IPP works**: The IPP (payload-processing) **deployment manifests** (Deployment, Service,
 > EnvoyFilter) live inside this repo at `deployment/base/payload-processing/`. This is the same
 > as OpenShift — the MaaS kustomize overlay includes IPP. The image tag and upstream source commit
-> are pinned in `deployment/overlays/odh/params.env` (`payload-processing-image`); override locally
+> are pinned in `deployment/base/maas-controller/default/params.env` (`payload-processing-image`); override locally
 > with `IPP_IMAGE` or `PAYLOAD_PROCESSING_COMMIT`. On Apple Silicon, the pre-built quay.io image is
 > x86-only, so the script **auto-clones** `ai-gateway-payload-processing` to
 > `../ai-gateway-payload-processing`, checks out the pinned commit, and builds an arm64 image locally.
