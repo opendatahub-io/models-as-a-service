@@ -241,8 +241,8 @@ func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *test
 	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		t.Fatalf("get Config: %v", err)
 	}
-	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got != "true" {
-		t.Fatalf("Config bootstrap annotation = %q, want true", got)
+	if got := cfg.Annotations[maas.DefaultAITenantBootstrappedAnnotation]; got != "" {
+		t.Fatalf("Config bootstrap annotation = %q, want empty until AITenant is Ready", got)
 	}
 }
 
@@ -392,7 +392,7 @@ func TestEnsureDefaultAITenantBootstrapNoopsWhenAITenantExistsAndMarksConfig(t *
 	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		t.Fatalf("get Config: %v", err)
 	}
-	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got != "true" {
+	if got := cfg.Annotations[maas.DefaultAITenantBootstrappedAnnotation]; got != "true" {
 		t.Fatalf("Config bootstrap annotation = %q, want true", got)
 	}
 }
@@ -461,7 +461,7 @@ func TestEnsureDefaultAITenantBootstrapSkipsTerminatingAITenant(t *testing.T) {
 	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		t.Fatalf("get Config: %v", err)
 	}
-	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got == "true" {
+	if got := cfg.Annotations[maas.DefaultAITenantBootstrappedAnnotation]; got == "true" {
 		t.Fatalf("Config bootstrap annotation = %q, want empty when AITenant is Terminating", got)
 	}
 }
@@ -528,7 +528,7 @@ func TestEnsureDefaultAITenantBootstrapSkipsTerminatingPhaseAITenant(t *testing.
 	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		t.Fatalf("get Config: %v", err)
 	}
-	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got == "true" {
+	if got := cfg.Annotations[maas.DefaultAITenantBootstrappedAnnotation]; got == "true" {
 		t.Fatalf("Config bootstrap annotation = %q, want empty when AITenant phase is Terminating", got)
 	}
 }
@@ -594,7 +594,7 @@ func TestEnsureDefaultAITenantBootstrapSkipsNotReadyAITenant(t *testing.T) {
 	if err := cl.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
 		t.Fatalf("get Config: %v", err)
 	}
-	if got := cfg.Annotations[defaultAITenantBootstrappedAnnotation]; got == "true" {
+	if got := cfg.Annotations[maas.DefaultAITenantBootstrappedAnnotation]; got == "true" {
 		t.Fatalf("Config bootstrap annotation = %q, want empty when AITenant is not Ready", got)
 	}
 }
@@ -774,7 +774,7 @@ func TestEnsureDefaultAITenantBootstrapDoesNotRecreateAfterBootstrapMarker(t *te
 					Name: maasv1alpha1.ConfigInstanceName,
 					UID:  types.UID("cfg-default"),
 					Annotations: map[string]string{
-						defaultAITenantBootstrappedAnnotation: "true",
+						maas.DefaultAITenantBootstrappedAnnotation: "true",
 					},
 				},
 			},

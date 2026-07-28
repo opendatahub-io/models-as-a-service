@@ -803,7 +803,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 	if xAPIKeyEnabled {
 		authenticationRules["api-keys-x-api-key"] = map[string]any{
 			"plain": map[string]any{
-				"expression": `"Bearer " + request.headers["x-api-key"]`,
+				"selector": "request.headers.x-api-key",
 			},
 			"when": []any{
 				map[string]any{

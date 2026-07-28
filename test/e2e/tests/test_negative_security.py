@@ -52,6 +52,7 @@ from test_helper import (
     _inference,
     _maas_api_url,
     _poll_status,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
 )
@@ -80,6 +81,9 @@ class TestHeaderSpoofing:
         The request should succeed (200) using the real key-derived identity,
         proving the spoofed headers had no effect on authorization.
         """
+        # Earlier tests may have rewritten maas-gateway-auth; minting a key
+        # against an unenforced gateway yields empty 403 flakes.
+        _wait_for_gateway_auth_enforced()
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         spoofed_headers = {
@@ -107,6 +111,7 @@ class TestHeaderSpoofing:
         Duplicate or conflicting X-MaaS-Subscription headers must not override
         the key-derived subscription.
         """
+        _wait_for_gateway_auth_enforced()
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
@@ -231,6 +236,7 @@ class TestCrossModelAccess:
         Uses the pre-deployed unconfigured model (a model with no subscription
         granting access to it) to test cross-model access denial.
         """
+        _wait_for_gateway_auth_enforced()
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         # The unconfigured model exists but has no subscription granting access.
@@ -420,6 +426,7 @@ class TestHeaderAbuse:
         Ensures the platform returns a clean 403 (subscription not found)
         without leaking errors, stack traces, or SQL/NoSQL injection.
         """
+        _wait_for_gateway_auth_enforced()
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         injection_payloads = [
