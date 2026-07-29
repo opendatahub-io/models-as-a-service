@@ -79,6 +79,14 @@ type Config struct {
 
 	MetricsPort int
 
+	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
+	// Default: true (OpenShift). Set false for non-OpenShift/xKS.
+	MetricsSecure bool
+
+	// MetricsCertDir is the directory containing tls.crt/tls.key for the metrics server.
+	// Populated by OpenShift service-ca via the maas-api-metrics Service annotation.
+	MetricsCertDir string
+
 	// DiscoveryEnableHTTP2 enables HTTP/2 ALPN negotiation on the TLS client used
 	// by model discovery probes. Default: false (HTTP/1.1 only).
 	DiscoveryEnableHTTP2 bool
@@ -108,6 +116,8 @@ func Load() *Config {
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
+	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
+	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
 	discoveryEnableHTTP2, _ := env.GetBool("DISCOVERY_ENABLE_HTTP2", false)
 	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
 	otelSampleRate := 1.0
@@ -144,6 +154,8 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		MetricsSecure:             metricsSecure,
+		MetricsCertDir:            metricsCertDir,
 		DiscoveryEnableHTTP2:      discoveryEnableHTTP2,
 		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:              otelInsecure,
@@ -173,6 +185,10 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
+	fs.BoolVar(&c.MetricsSecure, "metrics-secure", c.MetricsSecure,
+		"Serve metrics via HTTPS with authentication and authorization (default: true)")
+	fs.StringVar(&c.MetricsCertDir, "metrics-cert-dir", c.MetricsCertDir,
+		"Directory containing tls.crt and tls.key for the metrics HTTPS server")
 	// Note: DBConnectionURL is loaded from K8s secret 'maas-db-config', not from CLI flag
 }
 
@@ -237,6 +253,10 @@ func (c *Config) Validate() error {
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {
 		return errors.New("METRICS_PORT must be between 1 and 65535")
+	}
+
+	if c.MetricsSecure && strings.TrimSpace(c.MetricsCertDir) == "" {
+		return errors.New("METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true")
 	}
 
 	return nil

@@ -12,6 +12,9 @@ const (
 
 	DefaultMetricsPort = 9090
 
+	// DefaultMetricsCertDir is where OpenShift service-ca mounts metrics TLS material.
+	DefaultMetricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
+
 	// Header configuration constants.
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"
