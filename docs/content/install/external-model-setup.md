@@ -7,12 +7,10 @@ This guide walks through deploying an external AI/ML model (e.g., OpenAI, Anthro
 
 ## Multi-Tenant Limitation
 
-!!! danger "External models are not supported in multi-tenant deployments"
-    When multiple AITenants are deployed, each tenant gets a dedicated Gateway and Inference Payload Processor (IPP) stack. The ExternalModel reconciler is not tenant-aware — it always creates HTTPRoutes pointing to the default tenant's gateway (`--gateway-name` / `--gateway-namespace` controller flags). Each tenant's IPP EnvoyFilter targets its own gateway, which conflicts with the ExternalModel HTTPRoute's static gateway reference.
+!!! warning "External models are only supported for the default tenant"
+    In multi-tenant deployments, external models work for the **default tenant only**. Non-default tenant IPP (Inference Payload Processor) instances have the ExternalModel controller disabled to prevent HTTPRoute conflicts between tenants.
 
-    **Result:** External models do not work for any tenant — including the default tenant — when multiple IPP instances are running.
-
-    External models are only supported in single-tenant deployments. This limitation is tracked for a future fix.
+    External model support for non-default tenants is planned for a future release.
 
 ## Prerequisites
 
@@ -44,6 +42,33 @@ The Inference Payload Processor (IPP) component (ext-proc) handles API key injec
 IPP is required for external models — it injects the provider API key and translates between OpenAI-compatible format and the provider's native API.
 
 MaaS deploys the payload-processing component from the [`ai-gateway-payload-processing`](https://github.com/opendatahub-io/ai-gateway-payload-processing) repository. For detailed configuration and usage, see that project's documentation.
+
+### IPP response translation (opt-in)
+
+By default, the `api-translation` plugin runs on the **request** path only. Response-side `api-translation` is off so SSE streaming for internal and OpenAI-compatible models is not held by a response processor.
+
+Providers that rewrite responses (notably Anthropic Messages ↔ OpenAI) need response translation enabled manually on the plugins ConfigMap. After MaaS creates `payload-processing-plugins`, the controller stamps `opendatahub.io/managed: "false"` and then leaves the ConfigMap alone so your edits stick.
+
+```bash
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+
+# 1. Edit the live ConfigMap — under profiles[0].plugins.response add:
+#      - pluginRef: api-translation
+kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
+
+# 2. Reload IPP
+kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
+```
+
+To reset the ConfigMap to product defaults once, remove the opt-out annotation (or set `opendatahub.io/managed=true` for continuous reconciler management), wait for reconcile, then optionally set `opendatahub.io/managed=false` again after editing:
+
+```bash
+# One-shot reset to defaults (controller re-applies, then stamps managed=false again)
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
+
+# Or keep the reconciler owning the ConfigMap continuously:
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed=true --overwrite
+```
 
 !!! note
     If MaaS was deployed via the MaasTenantConfig CR (standard RHOAI path), IPP is already deployed as a subcomponent. Verify with:

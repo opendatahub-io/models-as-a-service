@@ -239,6 +239,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
 		r.SetName(PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
 		return patchPayloadProcessingClusterRoleBinding(r, params)
+	case gvk == GVKCertificate && name == baseMaaSAPIServingCertName:
+		return patchMaaSAPIServingCert(log, r, params)
 	}
 	return nil
 }
@@ -273,6 +275,35 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
+// the actual infra namespace (replacing the kustomize overlay's hardcoded "opendatahub"
+// placeholder). This makes the controller self-sufficient for TLS — no dependency on
+// the Helm chart hook to create the cert in the correct namespace.
+func patchMaaSAPIServingCert(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	tenantID := params.TenantIdentifier
+	certName := MaaSAPIServingCertName(tenantID)
+	r.SetName(certName)
+
+	secretName := certName
+	if err := unstructured.SetNestedField(r.Object, secretName, "spec", "secretName"); err != nil {
+		return fmt.Errorf("patch Certificate secretName: %w", err)
+	}
+
+	serviceName := MaaSAPIServiceName(tenantID)
+	newDNSNames := []any{
+		fmt.Sprintf("%s.%s.svc", serviceName, params.AppNamespace),
+		fmt.Sprintf("%s.%s.svc.cluster.local", serviceName, params.AppNamespace),
+	}
+	if err := unstructured.SetNestedSlice(r.Object, newDNSNames, "spec", "dnsNames"); err != nil {
+		return fmt.Errorf("patch Certificate dnsNames: %w", err)
+	}
+
+	log.V(4).Info("Patched maas-api serving Certificate",
+		"name", certName, "secretName", secretName,
+		"dnsNames", newDNSNames, "namespace", params.AppNamespace)
+	return nil
 }
 
 func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
@@ -360,6 +391,11 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	}
 	if err := setOrAddEnvVar(r, "payload-processing", "TENANT_NAMESPACE", params.SubscriptionNamespace); err != nil {
 		return fmt.Errorf("patch TENANT_NAMESPACE: %w", err)
+	}
+	if params.TenantIdentifier != "" {
+		if err := setOrAddEnvVar(r, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER", "true"); err != nil {
+			return fmt.Errorf("patch DISABLE_EXTERNAL_MODEL_CONTROLLER: %w", err)
+		}
 	}
 	if err := addPodTemplateLabel(r, LabelTenantInstance, deploymentName); err != nil {
 		return fmt.Errorf("patch tenant-instance label: %w", err)

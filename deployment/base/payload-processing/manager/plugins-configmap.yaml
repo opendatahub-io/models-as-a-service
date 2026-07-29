@@ -3,6 +3,11 @@ kind: ConfigMap
 metadata:
   name: payload-processing-plugins
   namespace: openshift-ingress
+  # Do NOT set opendatahub.io/managed=false here: PostRender drops any resource that
+  # already carries that annotation, which would prevent first-time creation.
+  # The tenant reconciler stamps managed=false after bootstrap/migrate so later
+  # SSA leaves this ConfigMap alone (see ApplyRendered). Set managed=true on the
+  # live ConfigMap to opt back into continuous reconciler management.
 data:
   custom-pre-processing-ipp-config.yaml: |
     apiVersion: llm-d.ai/v1alpha1
@@ -39,5 +44,10 @@ data:
         - pluginRef: model-provider-resolver
         - pluginRef: api-translation
         - pluginRef: apikey-injection
-        response:
-        - pluginRef: api-translation
+        # Response api-translation is off by default so SSE streaming for
+        # internal/OpenAI-compatible models is not held by a response processor.
+        # Re-enable for providers that need response rewrite (e.g. Anthropic):
+        #   response:
+        #   - pluginRef: api-translation
+        # See docs/content/install/external-model-setup.md (IPP response translation).
+        response: []

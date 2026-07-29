@@ -240,11 +240,11 @@ spec:
       spec:
         display:
           name: "Token consumption chart"
+          # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
+          # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
             Tokens from successful requests (2xx) over time by model or subscription.
-            **View by** drives chart ``sum by (${view_by:raw})``. Table uses hardcoded ``sum by (model, subscription)``.
-            LogQL ``[30m]`` is the range window for ``sum_over_time`` (Perses time-series step).
-            Visual: OpenShift Perses pattern — ``line`` + ``areaOpacity: 1`` + ``stack: all``.
+            **View by** drives the chart grouping.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -277,7 +277,7 @@ spec:
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
-                    | unwrap tokens_total [30m]))
+                    | unwrap tokens_total [2h]))
 
     tokenConsumptionTable:
       kind: Panel

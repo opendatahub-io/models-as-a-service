@@ -57,9 +57,10 @@ func GVR() schema.GroupVersionResource {
 // maasModelRefToModel converts a MaaSModelRef unstructured to a Model for the API.
 //
 // For LLMInferenceService-backed models (BBR clusters), the model ID is read from
-// status.resolvedModelAlias (the canonical publishers/{ns}/models/{name} form), and
-// the URL is derived from status.httpRouteHostnames[0] (the shared gateway base URL).
+// status.resolvedModelAlias (the canonical publishers/{ns}/models/{name} form).
 // For ExternalModel refs, the ExternalModel CR name is used as the ID.
+// Both kinds advertise the shared gateway base URL from status.httpRouteHostnames[0]
+// when present (falling back to status.endpoint).
 func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 	if u == nil {
 		return nil
@@ -115,28 +116,17 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 		}
 	}
 
+	// Both LLMInferenceService and ExternalModel share the gateway base URL on BBR
+	// clusters. Prefer status.httpRouteHostnames[0]; fall back to status.endpoint
+	// (already a base URL after controller reconcile) when hostnames are not set yet.
 	var urlPtr *apis.URL
-	switch kind {
-	case kindExternalModel:
-		// ExternalModel models keep using status.endpoint as their URL.
-		if endpoint != "" {
-			if parsed, err := url.Parse(endpoint); err == nil {
-				urlPtr = (*apis.URL)(parsed)
-			}
+	if hostnames, _, _ := unstructured.NestedStringSlice(u.Object, "status", "httpRouteHostnames"); len(hostnames) > 0 {
+		if parsed, err := url.Parse("https://" + hostnames[0]); err == nil {
+			urlPtr = (*apis.URL)(parsed)
 		}
-	default:
-		// LLMInferenceService-backed models on BBR clusters share the gateway base URL.
-		// Derive it from status.httpRouteHostnames[0] so all models point at the same
-		// gateway entry-point instead of per-model path URLs.
-		if hostnames, _, _ := unstructured.NestedStringSlice(u.Object, "status", "httpRouteHostnames"); len(hostnames) > 0 {
-			if parsed, err := url.Parse("https://" + hostnames[0]); err == nil {
-				urlPtr = (*apis.URL)(parsed)
-			}
-		} else if endpoint != "" {
-			// Fall back to endpoint when httpRouteHostnames is not yet populated.
-			if parsed, err := url.Parse(endpoint); err == nil {
-				urlPtr = (*apis.URL)(parsed)
-			}
+	} else if endpoint != "" {
+		if parsed, err := url.Parse(endpoint); err == nil {
+			urlPtr = (*apis.URL)(parsed)
 		}
 	}
 

@@ -260,6 +260,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.SubscriptionNamespace, requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
 	assertDeploymentSelectorLabelAbsent(t, payloadDeployment, LabelTenantInstance)
 	assert.Equal(t, PayloadProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadDeployment, LabelTenantInstance))
+	// Default tenant (empty TenantIdentifier) must NOT have DISABLE_EXTERNAL_MODEL_CONTROLLER
+	assertEnvVarAbsent(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER")
 
 	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
 		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
@@ -504,6 +506,8 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	payloadDeployment := requireResource(t, resources, GVKDeployment, "payload-processing-redteam")
 	assert.Equal(t, "redteam-gateway", requireEnvVarValue(t, payloadDeployment, "payload-processing", "GATEWAY_NAME"))
 	assert.Equal(t, "ai-tenant-redteam", requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
+	// Non-default tenant must have DISABLE_EXTERNAL_MODEL_CONTROLLER=true
+	assert.Equal(t, "true", requireEnvVarValue(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER"))
 	assert.Equal(t, "payload-processing-redteam", requireDeploymentSelectorLabel(t, payloadDeployment, LabelTenantInstance))
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
@@ -594,6 +598,33 @@ func requireEnvVarValue(t *testing.T, r *unstructured.Unstructured, containerNam
 	return ""
 }
 
+func assertEnvVarAbsent(t *testing.T, r *unstructured.Unstructured, containerName, envName string) {
+	t.Helper()
+
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	containerFound := false
+	for _, c := range containers {
+		containerMap, ok := c.(map[string]any)
+		require.True(t, ok)
+		if containerMap["name"] != containerName {
+			continue
+		}
+		containerFound = true
+
+		envSlice, _ := containerMap["env"].([]any)
+		for _, e := range envSlice {
+			envMap, ok := e.(map[string]any)
+			require.True(t, ok)
+			assert.NotEqual(t, envName, envMap["name"], "env var %q should not be present in container %q", envName, containerName)
+		}
+		break
+	}
+	require.True(t, containerFound, "container %q not found", containerName)
+}
+
 func requirePodTemplateLabel(t *testing.T, r *unstructured.Unstructured, key string) string {
 	t.Helper()
 
@@ -637,4 +668,88 @@ func requireServiceSelectorLabel(t *testing.T, r *unstructured.Unstructured, key
 	value, ok := selector[key]
 	require.True(t, ok, "selector label %q not found", key)
 	return value
+}
+
+func TestPatchMaaSAPIServingCert_DefaultTenant(t *testing.T) {
+	cert := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      "maas-api-serving-cert",
+			"namespace": "redhat-ai-gateway-infra",
+		},
+		"spec": map[string]any{
+			"secretName": "maas-api-serving-cert",
+			"issuerRef": map[string]any{
+				"name":  "rhai-ca-issuer",
+				"kind":  "ClusterIssuer",
+				"group": "cert-manager.io",
+			},
+			"dnsNames": []any{
+				"maas-api.opendatahub.svc",
+				"maas-api.opendatahub.svc.cluster.local",
+			},
+		},
+	}}
+
+	params := PlatformParams{
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantIdentifier: "",
+	}
+
+	err := patchMaaSAPIServingCert(logr.Discard(), cert, params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "maas-api-serving-cert", cert.GetName())
+
+	secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	assert.Equal(t, "maas-api-serving-cert", secretName)
+
+	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	assert.Equal(t, []string{
+		"maas-api.redhat-ai-gateway-infra.svc",
+		"maas-api.redhat-ai-gateway-infra.svc.cluster.local",
+	}, dnsNames)
+}
+
+func TestPatchMaaSAPIServingCert_MultiTenant(t *testing.T) {
+	cert := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "cert-manager.io/v1",
+		"kind":       "Certificate",
+		"metadata": map[string]any{
+			"name":      "maas-api-serving-cert",
+			"namespace": "redhat-ai-gateway-infra",
+		},
+		"spec": map[string]any{
+			"secretName": "maas-api-serving-cert",
+			"issuerRef": map[string]any{
+				"name":  "rhai-ca-issuer",
+				"kind":  "ClusterIssuer",
+				"group": "cert-manager.io",
+			},
+			"dnsNames": []any{
+				"maas-api.opendatahub.svc",
+				"maas-api.opendatahub.svc.cluster.local",
+			},
+		},
+	}}
+
+	params := PlatformParams{
+		AppNamespace:     "redhat-ai-gateway-infra",
+		TenantIdentifier: "redteam",
+	}
+
+	err := patchMaaSAPIServingCert(logr.Discard(), cert, params)
+	require.NoError(t, err)
+
+	assert.Equal(t, "maas-api-serving-cert-redteam", cert.GetName())
+
+	secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+	assert.Equal(t, "maas-api-serving-cert-redteam", secretName)
+
+	dnsNames, _, _ := unstructured.NestedStringSlice(cert.Object, "spec", "dnsNames")
+	assert.Equal(t, []string{
+		"maas-api-redteam.redhat-ai-gateway-infra.svc",
+		"maas-api-redteam.redhat-ai-gateway-infra.svc.cluster.local",
+	}, dnsNames)
 }
