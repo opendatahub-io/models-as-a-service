@@ -638,6 +638,10 @@ func markDefaultAITenantBootstrapped(ctx context.Context, c client.Client, ct *m
 	return nil
 }
 
+// clusterBootstrapPollInterval is how often ensureClusterBootstrapRunnable retries
+// creating the default AITenant after Config/default exists.
+const clusterBootstrapPollInterval = 2 * time.Second
+
 // ensureClusterBootstrapRunnable bootstraps the default AITenant once
 // Config/default is present (created by LifecycleReconciler). It does not set
 // owner references; LifecycleReconciler links Config to the default AITenant,
@@ -648,7 +652,7 @@ func ensureClusterBootstrapRunnable(mgr ctrl.Manager, tenantNamespace, aitenantN
 		log := ctrl.Log.WithName("setup").WithName("ensureClusterBootstrap")
 		c := mgr.GetClient()
 
-		ticker := time.NewTicker(30 * time.Second)
+		ticker := time.NewTicker(clusterBootstrapPollInterval)
 		defer ticker.Stop()
 
 		ensure := func() {
