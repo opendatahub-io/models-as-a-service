@@ -17,6 +17,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -913,4 +914,42 @@ func TestParseAITenantDeletionTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReadMaxSubscriptionReconciles(t *testing.T) {
+	s := managerTestScheme(t)
+
+	t.Run("returns 0 when Config does not exist", func(t *testing.T) {
+		cl := controllerfake.NewClientBuilder().WithScheme(s).Build()
+		got := readMaxSubscriptionReconciles(cl)
+		if got != 0 {
+			t.Fatalf("readMaxSubscriptionReconciles() = %d, want 0", got)
+		}
+	})
+
+	t.Run("returns 0 when field is nil", func(t *testing.T) {
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
+			Spec:       maasv1alpha1.ConfigSpec{},
+		}
+		cl := controllerfake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		got := readMaxSubscriptionReconciles(cl)
+		if got != 0 {
+			t.Fatalf("readMaxSubscriptionReconciles() = %d, want 0", got)
+		}
+	})
+
+	t.Run("returns configured value", func(t *testing.T) {
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
+			Spec: maasv1alpha1.ConfigSpec{
+				MaxSubscriptionReconciles: ptr.To(int32(5)),
+			},
+		}
+		cl := controllerfake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		got := readMaxSubscriptionReconciles(cl)
+		if got != 5 {
+			t.Fatalf("readMaxSubscriptionReconciles() = %d, want 5", got)
+		}
+	})
 }

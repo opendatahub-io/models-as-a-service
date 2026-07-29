@@ -145,9 +145,6 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		} else if res != nil {
 			return *res, nil
 		}
-		if err := r.ensureControllerReplicas(ctx, log, cfg, req.NamespacedName); err != nil {
-			return ctrl.Result{}, err
-		}
 		if err := r.ensureObservability(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -375,40 +372,6 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	}
 	log.Info("set Config owner reference on MaasTenantConfig/default-tenant", "namespace", r.TenantSubscriptionNamespace)
 	return nil, nil
-}
-
-// ensureControllerReplicas patches the maas-controller Deployment replica count
-// to match Config.Spec.ControllerReplicas. When the field is nil the Deployment
-// spec is left unchanged (preserving the manifest default).
-func (r *LifecycleReconciler) ensureControllerReplicas(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config, key types.NamespacedName) error {
-	if cfg == nil {
-		return nil
-	}
-	desired := cfg.Spec.ControllerReplicas
-	if desired == nil {
-		return nil
-	}
-
-	var dep appsv1.Deployment
-	if err := r.Get(ctx, key, &dep); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-
-	current := int32(1)
-	if dep.Spec.Replicas != nil {
-		current = *dep.Spec.Replicas
-	}
-	if current == *desired {
-		return nil
-	}
-
-	base := dep.DeepCopy()
-	dep.Spec.Replicas = desired
-	if err := r.Patch(ctx, &dep, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("patch maas-controller Deployment replicas: %w", err)
-	}
-	log.Info("updated maas-controller Deployment replicas", "from", current, "to", *desired)
-	return nil
 }
 
 func tenantReferencesConfig(tenant *maasv1alpha1.MaasTenantConfig, ct *maasv1alpha1.Config) bool {

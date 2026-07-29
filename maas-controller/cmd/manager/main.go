@@ -876,6 +876,27 @@ func parseAITenantDeletionTimeout() time.Duration {
 	return d
 }
 
+// readMaxSubscriptionReconciles reads Config/default (if it exists) and returns
+// the configured maxSubscriptionReconciles value. Returns 0 (use default) when
+// the Config CR does not exist or the field is unset.
+func readMaxSubscriptionReconciles(reader client.Reader) int {
+	var cfg maasv1alpha1.Config
+	if err := reader.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if !errors.IsNotFound(err) {
+			setupLog.Info("unable to read Config/default for maxSubscriptionReconciles, using default", "error", err)
+		}
+		return 0
+	}
+	if cfg.Spec.MaxSubscriptionReconciles == nil {
+		return 0
+	}
+	v := int(*cfg.Spec.MaxSubscriptionReconciles)
+	if v > 0 {
+		setupLog.Info("using maxSubscriptionReconciles from Config/default", "value", v)
+	}
+	return v
+}
+
 func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string) error {
 	if err := (&webhook.AITenantValidator{
 		Client:            mgr.GetAPIReader(),
@@ -1140,6 +1161,7 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)
 	}
+	maxSubReconciles := readMaxSubscriptionReconciles(mgr.GetAPIReader())
 	if err := (&maas.MaaSSubscriptionReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
@@ -1147,6 +1169,7 @@ func main() {
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
+		MaxConcurrentReconciles:         maxSubReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)

@@ -40,6 +40,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -67,6 +68,11 @@ type MaaSSubscriptionReconciler struct {
 	// Tenant does not yet carry spec.gatewayRef.
 	GatewayName      string
 	GatewayNamespace string
+
+	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles
+	// that the controller will run. When zero the controller-runtime default (1)
+	// is used.
+	MaxConcurrentReconciles int
 }
 
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
@@ -1114,6 +1120,12 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		b = b.Watches(&corev1.Namespace{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapNamespaceToMaaSSubscriptions,
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
+	}
+
+	if r.MaxConcurrentReconciles > 0 {
+		b = b.WithOptions(controller.Options{
+			MaxConcurrentReconciles: r.MaxConcurrentReconciles,
+		})
 	}
 
 	c, err := b.Build(r)

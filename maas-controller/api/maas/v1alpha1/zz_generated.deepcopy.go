@@ -269,8 +269,8 @@ func (in *ConfigSpec) DeepCopyInto(out *ConfigSpec) {
 		*out = new(bool)
 		**out = **in
 	}
-	if in.ControllerReplicas != nil {
-		in, out := &in.ControllerReplicas, &out.ControllerReplicas
+	if in.MaxSubscriptionReconciles != nil {
+		in, out := &in.MaxSubscriptionReconciles, &out.MaxSubscriptionReconciles
 		*out = new(int32)
 		**out = **in
 	}

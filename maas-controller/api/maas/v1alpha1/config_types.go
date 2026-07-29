@@ -66,17 +66,15 @@ type ConfigSpec struct {
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
 
-	// ControllerReplicas sets the replica count for the maas-controller Deployment.
-	// Additional replicas provide high availability — if the leader pod fails,
-	// a standby takes over without waiting for a new pod to start.
-	// Note: the controller uses leader election, so only one replica is active
-	// at a time; extra replicas are standby, not parallel workers.
-	// When unset, the controller does not manage replica count — the existing
-	// Deployment value is preserved.
+	// MaxSubscriptionReconciles sets the maximum number of MaaSSubscription
+	// reconciliations that run in parallel. Increasing this value improves
+	// throughput when the cluster has many subscriptions, at the cost of
+	// higher CPU and API-server request rate.
+	// When unset the controller-runtime default (1) is used.
 	// +optional
 	// +kubebuilder:validation:Minimum=1
-	// +kubebuilder:validation:Maximum=10
-	ControllerReplicas *int32 `json:"controllerReplicas,omitempty"`
+	// +kubebuilder:validation:Maximum=50
+	MaxSubscriptionReconciles *int32 `json:"maxSubscriptionReconciles,omitempty"`
 }
 
 // ConfigStatus defines the observed state of Config.
