@@ -12,6 +12,6 @@ spec:
     protocol: TCP
   - name: metrics
     port: 9090
-    targetPort: metrics
+    targetPort: https-metrics
     protocol: TCP
   type: ClusterIP

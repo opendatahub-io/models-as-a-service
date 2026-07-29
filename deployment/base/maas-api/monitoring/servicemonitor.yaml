@@ -1,0 +1,27 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: maas-api-metrics
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+    app.kubernetes.io/component: monitoring
+    monitoring.opendatahub.io/scrape: "true"
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      maas.opendatahub.io/metrics: "true"
+  endpoints:
+    - path: /metrics
+      port: https
+      scheme: https
+      interval: 30s
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        ca:
+          configMap:
+            name: openshift-service-ca.crt
+            key: service-ca.crt
+        # name.namespace.svc — filled by kustomize replacements in default/
+        serverName: maas-api-metrics.maas-api.svc
