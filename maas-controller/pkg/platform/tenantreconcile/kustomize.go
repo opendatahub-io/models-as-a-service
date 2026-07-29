@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -79,6 +80,12 @@ func postBuildTransform(resMap resmap.ResMap, appNamespace string) error {
 			if err := remapSubjectNamespaces(res, appNamespace); err != nil {
 				return fmt.Errorf("remap subjects on %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
+
+			// Kustomize replacements bake tlsConfig.serverName with the overlay
+			// namespace (opendatahub). Rewrite when INFRA_NAMESPACE differs.
+			if err := remapServiceMonitorServerName(res, appNamespace); err != nil {
+				return fmt.Errorf("remap ServiceMonitor serverName on %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
 		}
 
 		// --- ODH component labels (uses RNode API, persists directly) ---
@@ -132,6 +139,64 @@ func remapSubjectNamespaces(res *resource.Resource, appNamespace string) error {
 
 	// Write modified map back to the RNode via YAML round-trip.
 	m["subjects"] = subjects
+	b, err := yaml.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	node, err := kyaml.Parse(string(b))
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	res.ResetRNode((&resource.Resource{RNode: *node}))
+	return nil
+}
+
+// remapServiceMonitorServerName rewrites endpoints[].tlsConfig.serverName when
+// the second DNS label is the overlay default namespace (opendatahub), replacing
+// it with appNamespace (e.g. odh-ai-gateway-infra).
+func remapServiceMonitorServerName(res *resource.Resource, appNamespace string) error {
+	if res.GetKind() != "ServiceMonitor" || appNamespace == "" || appNamespace == overlayDefaultNamespace {
+		return nil
+	}
+
+	m, err := res.Map()
+	if err != nil {
+		return fmt.Errorf("map: %w", err)
+	}
+	spec, ok := m["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	endpoints, ok := spec["endpoints"].([]any)
+	if !ok {
+		return nil
+	}
+
+	changed := false
+	for _, ep := range endpoints {
+		epMap, ok := ep.(map[string]any)
+		if !ok {
+			continue
+		}
+		tlsCfg, ok := epMap["tlsConfig"].(map[string]any)
+		if !ok {
+			continue
+		}
+		serverName, ok := tlsCfg["serverName"].(string)
+		if !ok || serverName == "" {
+			continue
+		}
+		rewritten := replaceHostNamespace(serverName, appNamespace)
+		// Only rewrite when the host was using the overlay default namespace.
+		if rewritten != serverName && strings.Contains(serverName, "."+overlayDefaultNamespace+".") {
+			tlsCfg["serverName"] = rewritten
+			changed = true
+		}
+	}
+	if !changed {
+		return nil
+	}
+
 	b, err := yaml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)

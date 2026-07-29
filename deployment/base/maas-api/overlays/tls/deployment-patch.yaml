@@ -16,10 +16,19 @@ spec:
           value: /etc/maas-api/tls/tls.key
         - name: SSL_CERT_DIR
           value: /etc/ssl/certs:/etc/ssl/certs/openshift-service-ca
+        - name: METRICS_SECURE
+          value: "true"
+        - name: METRICS_PORT
+          value: "9090"
+        - name: METRICS_CERT_DIR
+          value: "/tmp/k8s-metrics-server/metrics-certs"
         ports:
         - $patch: replace
         - containerPort: 8443
           name: https
+          protocol: TCP
+        - containerPort: 9090
+          name: https-metrics
           protocol: TCP
         volumeMounts:
         - name: maas-api-tls
@@ -27,6 +36,9 @@ spec:
           readOnly: true
         - name: openshift-service-ca
           mountPath: /etc/ssl/certs/openshift-service-ca
+          readOnly: true
+        - name: metrics-certs
+          mountPath: /tmp/k8s-metrics-server/metrics-certs
           readOnly: true
         livenessProbe:
           httpGet:
@@ -45,4 +57,10 @@ spec:
       - name: openshift-service-ca
         configMap:
           name: openshift-service-ca.crt
-
+      - name: metrics-certs
+        secret:
+          secretName: maas-api-metrics-tls
+          defaultMode: 420
+          # Required on OpenShift/ODH: service-ca must provision this secret.
+          # Explicit false so strategic merge does not keep base optional: true.
+          optional: false
