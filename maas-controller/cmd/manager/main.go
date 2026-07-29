@@ -846,6 +846,19 @@ func resolveInfraNamespace(infraNs, controllerNs string) string {
 
 // deriveInfraNamespace maps controller namespace to infrastructure namespace.
 // This implements namespace separation: controller runs in one namespace, infrastructure services in another.
+func clampConcurrentReconciles(v int) int {
+	const minConcurrent, maxConcurrent = 1, 50
+	if v < minConcurrent {
+		setupLog.Info("clamping --max-concurrent-reconciles to minimum", "requested", v, "using", minConcurrent)
+		return minConcurrent
+	}
+	if v > maxConcurrent {
+		setupLog.Info("clamping --max-concurrent-reconciles to maximum", "requested", v, "using", maxConcurrent)
+		return maxConcurrent
+	}
+	return v
+}
+
 func deriveInfraNamespace(controllerNs string) string {
 	switch controllerNs {
 	case "redhat-ods-applications":
@@ -961,10 +974,7 @@ func main() {
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
 
-	if maxConcurrentReconciles < 1 || maxConcurrentReconciles > 50 {
-		setupLog.Error(nil, "invalid --max-concurrent-reconciles, must be 1-50", "value", maxConcurrentReconciles)
-		os.Exit(1)
-	}
+	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
 
 	// Allow empty monitoring-namespace to disable observability features (e.g. on xKS
 	// where the monitoring namespace may not exist). Non-empty values must be valid.
