@@ -953,13 +953,18 @@ func main() {
 		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5,
-		"Maximum number of concurrent reconciles for subscription and auth policy controllers.")
+		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-50).")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	if maxConcurrentReconciles < 1 || maxConcurrentReconciles > 50 {
+		setupLog.Error(nil, "invalid --max-concurrent-reconciles, must be 1-50", "value", maxConcurrentReconciles)
+		os.Exit(1)
+	}
 
 	// Allow empty monitoring-namespace to disable observability features (e.g. on xKS
 	// where the monitoring namespace may not exist). Non-empty values must be valid.
