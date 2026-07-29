@@ -1238,7 +1238,10 @@ func main() {
 
 	manifestPath := os.Getenv("MAAS_PLATFORM_MANIFESTS")
 	if manifestPath == "" {
-		manifestPath = tenantreconcile.DefaultManifestPath()
+		// tlsConfig.available reflects whether config.openshift.io API exists,
+		// which is the authoritative signal for OCP vs vanilla Kubernetes.
+		isOCP := tlsConfig.available
+		manifestPath = tenantreconcile.ManifestPathForPlatform(isOCP)
 	}
 	if abs, err := filepath.Abs(manifestPath); err == nil {
 		manifestPath = abs

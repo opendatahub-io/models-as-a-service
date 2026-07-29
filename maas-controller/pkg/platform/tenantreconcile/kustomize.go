@@ -182,3 +182,17 @@ func DefaultManifestPath() string {
 	}
 	return "../maas-api/deploy/overlays/odh"
 }
+
+// ManifestPathForPlatform returns the appropriate kustomize overlay path based on
+// whether the cluster is OpenShift (isOCP=true) or vanilla Kubernetes (isOCP=false).
+// The xKS overlay avoids OCP-specific resources like service-serving-certs and
+// service-ca ConfigMap injection that don't exist on non-OpenShift clusters.
+func ManifestPathForPlatform(isOCP bool) string {
+	if v := os.Getenv("MAAS_PLATFORM_MANIFESTS"); v != "" {
+		return v
+	}
+	if isOCP {
+		return "/maas-api/deploy/overlays/odh"
+	}
+	return "/maas-api/deploy/overlays/xks"
+}

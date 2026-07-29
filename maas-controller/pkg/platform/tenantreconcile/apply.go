@@ -37,6 +37,10 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 
 		// Skip resources whose live cluster copy has opendatahub.io/managed=false,
 		// allowing operators to opt specific resources out of reconciliation.
+		// The payload-processing-plugins ConfigMap is stamped with managed=false on
+		// bootstrap/migrate (see preparePayloadProcessingPluginsConfigMapApply) so
+		// subsequent reconciles leave user plugin edits alone unless they set
+		// opendatahub.io/managed=true to opt back into continuous management.
 		if isLiveResourceUnmanaged(ctx, c, u) {
 			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
 				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
@@ -68,6 +72,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			}
 			setTenantTrackingLabels(u, tenant)
 		}
+		preparePayloadProcessingPluginsConfigMapApply(ctx, c, u)
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
 		unstructured.RemoveNestedField(u.Object, "metadata", "resourceVersion")
 		unstructured.RemoveNestedField(u.Object, "status")
@@ -117,6 +122,52 @@ func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *uns
 	}
 	ann := live.GetAnnotations()
 	return ann != nil && ann[AnnotationManaged] == "false"
+}
+
+// isPayloadProcessingPluginsConfigMap reports whether u is the IPP plugins ConfigMap
+// (default name or per-tenant suffix).
+func isPayloadProcessingPluginsConfigMap(u *unstructured.Unstructured) bool {
+	if u == nil || u.GetKind() != "ConfigMap" {
+		return false
+	}
+	name := u.GetName()
+	if name == PayloadProcessingPluginsConfigMapName {
+		return true
+	}
+	return strings.HasPrefix(name, PayloadProcessingPluginsConfigMapName+"-")
+}
+
+// preparePayloadProcessingPluginsConfigMapApply stamps opendatahub.io/managed on the
+// plugins ConfigMap about to be SSA'd:
+//   - managed=false (default): next reconcile skips via isLiveResourceUnmanaged so
+//     operators can edit response plugins (e.g. re-enable api-translation) without
+//     the controller overwriting the ConfigMap.
+//   - managed=true preserved when the live object already opted into continuous
+//     reconciler management.
+//
+// Do not put managed=false in the source YAML: PostRender drops resources that
+// already carry that annotation, which would prevent first-time creation.
+func preparePayloadProcessingPluginsConfigMapApply(ctx context.Context, c client.Client, u *unstructured.Unstructured) {
+	if !isPayloadProcessingPluginsConfigMap(u) {
+		return
+	}
+	managedValue := "false"
+	live := &unstructured.Unstructured{}
+	live.SetGroupVersionKind(u.GroupVersionKind())
+	key := client.ObjectKeyFromObject(u)
+	if key.Name != "" {
+		if err := c.Get(ctx, key, live); err == nil {
+			if ann := live.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "true" {
+				managedValue = "true"
+			}
+		}
+	}
+	ann := u.GetAnnotations()
+	if ann == nil {
+		ann = make(map[string]string)
+	}
+	ann[AnnotationManaged] = managedValue
+	u.SetAnnotations(ann)
 }
 
 // isOwnedByExternalController returns true when the live cluster copy of the

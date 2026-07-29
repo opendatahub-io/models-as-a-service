@@ -1,0 +1,49 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-api-xks
+
+# xKS overlay: uses cert-manager for TLS instead of OCP service-serving-certs.
+# On xKS, cert-manager creates the serving cert and the cloud-manager injects the CA.
+resources:
+  - ../../../../deployment/base/maas-api/overlays/tls
+  - ../../../../deployment/base/maas-controller/policies
+  - ../../../../deployment/base/payload-processing/default
+  - certificate.yaml
+
+namespace: opendatahub
+
+patches:
+  # Replace OCP service-ca ConfigMap with an emptyDir (CA is injected by cert-manager
+  # via the trust-manager or mounted from the cluster CA bundle)
+  - target:
+      kind: Deployment
+      name: maas-api
+    patch: |
+      - op: replace
+        path: /spec/template/spec/volumes/1
+        value:
+          name: openshift-service-ca
+          secret:
+            secretName: opendatahub-ca
+            items:
+              - key: tls.crt
+                path: service-ca.crt
+            optional: true
+
+  # Remove OCP service-ca annotation (cert-manager handles cert creation)
+  - target:
+      kind: Service
+      name: maas-api
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
+
+  # Remove OCP CA bundle injection annotation from ConfigMap
+  - target:
+      kind: ConfigMap
+      name: openshift-service-ca.crt
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
