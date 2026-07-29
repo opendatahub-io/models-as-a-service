@@ -137,7 +137,5 @@ spec:
         secret:
           defaultMode: 420
           secretName: maas-controller-metrics-tls
-          # optional until service-ca provisions the secret after the Service exists
-          optional: true
       serviceAccountName: maas-controller
       terminationGracePeriodSeconds: 30
