@@ -313,13 +313,10 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 
 	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
-	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
+	wsLabels, found, err := unstructured.NestedStringMap(payloadEnvoyFilter.Object, "spec", "workloadSelector", "labels")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.NotEmpty(t, targetRefs)
-	firstTargetRef, ok := targetRefs[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
+	assert.Equal(t, params.GatewayName, wsLabels["gateway.networking.k8s.io/gateway-name"])
 
 	// Verify dual-stage filter chain with dual anchors:
 	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
