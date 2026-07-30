@@ -78,6 +78,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 
 	// Base IPP resource names in kustomize manifests. Per-tenant deployments suffix
 	// these with "-{tenantID}" (default tenant keeps unsuffixed names).
@@ -85,6 +86,9 @@ const (
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+	// PayloadProcessingEnvoyFilterPriority runs after Kuadrant's default-priority (0)
+	// EnvoyFilter so RHCL's envoy.filters.http.wasm anchor exists when we INSERT_*.
+	PayloadProcessingEnvoyFilterPriority int64 = 10
 
 	// LabelTenantInstance distinguishes pods when multiple IPP stacks share a gateway namespace.
 	LabelTenantInstance = "maas.opendatahub.io/tenant-instance"
@@ -121,6 +125,7 @@ var (
 	GVKNetworkPolicy        = schema.GroupVersionKind{Group: "networking.k8s.io", Version: "v1", Kind: "NetworkPolicy"}
 	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
+	GVKCertificate          = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
 )
 
 // Resource naming functions for multi-tenant deployment.
@@ -223,6 +228,10 @@ func PayloadProcessingServiceAccountName(tenantID string) string {
 
 func PayloadProcessingNetworkPolicyName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func MaaSAPIServingCertName(tenantID string) string {
+	return resourceNameForTenant(baseMaaSAPIServingCertName, tenantID)
 }
 
 func PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID string) string {

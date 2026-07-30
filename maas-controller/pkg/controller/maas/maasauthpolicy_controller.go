@@ -600,12 +600,13 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	if err := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
-		log.Error(err, "failed to reconcile gateway AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
+	if reconcileErr != nil {
+		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
+		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot)
+		return ctrl.Result{}, reconcileErr
 	}
-	if legacyPolicyExists {
+	if gwChanged || legacyPolicyExists || policy.Status.Phase != maasv1alpha1.PhaseActive {
 		gatewayPolicyReady, readinessMessage, readinessErr := r.gatewayAuthPolicyReady(ctx, gatewayNs, gatewayName)
 		if readinessErr != nil {
 			log.Error(readinessErr, "failed to check gateway AuthPolicy readiness")
@@ -614,7 +615,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 		if !gatewayPolicyReady {
 			message := fmt.Sprintf(
-				"Waiting for gateway AuthPolicy %s/%s to be accepted and enforced before removing the working legacy AuthPolicy: %s",
+				"Waiting for gateway AuthPolicy %s/%s to be accepted and enforced: %s",
 				gatewayNs,
 				r.gatewayAuthPolicyName(gatewayNs, gatewayName),
 				readinessMessage,
@@ -803,7 +804,7 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 	if xAPIKeyEnabled {
 		authenticationRules["api-keys-x-api-key"] = map[string]any{
 			"plain": map[string]any{
-				"expression": `"Bearer " + request.headers["x-api-key"]`,
+				"selector": "request.headers.x-api-key",
 			},
 			"when": []any{
 				map[string]any{
@@ -1210,10 +1211,9 @@ allow {
 
 	return map[string]any{
 		"targetRef": map[string]any{
-			"group":     "gateway.networking.k8s.io",
-			"kind":      "Gateway",
-			"name":      gatewayName,
-			"namespace": gatewayNamespace,
+			"group": "gateway.networking.k8s.io",
+			"kind":  "Gateway",
+			"name":  gatewayName,
 		},
 		// "when" must live inside "defaults" (not at spec level) because Kuadrant treats
 		// top-level "when" as implicit defaults, which conflicts with explicit "defaults".
@@ -1281,9 +1281,75 @@ func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyReady(ctx context.Context, g
 	return ready, message, nil
 }
 
+// specMatchesDesired reports whether the current spec (from the API server)
+// contains all fields present in the desired spec with equal values. Fields
+// added by the API server or its controllers (e.g. Kuadrant defaults like
+// "allValues", "strategy") are ignored — only the fields we explicitly set
+// are compared. Both sides are JSON-round-tripped first so Go type
+// differences (int64 vs float64) are normalised.
+func specMatchesDesired(desired, current map[string]any) bool {
+	desiredJSON, err := json.Marshal(desired)
+	if err != nil {
+		return false
+	}
+	currentJSON, err := json.Marshal(current)
+	if err != nil {
+		return false
+	}
+	var desiredNorm, currentNorm map[string]any
+	if err := json.Unmarshal(desiredJSON, &desiredNorm); err != nil {
+		return false
+	}
+	if err := json.Unmarshal(currentJSON, &currentNorm); err != nil {
+		return false
+	}
+	stripExtraFields(currentNorm, desiredNorm)
+	return reflect.DeepEqual(desiredNorm, currentNorm)
+}
+
+// stripExtraFields recursively removes keys from current that do not exist
+// in desired, so that server-added defaults do not cause false mismatches.
+func stripExtraFields(current, desired map[string]any) {
+	for k, cv := range current {
+		dv, exists := desired[k]
+		if !exists {
+			delete(current, k)
+			continue
+		}
+		if dMap, ok := dv.(map[string]any); ok {
+			if cMap, ok := cv.(map[string]any); ok {
+				stripExtraFields(cMap, dMap)
+			}
+		}
+		if dSlice, ok := dv.([]any); ok {
+			if cSlice, ok := cv.([]any); ok {
+				stripExtraFieldsSlice(cSlice, dSlice)
+			}
+		}
+	}
+}
+
+func stripExtraFieldsSlice(current, desired []any) {
+	for i := 0; i < len(current) && i < len(desired); i++ {
+		if dMap, ok := desired[i].(map[string]any); ok {
+			if cMap, ok := current[i].(map[string]any); ok {
+				stripExtraFields(cMap, dMap)
+			}
+		}
+		if dSlice, ok := desired[i].([]any); ok {
+			if cSlice, ok := current[i].([]any); ok {
+				stripExtraFieldsSlice(cSlice, dSlice)
+			}
+		}
+	}
+}
+
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
-func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Context, log logr.Logger, modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string) error {
+func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
+	ctx context.Context, log logr.Logger, modelAccessJSON string,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
+) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
 
 	// Calculate tenantName from tenantID
@@ -1316,7 +1382,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 	existing.SetGroupVersionKind(gwPolicy.GroupVersionKind())
 	err := r.Get(ctx, client.ObjectKeyFromObject(gwPolicy), existing)
 	if err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
+		return false, fmt.Errorf("failed to get gateway AuthPolicy: %w", err)
 	}
 	existingFound := err == nil
 
@@ -1334,14 +1400,14 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 				// delete it to prevent orphaned resources.
 				if existingFound && isManaged(existing) {
 					if delErr := r.Delete(ctx, existing); delErr != nil {
-						return fmt.Errorf("failed to delete stale tenant gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
+						return false, fmt.Errorf("failed to delete stale tenant gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
 					}
 					log.Info("deleted stale tenant gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
 				}
 				// Nothing to create or update without a Gateway.
-				return nil
+				return false, nil
 			}
-			return fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, gwErr)
+			return false, fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, gwErr)
 		}
 	}
 
@@ -1351,41 +1417,41 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(ctx context.Contex
 			setGatewayOwnerReference(gateway, gwPolicy)
 		}
 		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
-			return fmt.Errorf("failed to set gateway AuthPolicy spec: %w", err)
+			return false, fmt.Errorf("failed to set gateway AuthPolicy spec: %w", err)
 		}
 		if err := r.Create(ctx, gwPolicy); err != nil {
-			return fmt.Errorf("failed to create gateway AuthPolicy: %w", err)
+			return false, fmt.Errorf("failed to create gateway AuthPolicy: %w", err)
 		}
 		log.Info("gateway AuthPolicy created", "name", authPolicyName, "namespace", gatewayNamespace)
 		r.deleteGatewayDefaultAuthPolicy(ctx, log)
-		return nil
+		return true, nil
 	}
 
 	if !isManaged(existing) {
 		log.Info("gateway AuthPolicy opted out of management, skipping", "name", authPolicyName)
-		return nil
+		return false, nil
 	}
 
-	snapshot := existing.DeepCopy()
+	currentSpec, _, _ := unstructured.NestedMap(existing.Object, "spec")
 	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
-		return fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
+		return false, fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
 	}
 	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
 	// (handles upgrade from pre-ownerref versions).
 	if isTenantGateway {
 		setGatewayOwnerReference(gateway, existing)
 	}
-	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+	if specMatchesDesired(spec, currentSpec) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
 		r.deleteGatewayDefaultAuthPolicy(ctx, log)
-		return nil
+		return false, nil
 	}
 	if err := r.Update(ctx, existing); err != nil {
-		return fmt.Errorf("failed to update gateway AuthPolicy: %w", err)
+		return false, fmt.Errorf("failed to update gateway AuthPolicy: %w", err)
 	}
 	log.Info("gateway AuthPolicy updated", "name", authPolicyName, "namespace", gatewayNamespace)
 	r.deleteGatewayDefaultAuthPolicy(ctx, log)
-	return nil
+	return true, nil
 }
 
 // reconcileModelAuthPolicies creates or updates the per-model group-membership AuthPolicy for

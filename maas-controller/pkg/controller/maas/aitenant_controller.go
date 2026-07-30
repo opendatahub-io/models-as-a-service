@@ -37,13 +37,16 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -151,19 +154,69 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: time.Second}, nil
 	}
 
-	gatewayRef, err := r.validateTenantGateway(ctx, &aitenant)
+	gatewayRef := r.gatewayRefFor(&aitenant)
 	aitenant.Status.GatewayRef = gatewayRef
-	if err != nil {
+	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	statusSnapshot = aitenant.Status.DeepCopy()
+
+	var tenantConfigReady bool
+	ensureTenantResources := func() (ctrl.Result, bool, error) {
+		namespaceCreated, err := r.ensureTenantNamespace(ctx, &aitenant)
+		if err != nil {
+			setAITenantPhase(&aitenant, "Failed", "TenantNamespaceFailed", err.Error())
+			if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+				return ctrl.Result{}, true, err2
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, true, nil
+		}
+		if namespaceCreated {
+			setAITenantPhase(&aitenant, "Pending", "TenantNamespacePending", "waiting for tenant namespace to become available")
+			if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+				return ctrl.Result{}, true, err
+			}
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+
+		var namespacePending bool
+		tenantConfigReady, namespacePending, err = r.ensureTenantConfig(ctx, &aitenant)
+		if err != nil {
+			setAITenantPhase(&aitenant, "Failed", "TenantConfigReconcileFailed", err.Error())
+			if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+				return ctrl.Result{}, true, err2
+			}
+			return ctrl.Result{RequeueAfter: 30 * time.Second}, true, nil
+		}
+		if namespacePending {
+			setAITenantPhase(&aitenant, "Pending", "TenantNamespacePending", "waiting for tenant namespace to accept tenant resources")
+			if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+				return ctrl.Result{}, true, err
+			}
+			return ctrl.Result{RequeueAfter: time.Second}, true, nil
+		}
+
+		return ctrl.Result{}, false, nil
+	}
+
+	// The default namespace must be enabled before the Gateway becomes Ready so
+	// the UI is not blocked by the tenant-namespace admission check during normal
+	// bootstrap. Other AITenants keep the existing gateway-first provisioning
+	// order.
+	defaultTenantBootstrap := aitenant.Name == tenantreconcile.DefaultAITenantName
+	if defaultTenantBootstrap {
+		if res, done, err := ensureTenantResources(); err != nil || done {
+			return res, err
+		}
+	}
+
+	if err := r.validateTenantGateway(ctx, gatewayRef); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "GatewayCheckFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
-	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
-		return ctrl.Result{}, err
-	}
-	statusSnapshot = aitenant.Status.DeepCopy()
 
 	if err := r.ensureGatewayClaim(ctx, &aitenant, gatewayRef); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "GatewayClaimFailed", err.Error())
@@ -173,26 +226,24 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
-	if err := r.ensureTenantNamespace(ctx, &aitenant); err != nil {
-		setAITenantPhase(&aitenant, "Failed", "TenantNamespaceFailed", err.Error())
-		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
-			return ctrl.Result{}, err2
+	if !defaultTenantBootstrap {
+		if res, done, err := ensureTenantResources(); err != nil || done {
+			return res, err
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
-	}
-
-	if err := r.ensureTenantConfig(ctx, &aitenant); err != nil {
-		setAITenantPhase(&aitenant, "Failed", "TenantConfigReconcileFailed", err.Error())
-		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
-			return ctrl.Result{}, err2
-		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
 	if err := r.ensureTenantAdminRBAC(ctx, &aitenant); err != nil {
 		setAITenantPhase(&aitenant, "Failed", "RBACReconcileFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if !tenantConfigReady {
+		setAITenantPhase(&aitenant, "Pending", "TenantConfigNotReady", "waiting for MaasTenantConfig to report Ready")
+		if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
+			return ctrl.Result{}, err
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
@@ -213,7 +264,30 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
 			predicate.Or(predicate.GenerationChangedPredicate{}, predicate.Funcs{UpdateFunc: deletionTimestampSet}),
 		)).
+		Watches(
+			&maasv1alpha1.MaasTenantConfig{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
+		).
 		Complete(r)
+}
+
+// enqueueAITenantForTenantConfig maps MaasTenantConfig events back to the
+// owning AITenant. This ensures the AITenant reconciler re-creates the
+// MaasTenantConfig when a ghost from a previous install cycle finishes deleting.
+func (r *AITenantReconciler) enqueueAITenantForTenantConfig(_ context.Context, obj client.Object) []reconcile.Request {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		return nil
+	}
+	name := annotations[aitenantNameAnnotation]
+	ns := annotations[aitenantNamespaceAnnotation]
+	if name == "" || ns == "" {
+		return nil
+	}
+	return []reconcile.Request{{NamespacedName: types.NamespacedName{
+		Name:      name,
+		Namespace: ns,
+	}}}
 }
 
 func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AITenant) error {
@@ -254,7 +328,7 @@ func (r *AITenantReconciler) tenantNamespaceName(aitenant *maasv1alpha1.AITenant
 	return tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace)
 }
 
-func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
 	name := r.tenantNamespaceName(aitenant)
 	var ns corev1.Namespace
 	err := r.get(ctx, client.ObjectKey{Name: name}, &ns)
@@ -269,54 +343,53 @@ func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant
 		setMapValue(&toCreate.Annotations, aitenantCreatedAnnotation, "true")
 		if createErr := r.Create(ctx, toCreate); createErr != nil {
 			if !isAlreadyExistsError(createErr) {
-				return fmt.Errorf("create tenant namespace %q: %w", name, createErr)
+				return false, fmt.Errorf("create tenant namespace %q: %w", name, createErr)
 			}
 			if err := r.get(ctx, client.ObjectKey{Name: name}, &ns); err != nil {
-				return fmt.Errorf("get tenant namespace %q after create conflict: %w", name, err)
+				return false, fmt.Errorf("get tenant namespace %q after create conflict: %w", name, err)
 			}
 			err = nil
 		} else {
-			return nil
+			return true, nil
 		}
 	}
 	if err != nil {
-		return fmt.Errorf("get tenant namespace %q: %w", name, err)
+		return false, fmt.Errorf("get tenant namespace %q: %w", name, err)
 	}
 	if ns.Status.Phase == corev1.NamespaceTerminating {
-		return fmt.Errorf("tenant namespace %q is terminating", name)
+		return false, fmt.Errorf("tenant namespace %q is terminating", name)
 	}
 	if hasAITenantOwnerAnnotations(&ns) && !ownedByAITenant(&ns, aitenant) {
-		return fmt.Errorf("tenant namespace %q is managed by another AITenant", name)
+		return false, fmt.Errorf("tenant namespace %q is managed by another AITenant", name)
 	}
 	base := ns.DeepCopy()
 	applyAITenantMetadata(&ns, aitenant, name)
 	if equality.Semantic.DeepEqual(base, &ns) {
-		return nil
+		return false, nil
 	}
 	if err := r.Patch(ctx, &ns, client.MergeFrom(base)); err != nil {
-		return fmt.Errorf("patch tenant namespace %q: %w", name, err)
+		return false, fmt.Errorf("patch tenant namespace %q: %w", name, err)
 	}
-	return nil
+	return false, nil
 }
 
-func (r *AITenantReconciler) validateTenantGateway(ctx context.Context, aitenant *maasv1alpha1.AITenant) (maasv1alpha1.TenantGatewayRef, error) {
-	ref := r.gatewayRefFor(aitenant)
+func (r *AITenantReconciler) validateTenantGateway(ctx context.Context, ref maasv1alpha1.TenantGatewayRef) error {
 	if ref.Namespace == "" {
-		return ref, errors.New("gateway namespace is required; set --gateway-namespace")
+		return errors.New("gateway namespace is required; set --gateway-namespace")
 	}
 	if ref.Name == "" {
-		return ref, errors.New("spec.gateway.name is required when AITenant name is empty")
+		return errors.New("spec.gateway.name is required when AITenant name is empty")
 	}
 
 	var gateway gatewayapiv1.Gateway
 	key := client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}
 	if err := r.get(ctx, key, &gateway); err != nil {
 		if isNotFoundError(err) {
-			return ref, fmt.Errorf("gateway %s/%s not found: the Gateway must be created by a network or cluster administrator before AITenant can be provisioned", key.Namespace, key.Name)
+			return fmt.Errorf("gateway %s/%s not found: the Gateway must be created by a network or cluster administrator before AITenant can be provisioned", key.Namespace, key.Name)
 		}
-		return ref, fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
+		return fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
 	}
-	return ref, nil
+	return nil
 }
 
 func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maasv1alpha1.TenantGatewayRef {
@@ -375,8 +448,9 @@ func (r *AITenantReconciler) legacyGatewayNameIsSharedDefault(aitenant *maasv1al
 	return aitenant.Name != tenantreconcile.DefaultAITenantName && gatewayName == defaultGatewayName
 }
 
-func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, bool, error) {
 	tenantNamespace := r.tenantNamespaceName(aitenant)
+
 	config := &maasv1alpha1.MaasTenantConfig{
 		TypeMeta: metav1.TypeMeta{
 			APIVersion: maasv1alpha1.GroupVersion.String(),
@@ -392,15 +466,30 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		if !ok {
 			return fmt.Errorf("expected MaasTenantConfig, got %T", obj)
 		}
+		if !t.DeletionTimestamp.IsZero() {
+			return fmt.Errorf("MaasTenantConfig %s/%s is being deleted; waiting for cleanup to finish before recreating", t.Namespace, t.Name)
+		}
 		applyAITenantMetadata(t, aitenant, tenantNamespace)
 		if err := r.copyLegacyTenantConfig(ctx, t); err != nil {
 			return err
 		}
 		return nil
 	}); err != nil {
-		return err
+		if isNamespaceMissingError(err) {
+			return false, true, nil
+		}
+		return false, false, err
 	}
-	return r.markLegacyTenantDeprecated(ctx, tenantNamespace)
+	if err := r.markLegacyTenantDeprecated(ctx, tenantNamespace); err != nil {
+		return false, false, err
+	}
+	if err := r.get(ctx, client.ObjectKeyFromObject(config), config); err != nil {
+		return false, false, fmt.Errorf("get MaasTenantConfig %s/%s readiness: %w", config.Namespace, config.Name, err)
+	}
+	ready := apimeta.FindStatusCondition(config.Status.Conditions, tenantreconcile.ReadyConditionType)
+	return ready != nil &&
+		ready.Status == metav1.ConditionTrue &&
+		ready.ObservedGeneration == config.Generation, false, nil
 }
 
 func (r *AITenantReconciler) copyLegacyTenantConfig(ctx context.Context, config *maasv1alpha1.MaasTenantConfig) error {
@@ -1358,6 +1447,25 @@ func isAlreadyExistsError(err error) bool {
 		return true
 	}
 	return hasAPIStatusReason(err, metav1.StatusReasonAlreadyExists)
+}
+
+func isNamespaceMissingError(err error) bool {
+	var statusErr *apierrors.StatusError
+	if !errors.As(err, &statusErr) {
+		return false
+	}
+	if statusErr.Status().Reason != metav1.StatusReasonNotFound {
+		return false
+	}
+	details := statusErr.Status().Details
+	if details != nil {
+		kind := strings.ToLower(details.Kind)
+		if kind == "namespace" || kind == "namespaces" {
+			return true
+		}
+	}
+	msg := strings.ToLower(statusErr.Status().Message)
+	return strings.HasPrefix(msg, "namespaces ") && strings.Contains(msg, "not found")
 }
 
 func hasAPIStatusReason(err error, reason metav1.StatusReason) bool {

@@ -1,8 +1,9 @@
 # Admin usage dashboard — queries Loki structured logs via LogQL.
 # Uses $__range to bind LogQL windows to the native time picker.
-# LokiLabelValuesVariable for model/subscription dropdowns (COO 1.5+).
-# User filter uses TextVariable (regex input) to avoid Loki cardinality issues
-# from indexing high-cardinality user_id as a label. Admins enter regex patterns.
+# All three dropdowns (user, subscription, model) follow the dashboard time
+# picker. User filter uses LokiLogQLVariable with [$__range] — auto-populates
+# from structured metadata via count by (user_id), bypassing /label/values
+# (which requires stream labels). Subscription/model use LokiLabelValuesVariable.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. subscription when capturing is disabled). Do not remove.
 apiVersion: perses.dev/v1alpha1
@@ -21,13 +22,24 @@ spec:
       rate limiting, and per-user breakdown across all users and subscriptions.
   duration: 1h
   variables:
-    - kind: TextVariable
+    - kind: ListVariable
       spec:
         name: user
         display:
-          name: "User (regex)"
-          description: "Filter by user ID. Use regex: 'user-1' (single), 'user-1|user-2' (multiple), '.*' (all)"
-        defaultValue: ".*"
+          name: "User"
+          description: "Filter by user. Populated from the selected time range."
+        allowMultiple: true
+        allowAllValue: true
+        customAllValue: ".*"
+        defaultValue: "$__all"
+        plugin:
+          kind: LokiLogQLVariable
+          spec:
+            datasource:
+              kind: LokiDatasource
+              name: usage-logs-all
+            expr: 'count by (user_id) (count_over_time({service_name="models-as-a-service"} | user_id!="" | user_id!="-" | keep user_id [$__range]))'
+            labelName: user_id
     - kind: ListVariable
       spec:
         name: subscription
@@ -240,11 +252,11 @@ spec:
       spec:
         display:
           name: "Token consumption chart"
+          # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
+          # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
             Tokens from successful requests (2xx) over time by model or subscription.
-            **View by** drives chart ``sum by (${view_by:raw})``. Table uses hardcoded ``sum by (model, subscription)``.
-            LogQL ``[30m]`` is the range window for ``sum_over_time`` (Perses time-series step).
-            Visual: OpenShift Perses pattern — ``line`` + ``areaOpacity: 1`` + ``stack: all``.
+            **View by** drives the chart grouping.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -277,7 +289,7 @@ spec:
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
-                    | unwrap tokens_total [30m]))
+                    | unwrap tokens_total [2h]))
 
     tokenConsumptionTable:
       kind: Panel

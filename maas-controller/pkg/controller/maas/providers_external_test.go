@@ -203,8 +203,8 @@ func TestExternalModel_Status_Ready(t *testing.T) {
 	if !ready {
 		t.Error("Status: ready = false, want true")
 	}
-	if endpoint != "https://maas.example.com/default/gpt-4o" {
-		t.Errorf("Status: endpoint = %q, want %q", endpoint, "https://maas.example.com/default/gpt-4o")
+	if endpoint != "https://maas.example.com" {
+		t.Errorf("Status: endpoint = %q, want %q", endpoint, "https://maas.example.com")
 	}
 }
 
@@ -254,8 +254,8 @@ func TestExternalModel_GetModelEndpoint_FromHostnames(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelEndpoint: unexpected error: %v", err)
 	}
-	if endpoint != "https://maas.example.com/default/claude-sonnet" {
-		t.Errorf("GetModelEndpoint = %q, want %q", endpoint, "https://maas.example.com/default/claude-sonnet")
+	if endpoint != "https://maas.example.com" {
+		t.Errorf("GetModelEndpoint = %q, want %q", endpoint, "https://maas.example.com")
 	}
 }
 
@@ -273,8 +273,8 @@ func TestExternalModel_GetModelEndpoint_FromGateway(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetModelEndpoint: unexpected error: %v", err)
 	}
-	if endpoint != "https://maas.cluster.example.com/default/gpt-4o" {
-		t.Errorf("GetModelEndpoint = %q, want %q", endpoint, "https://maas.cluster.example.com/default/gpt-4o")
+	if endpoint != "https://maas.cluster.example.com" {
+		t.Errorf("GetModelEndpoint = %q, want %q", endpoint, "https://maas.cluster.example.com")
 	}
 }
 

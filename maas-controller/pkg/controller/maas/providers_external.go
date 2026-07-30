@@ -227,15 +227,14 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 	return endpoint, true, nil
 }
 
-// GetModelEndpoint returns the endpoint URL for the ExternalModel.
-// Uses ExternalModel name (spec.modelRef.name) in the path to match IPP's
-// model-provider-resolver store key. The HTTPRoute object name itself is
-// MaaS-prefixed to avoid colliding with the upstream inference ExternalModel controller.
+// GetModelEndpoint returns the shared gateway base URL for the ExternalModel.
+// Matches LLMInferenceService BBR catalog URLs (https://{gatewayHost}) so clients
+// use one base_url and select the model via body.model / X-Gateway-Model-Name.
+// Path-based HTTPRoute rules remain for backward-compatible clients.
 func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
 	extModelName := model.Spec.ModelRef.Name
 	if len(model.Status.HTTPRouteHostnames) > 0 {
-		hostname := model.Status.HTTPRouteHostnames[0]
-		return fmt.Sprintf("https://%s/%s/%s", hostname, model.Namespace, extModelName), nil
+		return fmt.Sprintf("https://%s", model.Status.HTTPRouteHostnames[0]), nil
 	}
 
 	gatewayName := h.r.gatewayName()
@@ -248,19 +247,19 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 
 	for _, listener := range gateway.Spec.Listeners {
 		if listener.Hostname != nil {
-			return fmt.Sprintf("https://%s/%s/%s", string(*listener.Hostname), model.Namespace, extModelName), nil
+			return fmt.Sprintf("https://%s", string(*listener.Hostname)), nil
 		}
 	}
 
 	for _, addr := range gateway.Status.Addresses {
 		if addr.Type != nil && *addr.Type == gatewayapiv1.HostnameAddressType {
-			return fmt.Sprintf("https://%s/%s/%s", addr.Value, model.Namespace, extModelName), nil
+			return fmt.Sprintf("https://%s", addr.Value), nil
 		}
 	}
 	if len(gateway.Status.Addresses) > 0 {
 		log.Info("Using IP-based gateway address; TLS hostname verification may fail",
 			"address", gateway.Status.Addresses[0].Value, "model", extModelName)
-		return fmt.Sprintf("https://%s/%s/%s", gateway.Status.Addresses[0].Value, model.Namespace, extModelName), nil
+		return fmt.Sprintf("https://%s", gateway.Status.Addresses[0].Value), nil
 	}
 
 	return "", fmt.Errorf("unable to determine endpoint: gateway %s/%s has no hostname or addresses", gatewayNS, gatewayName)

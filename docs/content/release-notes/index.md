@@ -8,6 +8,7 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 
 | RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
 |---------------|--------------|-----------------|--------|-------|
+| 3.5           | v0.2.1       | `v3.5`          | GA     | Multi-tenancy; body-based routing; xKS support; see [Upgrade Guide](../migration/upgrade-to-3.5.md) |
 | 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
 | 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
 | 3.2           | v0.0.2       | `v3.2`          | Tech Preview | Tier-based access; standalone deploy (`modelsAsService` not in DSC schema) |
@@ -21,7 +22,108 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 
 ---
 
-## v0.1.2
+## v0.2.1
+
+**Release Date:** TBD
+
+### Breaking Changes
+
+**`X-MaaS-Tenant` header eliminated (RHOAIENG-70517)**
+- The `X-MaaS-Tenant` header is no longer sent or expected. Tenant identity is now derived from the `AITenant` CR and namespace context. Clients and middleware that depend on this header must be updated.
+
+**AITenant automatic RBAC bindings removed**
+- `AITenant.spec.rbac` is deprecated and ignored. Existing manifests that still include the field remain schema-valid, but the controller no longer creates RoleBindings from it. The controller still creates tenant-admin Roles; platform administrators must create standard Kubernetes RoleBindings to grant access. See [Tenant RBAC](../configuration-and-management/tenant-rbac.md).
+
+**Tenant configuration migrated to MaasTenantConfig**
+- MaaS runtime settings (`apiKeys`, `telemetry`) previously in the legacy `Tenant` CR are now managed via the namespace-scoped `MaasTenantConfig` CR. OIDC and gateway context moved to the owning `AITenant`. Existing `Tenant.spec` fields are copied to `MaasTenantConfig/default-tenant` automatically during the migration grace window.
+
+**Infrastructure namespace separation**
+- MaaS infrastructure resources (secrets, config) now reside in a dedicated infrastructure namespace rather than the controller namespace. Existing deployments are migrated automatically.
+
+### New Features
+
+**Body-based routing (BBR)**
+
+- Models can now be selected via the `model` field in the request body (OpenAI-compatible format) in addition to URL path routing. Enables standard OpenAI SDK compatibility without path manipulation.
+- Canonical BBR model ID surfaced in `GET /v1/models` and `MaaSModelRef.status`.
+- Model-provider-resolver and maas-headers-guard added to the IPP pipeline for BBR support.
+
+**Multi-tenancy enhancements**
+
+- Default `AITenant` bootstrapped automatically for single-tenant deployments.
+- Any MaaS tenant can now be removed (not just non-default tenants).
+- Validating webhook prevents multiple `AITenant` CRs from claiming the same namespace.
+- Per-tenant IPP (Inference Payload Processing) stacks deployed for each `AITenant` gateway.
+- Configurable `AITenant` deletion timeout with force-remove finalizer.
+- `GET /v1/tenants` endpoint for gateway discovery.
+
+**Observability**
+
+- OTel Collector deployment for usage log collection.
+- EnvoyFilter for OTel structured usage logging with model and tenant context.
+- Logs-based usage dashboards and tenant-specific dashboard panels.
+- Tenant-level metrics, tracing, and logging.
+- Perses dashboards deployed via `maas-controller`.
+
+**Controller self-teardown**
+
+- `maas-controller` supports clean uninstallation — removes managed resources while preserving tenant namespaces.
+
+**Non-OpenShift Kubernetes (xKS) support**
+
+- New `xKS` overlay enables MaaS deployment on vanilla Kubernetes clusters.
+- OpenShift-only watchers are skipped on xKS to prevent cache-sync timeouts.
+
+**Security hardening**
+
+- Container hardening: `readOnlyRootFilesystem`, `seccompProfile` (FIND-007).
+- Request body size limit to prevent OOM (FIND-011).
+- Startup fails on missing gateway host; non-HTTPS probe URLs rejected (FIND-010).
+- Debug CORS restricted to `http://localhost` only (FIND-Debug-CORS).
+- Database credentials removed from error messages (FIND-006).
+- `X-MaaS-Username` and `X-MaaS-Group` added to sensitive headers (FIND-014).
+- SA token automount disabled on cleanup CronJob (FIND-015).
+- `X-MaaS-Subscription` header ignored for non-API-key requests (FIND-009).
+- Username hashed/redacted in logs.
+- GitHub Actions pinned to immutable commit SHAs.
+- `govulncheck` added for maas-api and maas-controller.
+
+**Additional features**
+
+- OpenShift cluster TLS profiles honored for gateway and controller TLS configuration.
+- OIDC JWKS cache TTL configurable via `Tenant` CR and wired to Authorino.
+- `maas-api` and `payload-processing` replica count configurable via `Tenant` annotation.
+- API key display name exposed in auth identity.
+- Unauthorized models filtered from `GET /subscriptions` response.
+- `stream_options.include_usage` enforced in IPP pipeline.
+- KServe upgraded to v0.19.0 with model-based routing support.
+- New AI Gateway base manifest entry point for modularized deployment.
+- Configurable Limitador scrape interval.
+- API key update debouncing.
+
+### Key Fixes
+
+- **CVE-2026-33815 / CVE-2026-33816:** pgx memory-safety and SQL injection fixes.
+- Prevent crash-loop when Kuadrant or KServe CRDs are not installed.
+- Preserve MaaS traffic during RHOAI 3.5 upgrades.
+- Require both `Accepted` and `Enforced` conditions for gateway `AuthPolicy` readiness.
+- Scope gateway `deny-all` auth to model inference paths only; exempt `/v1/subscriptions` and `/v1/api-keys`.
+- Resolve body-routed model names in gateway `AuthPolicy` and subscription validation.
+- Gracefully handle empty `monitoring-namespace` configuration.
+- Scope Secret informer cache to infrastructure namespace.
+- Parse Authorino bracket-wrapped groups header format.
+- Return empty list (not error) from management endpoints when no auth context present.
+
+### Known Limitations
+
+- **Token rate limits for non-OpenAI API formats:** Token-based rate limiting counts tokens only for OpenAI-compatible request/response formats. Models using other API formats (e.g., Anthropic Messages API) are not metered. See [Token Rate Limiting](../configuration-and-management/quota-and-access-configuration.md).
+- **External models in multi-tenant deployments:** External models are not yet fully supported in multi-tenant configurations. See [External Model Setup](../install/external-model-setup.md).
+
+[Full Changelog](https://github.com/opendatahub-io/models-as-a-service/compare/v0.2.0...v0.2.1)
+
+---
+
+## v0.2.0
 
 **Release Date:** TBD
 
@@ -33,7 +135,6 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - `status.authPolicies` now references `maas-gateway-auth / openshift-ingress` instead of per-model policy names.
 - New admission webhooks (`failurePolicy=Ignore`) validate that `MaaSAuthPolicy` and `MaaSSubscription` are created in namespaces that contain a `MaasTenantConfig` CR.
 - `AITenant` created outside the configured `--aitenant-namespace` are now rejected at admission instead of being accepted and later marked `Failed/InvalidPlacement` by the controller.
-- `AITenant.spec.rbac` is deprecated and ignored. Existing manifests that still include it remain schema-valid, but the controller no longer creates RoleBindings from it. The controller still creates tenant-admin Roles, and platform administrators must create standard Kubernetes RoleBindings to grant access. See [Tenant RBAC](../configuration-and-management/tenant-rbac.md).
 - **Minimum Kuadrant version:** v1.4.2 or later required for `spec.defaults.rules` support.
 - **End-user auth behavior is unchanged** — valid API key + active subscription + allowed group still returns `200`.
 
@@ -51,6 +152,8 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 ### Known Limitations
 
 - **`tenant-gateway-isolation` rule is a stub.** The gateway policy includes an always-allow placeholder for multi-gateway tenant isolation. This will be replaced with a real hostname check in a future release.
+
+[Full Changelog](https://github.com/opendatahub-io/models-as-a-service/compare/v0.1.1...v0.2.0)
 
 ---
 

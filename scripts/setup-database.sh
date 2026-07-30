@@ -16,8 +16,9 @@
 #   POSTGRES_USER      Database user (default: maas)
 #   POSTGRES_DB        Database name (default: maas)
 #   POSTGRES_PASSWORD  Database password (default: auto-generated)
-#   DB_SSLMODE         PostgreSQL sslmode (default: require). Set to "disable"
-#                      for CI environments where the Postgres pod lacks TLS.
+#   DB_SSLMODE         PostgreSQL sslmode (default: disable). The POC postgres
+#                      container has no TLS configured; set to "require" only
+#                      when connecting to TLS-enabled databases.
 #
 # Usage:
 #   ./scripts/setup-database.sh
@@ -50,11 +51,12 @@ derive_infra_namespace() {
 
 # Infrastructure namespace where maas-api and postgres deploy
 # Defaults to AUTO (namespace separation enabled). Set to empty string to disable for ROSA.
-INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE:-AUTO}"
+INFRA_NAMESPACE_RAW="${INFRA_NAMESPACE-AUTO}"
+CONTROLLER_NS="${NAMESPACE:-opendatahub}"
 if [ "$INFRA_NAMESPACE_RAW" = "AUTO" ]; then
-  # Derive from NAMESPACE (controller namespace) or default to opendatahub
-  CONTROLLER_NS="${NAMESPACE:-opendatahub}"
   INFRA_NAMESPACE=$(derive_infra_namespace "$CONTROLLER_NS")
+elif [ -z "$INFRA_NAMESPACE_RAW" ]; then
+  INFRA_NAMESPACE="$CONTROLLER_NS"
 else
   INFRA_NAMESPACE="$INFRA_NAMESPACE_RAW"
 fi
@@ -278,7 +280,7 @@ EOF
 # than strictly necessary but is always correct per RFC 3986 — %61 is equivalent to "a".
 # Uses od (POSIX) instead of xxd which may not be available in all environments.
 ENCODED_PASSWORD=$(printf '%s' "$POSTGRES_PASSWORD" | od -An -tx1 | tr -d ' \n' | sed 's/../%&/g')
-: "${DB_SSLMODE:=require}"
+: "${DB_SSLMODE:=disable}"
 DB_CONNECTION_URL="postgresql://${POSTGRES_USER}:${ENCODED_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=${DB_SSLMODE}"
 create_maas_db_config_secret "$INFRA_NAMESPACE" "$DB_CONNECTION_URL"
 

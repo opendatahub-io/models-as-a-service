@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strconv"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
@@ -104,6 +106,13 @@ func RunPlatform(
 	ready, detail, err := MaasAPIDeploymentReady(ctx, c, appNs, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("deployment status: %w", err)
+	}
+	if !ready {
+		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+	}
+	ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
+	if err != nil {
+		return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
 	}
 	if !ready {
 		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
@@ -210,6 +219,59 @@ func MaasAPIDeploymentReady(ctx context.Context, c client.Client, appNamespace, 
 	}
 	if dep.Status.AvailableReplicas < desired {
 		return false, fmt.Sprintf("available replicas %d/%d", dep.Status.AvailableReplicas, desired), nil
+	}
+	return true, "", nil
+}
+
+// PayloadProcessingEnvoyFilterReady verifies the per-tenant gateway EnvoyFilter that
+// wires ext_proc is present with a priority high enough to run after Kuadrant's wasm
+// insert. Without that, RHCL body-routed inference returns 404 NR on that gateway.
+//
+// This is a config-shape check (not a live config_dump). Use
+// scripts/check-payload-ext-proc-filters.sh to confirm filters are in the proxy.
+func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gatewayNamespace, gatewayName, tenantID string) (ready bool, detail string, err error) {
+	efName := PayloadProcessingEnvoyFilterName(tenantID)
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(GVKEnvoyFilter)
+	key := types.NamespacedName{Namespace: gatewayNamespace, Name: efName}
+	if err := c.Get(ctx, key, ef); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, fmt.Sprintf(
+				"EnvoyFilter %s/%s not found — ext_proc will not run; body-routed /v1/* returns 404 NR",
+				gatewayNamespace, efName), nil
+		}
+		return false, "", err
+	}
+
+	priority, found, err := unstructured.NestedInt64(ef.Object, "spec", "priority")
+	if err != nil {
+		return false, "", fmt.Errorf("read EnvoyFilter priority: %w", err)
+	}
+	if !found || priority < PayloadProcessingEnvoyFilterPriority {
+		shown := "missing"
+		if found {
+			shown = strconv.FormatInt(priority, 10)
+		}
+		return false, fmt.Sprintf(
+			"EnvoyFilter %s/%s spec.priority=%s; need >= %d so HTTP_FILTER inserts apply after Kuadrant wasm (otherwise body-routed /v1/* returns 404 NR)",
+			gatewayNamespace, efName, shown, PayloadProcessingEnvoyFilterPriority), nil
+	}
+
+	targetRefs, found, err := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+	if err != nil {
+		return false, "", fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
+	}
+	if !found || len(targetRefs) == 0 {
+		return false, fmt.Sprintf("EnvoyFilter %s/%s has no targetRefs", gatewayNamespace, efName), nil
+	}
+	ref, ok := targetRefs[0].(map[string]any)
+	if !ok {
+		return false, fmt.Sprintf("EnvoyFilter %s/%s targetRefs[0] is not an object", gatewayNamespace, efName), nil
+	}
+	if name, _ := ref["name"].(string); name != gatewayName {
+		return false, fmt.Sprintf(
+			"EnvoyFilter %s/%s targetRefs[0].name=%q; expected gateway %q",
+			gatewayNamespace, efName, name, gatewayName), nil
 	}
 	return true, "", nil
 }

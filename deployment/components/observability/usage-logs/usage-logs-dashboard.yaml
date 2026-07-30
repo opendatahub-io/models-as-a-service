@@ -204,6 +204,8 @@ spec:
       spec:
         display:
           name: "Token consumption chart"
+          # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
+          # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
             Tokens from successful requests (2xx) over time by model or subscription.
         plugin:
@@ -237,7 +239,7 @@ spec:
                   query: >-
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | unwrap tokens_total [30m]))
+                    | unwrap tokens_total [2h]))
 
     tokenConsumptionTable:
       kind: Panel

@@ -1887,9 +1887,9 @@ func TestBuildGatewayAuthPolicySpec_XAPIKeyEnabled(t *testing.T) {
 	if !ok {
 		t.Fatalf("api-keys-x-api-key is not a map: %T", xAPIKey)
 	}
-	expr, _, _ := unstructured.NestedString(xAPIKeyMap, "plain", "expression")
-	if !contains(expr, "x-api-key") {
-		t.Errorf("api-keys-x-api-key plain.expression should reference x-api-key header, got: %s", expr)
+	sel, _, _ := unstructured.NestedString(xAPIKeyMap, "plain", "selector")
+	if sel != "request.headers.x-api-key" {
+		t.Errorf("api-keys-x-api-key plain.selector should be request.headers.x-api-key, got: %s", sel)
 	}
 
 	priority, ok := xAPIKeyMap["priority"].(int64)
@@ -2119,6 +2119,7 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 		namespace    = "default"
 		maasAuthName = "auth-missing"
 		missingModel = "non-existent-model"
+		gatewayNS    = "openshift-ingress"
 	)
 
 	// Create auth policy referencing a non-existent model
@@ -2128,15 +2129,16 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(maasAuth).
+		WithObjects(maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:         c,
-		Scheme:         scheme,
-		InfraNamespace: namespace,
-		GatewayName:    "openshift-ingress/maas-default-gateway",
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   namespace,
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -2173,6 +2175,7 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 		validModel    = "valid-model"
 		missingModel  = "missing-model"
 		httpRouteName = "maas-" + validModel
+		gatewayNS     = "openshift-ingress"
 	)
 
 	// Create valid model and route
@@ -2187,15 +2190,16 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasAuth).
+		WithObjects(model, route, maasAuth, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
-		Client:         c,
-		Scheme:         scheme,
-		InfraNamespace: namespace,
-		GatewayName:    "openshift-ingress/maas-default-gateway",
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   namespace,
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
 	}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasAuthName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
@@ -3028,5 +3032,146 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_StaleCleanup_UnmanagedPreserved(
 	getErr := c.Get(context.Background(), types.NamespacedName{Name: staleAuthPolicyName, Namespace: tenantGwNS}, got)
 	if getErr != nil {
 		t.Fatalf("expected unmanaged stale tenant gateway AuthPolicy %q to be preserved, but Get returned error: %v", staleAuthPolicyName, getErr)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_RequeuesUntilEnforcedAfterUpdate verifies that
+// the controller requeues until the gateway AuthPolicy is both Accepted and
+// Enforced after creating or updating it — not just during legacy upgrades.
+func TestMaaSAuthPolicyReconciler_RequeuesUntilEnforcedAfterUpdate(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "openshift-ingress"
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	// Step 1: First reconcile creates the gateway AuthPolicy. No status yet → requeue.
+	result, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("step 1: Reconcile error: %v", err)
+	}
+	if result.RequeueAfter != 10*time.Second {
+		t.Fatalf("step 1: RequeueAfter = %s, want 10s (gateway AuthPolicy not yet enforced)", result.RequeueAfter)
+	}
+
+	// Verify the gateway AuthPolicy was created.
+	gwAP := &unstructured.Unstructured{}
+	gwAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwAP); err != nil {
+		t.Fatalf("step 1: gateway AuthPolicy not found: %v", err)
+	}
+
+	// Step 2: Set Accepted=True but Enforced=False → still requeues.
+	_ = unstructured.SetNestedSlice(gwAP.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+		map[string]any{"type": "Enforced", "status": "False"},
+	}, "status", "conditions")
+	_ = unstructured.SetNestedField(gwAP.Object, gwAP.GetGeneration(), "status", "observedGeneration")
+	if err := c.Update(ctx, gwAP); err != nil {
+		t.Fatalf("step 2: update gateway AuthPolicy status: %v", err)
+	}
+
+	result, err = r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("step 2: Reconcile error: %v", err)
+	}
+	if result.RequeueAfter != 10*time.Second {
+		t.Fatalf("step 2: RequeueAfter = %s, want 10s (Enforced still False)", result.RequeueAfter)
+	}
+
+	// Step 3: Set both Accepted=True and Enforced=True → reconcile completes.
+	if err := c.Get(ctx, types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, gwAP); err != nil {
+		t.Fatalf("step 3: get gateway AuthPolicy: %v", err)
+	}
+	_ = unstructured.SetNestedSlice(gwAP.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+		map[string]any{"type": "Enforced", "status": "True"},
+	}, "status", "conditions")
+	_ = unstructured.SetNestedField(gwAP.Object, gwAP.GetGeneration(), "status", "observedGeneration")
+	if err := c.Update(ctx, gwAP); err != nil {
+		t.Fatalf("step 3: update gateway AuthPolicy status: %v", err)
+	}
+
+	result, err = r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("step 3: Reconcile error: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Fatalf("step 3: RequeueAfter = %s, want 0 (gateway AuthPolicy is enforced)", result.RequeueAfter)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_NoRequeueWhenUnchanged verifies that when the
+// gateway AuthPolicy spec is already up to date, the controller does not
+// requeue for enforcement — the policy is already enforced from a prior reconcile.
+func TestMaaSAuthPolicyReconciler_NoRequeueWhenUnchanged(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "openshift-ingress"
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+	readyGatewayPolicy := newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy, readyGatewayPolicy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
+	ctx := context.Background()
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	// First reconcile: updates the gateway AuthPolicy with real spec.
+	// Since the pre-populated policy has no real spec, this IS a change.
+	// But the policy is pre-populated with ready conditions, so enforcement
+	// check should pass.
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("first Reconcile: %v", err)
+	}
+
+	// Second reconcile: same content, no change → should not requeue.
+	result, err := r.Reconcile(ctx, req)
+	if err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+	if result.RequeueAfter != 0 {
+		t.Errorf("second Reconcile: RequeueAfter = %s, want 0 (no spec change, no enforcement wait needed)", result.RequeueAfter)
 	}
 }
