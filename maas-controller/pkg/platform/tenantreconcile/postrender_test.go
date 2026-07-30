@@ -23,8 +23,8 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			config: nil,
 			expectedLabels: map[string]any{
 				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     "auth.identity.subscription_info.costCenter",
-				"organization_id": "auth.identity.subscription_info.organizationId",
+				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
 				"model":           "responseBodyJSON(\"/model\")",
 			},
 			absentKeys: []string{"user", "group"},
@@ -90,8 +90,8 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			},
 			expectedLabels: map[string]any{
 				"subscription":    "auth.identity.selected_subscription",
-				"cost_center":     "auth.identity.subscription_info.costCenter",
-				"organization_id": "auth.identity.subscription_info.organizationId",
+				"cost_center":     `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
+				"organization_id": `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`,
 				"user":            "auth.identity.userid",
 				"group":           "auth.identity.groups_str",
 				"model":           "responseBodyJSON(\"/model\")",
