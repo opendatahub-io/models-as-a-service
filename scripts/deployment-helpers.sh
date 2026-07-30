@@ -195,6 +195,39 @@ export AUTHORINO_MIN_VERSION="0.22.0"
 export LIMITADOR_MIN_VERSION="0.16.0"
 export DNS_OPERATOR_MIN_VERSION="0.15.0"
 
+# resolve_policy_engine_namespace returns the namespace where RHCL/Kuadrant workloads run.
+# Optional argument: policy engine name (rhcl|kuadrant). Defaults to POLICY_ENGINE env or auto-detect.
+resolve_policy_engine_namespace() {
+  local policy_engine="${1:-${POLICY_ENGINE:-}}"
+  local default_ns="${RHCL_NAMESPACE:-kuadrant-system}"
+  if [[ -z "$policy_engine" ]]; then
+    if kubectl get ns kuadrant-system &>/dev/null \
+      && kubectl get deploy authorino -n kuadrant-system &>/dev/null 2>&1; then
+      echo "kuadrant-system"
+      return
+    fi
+    if kubectl get ns rh-connectivity-link &>/dev/null \
+      && kubectl get deploy authorino -n rh-connectivity-link &>/dev/null 2>&1; then
+      echo "rh-connectivity-link"
+      return
+    fi
+    echo "$default_ns"
+    return
+  fi
+  case "$policy_engine" in
+    rhcl|kuadrant) echo "$default_ns" ;;
+    *)
+      log_warn "Unknown policy engine '$policy_engine', defaulting to $default_ns"
+      echo "$default_ns"
+      ;;
+  esac
+}
+
+# resolve_authorino_namespace returns the namespace where Authorino runs.
+resolve_authorino_namespace() {
+  resolve_policy_engine_namespace "$@"
+}
+
 # ==========================================
 # Logging Functions
 # ==========================================

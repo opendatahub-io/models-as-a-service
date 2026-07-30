@@ -43,6 +43,10 @@
 #   DEPLOY_MODE           - deploy.sh --deployment-mode to use: kustomize (default, matches default CI)
 #                           or operator (exercises ODH's ModelsAsService/AIGateway component
 #                           reconcilers directly; required for AI_GATEWAY_OPERATOR_IMAGE)
+#   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl). Prow uses Red Hat Connectivity Link
+#                   from the cluster redhat-operators catalog (stable channel head) in kuadrant-system.
+#   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin (default: unset = channel head)
+#   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
 #   INSECURE_HTTP  - Deploy without TLS and use HTTP for tests (default: false)
 #                    Affects deploy.sh (via --disable-tls-backend) and test env
 #   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false). When true, deploy.sh runs with
@@ -110,7 +114,17 @@ export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 # instead of installing maas-controller/maas-api directly via kustomize. Required when
 # AI_GATEWAY_OPERATOR_IMAGE is set, since ai-gateway-operator is only deployed by the operator.
 DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
-AUTHORINO_NAMESPACE="kuadrant-system"
+# Use RHCL channel head (no startingCSV pin) so CI validates the latest released RHCL.
+export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
+export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
+# Optional pin for debugging only; leave unset to follow redhat-operators stable head.
+export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
+if [[ "${SKIP_DEPLOYMENT:-false}" == "true" ]]; then
+    AUTHORINO_NAMESPACE="$(resolve_authorino_namespace)"
+else
+    AUTHORINO_NAMESPACE="$(resolve_authorino_namespace "$POLICY_ENGINE")"
+fi
+export AUTHORINO_NAMESPACE
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
@@ -319,15 +333,17 @@ deploy_maas_platform() {
         echo "Using OIDC issuer: ${OIDC_ISSUER_URL}"
     fi
 
-    # 3. Deploy MaaS via operator (Kuadrant, gateway, maas-api, maas-controller, policies)
+    # 3. Deploy MaaS via operator (RHCL/Kuadrant, gateway, maas-api, maas-controller, policies)
     # Note: ODH/catalog already installed by install-odh.sh; deploy.sh will skip duplicate installs
     # CI Postgres pods do not have TLS; override sslmode to avoid connection failures.
     export DB_SSLMODE="${DB_SSLMODE:-disable}"
+    echo "Using policy engine: ${POLICY_ENGINE} (Authorino namespace: ${AUTHORINO_NAMESPACE})"
     # deploy.sh includes MODEL_NAMESPACE in Gateway allowedRoutes when exported
     export MODEL_NAMESPACE
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
         --deployment-mode "${DEPLOY_MODE}"
+        --policy-engine "${POLICY_ENGINE}"
     )
     if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
         deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")
@@ -770,7 +786,7 @@ run_e2e_tests() {
         echo "❌ ERROR: Authenticated gateway access not working after ${auth_timeout}s"
         echo "   The gateway is not forwarding authenticated requests to maas-api."
         echo "   Check AuthPolicy status: kubectl get authpolicy -A -o wide"
-        echo "   Check Authorino logs: kubectl logs -n kuadrant-system -l app=authorino --tail=50"
+        echo "   Check Authorino logs: kubectl logs -n ${AUTHORINO_NAMESPACE} -l app=authorino --tail=50"
         exit 1
     fi
 
@@ -810,7 +826,7 @@ run_e2e_tests() {
             done
             if [[ $SECONDS -ge $oidc_deadline ]]; then
                 echo "⚠️  WARNING: OIDC gateway readiness failed after ${oidc_timeout}s (still HTTP 401)."
-                echo "   Issuer check already passed; suspect JWKS/network from kuadrant-system to Keycloak or token signature."
+                echo "   Issuer check already passed; suspect JWKS/network from ${AUTHORINO_NAMESPACE} to Keycloak or token signature."
                 echo "   kubectl get authpolicy maas-gateway-auth -n ${GATEWAY_NAMESPACE:-openshift-ingress} -o yaml | grep -A30 oidc"
                 echo "   kubectl logs -n ${AUTHORINO_NAMESPACE} -l app=authorino --tail=80"
                 if [[ "${OIDC_READINESS_STRICT}" == "true" ]]; then

@@ -374,7 +374,7 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 		labels["user"] = "auth.identity.userid"
 	}
 	if captureGroup {
-		labels["group"] = "auth.identity.group"
+		labels["group"] = "auth.identity.groups_str"
 	}
 	if captureModelUsage {
 		labels["model"] = "responseBodyJSON(\"/model\")"
