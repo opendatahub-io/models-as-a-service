@@ -58,7 +58,7 @@ spec:
 | `clientId` | OAuth2 client ID. Tokens must have `azp` claim matching this value. |
 | `ttl` | JWKS cache duration in seconds (default: 300, minimum: 30). |
 
-For unmanaged tenants (not backed by an AITenant), configure OIDC on the Tenant CR directly:
+For unmanaged tenants (legacy `Tenant` CR, not backed by an AITenant -- deprecated, will be removed in a future release):
 
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
@@ -108,9 +108,9 @@ For Mode 2 (standalone OIDC), the IdP must:
 
 MaaS does **not** perform OAuth2 client authentication (no `client_secret`). It validates bearer tokens only. Client authentication and secret management are the IdP's responsibility.
 
-## Field Alignment (Tenant vs AITenant)
+## Field Alignment (Legacy Tenant vs AITenant)
 
-Configuration fields align between Tenant CR and AITenant CR:
+Configuration fields align between the legacy Tenant CR and the current AITenant CR:
 
 | Field | Tenant CR path | AITenant CR path | Semantics |
 |-------|---------------|-------------------|-----------|
@@ -126,5 +126,5 @@ Configuration fields align between Tenant CR and AITenant CR:
 - [External OIDC Configuration](../advanced-administration/external-oidc.md) — JWKS cache TTL, monitoring, security controls
 - [API Key Authentication](api-key-authentication.md) — API key creation flow and architecture
 - [Authentication Internals](../architecture-internals/authentication-internals.md) — Gateway identity pipeline details
-- [Tenant CRD Reference](../reference/crds/tenant.md) — Full Tenant spec including OIDC fields
+- [MaasTenantConfig CRD Reference](../reference/crds/tenant.md) — Runtime tenant configuration (API keys, telemetry)
 - [AITenant CRD Reference](../reference/crds/ai-tenant.md) — AITenant spec including OIDC fields
