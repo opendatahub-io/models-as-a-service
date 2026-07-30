@@ -120,9 +120,18 @@ echo "8a-infra. Cleaning MaaS resources from infrastructure namespaces (if prese
 cleanup_maas_resources "redhat-ai-gateway-infra"  # derived from redhat-ods-applications
 cleanup_maas_resources "odh-ai-gateway-infra"     # derived from opendatahub
 
-# 8b. Delete opendatahub namespace
-echo "8b. Deleting opendatahub namespace..."
+# 8b. Delete opendatahub and infrastructure namespaces
+echo "8b. Deleting opendatahub and related namespaces..."
 kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
+for infra_ns in odh-ai-gateway-infra redhat-ai-gateway-infra opendatahub-monitoring; do
+    if kubectl get namespace "$infra_ns" &>/dev/null; then
+        echo "   Deleting $infra_ns namespace..."
+        # Clean OLM resources that may block namespace deletion
+        kubectl delete subscription --all -n "$infra_ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+        kubectl delete csv --all -n "$infra_ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+        kubectl delete ns "$infra_ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+    fi
+done
 
 force_delete_namespace() {
     local ns=$1
