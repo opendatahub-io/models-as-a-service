@@ -86,6 +86,9 @@ const (
 	PayloadPreProcessingName                      = "payload-pre-processing"
 	PayloadProcessingPluginsConfigMapName         = "payload-processing-plugins"
 	PayloadProcessingReaderClusterRoleBindingName = "payload-processing-reader"
+	// PayloadProcessingEnvoyFilterPriority runs after Kuadrant's default-priority (0)
+	// EnvoyFilter so RHCL's envoy.filters.http.wasm anchor exists when we INSERT_*.
+	PayloadProcessingEnvoyFilterPriority int64 = 10
 
 	// LabelTenantInstance distinguishes pods when multiple IPP stacks share a gateway namespace.
 	LabelTenantInstance = "maas.opendatahub.io/tenant-instance"

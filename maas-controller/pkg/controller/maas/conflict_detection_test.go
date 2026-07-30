@@ -120,6 +120,7 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 		rogueName      = "kserve-route-authn"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
@@ -130,11 +131,11 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueAP).
+		WithObjects(model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -168,6 +169,7 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 		namespace      = "default"
 		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
@@ -179,11 +181,11 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogue1, rogue2).
+		WithObjects(model, route, maasPolicy, rogue1, rogue2, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -220,6 +222,7 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 		namespace      = "default"
 		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
@@ -230,11 +233,11 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, unrelatedAP).
+		WithObjects(model, route, maasPolicy, unrelatedAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -264,6 +267,7 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 		otherNS        = "other-ns"
 		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	model := newMaaSModelRef(modelName, modelNamespace, "ExternalModel", modelName)
@@ -274,11 +278,11 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueInOtherNS).
+		WithObjects(model, route, maasPolicy, rogueInOtherNS, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: policyNS}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -307,6 +311,7 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 		httpRouteName  = "maas-" + modelName
 		maasPolicyName = "policy-a"
 		rogueName      = "kserve-route-authn"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
@@ -317,11 +322,11 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, rogueAP).
+		WithObjects(model, route, maasPolicy, rogueAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 
@@ -367,6 +372,7 @@ func TestDetectConflictingAuthPolicies_MissingModel(t *testing.T) {
 	const (
 		namespace      = "default"
 		maasPolicyName = "policy-a"
+		gatewayNS      = "openshift-ingress"
 	)
 
 	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
@@ -375,11 +381,11 @@ func TestDetectConflictingAuthPolicies_MissingModel(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(maasPolicy).
+		WithObjects(maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: %v", err)
@@ -414,6 +420,8 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	route := newHTTPRoute(httpRouteName, namespace)
 	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
 
+	gatewayNS := "openshift-ingress"
+
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	gatewayAP.SetName("gateway-default-auth")
@@ -429,11 +437,11 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy, gatewayAP).
+		WithObjects(model, route, maasPolicy, gatewayAP, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
-	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system"}
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, InfraNamespace: "maas-system", GatewayNamespace: gatewayNS, GatewayName: "maas-default-gateway"}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: %v", err)

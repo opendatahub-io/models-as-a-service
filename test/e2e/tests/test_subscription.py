@@ -1954,13 +1954,14 @@ class TestStatusReporting:
         Uses pre-deployed e2e-trlp-test-simulated model to avoid TRLP sharing with concurrent tests.
 
         Test flow:
-        1. Scale down Kuadrant controller
-        2. Create subscription with valid model - TRLP created but not accepted
-        3. Wait for subscription to enter Degraded phase (TRLP ready=false)
-        4. Create API key and verify inference is blocked (403 Forbidden)
-        5. Scale Kuadrant controller back up
-        6. Wait for subscription to reach Active phase (TRLP ready=true)
-        7. Verify inference works (200 OK)
+        1. Create auth policy with Kuadrant up — wait for Active + Enforced
+        2. Scale down Kuadrant controller
+        3. Create subscription — TRLP created but not accepted
+        4. Wait for subscription to enter Degraded phase (TRLP ready=false)
+        5. Create API key and verify inference is blocked (403 Forbidden)
+        6. Scale Kuadrant controller back up
+        7. Wait for subscription to reach Active phase (TRLP ready=true)
+        8. Verify inference works (200 OK)
         """
         ns = _ns()
         subscription_name = "e2e-trlp-degraded-sub"
@@ -1968,33 +1969,36 @@ class TestStatusReporting:
         sa_name = "e2e-trlp-degraded-sa"
 
         try:
-            # Step 1: Scale down Kuadrant controller BEFORE creating subscription
-            log.info("Step 1: Scaling down Kuadrant controller...")
-            _scale_kuadrant_controller_down()
-
-            # Step 2: Create auth policy and subscription
-            log.info("Step 2: Creating subscription with Kuadrant controller down...")
+            # Step 1: Create auth policy with Kuadrant UP so it can reach Active + Enforced.
+            # The controller gates MaaSAuthPolicy on gateway AuthPolicy enforcement
+            # (RHOAIENG-79568), so Kuadrant must be running for the phase to reach Active.
+            log.info("Step 1: Creating auth policy with Kuadrant up...")
             sa_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
             _create_test_auth_policy(auth_name, TRLP_TEST_MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, TRLP_TEST_MODEL_REF, users=[sa_user])
-
-            # Wait for auth policy to reconcile. In gateway-only mode, it remains Active even when
-            # Kuadrant TRLP reconciliation is degraded. Do NOT wait for gateway AuthPolicy Enforced
-            # here — Kuadrant is intentionally down, so Enforced can never become True
-            # (AuthConfigs pile up "waiting … to sync").
-            log.info("Waiting for MaaSAuthPolicy to reconcile (Kuadrant down; skip Enforced wait)...")
             _wait_for_maas_auth_policy_phase(
                 auth_name,
                 "Active",
-                timeout=60,
+                timeout=120,
                 require_auth_policies=False,
-                require_enforced=False,
             )
+            log.info("Step 1: Auth policy Active + Enforced")
 
-            # Step 3: Wait for subscription to reach Degraded phase with TRLP not ready
-            log.info("Step 3: Waiting for subscription to enter Degraded phase (TRLP not ready)...")
+            # Step 2: Scale down Kuadrant controller BEFORE creating subscription.
+            # The auth policy is already Active and the gateway AuthPolicy is Enforced.
+            # Creating a subscription does NOT change the gateway AuthPolicy spec
+            # (only MaaSAuthPolicy subjects feed the allowlist), so no enforcement
+            # re-check is triggered.
+            log.info("Step 2: Scaling down Kuadrant controller...")
+            _scale_kuadrant_controller_down()
+
+            # Step 3: Create subscription — TRLP cannot be reconciled with Kuadrant down.
+            log.info("Step 3: Creating subscription with Kuadrant controller down...")
+            _create_test_subscription(subscription_name, TRLP_TEST_MODEL_REF, users=[sa_user])
+
+            # Step 4: Wait for subscription to reach Degraded phase with TRLP not ready
+            log.info("Step 4: Waiting for subscription to enter Degraded phase (TRLP not ready)...")
             cr = _wait_for_maas_subscription_phase(subscription_name, "Degraded", timeout=120)
             _wait_for_subscription_trlp_status(subscription_name, expected_ready=False, timeout=120)
 
@@ -2007,20 +2011,20 @@ class TestStatusReporting:
             assert any(not trlp.get("ready") for trlp in trlp_statuses), "Expected at least one TRLP to be not ready"
             log.info("✅ Subscription in Degraded phase with TRLP not ready")
 
-            # Step 4: Create API key and verify inference is blocked
-            log.info("Step 4: Creating API key and verifying inference is blocked...")
+            # Step 5: Create API key and verify inference is blocked
+            log.info("Step 5: Creating API key and verifying inference is blocked...")
             api_key = _create_api_key(sa_token, name="e2e-trlp-test-key", subscription=subscription_name)
 
             resp = _poll_status(api_key, 403, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
             assert resp.status_code == 403, f"Expected 403 Forbidden for Degraded subscription with TRLP not ready, got {resp.status_code}: {resp.text}"
             log.info("✅ Inference blocked for Degraded subscription with TRLP not ready")
 
-            # Step 5: Scale Kuadrant controller back up
-            log.info("Step 5: Scaling Kuadrant controller back up...")
+            # Step 6: Scale Kuadrant controller back up
+            log.info("Step 6: Scaling Kuadrant controller back up...")
             _scale_kuadrant_controller_up()
 
-            # Step 6: Wait for subscription to reach Active phase with TRLP ready
-            log.info("Step 6: Waiting for subscription to reach Active phase (TRLP ready)...")
+            # Step 7: Wait for subscription to reach Active phase with TRLP ready
+            log.info("Step 7: Waiting for subscription to reach Active phase (TRLP ready)...")
             _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=120)
             _wait_for_subscription_trlp_status(subscription_name, expected_ready=True, timeout=120)
             # Drain AuthConfig backlog from the Kuadrant-down window before HTTP checks.
@@ -2035,8 +2039,8 @@ class TestStatusReporting:
             assert all(trlp.get("ready") for trlp in trlp_statuses), "Expected all TRLPs to be ready"
             log.info("✅ Subscription returned to Active phase with all TRLPs ready")
 
-            # Step 7: Verify inference works (poll to allow Envoy config propagation)
-            log.info("Step 7: Verifying inference works with Active subscription...")
+            # Step 8: Verify inference works (poll to allow Envoy config propagation)
+            log.info("Step 8: Verifying inference works with Active subscription...")
             resp = _poll_status(api_key, 200, path=TRLP_TEST_MODEL_PATH, model_name=TRLP_TEST_MODEL_ID, timeout=60)
             assert resp.status_code == 200, f"Expected 200 OK for Active subscription, got {resp.status_code}: {resp.text}"
             log.info("✅ Inference works with Active subscription after Kuadrant recovery")
