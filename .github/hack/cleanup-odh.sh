@@ -353,8 +353,9 @@ kubectl delete group odh-admins --ignore-not-found 2>/dev/null || true
 # This removes all maas.opendatahub.io CRDs (configs, tenants, subscriptions, legacy clustertenants, …).
 # ODH-internal CRDs are only deleted with --include-crds.
 echo "17. Deleting KServe/MaaS CRDs (always removed to prevent version conflicts)..."
-for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io'); do
+for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io|inference\.opendatahub\.io'); do
     echo "   Deleting $crd"
+    kubectl patch "$crd" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
@@ -362,6 +363,7 @@ if $INCLUDE_CRDS; then
     echo "17b. Deleting all ODH CRDs..."
     for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'opendatahub\.io|trustyai\.opendatahub'); do
         echo "   Deleting $crd"
+        kubectl patch "$crd" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
         kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
     done
 else
