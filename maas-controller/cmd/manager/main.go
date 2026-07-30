@@ -847,7 +847,7 @@ func resolveInfraNamespace(infraNs, controllerNs string) string {
 // deriveInfraNamespace maps controller namespace to infrastructure namespace.
 // This implements namespace separation: controller runs in one namespace, infrastructure services in another.
 func clampConcurrentReconciles(v int) int {
-	const minConcurrent, maxConcurrent = 1, 5
+	const minConcurrent, maxConcurrent = 1, 10
 	if v < minConcurrent {
 		setupLog.Info("clamping --max-concurrent-reconciles to minimum", "requested", v, "using", minConcurrent)
 		return minConcurrent
@@ -966,7 +966,7 @@ func main() {
 		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
 	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5,
-		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-5).")
+		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-10). Values above 5 may require increased CPU/memory on the controller pod.")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
 
