@@ -67,9 +67,9 @@ func TestPostgresStore_SearchByLabels(t *testing.T) {
 	labels3 := map[string]string{"cost_center": "CC-001"}
 
 	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash1",
-		"key1", "", []string{}, "sub1", "test-tenant", nil, false, labels1)
+		"key1", "", []string{}, "sub1", "test-tenant", nil, false, labels1))
 	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash2",
-		"key2", "", []string{}, "sub1", "test-tenant", nil, false, labels2)
+		"key2", "", []string{}, "sub1", "test-tenant", nil, false, labels2))
 	require.NoError(t, store.AddKey(ctx, "alice", uuid.New().String(), "hash3",
 		"key3", "", []string{}, "sub1", "test-tenant", nil, false, labels3))
 

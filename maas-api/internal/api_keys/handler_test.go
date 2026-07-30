@@ -2494,7 +2494,7 @@ func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
 	// Seed data so we can verify no keys leak when there is no auth context.
 	ctx := context.Background()
 	err := store.AddKey(ctx, "alice", "key-1", "hash-1", "Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
