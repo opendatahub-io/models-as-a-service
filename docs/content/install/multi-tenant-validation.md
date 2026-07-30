@@ -27,10 +27,10 @@ Expected labels:
 - `ai-gateway.opendatahub.io/tenant: <tenant-name>`
 - `maas.opendatahub.io/managed-by-aitenant: "true"`
 
-Verify the Tenant CR:
+Verify the MaasTenantConfig CR:
 
 ```bash
-oc get tenant default-tenant -n ${TENANT_NS} -o yaml
+oc get maastenantconfig default-tenant -n ${TENANT_NS} -o yaml
 ```
 
 Expected: `status.phase` is `Active`.
@@ -122,8 +122,8 @@ Each tenant's maas-api instance serves only its own tenant's data. API keys are 
 echo "=== AITenant ==="
 oc get aitenant ${TENANT_NAME} -n ai-tenants
 
-echo "=== Tenant CR ==="
-oc get tenant default-tenant -n ${TENANT_NS}
+echo "=== MaasTenantConfig CR ==="
+oc get maastenantconfig default-tenant -n ${TENANT_NS}
 
 echo "=== maas-api ==="
 oc get deployment maas-api-${TENANT_NAME} -n ${INFRA_NS}
@@ -175,7 +175,7 @@ gateway openshift-ingress/red-team is already in use by AITenant ai-tenants/othe
 
 ### MaaSSubscription rejected
 
-MaaSSubscription and MaaSAuthPolicy must be created in a namespace that contains a `Tenant` CR. Wait for the AITenant controller to create the Tenant CR before creating these resources.
+MaaSSubscription and MaaSAuthPolicy must be created in a namespace that contains a `MaasTenantConfig` CR. Wait for the AITenant controller to create the MaasTenantConfig before creating these resources.
 
 ## See Also
 

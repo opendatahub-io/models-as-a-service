@@ -25,7 +25,7 @@ The tenant-admin Role in the tenant namespace grants:
 
 - `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on `MaaSAuthPolicy`
 - `get`, `list`, `watch`, `create`, `update`, `patch`, and `delete` on `MaaSSubscription`
-- `get`, `update`, and `patch` on `Tenant/default-tenant`
+- `get`, `update`, and `patch` on `MaasTenantConfig/default-tenant`
 - `get`, `list`, and `watch` on `MaaSModelRef`
 
 The object-admin Role grants `get` on the specific `AITenant` object in the AITenant infrastructure namespace. Bind it when tenant administrators or dashboards need to read tenant bootstrap status.
