@@ -682,10 +682,11 @@ def wait_for_httproute_accepted(
             parent_namespace = parent_ref.get("namespace") or gateway_namespace
             if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
                 continue
-            return any(
+            if any(
                 condition.get("type") == "Accepted" and condition.get("status") == "True"
                 for condition in parent.get("conditions") or []
-            )
+            ):
+                return True
         return False
 
     return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)

@@ -8,6 +8,7 @@ Runs in default CI (no tenant namespace discovery required).
 """
 
 import json
+import logging
 import uuid
 
 import pytest
@@ -24,11 +25,23 @@ from multitenancy_helpers import (
 from test_helper import (
     MODEL_NAMESPACE,
     MODEL_REF,
+    _create_api_key,
+    _create_sa_token,
     _create_test_auth_policy,
+    _create_test_subscription,
     _delete_cr,
+    _delete_sa,
+    _get_cr,
+    _ns,
+    _sa_to_user,
+    _scale_kuadrant_controller_down,
+    _scale_kuadrant_controller_up,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_reconcile,
 )
+
+log = logging.getLogger(__name__)
 
 
 def _gateway_auth_rego() -> str:
@@ -192,3 +205,122 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             "gateway-default-auth predicate must include header-based model identity check, "
             f"got: {predicate}"
         )
+
+
+class TestEnforcementGapAfterAuthPolicyChange:
+    """RHOAIENG-79568: Auth enforcement gap when a spec change updates the gateway AuthPolicy.
+
+    Reproduces the scenario where a new MaaSAuthPolicy (or any change that alters the
+    aggregated model allowlist) updates the gateway AuthPolicy spec. Kuadrant must
+    re-process the update; until it does, observedGeneration lags behind generation
+    and enforcement is stale.
+
+    The test scales Kuadrant down to freeze enforcement, then creates a second
+    MaaSAuthPolicy to trigger a gateway AuthPolicy spec change. This widens the
+    normally sub-second enforcement gap to a permanent, observable state.
+
+    Verifies:
+    - With the controller fix: MaaSAuthPolicy stays Pending while gateway is unenforced
+    - Without the fix: MaaSAuthPolicy falsely reports Active
+    """
+
+    def test_controller_holds_pending_while_unenforced(self):
+        """With Kuadrant down, MaaSAuthPolicy must NOT reach Active after a
+        gateway AuthPolicy spec change.
+
+        Steps:
+        1. Establish baseline: auth policy Active, gateway Enforced
+        2. Scale Kuadrant down (freeze enforcement)
+        3. Create a second MaaSAuthPolicy (changes aggregated allowlist → spec update)
+        4. Wait for maas-controller to reconcile
+        5. Check MaaSAuthPolicy phase — should be Pending (not Active)
+        6. Scale Kuadrant back up, wait for enforcement
+        7. Verify MaaSAuthPolicy reaches Active and API key creation succeeds
+        """
+        ns = _ns()
+        suffix = uuid.uuid4().hex[:8]
+        auth_name_1 = f"e2e-enforce-gap-auth1-{suffix}"
+        auth_name_2 = f"e2e-enforce-gap-auth2-{suffix}"
+        sub_name = f"e2e-enforce-gap-sub-{suffix}"
+        sa_name = f"e2e-enforce-gap-sa-{suffix}"
+
+        try:
+            # Step 1: Establish baseline with first auth policy.
+            oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
+            sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
+
+            _create_test_auth_policy(auth_name_1, MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
+            _wait_for_maas_auth_policy_phase(auth_name_1, timeout=120, require_enforced=True)
+            _wait_for_gateway_auth_enforced()
+            log.info("Step 1: Baseline established — auth Active, gateway Enforced")
+
+            # Step 2: Scale Kuadrant down to freeze enforcement.
+            log.info("Step 2: Scaling Kuadrant down to freeze enforcement...")
+            _scale_kuadrant_controller_down()
+
+            # Step 3: Create a second MaaSAuthPolicy with a different group.
+            # This changes the aggregated model allowlist, which changes the gateway
+            # AuthPolicy spec. The maas-controller will update the spec, but Kuadrant
+            # (now down) cannot re-process it → observedGeneration lags → not enforced.
+            log.info("Step 3: Creating second MaaSAuthPolicy to trigger spec change...")
+            unique_group = f"e2e-trigger-group-{suffix}"
+            _create_test_auth_policy(auth_name_2, MODEL_REF, groups=[unique_group])
+
+            # Step 4: Wait for maas-controller to reconcile.
+            # The controller updates the gateway AuthPolicy, then checks enforcement.
+            # With Kuadrant down, observedGeneration won't catch up → Enforced stale.
+            _wait_reconcile(seconds=15)
+
+            # Step 5: Check MaaSAuthPolicy phase.
+            # Check both policies — both should be affected by the enforcement gate.
+            cr1 = _get_cr("maasauthpolicy", auth_name_1, namespace=ns)
+            cr2 = _get_cr("maasauthpolicy", auth_name_2, namespace=ns)
+            phase1 = (cr1 or {}).get("status", {}).get("phase", "unknown")
+            phase2 = (cr2 or {}).get("status", {}).get("phase", "unknown")
+            log.info("Step 5: MaaSAuthPolicy phases: %s=%s, %s=%s",
+                     auth_name_1, phase1, auth_name_2, phase2)
+
+            if phase2 == "Pending":
+                log.info("Controller correctly holding MaaSAuthPolicy in Pending "
+                         "while gateway AuthPolicy is not enforced")
+            elif phase2 == "Active":
+                log.warning("MaaSAuthPolicy is Active despite gateway not being enforced "
+                            "— controller is NOT checking enforcement (pre-fix behavior)")
+
+            # Step 6: Scale Kuadrant back up and wait for enforcement.
+            log.info("Step 6: Scaling Kuadrant back up...")
+            _scale_kuadrant_controller_up()
+            _wait_for_gateway_auth_enforced(timeout=180)
+            _wait_for_maas_auth_policy_phase(
+                auth_name_1, "Active", timeout=120, require_enforced=True
+            )
+            log.info("Step 6: Enforcement restored")
+
+            # Step 7: Verify API key creation succeeds.
+            api_key = _create_api_key(oc_token, name=f"post-gap-{suffix}", subscription=sub_name)
+            assert api_key and api_key.startswith("sk-"), (
+                f"Expected valid API key after enforcement restored, got: "
+                f"{api_key[:20] if api_key else None}"
+            )
+            log.info("Step 7: API key creation succeeded after enforcement restored")
+
+            # Final assertion: the second auth policy (the one that triggered the
+            # spec change) should have been held in Pending while Kuadrant was down.
+            assert phase2 == "Pending", (
+                f"RHOAIENG-79568: MaaSAuthPolicy '{auth_name_2}' was '{phase2}' while "
+                f"gateway AuthPolicy was NOT enforced (Kuadrant was down). "
+                f"With the enforcement-check fix, the controller should hold Pending "
+                f"until Enforced=True."
+            )
+
+        finally:
+            try:
+                _scale_kuadrant_controller_up()
+            except Exception as e:
+                log.warning("Failed to scale Kuadrant up during cleanup: %s", e)
+            _delete_cr("maassubscription", sub_name, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name_2, namespace=ns)
+            _delete_cr("maasauthpolicy", auth_name_1, namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            _wait_reconcile()

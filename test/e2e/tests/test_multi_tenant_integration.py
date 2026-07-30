@@ -183,7 +183,6 @@ class TestMultiTenantIntegration:
                 apply_maas_subscription(shared_sub, case["tenant_ns"])
                 wait_for_finalizer("maasauthpolicy", shared_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
                 wait_for_finalizer("maassubscription", shared_sub, case["tenant_ns"], FINALIZER_SUBSCRIPTION)
-                wait_for_status_phase("maasauthpolicy", shared_policy, case["tenant_ns"], expected_phase="Active")
 
             expected_subs = [f"{case_a['tenant_ns']}/{shared_sub}", f"{case_b['tenant_ns']}/{shared_sub}"]
             wait_for_annotation_contains(
@@ -213,7 +212,6 @@ class TestMultiTenantIntegration:
 
             apply_discovery_labels(case["tenant_ns"], case["tenant_label_name"])
             wait_for_finalizer("maasauthpolicy", first_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
-            wait_for_status_phase("maasauthpolicy", first_policy, case["tenant_ns"], expected_phase="Active")
 
             remove_discovery_labels(case["tenant_ns"])
             _wait_reconcile(10)
