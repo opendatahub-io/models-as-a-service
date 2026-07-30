@@ -99,6 +99,7 @@ nav:
       - Limitador Persistence: advanced-administration/limitador-persistence.md
       - Authorino Caching: configuration-and-management/authorino-caching.md
       - External OIDC: advanced-administration/external-oidc.md
+      - Controller Performance Tuning: advanced-administration/controller-performance-tuning.md
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md
