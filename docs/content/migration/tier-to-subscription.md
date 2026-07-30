@@ -296,6 +296,9 @@ See [Migration Script](#migration-automation-script) section below for details.
 
 ### Phase 3: Validate New Configuration
 
+!!! note "Body-based routing"
+    The curl examples in this section use path-based URLs (e.g. `https://${HOST}/llm/my-model-name/v1/chat/completions`) for continuity with the migration context. For new integrations, use the body-based endpoint (`https://${HOST}/v1/chat/completions` with the model in the request body). See [Inference](../user-guide/inference.md) for details.
+
 Test each migrated model to ensure the new subscription model works correctly:
 
 ```bash
