@@ -14,15 +14,22 @@
 # - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
 # - MaaS validating webhook configuration
 # - Keycloak identity provider (if deployed)
-# - ODH CRDs (optional)
+# - KServe/MaaS/ODH CRDs (on by default; use --skip-crds to preserve them)
 #
-# Usage: ./cleanup-odh.sh [--include-crds]
+# Usage: ./cleanup-odh.sh [--skip-crds]
+#
+#   --skip-crds   Keep all CRDs (KServe, MaaS, ODH). By default CRDs are
+#                 deleted to prevent storedVersions schema conflicts on reinstall.
 #
 
 set -euo pipefail
 
-INCLUDE_CRDS=false
+INCLUDE_CRDS=true
 
+if [[ "${1:-}" == "--skip-crds" ]]; then
+    INCLUDE_CRDS=false
+fi
+# Legacy flag kept for backwards compatibility
 if [[ "${1:-}" == "--include-crds" ]]; then
     INCLUDE_CRDS=true
 fi
