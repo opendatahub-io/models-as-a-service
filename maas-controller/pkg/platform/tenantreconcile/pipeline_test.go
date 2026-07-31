@@ -153,7 +153,26 @@ func TestPayloadProcessingEnvoyFilterReady(t *testing.T) {
 	})
 
 	t.Run("wrong gateway targetRef", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithObjects(payloadProcessingEnvoyFilter(gwNS, efName, "other-gw", &prioOK)).Build()
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(GVKEnvoyFilter)
+		ef.SetNamespace(gwNS)
+		ef.SetName(efName)
+		ef.Object["spec"] = map[string]any{
+			"priority": prioOK,
+			"workloadSelector": map[string]any{
+				"labels": map[string]any{
+					"gateway.networking.k8s.io/gateway-name": gwName,
+				},
+			},
+			"targetRefs": []any{
+				map[string]any{
+					"group": "gateway.networking.k8s.io",
+					"kind":  "Gateway",
+					"name":  "other-gw",
+				},
+			},
+		}
+		c := fake.NewClientBuilder().WithObjects(ef).Build()
 		ready, detail, err := PayloadProcessingEnvoyFilterReady(context.Background(), c, gwNS, gwName, tenantID)
 		require.NoError(t, err)
 		assert.False(t, ready)
