@@ -518,6 +518,27 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
 }
 
+func TestRenderKustomizeRemapsServiceMonitorServerName(t *testing.T) {
+	const appNamespace = "odh-ai-gateway-infra"
+	resources := renderOverlayResources(t, appNamespace)
+
+	smGVK := schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
+	sm := requireResource(t, resources, smGVK, "maas-api-metrics")
+	assert.Equal(t, appNamespace, sm.GetNamespace())
+
+	endpoints, found, err := unstructured.NestedSlice(sm.Object, "spec", "endpoints")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.NotEmpty(t, endpoints)
+	ep, ok := endpoints[0].(map[string]any)
+	require.True(t, ok)
+	tlsCfg, ok := ep["tlsConfig"].(map[string]any)
+	require.True(t, ok)
+	got, ok := tlsCfg["serverName"].(string)
+	require.True(t, ok)
+	assert.Equal(t, "maas-api-metrics."+appNamespace+".svc", got)
+}
+
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 

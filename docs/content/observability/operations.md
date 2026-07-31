@@ -172,7 +172,7 @@ Watch: `authorized_hits{user}`, `authorized_calls{user}`, `istio_request_duratio
 | **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits{user}`; vLLM prompt/gen metrics are per-model only |
 | **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls` from Limitador (has correct labels) |
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
-| **maas-api metrics** | No `/metrics` endpoint | No workaround; requires adding Prometheus instrumentation |
+| **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
 | **PromQL warnings** | Counter names don't end in `_total` | Cosmetic only; all queries work correctly |
 
 !!! note "Total vs Split"
