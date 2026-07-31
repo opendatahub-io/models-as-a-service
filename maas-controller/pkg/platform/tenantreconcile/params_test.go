@@ -317,6 +317,11 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, found, "EnvoyFilter spec.priority must be set so RHCL wasm anchors apply after Kuadrant")
 	assert.Equal(t, PayloadProcessingEnvoyFilterPriority, priority)
+	wsLabels, found, err := unstructured.NestedStringMap(payloadEnvoyFilter.Object, "spec", "workloadSelector", "labels")
+	require.NoError(t, err)
+	require.True(t, found, "EnvoyFilter spec.workloadSelector.labels must be set to scope filters to the gateway proxy")
+	assert.Equal(t, params.GatewayName, wsLabels["gateway.networking.k8s.io/gateway-name"])
+
 	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
 	require.NoError(t, err)
 	require.True(t, found)

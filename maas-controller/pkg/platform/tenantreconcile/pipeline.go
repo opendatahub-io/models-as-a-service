@@ -257,6 +257,16 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 			gatewayNamespace, efName, shown, PayloadProcessingEnvoyFilterPriority), nil
 	}
 
+	wsLabels, found, err := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+	if err != nil {
+		return false, "", fmt.Errorf("read EnvoyFilter workloadSelector: %w", err)
+	}
+	if !found || wsLabels["gateway.networking.k8s.io/gateway-name"] != gatewayName {
+		return false, fmt.Sprintf(
+			"EnvoyFilter %s/%s workloadSelector missing or not scoped to gateway %q — filters leak to all proxies in the namespace",
+			gatewayNamespace, efName, gatewayName), nil
+	}
+
 	targetRefs, found, err := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
 	if err != nil {
 		return false, "", fmt.Errorf("read EnvoyFilter targetRefs: %w", err)

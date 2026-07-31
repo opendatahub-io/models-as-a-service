@@ -654,6 +654,12 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("write EnvoyFilter priority: %w", err)
 	}
 
+	if err := unstructured.SetNestedStringMap(r.Object, map[string]string{
+		"gateway.networking.k8s.io/gateway-name": params.GatewayName,
+	}, "spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write EnvoyFilter workloadSelector: %w", err)
+	}
+
 	targetRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
 	if err != nil {
 		return fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
