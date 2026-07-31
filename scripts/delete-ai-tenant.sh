@@ -34,6 +34,7 @@ echo "  Deleting Gateway..."
 kubectl delete gateway "$TENANT_NAME" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
 
 echo "  Deleting Route..."
+kubectl delete route "${TENANT_NAME}-gateway" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
 kubectl delete route "${TENANT_NAME}-route" -n "$GATEWAY_NAMESPACE" --ignore-not-found=true
 
 echo "  Deleting Gateway options ConfigMap..."

@@ -846,6 +846,19 @@ func resolveInfraNamespace(infraNs, controllerNs string) string {
 
 // deriveInfraNamespace maps controller namespace to infrastructure namespace.
 // This implements namespace separation: controller runs in one namespace, infrastructure services in another.
+func clampConcurrentReconciles(v int) int {
+	const minConcurrent, maxConcurrent = 1, 10
+	if v < minConcurrent {
+		setupLog.Info("clamping --max-concurrent-reconciles to minimum", "requested", v, "using", minConcurrent)
+		return minConcurrent
+	}
+	if v > maxConcurrent {
+		setupLog.Info("clamping --max-concurrent-reconciles to maximum", "requested", v, "using", maxConcurrent)
+		return maxConcurrent
+	}
+	return v
+}
+
 func deriveInfraNamespace(controllerNs string) string {
 	switch controllerNs {
 	case "redhat-ods-applications":
@@ -927,6 +940,7 @@ func main() {
 	var authzCacheTTL int64
 	var subscriptionNamespaceMaintainInterval time.Duration
 	var enableTenantNamespaceDiscovery bool
+	var maxConcurrentReconciles int
 	var observabilityManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
@@ -951,12 +965,16 @@ func main() {
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
 		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
+	flag.IntVar(&maxConcurrentReconciles, "max-concurrent-reconciles", 5,
+		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-10). Values above 5 may require increased CPU/memory on the controller pod.")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
+
+	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
 
 	// Allow empty monitoring-namespace to disable observability features (e.g. on xKS
 	// where the monitoring namespace may not exist). Non-empty values must be valid.
@@ -1136,6 +1154,7 @@ func main() {
 		MetadataCacheTTL:                metadataCacheTTL,
 		AuthzCacheTTL:                   authzCacheTTL,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+		MaxConcurrentReconciles:         maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
 		os.Exit(1)
@@ -1147,6 +1166,7 @@ func main() {
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
+		MaxConcurrentReconciles:         maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
 		os.Exit(1)

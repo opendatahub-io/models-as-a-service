@@ -59,6 +59,9 @@ To enable MaaS policies for an LLMInferenceService:
 
 Without the gateway reference, the model uses the standard gateway and MaaS policies do not apply.
 
+!!! tip "Multi-tenant deployments"
+    For models that serve a non-default tenant, set `spec.tenantRef` on the MaaSModelRef to the AITenant name. This tells the controller to resolve the gateway from the named AITenant instead of using namespace-based inference. See [Multi-Tenant Setup — Configure Models](../install/multi-tenant-setup.md#5-configure-models).
+
 ---
 
 ## External Models

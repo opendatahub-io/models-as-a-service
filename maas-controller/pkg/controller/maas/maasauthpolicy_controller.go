@@ -41,6 +41,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -87,6 +88,9 @@ type MaaSAuthPolicyReconciler struct {
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
 	Recorder record.EventRecorder
+	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
+	// Defaults to 1 if not set.
+	MaxConcurrentReconciles int
 }
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
@@ -2078,6 +2082,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	})
 
 	b := ctrl.NewControllerManagedBy(mgr).
+		WithOptions(controller.Options{MaxConcurrentReconciles: max(1, r.MaxConcurrentReconciles)}).
 		For(&maasv1alpha1.MaaSAuthPolicy{}, builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			predicate.Funcs{UpdateFunc: deletionTimestampSet},

@@ -326,17 +326,24 @@ else
     print_fail "No MaaS API pods running" "Pods may be starting or failed" "Check: kubectl get pods -n $INFRA_NAMESPACE -l app.kubernetes.io/name=maas-api"
 fi
 
-# Check Kuadrant pods
-print_check "Kuadrant system pods"
+# Check policy engine pods (RHCL or Kuadrant)
+print_check "Policy engine pods (RHCL/Kuadrant)"
+POLICY_ENGINE_NAMESPACE=""
 if kubectl get namespace kuadrant-system &>/dev/null; then
-    KUADRANT_PODS=$(kubectl get pods -n kuadrant-system --no-headers 2>/dev/null | grep -c "Running" || echo "0")
-    if [ "$KUADRANT_PODS" -gt 0 ]; then
-        print_success "Kuadrant has $KUADRANT_PODS running pod(s)"
+    POLICY_ENGINE_NAMESPACE="kuadrant-system"
+elif kubectl get namespace rh-connectivity-link &>/dev/null; then
+    POLICY_ENGINE_NAMESPACE="rh-connectivity-link"
+fi
+if [[ -n "$POLICY_ENGINE_NAMESPACE" ]]; then
+    POLICY_ENGINE_PODS=$(kubectl get pods -n "$POLICY_ENGINE_NAMESPACE" --no-headers 2>/dev/null | grep -c "Running" || true)
+    [[ "$POLICY_ENGINE_PODS" =~ ^[0-9]+$ ]] || POLICY_ENGINE_PODS=0
+    if [ "$POLICY_ENGINE_PODS" -gt 0 ]; then
+        print_success "Policy engine has $POLICY_ENGINE_PODS running pod(s) in $POLICY_ENGINE_NAMESPACE"
     else
-        print_fail "No Kuadrant pods running" "Kuadrant operators may not be installed" "Check: kubectl get pods -n kuadrant-system"
+        print_fail "No policy engine pods running" "RHCL/Kuadrant operators may not be installed" "Check: kubectl get pods -n $POLICY_ENGINE_NAMESPACE"
     fi
 else
-    print_fail "Kuadrant namespace not found" "Kuadrant may not be installed" "Run: ./scripts/install-dependencies.sh --kuadrant"
+    print_fail "Policy engine namespace not found" "RHCL or Kuadrant may not be installed" "Run deploy.sh with --policy-engine rhcl or --policy-engine kuadrant"
 fi
 
 # Check OpenDataHub/KServe pods

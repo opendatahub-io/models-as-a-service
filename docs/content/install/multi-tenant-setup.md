@@ -54,16 +54,6 @@ metadata:
 spec:
   gatewayClassName: openshift-default
   listeners:
-    - name: http
-      hostname: ${GATEWAY_HOSTNAME}
-      port: 80
-      protocol: HTTP
-      allowedRoutes:
-        namespaces:
-          from: Selector
-          selector:
-            matchLabels:
-              ${GATEWAY_ACCESS_LABEL}: "true"
     - name: https
       hostname: ${GATEWAY_HOSTNAME}
       port: 443
@@ -83,7 +73,12 @@ spec:
 EOF
 ```
 
-Create an OpenShift Route for external access:
+!!! note "Route auto-provisioning"
+    On OpenShift with `gatewayClassName: openshift-default`, the Gateway controller typically auto-provisions a Route for external access. Check whether a Route was created automatically before creating one manually:
+    ```bash
+    oc get route -n ${GATEWAY_NAMESPACE} -l gateway.networking.k8s.io/gateway-name=${TENANT_NAME}
+    ```
+    If no Route was auto-provisioned, create one manually:
 
 ```bash
 GATEWAY_SERVICE_NAME="${TENANT_NAME}-openshift-default"
@@ -120,7 +115,7 @@ oc get gateway ${TENANT_NAME} -n ${GATEWAY_NAMESPACE}
 ```
 
 !!! tip "Automated script"
-    The `scripts/create-ai-tenant.sh` script automates Gateway, Route, and AITenant creation.
+    The `scripts/create-ai-tenant.sh` script automates Gateway and AITenant creation.
     For multi-tenant deployments use the per-gateway label selector and label namespaces manually:
     ```bash
     NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-red-team=true" \
@@ -198,10 +193,10 @@ Expected labels:
 - `ai-gateway.opendatahub.io/tenant=<tenant-name>`
 - `maas.opendatahub.io/managed-by-aitenant=true`
 
-Verify the Tenant CR exists:
+Verify the MaasTenantConfig CR exists:
 
 ```bash
-oc get tenant default-tenant -n ai-tenant-${TENANT_NAME}
+oc get maastenantconfig default-tenant -n ai-tenant-${TENANT_NAME}
 ```
 
 Verify the maas-api deployment is running in the infrastructure namespace:
@@ -226,25 +221,34 @@ See [Tenant RBAC](../configuration-and-management/tenant-rbac.md) for examples w
 
 ## 5. Configure Models
 
-Create MaaS resources in the tenant namespace to expose models:
+Create the MaaSModelRef in the **model namespace** (co-located with the backend resource) and use `tenantRef` to associate it with the tenant's gateway. MaaSAuthPolicy and MaaSSubscription must be created in the **tenant namespace** (where the MaasTenantConfig CR lives).
 
 ```bash
 TENANT_NS="ai-tenant-${TENANT_NAME}"
+MODEL_NS="llm"   # namespace where the LLMInferenceService runs
 
-# Create a MaaSModelRef
+# The model namespace must carry the tenant Gateway's access label
+# so the controller-generated HTTPRoute can attach.
+oc label namespace "${MODEL_NS}" "maas.opendatahub.io/gateway-access-${TENANT_NAME}=true" --overwrite
+
+# Create a MaaSModelRef in the model namespace.
+# tenantRef tells the controller to resolve the gateway from this AITenant
+# instead of using namespace-based inference (which defaults to the default tenant).
 cat <<EOF | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
 metadata:
   name: my-model
-  namespace: ${TENANT_NS}
+  namespace: ${MODEL_NS}
 spec:
   modelRef:
+    kind: LLMInferenceService
     name: my-llm-inference-service
-    namespace: llm
+  tenantRef: ${TENANT_NAME}
 EOF
 
-# Create a MaaSAuthPolicy
+# Create a MaaSAuthPolicy in the tenant namespace.
+# modelRefs point to the MaaSModelRef by name and namespace.
 cat <<EOF | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
@@ -254,14 +258,14 @@ metadata:
 spec:
   modelRefs:
     - name: my-model
-      namespace: ${TENANT_NS}
+      namespace: ${MODEL_NS}
   subjects:
     groups:
       - name: system:authenticated
     users: []
 EOF
 
-# Create a MaaSSubscription
+# Create a MaaSSubscription in the tenant namespace.
 cat <<EOF | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSSubscription
@@ -275,7 +279,7 @@ spec:
     users: []
   modelRefs:
     - name: my-model
-      namespace: ${TENANT_NS}
+      namespace: ${MODEL_NS}
       tokenRateLimits:
         - limit: 1000
           window: 1m
@@ -283,7 +287,10 @@ EOF
 ```
 
 !!! note
-    MaaSAuthPolicy and MaaSSubscription must be created in a namespace that contains a `Tenant` CR. The admission webhook rejects them otherwise.
+    MaaSAuthPolicy and MaaSSubscription must be created in a namespace that contains a `MaasTenantConfig` CR. The admission webhook rejects them otherwise.
+
+!!! tip "MaaSModelRef for the default tenant"
+    For models that belong to the default tenant, `tenantRef` can be omitted. The controller falls back to namespace-based gateway resolution. See [MaaSModelRef CRD Reference](../reference/crds/maas-model-ref.md#multi-tenant-models) for details.
 
 ## Webhook Validation
 
@@ -297,7 +304,7 @@ The AITenant admission webhook enforces two rules:
 
 ### Self-Bootstrap
 
-On startup, the controller automatically creates `AITenant/models-as-a-service` in the infrastructure namespace for the default tenant. This AITenant bootstraps the default tenant namespace and Tenant CR.
+On startup, the controller automatically creates `AITenant/models-as-a-service` in the infrastructure namespace for the default tenant. This AITenant bootstraps the default tenant namespace and `MaasTenantConfig` CR.
 
 ### Namespace Discovery
 
@@ -331,7 +338,7 @@ The controller finalizer cleans up:
     User-created RoleBindings are **not** deleted. Remove them manually before or after deleting the AITenant. Stale RoleBindings that reference recreated Roles can re-enable access.
 
 !!! tip "Automated cleanup"
-    Use the `scripts/delete-ai-tenant.sh` script for full cleanup including Gateway and Route:
+    Use the `scripts/delete-ai-tenant.sh` script for full cleanup including Gateway:
     ```bash
     ./scripts/delete-ai-tenant.sh red-team
     ```
@@ -344,7 +351,7 @@ The controller finalizer cleans up:
 ## See Also
 
 - [AITenant CRD Reference](../reference/crds/ai-tenant.md)
-- [Tenant CRD Reference](../reference/crds/tenant.md)
+- [MaasTenantConfig CRD Reference](../reference/crds/tenant.md)
 - [Tenant RBAC](../configuration-and-management/tenant-rbac.md)
 - [Multi-Tenant Validation](multi-tenant-validation.md)
 - [API Reference](../reference/api-reference.md)
