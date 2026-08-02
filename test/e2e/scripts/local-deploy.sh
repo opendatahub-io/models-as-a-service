@@ -1105,6 +1105,7 @@ cat > "$TEMP_DIR/params.env" <<EOF
 maas-api-image=${MAAS_API_IMAGE}
 maas-controller-image=${MAAS_CONTROLLER_IMAGE}
 payload-processing-image=${IPP_IMAGE}
+# Despite the name, this image runs the per-tenant API key revocation Job.
 maas-api-key-cleanup-image=docker.io/curlimages/curl:latest
 EOF
 

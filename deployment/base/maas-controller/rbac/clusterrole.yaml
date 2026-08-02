@@ -104,18 +104,6 @@ rules:
   resources:
   - cronjobs
   verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - watch
-- apiGroups:
-  - batch
-  resources:
-  - jobs
-  verbs:
-  - create
   - delete
   - get
 - apiGroups:
