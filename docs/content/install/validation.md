@@ -72,7 +72,7 @@ MODELS=$(curl -sS ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${API_KEY}" | jq -r .) && \
 echo $MODELS | jq . && \
-MODEL_NAME=$(echo $MODELS | jq -r '[.data[] | select(.ready==true)][0].id') && \
+MODEL_NAME=$(echo $MODELS | jq -re '[.data[] | select(.ready==true)][0].id') && \
 echo "Model: $MODEL_NAME"
 ```
 

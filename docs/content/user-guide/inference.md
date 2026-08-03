@@ -42,7 +42,8 @@ API_KEY="sk-oai-..."  # Your API key
 # Get the first ready model name
 MODEL_NAME=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '[.data[] | select(.ready==true)][0].id')
+    jq -re '[.data[] | select(.ready==true)][0].id') || \
+    { echo "No ready models found"; exit 1; }
 
 # Make an inference request
 curl -sS \
@@ -195,7 +196,8 @@ MaaS also supports per-model URL endpoints where the model is identified by the 
 # Get the per-model URL
 MODEL_URL=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '[.data[] | select(.ready==true)][0].url')
+    jq -re '[.data[] | select(.ready==true)][0].url') || \
+    { echo "No ready models found"; exit 1; }
 
 # Make an inference request using the path-based URL
 curl -sS \

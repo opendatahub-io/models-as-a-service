@@ -119,7 +119,8 @@ Use the model `id` with the gateway's body-based endpoint:
 ```bash
 MODEL_NAME=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '[.data[] | select(.ready==true)][0].id')
+    jq -re '[.data[] | select(.ready==true)][0].id') || \
+    { echo "No ready models found"; exit 1; }
 
 curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -140,7 +141,8 @@ The `url` field provides a per-model endpoint for path-based routing:
 ```bash
 MODEL_URL=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '[.data[] | select(.ready==true)][0].url')
+    jq -re '[.data[] | select(.ready==true)][0].url') || \
+    { echo "No ready models found"; exit 1; }
 
 echo "Model URL: ${MODEL_URL}"
 ```
