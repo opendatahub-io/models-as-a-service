@@ -153,7 +153,7 @@ spec:
       protocol: HTTPS
       allowedRoutes:
         namespaces:
-          from: All
+          from: Same
       tls:
         certificateRefs:
           - group: ""
