@@ -119,7 +119,7 @@ Use the model `id` with the gateway's body-based endpoint:
 ```bash
 MODEL_NAME=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '.data[] | select(.id=="llama-2-7b-chat") | .id')
+    jq -r '[.data[] | select(.ready==true)][0].id')
 
 curl -sS \
   -H "Authorization: Bearer ${API_KEY}" \
@@ -127,6 +127,9 @@ curl -sS \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}" \
   "${MAAS_API_URL}/v1/chat/completions"
 ```
+
+!!! tip "Model ID format"
+    For on-cluster models (LLMInferenceService), the `id` is a publisher ID like `publishers/llm/models/facebook/opt-125m`. For external models, it is typically the model name (e.g. `gpt-4o`). Always use the `id` from the API response.
 
 See [Inference](inference.md) for full examples including streaming and multi-turn conversations.
 
@@ -137,7 +140,7 @@ The `url` field provides a per-model endpoint for path-based routing:
 ```bash
 MODEL_URL=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '.data[] | select(.id=="llama-2-7b-chat") | .url')
+    jq -r '[.data[] | select(.ready==true)][0].url')
 
 echo "Model URL: ${MODEL_URL}"
 ```

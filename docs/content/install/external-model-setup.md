@@ -287,7 +287,7 @@ curl -sS "https://${GW_HOST}/v1/chat/completions" \
 # Bogus key - expect 403
 curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer bogus-key" \
+  -H "Authorization: Bearer sk-oai-FAKE-KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 
 # No auth - expect 401

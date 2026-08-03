@@ -70,11 +70,10 @@ Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models`
 ```bash
 MODELS=$(curl -sS ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" | jq -r .) && \
+    -H "Authorization: Bearer ${API_KEY}" | jq -r .) && \
 echo $MODELS | jq . && \
-MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id') && \
-MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
-echo "Model URL: $MODEL_URL"
+MODEL_NAME=$(echo $MODELS | jq -r '[.data[] | select(.ready==true)][0].id') && \
+echo "Model: $MODEL_NAME"
 ```
 
 ### 4. Test Model Inference Endpoint
@@ -89,7 +88,7 @@ curl -sS -H "Authorization: Bearer ${API_KEY}" \
 ```
 
 !!! note "Legacy path-based endpoint"
-    You can also use the per-model URL from step 3: `${MODEL_URL}/v1/chat/completions`. Both path-based and body-based endpoints are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
+    You can also use the per-model `url` from the model listing response (e.g. `${MODEL_URL}/v1/chat/completions`). Both path-based and body-based endpoints are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ### 6. Test Authorization Enforcement
 
