@@ -682,10 +682,11 @@ def wait_for_httproute_accepted(
             parent_namespace = parent_ref.get("namespace") or gateway_namespace
             if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
                 continue
-            return any(
+            if any(
                 condition.get("type") == "Accepted" and condition.get("status") == "True"
                 for condition in parent.get("conditions") or []
-            )
+            ):
+                return True
         return False
 
     return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
@@ -1073,14 +1074,12 @@ def get_ipp_deployment_env(deployment_name: str, namespace: str = GATEWAY_NAMESP
 
 
 def envoyfilter_target_gateway(name: str, namespace: str = GATEWAY_NAMESPACE) -> str:
+    """Return the gateway this IPP EnvoyFilter selects via workloadSelector."""
     envoyfilter = get_json_or_none("envoyfilter", name, namespace)
     if not envoyfilter:
         return ""
-    spec = envoyfilter.get("spec") or {}
-    target_refs = spec.get("targetRefs") or []
-    if target_refs:
-        return target_refs[0].get("name") or ""
-    return (spec.get("targetRef") or {}).get("name") or ""
+    ws_labels = ((envoyfilter.get("spec") or {}).get("workloadSelector") or {}).get("labels") or {}
+    return ws_labels.get("gateway.networking.k8s.io/gateway-name") or ""
 
 
 def envoyfilter_grpc_cluster_names(envoyfilter: dict) -> list[str]:

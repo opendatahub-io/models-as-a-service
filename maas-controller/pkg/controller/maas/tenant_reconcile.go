@@ -386,7 +386,7 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 	if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
 		tenant.Status.Phase = "Degraded"
 	}
-	setDeploymentsAvailableCondition(tenant, true, "DeploymentsReady", "maas-api deployment is available")
+	setDeploymentsAvailableCondition(tenant, true, "DeploymentsReady", "maas-api deployment and payload-processing EnvoyFilter are available")
 	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
 		Type:               tenantreconcile.ReadyConditionType,
 		Status:             metav1.ConditionTrue,

@@ -47,3 +47,26 @@ patches:
     patch: |
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
+
+  # Exclude monitoring resources on xKS (PodMonitor CRD requires Prometheus Operator,
+  # NetworkPolicy references OCP-specific redhat-ods-monitoring namespace)
+  - target:
+      group: monitoring.coreos.com
+      version: v1
+      kind: PodMonitor
+      name: maas-api-metrics
+    patch: |
+      $patch: delete
+      apiVersion: monitoring.coreos.com/v1
+      kind: PodMonitor
+      metadata:
+        name: maas-api-metrics
+  - target:
+      kind: NetworkPolicy
+      name: maas-api-allow-monitoring
+    patch: |
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: NetworkPolicy
+      metadata:
+        name: maas-api-allow-monitoring

@@ -4,10 +4,19 @@ metadata:
   name: payload-processing
   namespace: openshift-ingress
 spec:
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: maas-default-gateway
+  # Must run AFTER Kuadrant's EnvoyFilter (default priority 0), which INSERT_BEFOREs
+  # envoy.filters.http.wasm relative to the router. Without a positive priority, istiod
+  # applies this resource first (same priority 0, older creationTimestamp) and the RHCL
+  # wasm anchors miss — ext_proc never enters the gateway filter chain (404 NR on
+  # body-routed /v1/*). Multi-tenant gateways are especially affected: their
+  # payload-processing-* EFs are often created before Kuadrant's per-gateway EF.
+  # ODH WasmPlugin anchors are unaffected: WasmPlugin is in the base chain before
+  # any EnvoyFilter patches.
+  # See: https://istio.io/latest/docs/reference/config/networking/envoy-filter/#EnvoyFilter
+  priority: 10
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
   configPatches:
     # Stage 1: must run BEFORE the WasmPlugin so auth sees X-Gateway-Model-Name.
     - applyTo: HTTP_FILTER
@@ -70,6 +79,7 @@ spec:
             message_timeout: 300s
     # RHCL 1.4 injects auth via envoy.filters.http.wasm (no WasmPlugin CR). Only one anchor
     # pair matches per cluster: WasmPlugin on ODH/community Kuadrant, wasm filter on RHCL 1.4.
+    # These patches require priority > Kuadrant's EF (see spec.priority above).
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY

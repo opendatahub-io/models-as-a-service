@@ -313,13 +313,17 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 
 	payloadEnvoyFilter := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(tenantID))
 	assert.Equal(t, params.GatewayNamespace, payloadEnvoyFilter.GetNamespace())
-	targetRefs, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
+	priority, found, err := unstructured.NestedInt64(payloadEnvoyFilter.Object, "spec", "priority")
+	require.NoError(t, err)
+	require.True(t, found, "EnvoyFilter spec.priority must be set so RHCL wasm anchors apply after Kuadrant")
+	assert.Equal(t, PayloadProcessingEnvoyFilterPriority, priority)
+	wsLabels, found, err := unstructured.NestedStringMap(payloadEnvoyFilter.Object, "spec", "workloadSelector", "labels")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.NotEmpty(t, targetRefs)
-	firstTargetRef, ok := targetRefs[0].(map[string]any)
-	require.True(t, ok)
-	assert.Equal(t, params.GatewayName, firstTargetRef["name"])
+	assert.Equal(t, params.GatewayName, wsLabels["gateway.networking.k8s.io/gateway-name"])
+	_, targetRefsFound, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "targetRefs")
+	require.NoError(t, err)
+	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual anchors:
 	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),

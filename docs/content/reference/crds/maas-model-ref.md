@@ -12,6 +12,7 @@ Identifies an AI/ML model for the MaaS platform. The backend may be on-cluster (
 |-------|------|----------|-------------|
 | modelRef | ModelReference | Yes | Reference to the model backend (kind and name) |
 | endpointOverride | string | No | Optional override for the endpoint URL. See [Endpoint Override](#endpoint-override) below. |
+| tenantRef | string | No | Name of the AITenant this model belongs to. When omitted, the model is assigned to the default tenant. See [Multi-Tenant Models](#multi-tenant-models) below. |
 
 ### ModelReference
 
@@ -102,6 +103,34 @@ The override does not bypass backend validation. The controller still checks tha
 
 ---
 
+## Multi-Tenant Models
+
+By default, the controller resolves the gateway for a MaaSModelRef using namespace-based inference — it looks for a MaasTenantConfig in the model's namespace and uses the associated default-tenant gateway.
+
+In multi-tenant deployments, models often live in a shared namespace (e.g. `llm`) but need to route through a specific tenant's gateway. Set `spec.tenantRef` to the name of the AITenant. The controller looks up the AITenant in the AITenant namespace and uses its gateway directly.
+
+A validating webhook rejects `tenantRef` values that do not match an existing AITenant. The value must use lowercase alphanumeric characters and hyphens (matching the CRD pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`) and be no longer than 253 characters.
+
+**Example:**
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: granite-7b
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: granite-7b-instruct
+  tenantRef: red-team
+```
+
+The resolved tenant appears in `status.resolvedTenantRef`. When `tenantRef` is removed or left empty, the field is cleared and the controller reverts to namespace-based resolution.
+
+For step-by-step instructions, see [Multi-Tenant Setup — Configure Models](../../install/multi-tenant-setup.md#5-configure-models).
+
+---
+
 ## Status
 
 ### MaaSModelRefStatus
@@ -115,6 +144,7 @@ The override does not bypass backend validation. The controller still checks tha
 | httpRouteGatewayName | string | Name of the Gateway that the HTTPRoute references |
 | httpRouteGatewayNamespace | string | Namespace of the Gateway that the HTTPRoute references |
 | httpRouteHostnames | []string | Hostnames configured on the HTTPRoute |
+| resolvedTenantRef | string | The explicitly selected AITenant from `spec.tenantRef`; empty when `tenantRef` is omitted and namespace-based resolution is used. |
 | conditions | []Condition | Latest observations of the model's state |
 
 ---

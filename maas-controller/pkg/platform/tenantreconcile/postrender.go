@@ -364,17 +364,17 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 	}
 	labels := map[string]any{
 		"subscription": "auth.identity.selected_subscription",
-		"cost_center":  "auth.identity.subscription_info.costCenter",
+		"cost_center":  `has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""`,
 	}
 	if captureOrganization {
-		labels["organization_id"] = "auth.identity.subscription_info.organizationId"
+		labels["organization_id"] = `has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""`
 	}
 	if captureUser {
 		log.Info("WARNING: User identity metrics enabled - ensure GDPR/privacy compliance", "field", "captureUser", "value", true)
 		labels["user"] = "auth.identity.userid"
 	}
 	if captureGroup {
-		labels["group"] = "auth.identity.group"
+		labels["group"] = "auth.identity.groups_str"
 	}
 	if captureModelUsage {
 		labels["model"] = "responseBodyJSON(\"/model\")"

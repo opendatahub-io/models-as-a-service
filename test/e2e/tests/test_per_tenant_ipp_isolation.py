@@ -223,18 +223,19 @@ class TestPerTenantIPPInfrastructure:
                 f"{names['processing_deployment']} TENANT_NAMESPACE mismatch: {env!r}"
             )
 
-    def test_per_tenant_envoyfilter_target_ref_isolated(self, ipp_tenant_cases):
+    def test_per_tenant_envoyfilter_workload_selector_isolated(self, ipp_tenant_cases):
         for case in ipp_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             target = envoyfilter_target_gateway(names["envoyfilter"], GATEWAY_NAMESPACE)
             assert target == case["gateway_name"], (
-                f"{names['envoyfilter']} must target gateway {case['gateway_name']}, got {target!r}"
+                f"{names['envoyfilter']} workloadSelector must select gateway "
+                f"{case['gateway_name']}, got {target!r}"
             )
 
         default_target = envoyfilter_target_gateway("payload-processing", GATEWAY_NAMESPACE)
         assert default_target == DEFAULT_GATEWAY_NAME, (
-            f"default payload-processing EnvoyFilter must target {DEFAULT_GATEWAY_NAME}, "
-            f"got {default_target!r}"
+            f"default payload-processing EnvoyFilter workloadSelector must select "
+            f"{DEFAULT_GATEWAY_NAME}, got {default_target!r}"
         )
 
     def test_per_tenant_envoyfilter_grpc_clusters(self, ipp_tenant_cases):
