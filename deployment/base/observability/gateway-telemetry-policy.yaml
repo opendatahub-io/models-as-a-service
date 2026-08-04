@@ -13,8 +13,8 @@ spec:
         user: auth.identity.userid
         # Subscription metadata for usage attribution and billing
         subscription: auth.identity.selected_subscription
-        organization_id: auth.identity.subscription_info.organizationId
-        cost_center: auth.identity.subscription_info.costCenter
+        organization_id: 'has(auth.identity.subscription_info.organizationId) ? auth.identity.subscription_info.organizationId : ""'
+        cost_center: 'has(auth.identity.subscription_info.costCenter) ? auth.identity.subscription_info.costCenter : ""'
   targetRef:
     group: gateway.networking.k8s.io
     kind: Gateway
