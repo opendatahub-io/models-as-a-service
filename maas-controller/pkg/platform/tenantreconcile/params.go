@@ -37,7 +37,17 @@ type PlatformParams struct {
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
 	// PayloadProcessingReplicas overrides the payload-processing Deployment replica count when non-nil.
+	// When PayloadProcessingAutoscaling is true, this value becomes the HPA minReplicas instead.
 	PayloadProcessingReplicas *int32
+
+	// PayloadProcessingAutoscaling enables HPA for payload-processing pods when true.
+	PayloadProcessingAutoscaling bool
+	// PayloadProcessingMaxReplicas is the HPA maxReplicas (default 10, only used when autoscaling is true).
+	PayloadProcessingMaxReplicas int32
+	// PayloadProcessingTargetCPU is the HPA target CPU utilization percentage (default 70).
+	PayloadProcessingTargetCPU int32
+	// PayloadProcessingTargetMemory is the HPA target memory utilization percentage (default 80).
+	PayloadProcessingTargetMemory int32
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
@@ -67,6 +77,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
+	params.PayloadProcessingAutoscaling, params.PayloadProcessingMaxReplicas, params.PayloadProcessingTargetCPU, params.PayloadProcessingTargetMemory = resolveAutoscalingAnnotations(tenant, &params.Warnings, log)
 
 	log.Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
@@ -120,6 +131,12 @@ func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIRe
 
 const maxReplicaCount = 100
 
+const (
+	defaultMaxReplicas  int32 = 10
+	defaultTargetCPU    int32 = 70
+	defaultTargetMemory int32 = 80
+)
+
 func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	n, err := strconv.ParseInt(value, 10, 32)
 	if err != nil {
@@ -133,6 +150,72 @@ func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	}
 	r := int32(n)
 	return &r, ""
+}
+
+// resolveAutoscalingAnnotations reads autoscaling-related annotations from the tenant object
+// and returns resolved values with defaults applied.
+func resolveAutoscalingAnnotations(tenant client.Object, warnings *[]string, log logr.Logger) (enabled bool, maxReplicas, targetCPU, targetMemory int32) {
+	maxReplicas = defaultMaxReplicas
+	targetCPU = defaultTargetCPU
+	targetMemory = defaultTargetMemory
+
+	annotations := tenant.GetAnnotations()
+	if annotations == nil {
+		return false, maxReplicas, targetCPU, targetMemory
+	}
+
+	if v, ok := annotations[AnnotationPayloadProcessingAutoscaling]; ok {
+		enabled = strings.EqualFold(v, "true")
+		if !enabled && !strings.EqualFold(v, "false") {
+			*warnings = append(*warnings, fmt.Sprintf("annotation %s has invalid value %q: must be \"true\" or \"false\"", AnnotationPayloadProcessingAutoscaling, v))
+		}
+	}
+	if !enabled {
+		return false, maxReplicas, targetCPU, targetMemory
+	}
+
+	log.Info("Payload-processing autoscaling enabled")
+
+	if v, ok := annotations[AnnotationPayloadProcessingMaxReplicas]; ok {
+		if parsed, warn := parsePercentOrReplicaAnnotation(AnnotationPayloadProcessingMaxReplicas, v, 1, maxReplicaCount); warn != "" {
+			*warnings = append(*warnings, warn)
+		} else {
+			maxReplicas = parsed
+			log.Info("Resolved payload-processing max replicas from annotation", "maxReplicas", maxReplicas)
+		}
+	}
+
+	if v, ok := annotations[AnnotationPayloadProcessingTargetCPU]; ok {
+		if parsed, warn := parsePercentOrReplicaAnnotation(AnnotationPayloadProcessingTargetCPU, v, 1, 100); warn != "" {
+			*warnings = append(*warnings, warn)
+		} else {
+			targetCPU = parsed
+			log.Info("Resolved payload-processing target CPU from annotation", "targetCPU", targetCPU)
+		}
+	}
+
+	if v, ok := annotations[AnnotationPayloadProcessingTargetMemory]; ok {
+		if parsed, warn := parsePercentOrReplicaAnnotation(AnnotationPayloadProcessingTargetMemory, v, 1, 100); warn != "" {
+			*warnings = append(*warnings, warn)
+		} else {
+			targetMemory = parsed
+			log.Info("Resolved payload-processing target memory from annotation", "targetMemory", targetMemory)
+		}
+	}
+
+	return enabled, maxReplicas, targetCPU, targetMemory
+}
+
+// parsePercentOrReplicaAnnotation parses a numeric annotation within a given range.
+func parsePercentOrReplicaAnnotation(annotationKey, value string, lower, upper int32) (int32, string) {
+	n, err := strconv.ParseInt(value, 10, 32)
+	if err != nil {
+		return 0, fmt.Sprintf("annotation %s has invalid value %q: must be an integer", annotationKey, value)
+	}
+	if int32(n) < lower || int32(n) > upper {
+		return 0, fmt.Sprintf("annotation %s has invalid value %q: must be between %d and %d", annotationKey, value, lower, upper)
+	}
+	return int32(n), ""
 }
 
 func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
@@ -372,7 +455,10 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	r.SetNamespace(params.GatewayNamespace)
 	deploymentName := PayloadProcessingDeploymentName(params.TenantIdentifier)
 
-	if params.PayloadProcessingReplicas != nil {
+	// When autoscaling is enabled, do NOT set spec.replicas on the Deployment.
+	// The HPA manages replica count; setting it here would fight with the HPA controller.
+	// The replica annotation value is used as HPA minReplicas instead (see patchPayloadProcessingHPA).
+	if params.PayloadProcessingReplicas != nil && !params.PayloadProcessingAutoscaling {
 		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadProcessingReplicas), "spec", "replicas"); err != nil {
 			return fmt.Errorf("patch payload-processing replicas: %w", err)
 		}
