@@ -27,6 +27,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-logr/logr"
 	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -37,9 +38,11 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -75,6 +78,9 @@ const (
 	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
 	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
 	aitenantAPIKeyCleanupTTLSeconds         = int32(300)
+
+	// envoyFilterManifestPath is the default path to the EnvoyFilter manifest inside the container.
+	envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -103,6 +109,10 @@ type AITenantReconciler struct {
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
 	Recorder record.EventRecorder
+	// MonitoringNamespace is where the OTel Collector is deployed (for EnvoyFilter cluster address).
+	MonitoringNamespace string
+	// EnvoyFilterManifestPath overrides the default path to the usage-logs EnvoyFilter YAML (testing).
+	EnvoyFilterManifestPath string
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -116,6 +126,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;delete
 // +kubebuilder:rbac:groups=batch,resources=jobs,verbs=get;create;delete
+// +kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;create;patch;delete
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -248,6 +259,14 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
 
+	if err := r.ensureUsageLogsEnvoyFilter(ctx, &aitenant); err != nil {
+		setAITenantPhase(&aitenant, "Failed", "EnvoyFilterReconcileFailed", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
@@ -267,6 +286,11 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
+		).
+		Watches(
+			&maasv1alpha1.Config{},
+			handler.EnqueueRequestsFromMapFunc(r.mapConfigToAITenants),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Complete(r)
 }
@@ -288,6 +312,201 @@ func (r *AITenantReconciler) enqueueAITenantForTenantConfig(_ context.Context, o
 		Name:      name,
 		Namespace: ns,
 	}}}
+}
+
+// mapConfigToAITenants maps a Config change to reconcile requests for all AITenants
+// in the configured namespace. This propagates usageLogging toggle changes to all
+// tenants so their EnvoyFilters are created or deleted.
+func (r *AITenantReconciler) mapConfigToAITenants(ctx context.Context, _ client.Object) []reconcile.Request {
+	aitenantNamespace := r.aitenantNamespace()
+	var aitenantList maasv1alpha1.AITenantList
+	if err := r.List(ctx, &aitenantList, client.InNamespace(aitenantNamespace)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list AITenants for Config change mapping")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(aitenantList.Items))
+	for i := range aitenantList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&aitenantList.Items[i]),
+		})
+	}
+	return requests
+}
+
+// envoyFilterTenantID returns the tenant identifier used for EnvoyFilter naming.
+// The default AITenant maps to "" (producing the base name); named tenants use
+// their AITenant name as the suffix.
+func envoyFilterTenantID(aitenant *maasv1alpha1.AITenant) string {
+	if aitenant.Name == tenantreconcile.DefaultAITenantName {
+		return ""
+	}
+	return aitenant.Name
+}
+
+// ensureUsageLogsEnvoyFilter deploys or removes a per-tenant EnvoyFilter based on
+// the Config's usageLogging feature gate. Each AITenant gets its own EnvoyFilter
+// scoped to its gateway via spec.workloadSelector, emitting structured per-request usage
+// logs (token counts, identity, model) to the OTel Collector via gRPC ALS.
+// Sets the ObservabilityReady status condition to reflect the current state.
+func (r *AITenantReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	log := ctrl.LoggerFrom(ctx)
+	gatewayRef := r.gatewayRefFor(aitenant)
+	efName := tenantreconcile.UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))
+
+	if r.MonitoringNamespace == "" {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "MonitoringNamespaceNotConfigured",
+			Message:            "Usage-logs EnvoyFilter not deployed: MonitoringNamespace is empty",
+			ObservedGeneration: aitenant.Generation,
+		})
+		return nil
+	}
+
+	var cfg maasv1alpha1.Config
+	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
+		if apierrors.IsNotFound(err) {
+			apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+				Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+				Status:             metav1.ConditionFalse,
+				Reason:             "ConfigNotFound",
+				Message:            "Usage-logs EnvoyFilter not deployed: Config CR not found",
+				ObservedGeneration: aitenant.Generation,
+			})
+			return r.deleteEnvoyFilterIfExists(ctx, log, efName)
+		}
+		return err
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "UsageLoggingDisabled",
+			Message:            "Usage-logs EnvoyFilter not deployed: usageLogging is disabled in Config",
+			ObservedGeneration: aitenant.Generation,
+		})
+		return r.deleteEnvoyFilterIfExists(ctx, log, efName)
+	}
+
+	applied, err := r.applyUsageLogsEnvoyFilter(ctx, log, &cfg, efName, gatewayRef.Name)
+	if err != nil {
+		return err
+	}
+
+	if applied {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionTrue,
+			Reason:             "EnvoyFilterApplied",
+			Message:            fmt.Sprintf("Usage-logs EnvoyFilter %s deployed targeting gateway %s", efName, gatewayRef.Name),
+			ObservedGeneration: aitenant.Generation,
+		})
+	} else {
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.AITenantConditionObservabilityReady,
+			Status:             metav1.ConditionFalse,
+			Reason:             "EnvoyFilterSkipped",
+			Message:            "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			ObservedGeneration: aitenant.Generation,
+		})
+	}
+	return nil
+}
+
+func (r *AITenantReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger, efName string) error {
+	ef := &unstructured.Unstructured{}
+	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+	ef.SetName(efName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	if err := r.Delete(ctx, ef); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete usage-logs EnvoyFilter %s: %w", efName, err)
+	}
+	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)", "name", efName)
+	return nil
+}
+
+func (r *AITenantReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config, efName, gatewayName string) (bool, error) {
+	manifestPath := r.EnvoyFilterManifestPath
+	if manifestPath == "" {
+		manifestPath = envoyFilterManifestPath
+	}
+	raw, err := os.ReadFile(manifestPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
+			return false, nil
+		}
+		return false, fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
+	}
+
+	ef := &unstructured.Unstructured{}
+	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
+	if _, _, err := dec.Decode(raw, nil, ef); err != nil {
+		return false, fmt.Errorf("decode EnvoyFilter manifest: %w", err)
+	}
+
+	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
+	if err := patchClusterAddress(ef, collectorAddress); err != nil {
+		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
+	}
+
+	if err := patchEnvoyFilterWorkloadSelector(ef, gatewayName); err != nil {
+		return false, fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
+	}
+
+	ef.SetName(efName)
+	ef.SetNamespace(r.GatewayNamespace)
+
+	// Config is cluster-scoped; EnvoyFilter is namespaced. Kubernetes GC does not
+	// enforce cross-namespace owner refs, so this won't cascade-delete the EF when
+	// Config is removed. That's acceptable: Config is managed by a higher-level
+	// operator and outlives tenants; reconcileAITenantDelete explicitly cleans up
+	// the EF, and ensureUsageLogsEnvoyFilter deletes it when usageLogging is off.
+	//
+	// Note: the API server does not currently reject cross-namespace ownerRefs on
+	// namespaced resources. If a future Kubernetes version tightens this constraint,
+	// switch to a label-based ownership model (e.g., maas.opendatahub.io/config-owner).
+	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
+		return false, fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
+	}
+
+	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if apimeta.IsNoMatchError(err) {
+			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
+			return false, nil
+		}
+		return false, fmt.Errorf("apply usage-logs EnvoyFilter %s: %w", efName, err)
+	}
+
+	log.V(1).Info("applied usage-logs EnvoyFilter",
+		"name", efName, "namespace", r.GatewayNamespace,
+		"gateway", gatewayName, "collector", collectorAddress)
+	return true, nil
+}
+
+// patchEnvoyFilterWorkloadSelector sets spec.workloadSelector.labels["gateway.networking.k8s.io/gateway-name"]
+// to the tenant's gateway so the EnvoyFilter applies only to traffic through this tenant's gateway.
+// targetRefs and workloadSelector are mutually exclusive in Istio 1.26+; any leftover targetRefs
+// are removed to prevent admission rejection.
+//
+// Note: SetNestedStringMap replaces the entire labels map. If the manifest ever needs
+// additional workloadSelector labels, merge them here rather than relying on the manifest value.
+func patchEnvoyFilterWorkloadSelector(ef *unstructured.Unstructured, gatewayName string) error {
+	if err := unstructured.SetNestedStringMap(ef.Object,
+		map[string]string{"gateway.networking.k8s.io/gateway-name": gatewayName},
+		"spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write workloadSelector: %w", err)
+	}
+	// targetRefs and workloadSelector are mutually exclusive (Istio 1.26+). Drop any
+	// leftover targetRefs from older manifests so SSA/admission never sees both.
+	unstructured.RemoveNestedField(ef.Object, "spec", "targetRefs")
+	return nil
 }
 
 func (r *AITenantReconciler) validateAITenantPlacement(aitenant *maasv1alpha1.AITenant) error {
@@ -647,6 +866,14 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
+	// Clean up the per-tenant EnvoyFilter. Transient errors are returned so the
+	// reconciler retries; only NotFound / CRD-not-installed are swallowed by
+	// deleteEnvoyFilterIfExists itself.
+	efName := tenantreconcile.UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))
+	if err := r.deleteEnvoyFilterIfExists(ctx, ctrl.LoggerFrom(ctx), efName); err != nil {
+		return ctrl.Result{}, fmt.Errorf("delete per-tenant EnvoyFilter %s: %w", efName, err)
+	}
+
 	// Keep the tenant namespace so user-created objects (Secrets, RoleBindings, etc.)
 	// survive. Only strip AITenant ownership metadata so discovery no longer treats
 	// it as an active MaaS tenant namespace.
@@ -714,6 +941,9 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	}
 	if err := r.deleteTenantGatewayAuthPolicy(ctx, aitenant); err != nil {
 		log.Error(err, "best-effort deleteTenantGatewayAuthPolicy failed during forced finalizer removal")
+	}
+	if err := r.deleteEnvoyFilterIfExists(ctx, log, tenantreconcile.UsageLogsEnvoyFilterName(envoyFilterTenantID(aitenant))); err != nil {
+		log.Error(err, "best-effort deleteEnvoyFilter failed during forced finalizer removal")
 	}
 	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
 		log.Error(err, "best-effort deleteGatewayClaim failed during forced finalizer removal")

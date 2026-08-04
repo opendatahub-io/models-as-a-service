@@ -26,6 +26,10 @@ const (
 
 	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
 	AITenantConditionReady = "Ready"
+
+	// AITenantConditionObservabilityReady indicates whether usage-logs observability
+	// resources (EnvoyFilter) are deployed for this tenant.
+	AITenantConditionObservabilityReady = "ObservabilityReady"
 )
 
 // +kubebuilder:object:root=true

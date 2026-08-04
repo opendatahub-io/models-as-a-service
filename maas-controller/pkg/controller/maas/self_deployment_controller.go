@@ -37,7 +37,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -57,9 +56,6 @@ import (
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
 
-// envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
-const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
-
 // usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
 const usageLogsCollectorName = "usage-logs"
 
@@ -68,9 +64,6 @@ const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 
 // usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
 const usageLogsTenancyProxyContainerName = "proxy"
-
-// envoyFilterName is the name of the usage-logs EnvoyFilter resource.
-const envoyFilterName = "maas-model-access-logs"
 
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
@@ -92,7 +85,6 @@ type LifecycleReconciler struct {
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
-	EnvoyFilterManifestPath     string
 	UsageLogsManifestPath       string
 }
 
@@ -102,7 +94,6 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
-//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;patch;delete
 
@@ -416,9 +407,6 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 		return err
 	}
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
-		return err
-	}
-	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
 		return err
 	}
 	if err := r.ensureUsageLogs(ctx, log); err != nil {
@@ -741,86 +729,6 @@ func patchTenancyProxyImage(res *unstructured.Unstructured) error {
 	}
 
 	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
-}
-
-// ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
-// the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
-// usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
-func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.deleteEnvoyFilterIfExists(ctx, log)
-		}
-		return err
-	}
-
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteEnvoyFilterIfExists(ctx, log)
-	}
-
-	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg)
-}
-
-func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName(envoyFilterName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := r.Delete(ctx, ef); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
-	}
-	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
-	return nil
-}
-
-func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
-	manifestPath := r.EnvoyFilterManifestPath
-	if manifestPath == "" {
-		manifestPath = envoyFilterManifestPath
-	}
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
-			return nil
-		}
-		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
-	}
-
-	ef := &unstructured.Unstructured{}
-	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-	_, _, err = dec.Decode(raw, nil, ef)
-	if err != nil {
-		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
-	}
-
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
-	if err := patchClusterAddress(ef, collectorAddress); err != nil {
-		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
-	}
-
-	ef.SetName(envoyFilterName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
-	}
-
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
-		if apimeta.IsNoMatchError(err) {
-			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
-			return nil
-		}
-		return fmt.Errorf("apply usage-logs EnvoyFilter: %w", err)
-	}
-
-	log.V(1).Info("applied usage-logs EnvoyFilter", "namespace", r.GatewayNamespace, "collector", collectorAddress)
-	return nil
 }
 
 // patchClusterAddress sets the collector address in the CLUSTER configPatch
