@@ -56,8 +56,8 @@ nav:
     - Release Notes: release-notes/index.md
     - Migration:
       - Tier to Subscription: migration/tier-to-subscription.md
-      - Upgrade to 3.4: migration/upgrade-to-3.4.md
-      - Upgrade to 3.5: migration/upgrade-to-3.5.md
+      - Upgrade 3.3 to 3.4: migration/upgrade-to-3.4.md
+      - Upgrade 3.4 to 3.5: migration/upgrade-to-3.5.md
   - Concepts:
     - Architecture: concepts/architecture.md
     - Multi-Tenancy: concepts/multi-tenancy.md
