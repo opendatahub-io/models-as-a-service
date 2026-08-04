@@ -757,3 +757,199 @@ func TestPatchMaaSAPIServingCert_MultiTenant(t *testing.T) {
 		"maas-api-redteam.redhat-ai-gateway-infra.svc.cluster.local",
 	}, dnsNames)
 }
+
+func TestBuildPlatformParams_AutoscalingAnnotations(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "maas-default-gateway",
+	}}
+
+	t.Run("no autoscaling annotation leaves defaults", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(80), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("autoscaling enabled with defaults", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "true",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(80), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("autoscaling with custom values", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling:  "true",
+			AnnotationPayloadProcessingMaxReplicas:  "20",
+			AnnotationPayloadProcessingTargetCPU:    "60",
+			AnnotationPayloadProcessingTargetMemory: "90",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(20), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(60), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(90), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("invalid autoscaling value produces warning", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "yes",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadProcessingAutoscaling)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be \"true\" or \"false\"")
+	})
+
+	t.Run("invalid max replicas produces warning and keeps default", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "true",
+			AnnotationPayloadProcessingMaxReplicas: "999",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "must be between 1 and 100")
+	})
+
+	t.Run("autoscaling disabled ignores other autoscaling annotations", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "false",
+			AnnotationPayloadProcessingMaxReplicas: "20",
+			AnnotationPayloadProcessingTargetCPU:   "60",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadProcessingTargetCPU)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("replicas annotation becomes minReplicas not spec.replicas", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "true",
+			AnnotationPayloadProcessingReplicas:    "3",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(3), *got.PayloadProcessingReplicas)
+		assert.Empty(t, got.Warnings)
+	})
+}
+
+func TestPatchPayloadProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T) {
+	replicas := int32(5)
+	deployment := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "payload-processing",
+			"namespace": "openshift-ingress",
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"selector": map[string]any{
+				"matchLabels": map[string]any{"app": "payload-processing"},
+			},
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": "payload-processing"},
+				},
+				"spec": map[string]any{
+					"serviceAccountName": "payload-processing",
+					"containers": []any{
+						map[string]any{
+							"name":  "payload-processing",
+							"image": "test-image",
+						},
+					},
+					"volumes": []any{
+						map[string]any{
+							"name": "plugins-config-volume",
+							"configMap": map[string]any{
+								"name": "payload-processing-plugins",
+							},
+						},
+					},
+				},
+			},
+		},
+	}}
+
+	t.Run("without autoscaling replicas are set on deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:          "openshift-ingress",
+			PayloadProcessingReplicas: &replicas,
+			PayloadProcessingImage:    "test-image",
+		}
+		err := patchPayloadProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		r, _, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.Equal(t, int64(5), r)
+	})
+
+	t.Run("with autoscaling replicas are NOT set on deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:             "openshift-ingress",
+			PayloadProcessingReplicas:    &replicas,
+			PayloadProcessingAutoscaling: true,
+			PayloadProcessingImage:       "test-image",
+		}
+		err := patchPayloadProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		r, _, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.Equal(t, int64(1), r)
+	})
+}

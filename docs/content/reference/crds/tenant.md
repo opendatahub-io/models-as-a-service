@@ -93,14 +93,33 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 Optional metadata annotations that control per-tenant horizontal scaling.
 
+### Replica Count Overrides
+
 | Annotation | Default | Valid Range | Description |
 |------------|---------|-------------|-------------|
 | `maas.opendatahub.io/maas-api-replicas` | 1 | 1–100 | Overrides the maas-api Deployment replica count for this tenant |
-| `maas.opendatahub.io/payload-processing-replicas` | 1 | 1–100 | Overrides the payload-processing Deployment replica count for this tenant |
+| `maas.opendatahub.io/payload-processing-replicas` | 1 | 1–100 | Overrides the payload-processing Deployment replica count for this tenant. When autoscaling is enabled, this value sets the HPA `minReplicas` floor instead of `spec.replicas`. |
 
 When set, the controller patches the corresponding Deployment's `spec.replicas` during reconciliation. Invalid values (non-numeric, zero, negative, or exceeding 100) produce a `Degraded` status condition with a remediation message; the default replica count is preserved.
 
 Remove the annotation to revert to the manifest default.
+
+### Autoscaling (HPA)
+
+| Annotation | Default | Valid Values | Description |
+|------------|---------|--------------|-------------|
+| `maas.opendatahub.io/payload-processing-autoscaling` | (not set) | `"true"` / `"false"` | Enables HPA-based autoscaling for payload-processing pods. When enabled, the controller creates an HPA targeting the payload-processing Deployment. |
+| `maas.opendatahub.io/payload-processing-max-replicas` | 10 | 1–100 | HPA `maxReplicas`. Only effective when autoscaling is enabled. |
+| `maas.opendatahub.io/payload-processing-target-cpu` | 70 | 1–100 | HPA target CPU utilization percentage. |
+| `maas.opendatahub.io/payload-processing-target-memory` | 80 | 1–100 | HPA target memory utilization percentage. |
+
+When autoscaling is enabled:
+- The `payload-processing-replicas` annotation (if set) becomes the HPA `minReplicas` floor instead of directly setting `spec.replicas` on the Deployment.
+- The HPA manages the Deployment's replica count based on CPU and memory utilization thresholds.
+- Scale-down uses a 300s stabilization window and a 25%/60s policy to prevent flapping.
+- Scale-up reacts immediately (0s stabilization) with up to 100%/15s or 4 pods/15s (whichever is higher).
+
+Remove the `payload-processing-autoscaling` annotation (or set it to `"false"`) to disable autoscaling. The HPA will be removed and the Deployment will revert to static replica management.
 
 ### Example: Scaling for High Concurrency
 
@@ -113,6 +132,25 @@ metadata:
   annotations:
     maas.opendatahub.io/maas-api-replicas: "3"
     maas.opendatahub.io/payload-processing-replicas: "2"
+spec:
+  apiKeys:
+    maxExpirationDays: 90
+```
+
+### Example: Autoscaling Payload Processing
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaasTenantConfig
+metadata:
+  name: default-tenant
+  namespace: models-as-a-service
+  annotations:
+    maas.opendatahub.io/payload-processing-autoscaling: "true"
+    maas.opendatahub.io/payload-processing-replicas: "2"       # minimum replicas (floor)
+    maas.opendatahub.io/payload-processing-max-replicas: "15"  # maximum replicas (ceiling)
+    maas.opendatahub.io/payload-processing-target-cpu: "60"    # scale up when avg CPU > 60%
+    maas.opendatahub.io/payload-processing-target-memory: "75" # scale up when avg memory > 75%
 spec:
   apiKeys:
     maxExpirationDays: 90

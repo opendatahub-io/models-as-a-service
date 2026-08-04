@@ -95,6 +95,14 @@ func RunPlatform(
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
+	// Clean up orphaned HPA when autoscaling is disabled. SSA only creates/updates
+	// resources in the rendered set; it does NOT delete resources that were previously
+	// rendered but are now absent. Without explicit cleanup, disabling autoscaling
+	// would leave a stale HPA that keeps scaling pods.
+	if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
+		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+	}
+
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
 		return nil, fmt.Errorf("sync maas-parameters ConfigMap: %w", err)
 	}
@@ -275,4 +283,36 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 			gatewayNamespace, efName, gatewayNameLabel, got, gatewayName), nil
 	}
 	return true, "", nil
+}
+
+// cleanupPayloadProcessingHPA deletes the payload-processing HPA when autoscaling
+// is disabled. This is necessary because SSA only creates/updates resources but never
+// deletes resources that are no longer in the rendered set. Without explicit cleanup,
+// an HPA created during an autoscaling-enabled reconcile would remain active after
+// the autoscaling annotation is removed, continuing to scale pods.
+func cleanupPayloadProcessingHPA(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.PayloadProcessingAutoscaling {
+		// Autoscaling is enabled; the HPA is (being) created, nothing to clean up.
+		return nil
+	}
+
+	tenantID := params.TenantIdentifier
+	hpaName := PayloadProcessingHPAName(tenantID)
+	hpa := &unstructured.Unstructured{}
+	hpa.SetGroupVersionKind(GVKHPA)
+	key := types.NamespacedName{Namespace: params.GatewayNamespace, Name: hpaName}
+
+	if err := c.Get(ctx, key, hpa); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // No HPA exists, nothing to clean up.
+		}
+		return fmt.Errorf("get HPA %s/%s: %w", params.GatewayNamespace, hpaName, err)
+	}
+
+	log.Info("Deleting orphaned payload-processing HPA (autoscaling disabled)",
+		"hpa", hpaName, "namespace", params.GatewayNamespace)
+	if err := c.Delete(ctx, hpa); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete HPA %s/%s: %w", params.GatewayNamespace, hpaName, err)
+	}
+	return nil
 }
