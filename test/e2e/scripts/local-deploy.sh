@@ -994,7 +994,7 @@ spec:
     protocol: HTTP
     allowedRoutes:
       namespaces:
-        from: All
+        from: Same
 EOF
 
   echo "  Waiting for Gateway to be programmed..."
