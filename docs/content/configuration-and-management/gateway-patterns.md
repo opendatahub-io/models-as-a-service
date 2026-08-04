@@ -226,7 +226,7 @@ label each namespace that needs to attach HTTPRoutes before applying:
 
 ```bash
 # Replace <application-namespace> with opendatahub or redhat-ods-applications
-oc label namespace <application-namespace> maas.opendatahub.io/gateway-access=true
+oc label namespace <application-namespace> maas.opendatahub.io/gateway-access=true --overwrite
 ```
 
 This example routes all traffic to `maas-api`:
