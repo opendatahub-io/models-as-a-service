@@ -593,6 +593,12 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		return
 	}
 
+	// Validate the labels provided as a filter in the request.
+	if err := validateLabels(req.Filters.LabelsContain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
 	// Call service layer (tenant scoping is mandatory)
 	result, err := h.service.Search(
 		c.Request.Context(),

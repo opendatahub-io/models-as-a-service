@@ -2958,3 +2958,79 @@ func TestGetAPIKey_WithLabels(t *testing.T) {
 
 	assert.Equal(t, labels, key.Labels)
 }
+
+// TestSearchAPIKeys_InvalidLabelsContain verifies that labelsContain filters
+// in search requests are validated with the same rules as label creation.
+func TestSearchAPIKeys_InvalidLabelsContain(t *testing.T) {
+	tests := []struct {
+		name          string
+		labelsContain map[string]string
+		wantErr       string
+	}{
+		{
+			name:          "empty key",
+			labelsContain: map[string]string{"": "value"},
+			wantErr:       "label keys cannot be empty",
+		},
+		{
+			name:          "too many labels",
+			labelsContain: makeLargeLabels(constant.MaxLabelsEntries + 1),
+			wantErr:       fmt.Sprintf("cannot exceed %d", constant.MaxLabelsEntries),
+		},
+		{
+			name:          "invalid key characters",
+			labelsContain: map[string]string{"invalid key!": "value"},
+			wantErr:       "invalid characters",
+		},
+		{
+			name:          "key too long",
+			labelsContain: map[string]string{strings.Repeat("a", constant.MaxLabelKeyLength+1): "value"},
+			wantErr:       fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:          "value too long",
+			labelsContain: map[string]string{"key": strings.Repeat("a", constant.MaxLabelValueLength+1)},
+			wantErr:       fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:          "control characters in value",
+			labelsContain: map[string]string{"k": "val\x00ue"},
+			wantErr:       "contains invalid control characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			svc := NewService(store, &config.Config{}, fixedSubSelector{})
+			handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+			reqBody := SearchAPIKeysRequest{
+				Filters: &SearchFilters{
+					LabelsContain: tt.labelsContain,
+				},
+			}
+			body, err := json.Marshal(reqBody)
+			require.NoError(t, err)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"data-science"},
+				Tenant:   "test-tenant",
+			})
+
+			handler.SearchAPIKeys(c)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+
+			var errResp map[string]any
+			err = json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Contains(t, errResp["error"], tt.wantErr)
+		})
+	}
+}
