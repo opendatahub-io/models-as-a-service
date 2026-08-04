@@ -19,6 +19,23 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
 
+  # Metrics Service also uses service-ca on OpenShift; strip it for xKS and expose HTTP.
+  - target:
+      kind: Service
+      name: maas-controller-metrics
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
+      - op: replace
+        path: /spec/ports/0/name
+        value: metrics
+      - op: replace
+        path: /spec/ports/0/port
+        value: 8080
+      - op: replace
+        path: /spec/ports/0/targetPort
+        value: metrics
+
   # Remove OCP CA bundle injection (cert-manager CA injection is handled by the chart)
   - target:
       kind: ValidatingWebhookConfiguration
@@ -28,11 +45,25 @@ patches:
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
 
   # Mount the webhook TLS secret into the controller deployment
-  # (Certificate is created by the rhai-on-xks-chart post-install hook)
+  # (Certificate is created by the rhai-on-xks-chart post-install hook).
+  # Replace (not merge) base volumes/volumeMounts so OpenShift metrics-certs
+  # from manager.yaml are dropped when SecureServing is disabled.
   - target:
       kind: Deployment
       name: maas-controller
     patch: |
+      - op: replace
+        path: /spec/template/spec/containers/0/args/2
+        value: --metrics-bind-address=:8080
+      - op: replace
+        path: /spec/template/spec/containers/0/args/3
+        value: --metrics-secure=false
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/containerPort
+        value: 8080
+      - op: replace
+        path: /spec/template/spec/containers/0/ports/0/name
+        value: metrics
       - op: add
         path: /spec/template/spec/volumes
         value:
