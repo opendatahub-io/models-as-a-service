@@ -1999,11 +1999,16 @@ patch_gateway_allowed_routes() {
   [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" || -n "${NAMESPACE_SELECTOR_LABELS:-}" ]] && has_custom_config=true
 
   # Check whether any listener still carries an insecure allowedRoutes default.
+  # Treat a read failure as needing a patch (fail closed) rather than silently skipping.
   local any_all=false
   local i current_from
   for ((i=0; i<listener_count; i++)); do
-    current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
-      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null || echo "")
+    if ! current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null); then
+      log_warn "  Could not read listener $i allowedRoutes from Gateway ${gateway_namespace}/${gateway_name} — assuming patch needed"
+      any_all=true
+      break
+    fi
     [[ "$current_from" == "All" ]] && any_all=true && break
   done
 
