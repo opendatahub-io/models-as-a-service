@@ -160,7 +160,7 @@ EOF
 
         sleep 5
 
-        # Gateway API + fail-close rate limits (same as deploy.sh patch_kuadrant_csv)
+        # Gateway API + fail-close rate limits + auth timeout (same as deploy.sh patch_kuadrant_csv)
         echo "🚀 Patching Kuadrant operator CSV..."
         patch_kuadrant_csv "kuadrant-system" "kuadrant-operator"
 
