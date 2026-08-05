@@ -45,6 +45,10 @@ const (
 	// use this label to discover tenant namespaces dynamically.
 	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
 
+	// LabelGatewayAccess is set to "true" on tenant namespaces so that the MaaS Gateway
+	// allowedRoutes selector accepts HTTPRoutes from those namespaces.
+	LabelGatewayAccess = "maas.opendatahub.io/gateway-access"
+
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
 

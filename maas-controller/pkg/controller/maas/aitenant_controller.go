@@ -1389,6 +1389,7 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, t
 	labels[aiGatewayTenantLabel] = aitenant.Name
 	labels[tenantreconcile.LabelTenantName] = aitenant.Name
 	labels[tenantreconcile.LabelTenantNamespace] = tenantNamespace
+	labels[tenantreconcile.LabelGatewayAccess] = "true"
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
@@ -1408,6 +1409,7 @@ func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, 
 	removeMapValueIfEqual(&labels, aiGatewayTenantLabel, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantName, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantNamespace, tenantNamespace)
+	removeMapValueIfEqual(&labels, tenantreconcile.LabelGatewayAccess, "true")
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
