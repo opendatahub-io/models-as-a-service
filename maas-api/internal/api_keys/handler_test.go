@@ -3151,6 +3151,11 @@ func TestSearchAPIKeys_InvalidLabelsContain(t *testing.T) {
 			wantErr:       "label keys cannot be empty",
 		},
 		{
+			name:          "empty value",
+			labelsContain: map[string]string{"key": ""},
+			wantErr:       "cannot be empty",
+		},
+		{
 			name:          "too many labels",
 			labelsContain: makeLargeLabels(constant.MaxLabelsEntries + 1),
 			wantErr:       fmt.Sprintf("cannot exceed %d", constant.MaxLabelsEntries),
