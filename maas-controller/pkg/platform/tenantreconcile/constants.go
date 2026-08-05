@@ -26,25 +26,10 @@ const (
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
 
 	// AnnotationPayloadProcessingReplicas overrides the payload-processing Deployment replica count for a tenant.
-	// When autoscaling is enabled, this value sets HPA minReplicas instead of Deployment spec.replicas.
+	// When autoscaling is enabled via spec.payloadProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
-
-	// AnnotationPayloadProcessingAutoscaling enables HPA-based autoscaling for payload-processing pods.
-	// When set to "true", the controller creates an HPA targeting the payload-processing Deployment.
-	// The payload-processing-replicas annotation (if set) becomes the HPA minReplicas floor.
-	AnnotationPayloadProcessingAutoscaling = "maas.opendatahub.io/payload-processing-autoscaling"
-
-	// AnnotationPayloadProcessingMaxReplicas overrides the HPA maxReplicas for payload-processing.
-	// Only effective when autoscaling is enabled. Default: 10. Valid range: 1-100.
-	AnnotationPayloadProcessingMaxReplicas = "maas.opendatahub.io/payload-processing-max-replicas"
-
-	// AnnotationPayloadProcessingTargetCPU overrides the HPA target CPU utilization percentage.
-	// Only effective when autoscaling is enabled. Default: 70. Valid range: 1-100.
-	AnnotationPayloadProcessingTargetCPU = "maas.opendatahub.io/payload-processing-target-cpu"
-
-	// AnnotationPayloadProcessingTargetMemory overrides the HPA target memory utilization percentage.
-	// Only effective when autoscaling is enabled. Default: 80. Valid range: 1-100.
-	AnnotationPayloadProcessingTargetMemory = "maas.opendatahub.io/payload-processing-target-memory"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
