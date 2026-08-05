@@ -16,6 +16,5 @@ ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS labels JSONB DEFAULT NULL;
   END
   $$;
 
--- GIN index for efficient JSONB containment queries (@> operator)
--- Supports fast lookups like: WHERE labels @> '{"cmdb_id": "AST123456"}'::jsonb
-CREATE INDEX IF NOT EXISTS idx_api_keys_labels_gin ON api_keys USING GIN (labels);
+-- Note: The GIN index for efficient JSONB containment queries (@> operator) cannot be run inside a transaction block.
+-- It is applied in the runConcurrentMigrations function in the db_driver.go file.
