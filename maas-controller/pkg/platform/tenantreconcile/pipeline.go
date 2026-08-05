@@ -91,16 +91,16 @@ func RunPlatform(
 		return nil, fmt.Errorf("post-render: %w", err)
 	}
 
-	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
-		return nil, fmt.Errorf("apply: %w", err)
-	}
-
-	// Clean up orphaned HPA when autoscaling is disabled. SSA only creates/updates
-	// resources in the rendered set; it does NOT delete resources that were previously
-	// rendered but are now absent. Without explicit cleanup, disabling autoscaling
-	// would leave a stale HPA that keeps scaling pods.
+	// Clean up orphaned HPA before applying static replicas. When autoscaling is
+	// disabled, the HPA must be deleted first so it cannot reset spec.replicas
+	// between the apply and the next reconciliation. SSA only creates/updates
+	// resources in the rendered set; it does NOT delete absent resources.
 	if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
 		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+	}
+
+	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
+		return nil, fmt.Errorf("apply: %w", err)
 	}
 
 	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
