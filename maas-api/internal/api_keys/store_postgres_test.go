@@ -4,6 +4,7 @@ package api_keys_test
 
 import (
 	"context"
+	"database/sql"
 	"os"
 	"testing"
 
@@ -120,6 +121,43 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 	key, err := store.Get(ctx, keyID)
 	require.NoError(t, err)
 	assert.Nil(t, key.Labels) // Important: should be nil, not empty map
+}
+
+// TestPostgresStore_ConcurrentIndexesCreated verifies that all indexes registered
+// in concurrentMigrations are created during store initialization.
+func TestPostgresStore_ConcurrentIndexesCreated(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	// Ensure migrations have run by initializing the store.
+	store := setupTestPostgresStore(t)
+	defer store.Close()
+
+	// Use a separate connection to query pg_indexes directly,
+	// avoiding the need to expose *sql.DB on PostgresStore.
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+
+	// The db_driver.go file contains a list of concurrent migrations that are applied to the database.
+	// This test verifies that all of these indexes are created in the database.
+	for _, name := range api_keys.ConcurrentMigrationNames() {
+		t.Run(name, func(t *testing.T) {
+			var indexName string
+			err := db.QueryRow(
+				"SELECT indexname FROM pg_indexes WHERE tablename = 'api_keys' AND indexname = $1",
+				name,
+			).Scan(&indexName)
+
+			require.NoError(t, err, "expected index %q to exist", name)
+			assert.Equal(t, name, indexName)
+		})
+	}
 }
 
 // setupTestPostgresStore creates a PostgreSQL store for testing.
