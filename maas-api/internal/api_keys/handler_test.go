@@ -2722,6 +2722,11 @@ func TestValidateLabels_Errors(t *testing.T) {
 			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
 		},
 		{
+			name:    "empty value",
+			labels:  map[string]string{"key": ""},
+			wantErr: "label value for key 'key' cannot be empty",
+		},
+		{
 			name:    "value too long",
 			labels:  map[string]string{"key": strings.Repeat("a", constant.MaxLabelValueLength+1)},
 			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),

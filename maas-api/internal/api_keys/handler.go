@@ -348,6 +348,9 @@ func validateLabels(labels map[string]string) error {
         }
         
         // Value validation
+		if len(value) == 0 {
+			return fmt.Errorf("label value for key '%s' cannot be empty", key)
+		}
         if len(value) > constant.MaxLabelValueLength {
             return fmt.Errorf("label value for key '%s' exceeds %d characters", key, constant.MaxLabelValueLength)
         }
