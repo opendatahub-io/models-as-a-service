@@ -72,6 +72,60 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
 
 Additionally, a Perses dashboard for metrics-based usage will be added to the ODH observability dashboard, and it would show data when `captureUser` and `captureModelUsage` are turned on.
 
+#### Logs based usage dashboards
+
+We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics based dashboard.
+
+In order to enable this feature, you need to turn on `usageLogging` in the `Config`:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usageLogging":true}}'
+```
+
+This creates:
+
+- **EnvoyFilter** (`maas-model-access-logs`) - emits OTLP structured access logs from the gateway
+- **OpenTelemetry Collector** (`usage-logs-collector`) - collects the logs and exports them to Loki
+- **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users
+- **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
+- **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
+
+!!! note "Prerequisites"
+    Requires Loki (Operator) and to configure LokiStack named `usage`, for example:
+
+```yaml
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: usage
+  namespace: redhat-ods-monitoring
+spec:
+  limits:
+    global:
+      otlp:
+        streamLabels:
+          resourceAttributes:
+            - name: service.name
+            - name: subscription
+            - name: model
+            - name: response_type
+            - name: kubernetes_namespace_name
+  managementState: Managed
+  size: 1x.demo
+  storage:
+    schemas:
+      - effectiveDate: '2024-10-01'
+        version: v13
+    secret:
+      credentialMode: static
+      name: minio-secret
+      type: s3
+  storageClassName: gp3-csi
+  tenants:
+    mode: openshift-logging
+```
+
+
 ### Option 2: Kustomize (Development)
 
 !!! warning "Development Only"
