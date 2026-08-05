@@ -2,53 +2,24 @@
 
 ## Prerequisites
 
-### User Workload Monitoring
+### ODH Monitoring Stack
 
-[User Workload Monitoring](https://docs.redhat.com/en/documentation/monitoring_stack_for_red_hat_openshift/4.19/html-single/configuring_user_workload_monitoring/index#enabling-monitoring-for-user-defined-projects_preparing-to-configure-the-monitoring-stack-uwm) must be enabled for Prometheus to scrape metrics.
+For metrics to be collected and stored in the ODH monitoring stack, configure DSCI `monitoring.metrics` - see [Platform Setup](../install/platform-setup.md#install-platform-operator).
 
-!!! warning "Required"
-    Without User Workload Monitoring, ServiceMonitors will not be processed and no metrics will be collected.
+Verify the status of both `MonitoringStackAvailable` and `MonitoringReady` conditions is `True`:
 
 ```bash
-kubectl apply -f - <<EOF
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: cluster-monitoring-config
-  namespace: openshift-monitoring
-data:
-  config.yaml: |
-    enableUserWorkload: true
-EOF
-
-# Verify prometheus-user-workload pods are running
-kubectl get pods -n openshift-user-workload-monitoring
+kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
 ```
 
-### Kuadrant Observability
+### ODH Observability Dashboard tabs (Optional)
 
-Enable observability on the Kuadrant CR for rate-limiting metrics (`authorized_hits`, `authorized_calls`, `limited_calls`):
+For usage dashboard(s) to appear in the ODH observability dashboard, Perses needs to be deployed.
 
-```bash
-kubectl patch kuadrant kuadrant -n kuadrant-system --type=merge \
-  -p '{"spec":{"observability":{"enable":true}}}'
-
-# Verify PodMonitor was created
-kubectl get podmonitor -n kuadrant-system kuadrant-limitador-monitor
-```
-
-### RHOAI Dashboard Observability Tab (Optional)
-
-For Perses-based dashboards in the RHOAI Dashboard:
-
-- Install **Cluster Observability Operator** and **OpenTelemetry Operator** from OperatorHub
-- Configure DSCI `monitoring.metrics` - see [Platform Setup](../install/platform-setup.md#install-platform-operator)
-- Enable `observabilityDashboard: true` on OdhDashboardConfig - see [Feature Flags](../install/maas-setup.md#odhdashboardconfig-feature-flags)
+Verify the static of `PersesAvailable` condition is `True`:
 
 ```bash
-# Verify
-kubectl get csv -A | grep -E 'cluster-observability|opentelemetry'
-kubectl get pods -n redhat-ods-monitoring | grep perses
+kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
 ```
 
 See [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
@@ -98,6 +69,8 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
 
 !!! warning "AuthPolicy Dependency"
     Istio Telemetry reads `X-MaaS-Subscription` header injected by AuthPolicy. Without header injection, `subscription` label will be empty.
+
+Additionally, a Perses dashboard for metrics-based usage will be added to the ODH observability dashboard, and it would show data when `captureUser` and `captureModelUsage` are turned on.
 
 ### Option 2: Kustomize (Development)
 
