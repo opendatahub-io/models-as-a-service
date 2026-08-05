@@ -10,6 +10,7 @@ This guide covers what tests exist in the MaaS project, how to run them, and how
 | **Unit tests** | `maas-controller/pkg/` | Go | `make test` |
 | **E2E tests** | `test/e2e/tests/` | Python (pytest) | `run-tests-quick.sh`, `smoke.sh` |
 | **CI smoke / E2E** | `test/e2e/scripts/prow_run_smoke_test.sh` | Bash + pytest | Konflux integration |
+| **Integration tests** | `test/integration/postgres.sh` | Bash | See [Integration Tests (PostgreSQL)](#integration-tests-postgresql) |
 | **Integration tests** | [opendatahub-tests](https://github.com/opendatahub-io/opendatahub-tests) | Python (pytest) | ODH CI / Nightly |
 
 ### Repository Structure (Testing)
@@ -74,27 +75,17 @@ Integration tests for `maas-api` verify JSONB storage, GIN index queries, and NU
 
 **Integration tests skip protection:**
 
+Note: `TestPostgres` is compiled with the other unit tests. To avoid the postgresql integration tests running during unit testing with `make test` the following must be true for the postgresql tests to be included in `make test`.
+
 - Build tag check (requires `-tags=integration`)
 - `testing.Short()` check (skipped in short mode)
 - Environment variable check (skips if `TEST_DATABASE_URL` not set)
 
-
 ```bash
-# Start PostgreSQL
-podman run --name maas-test -e POSTGRES_PASSWORD=postgres -p 5432:5432 -d postgres:15
-
-# Wait for PostgreSQL readiness before creating the database.
-podman logs --follow maas-test
-
-# Create test database
-podman exec -it maas-test psql -U postgres -c "CREATE DATABASE maas_test;"
-
-# Run integration tests
-export TEST_DATABASE_URL="postgres://postgres:postgres@localhost:5432/maas_test?sslmode=disable"
-go test -tags=integration -v -run "TestPostgres" ./internal/api_keys
-
-# Cleanup
-podman stop maas-test && podman rm maas-test
+./test/integration/postgresql.sh
+if [ $? -eq 0 ]; then 
+  echo "Integration tests passed" 
+fi
 ```
 
 ### E2E Tests (Python)
