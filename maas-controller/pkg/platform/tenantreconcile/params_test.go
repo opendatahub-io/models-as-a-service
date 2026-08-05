@@ -885,6 +885,25 @@ func TestBuildPlatformParams_AutoscalingAnnotations(t *testing.T) {
 		assert.Equal(t, int32(3), *got.PayloadProcessingReplicas)
 		assert.Empty(t, got.Warnings)
 	})
+
+	t.Run("minReplicas exceeding maxReplicas clamps max and warns", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingAutoscaling: "true",
+			AnnotationPayloadProcessingReplicas:    "20",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(20), *got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(20), got.PayloadProcessingMaxReplicas, "maxReplicas should be clamped to match minReplicas")
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "exceeds payload-processing-max-replicas")
+	})
 }
 
 func TestPatchPayloadProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T) {
@@ -939,7 +958,7 @@ func TestPatchPayloadProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T)
 		assert.Equal(t, int64(5), r)
 	})
 
-	t.Run("with autoscaling replicas are NOT set on deployment", func(t *testing.T) {
+	t.Run("with autoscaling replicas are removed from deployment", func(t *testing.T) {
 		dep := deployment.DeepCopy()
 		params := PlatformParams{
 			GatewayNamespace:             "openshift-ingress",
@@ -949,7 +968,8 @@ func TestPatchPayloadProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T)
 		}
 		err := patchPayloadProcessingDeployment(logr.Discard(), dep, params)
 		require.NoError(t, err)
-		r, _, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
-		assert.Equal(t, int64(1), r)
+		// spec.replicas should be absent so the HPA has sole ownership
+		_, found, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.False(t, found, "spec.replicas should be removed when autoscaling is enabled")
 	})
 }

@@ -79,6 +79,21 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
 	params.PayloadProcessingAutoscaling, params.PayloadProcessingMaxReplicas, params.PayloadProcessingTargetCPU, params.PayloadProcessingTargetMemory = resolveAutoscalingAnnotations(tenant, &params.Warnings, log)
 
+	// Validate minReplicas <= maxReplicas when autoscaling is enabled.
+	// An invalid combination (e.g. replicas=20, max-replicas=10) would produce an HPA
+	// that the Kubernetes API rejects, blocking tenant reconciliation.
+	if params.PayloadProcessingAutoscaling && params.PayloadProcessingReplicas != nil {
+		if *params.PayloadProcessingReplicas > params.PayloadProcessingMaxReplicas {
+			params.Warnings = append(params.Warnings, fmt.Sprintf(
+				"payload-processing-replicas (%d) exceeds payload-processing-max-replicas (%d); clamping max-replicas to match",
+				*params.PayloadProcessingReplicas, params.PayloadProcessingMaxReplicas))
+			params.PayloadProcessingMaxReplicas = *params.PayloadProcessingReplicas
+			log.Info("Clamped payload-processing max-replicas to match min-replicas",
+				"minReplicas", *params.PayloadProcessingReplicas,
+				"maxReplicas", params.PayloadProcessingMaxReplicas)
+		}
+	}
+
 	log.Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
@@ -455,10 +470,13 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	r.SetNamespace(params.GatewayNamespace)
 	deploymentName := PayloadProcessingDeploymentName(params.TenantIdentifier)
 
-	// When autoscaling is enabled, do NOT set spec.replicas on the Deployment.
-	// The HPA manages replica count; setting it here would fight with the HPA controller.
-	// The replica annotation value is used as HPA minReplicas instead (see patchPayloadProcessingHPA).
-	if params.PayloadProcessingReplicas != nil && !params.PayloadProcessingAutoscaling {
+	// When autoscaling is enabled, remove spec.replicas so the HPA has sole ownership.
+	// SSA would otherwise reset the HPA-selected count on every reconciliation.
+	// When autoscaling is disabled, apply the annotation override normally.
+	if params.PayloadProcessingAutoscaling {
+		unstructured.RemoveNestedField(r.Object, "spec", "replicas")
+		log.V(4).Info("Removed spec.replicas from payload-processing (HPA manages replicas)", "deployment", deploymentName)
+	} else if params.PayloadProcessingReplicas != nil {
 		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadProcessingReplicas), "spec", "replicas"); err != nil {
 			return fmt.Errorf("patch payload-processing replicas: %w", err)
 		}
