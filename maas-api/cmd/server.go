@@ -58,7 +58,6 @@ func buildTLSConfig(cfg *config.Config, profileMinVersion uint16, profileCipherS
 		minVersion = profileMinVersion
 	}
 
-	//nolint:gosec // G402: MinVersion comes from cluster TLS profile or --tls-min-version flag (default: TLS 1.2)
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
 		MinVersion:   minVersion,
