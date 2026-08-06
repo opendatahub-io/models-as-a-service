@@ -60,6 +60,7 @@ from test_helper import (
     _ns,
     _sa_to_user,
     _snapshot_cr,
+    _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_model_ready,
@@ -107,6 +108,58 @@ def _get_models_with_gateway_retry(headers, retries=GATEWAY_PROPAGATION_RETRIES)
         f"{_maas_api_url()}/v1/models",
         retries=retries,
         headers=headers,
+    )
+
+
+def _models_in_subscription(models_data, subscription_name):
+    """Return model IDs from a central /v1/models payload tied to subscription_name."""
+    models = models_data.get("data") or []
+    in_subscription = []
+    for model in models:
+        for sub in model.get("subscriptions") or []:
+            if sub.get("name") == subscription_name:
+                in_subscription.append(model.get("id"))
+                break
+    return in_subscription
+
+
+def _wait_for_central_models_in_subscription(
+    api_key,
+    subscription_name,
+    *,
+    timeout=90,
+    poll_interval=5,
+):
+    """Poll central /v1/models until at least one model is tied to subscription_name."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    deadline = time.time() + timeout
+    last_status = None
+    last_model_ids = []
+
+    while time.time() < deadline:
+        response = _get_models_with_gateway_retry(headers=headers)
+        last_status = response.status_code
+        if response.status_code != 200:
+            time.sleep(poll_interval)
+            continue
+
+        try:
+            models_data = response.json()
+        except (json.JSONDecodeError, ValueError):
+            time.sleep(poll_interval)
+            continue
+
+        in_subscription = _models_in_subscription(models_data, subscription_name)
+        if in_subscription:
+            return models_data, in_subscription
+
+        last_model_ids = [m.get("id") for m in models_data.get("data") or []]
+        time.sleep(poll_interval)
+
+    raise AssertionError(
+        f"Expected at least 1 model tied to subscription '{subscription_name}' "
+        f"within {timeout}s, but found none. "
+        f"Last HTTP status: {last_status}, returned model IDs: {last_model_ids}"
     )
 
 
@@ -2142,6 +2195,7 @@ class TestModelsEndpoint:
                 groups=["system:authenticated"]
             )
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90)
+            _wait_for_gateway_auth_enforced()
 
             # 2. Create subscription with low token limit
             log.info(f"Creating subscription with {token_limit} token limit")
@@ -2156,6 +2210,7 @@ class TestModelsEndpoint:
 
             # Wait for TRLP to be created and enforced
             _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=90)
 
             # 3. Create API key for this subscription.
             # Use SA token to avoid environment-specific user-token 401s.
@@ -2164,6 +2219,17 @@ class TestModelsEndpoint:
                 oc_token,
                 name=f"e2e-central-exempt-{uuid.uuid4().hex[:8]}",
                 subscription=subscription_name,
+            )
+
+            # Baseline: central discovery must list the subscription model before quota tests.
+            _, baseline_models = _wait_for_central_models_in_subscription(
+                api_key,
+                subscription_name,
+                timeout=90,
+            )
+            log.info(
+                "Central /v1/models baseline before quota exhaustion: %s",
+                baseline_models,
             )
 
             # 4. Exhaust the token limit
@@ -2198,48 +2264,28 @@ class TestModelsEndpoint:
                 f"Expected 429 for inference after exhausting tokens, got {r_inference.status_code}"
             log.info("✓ Inference endpoint correctly blocked with 429")
 
-            # 6. Verify central /v1/models endpoint still works
+            # 6-7. Verify central /v1/models still works and lists subscription models
             log.info("Verifying central /v1/models endpoint is still accessible...")
-            headers = {"Authorization": f"Bearer {api_key}"}
-            r_models = _get_models_with_gateway_retry(headers=headers)
-
-            assert r_models.status_code == 200, \
-                f"Expected 200 for central /v1/models endpoint even when quota exhausted, got {r_models.status_code}. " \
-                f"The central /v1/models endpoint should be exempt from rate limiting (gateway-level) and " \
-                f"should be able to call model-specific /v1/models endpoints (per-route exemption). " \
-                f"Response: {r_models.text[:500]}"
-
-            # 7. Verify response structure and contains our model
-            try:
-                models_data = r_models.json()
-                assert "data" in models_data, \
-                    f"Expected 'data' field in response, got: {list(models_data.keys())}"
-
-                models = models_data["data"]
-                assert isinstance(models, list), "Expected 'data' to be a list"
-
-                # Verify at least one model is tied to our test subscription
-                model_ids = [m.get("id") for m in models]
-                log.info(f"✅ Central /v1/models returned {len(models)} models: {model_ids}")
-
-                # Check that at least one model belongs to our test subscription
-                models_in_our_subscription = []
-                for model in models:
-                    # Models have a subscriptions array with subscription info
-                    model_subs = model.get("subscriptions", [])
-                    for sub in model_subs:
-                        if sub.get("name") == subscription_name:
-                            models_in_our_subscription.append(model.get("id"))
-                            break
-
-                assert len(models_in_our_subscription) >= 1, \
-                    f"Expected at least 1 model tied to subscription '{subscription_name}', " \
-                    f"but found none. Returned models: {model_ids}, subscription: {subscription_name}"
-
-                log.info(f"✓ Found {len(models_in_our_subscription)} model(s) in our subscription: {models_in_our_subscription}")
-
-            except json.JSONDecodeError as e:
-                pytest.fail(f"Central /v1/models response is not valid JSON: {e}. Response: {r_models.text[:500]}")
+            models_data, models_in_our_subscription = _wait_for_central_models_in_subscription(
+                api_key,
+                subscription_name,
+                timeout=90,
+            )
+            assert "data" in models_data, \
+                f"Expected 'data' field in response, got: {list(models_data.keys())}"
+            assert isinstance(models_data["data"], list), "Expected 'data' to be a list"
+            model_ids = [m.get("id") for m in models_data["data"]]
+            log.info(
+                "Central /v1/models returned %d models after quota exhaustion: %s",
+                len(models_data["data"]),
+                model_ids,
+            )
+            log.info(
+                "Found %d model(s) in subscription %s: %s",
+                len(models_in_our_subscription),
+                subscription_name,
+                models_in_our_subscription,
+            )
 
             log.info("✅ Central /v1/models endpoint works correctly when quota exhausted")
             log.info("   - Gateway-level exemption: ✓")

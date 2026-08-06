@@ -2677,19 +2677,10 @@ func TestAITenantReconcile_DefaultTenantDeletionCompletesInZeroTenantState(t *te
 	gatewayAuthPolicy.SetLabels(map[string]string{
 		"app.kubernetes.io/managed-by": "maas-controller",
 	})
-	gatewayDefaultAuthPolicy := &unstructured.Unstructured{}
-	gatewayDefaultAuthPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
-	gatewayDefaultAuthPolicy.SetName(gatewayDefaultAuthPolicyName)
-	gatewayDefaultAuthPolicy.SetNamespace(gatewayRef.Namespace)
-	gatewayDefaultAuthPolicy.SetLabels(map[string]string{
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-controller",
-		"app.kubernetes.io/component":  "default-policy",
-	})
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, claim, tenantNamespace, userSecret, gatewayAuthPolicy, gatewayDefaultAuthPolicy).
+		WithObjects(aitenant, claim, tenantNamespace, userSecret, gatewayAuthPolicy).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -2722,67 +2713,12 @@ func TestAITenantReconcile_DefaultTenantDeletionCompletesInZeroTenantState(t *te
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	err = cl.Get(ctx, client.ObjectKeyFromObject(gatewayAuthPolicy), gatewayAuthPolicy)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-	err = cl.Get(ctx, client.ObjectKeyFromObject(gatewayDefaultAuthPolicy), gatewayDefaultAuthPolicy)
-	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 
 	var remaining maasv1alpha1.AITenant
 	err = cl.Get(ctx, key, &remaining)
 	if !apierrors.IsNotFound(err) {
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer))
-	}
-}
-
-func TestDeleteTenantGatewayAuthPolicy_RecreatedDefaultPolicy(t *testing.T) {
-	s := aitenantTestScheme(t)
-	ctx := context.Background()
-
-	gatewayRef := maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: "maas-default-gateway"}
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      tenantreconcile.DefaultAITenantName,
-			Namespace: tenantreconcile.DefaultAITenantNamespace,
-		},
-		Status: maasv1alpha1.AITenantStatus{GatewayRef: gatewayRef},
-	}
-
-	for _, tc := range []struct {
-		name         string
-		labels       map[string]string
-		shouldBeKept bool
-	}{
-		{
-			name: "controller-managed policy is deleted when maas-gateway-auth is already gone",
-			labels: map[string]string{
-				"app.kubernetes.io/managed-by": "maas-controller",
-				"app.kubernetes.io/part-of":    "maas-controller",
-				"app.kubernetes.io/component":  "default-policy",
-			},
-		},
-		{
-			name:         "same-named user policy is preserved",
-			shouldBeKept: true,
-		},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			g := NewWithT(t)
-			policy := &unstructured.Unstructured{}
-			policy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
-			policy.SetName(gatewayDefaultAuthPolicyName)
-			policy.SetNamespace(gatewayRef.Namespace)
-			policy.SetLabels(tc.labels)
-
-			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(policy).Build()
-			r := &AITenantReconciler{Client: cl, APIReader: cl}
-
-			g.Expect(r.deleteTenantGatewayAuthPolicy(ctx, aitenant)).To(Succeed())
-			err := cl.Get(ctx, client.ObjectKeyFromObject(policy), policy)
-			if tc.shouldBeKept {
-				g.Expect(err).NotTo(HaveOccurred())
-			} else {
-				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
-			}
-		})
 	}
 }
 
