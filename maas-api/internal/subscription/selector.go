@@ -168,6 +168,31 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 	return accessible, nil
 }
 
+func isResolvedModelAuthorized(sub *subscription, requestedModel string, authorizedSet map[authpolicy.ModelKey]bool) bool {
+	if authorizedSet == nil || requestedModel == "" {
+		return true
+	}
+	ref := findModelRef(sub, requestedModel)
+	if ref == nil {
+		return false
+	}
+	return authorizedSet[authpolicy.ModelKey{Namespace: ref.Namespace, Name: ref.Name}]
+}
+
+func buildAuthorizedResponse(sub *subscription, subscriptionLabel, requestedModel string, authorizedSet map[authpolicy.ModelKey]bool) (*SelectResponse, error) {
+	if !isResolvedModelAuthorized(sub, requestedModel, authorizedSet) {
+		return nil, &AccessDeniedError{Subscription: subscriptionLabel}
+	}
+	if err := checkModelHealth(sub, requestedModel); err != nil {
+		return nil, err
+	}
+	resp := toResponseWithResolvedModel(sub, requestedModel)
+	if authorizedSet != nil {
+		resp.ModelRefs = filterAuthorizedModels(resp.ModelRefs, authorizedSet)
+	}
+	return resp, nil
+}
+
 func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.ModelKey]bool) []ModelRefInfo {
 	out := make([]ModelRefInfo, 0, len(refs))
 	for _, ref := range refs {
@@ -176,6 +201,45 @@ func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.Mo
 		}
 	}
 	return out
+}
+
+// selectExplicit handles the explicit subscription selection branch of Select.
+// It supports both "namespace/name" and bare "name" formats.
+func selectExplicit(
+	subscriptions []subscription,
+	requestedSubscription, requestedModel, username string,
+	groups []string,
+	authorizedSet map[authpolicy.ModelKey]bool,
+) (*SelectResponse, error) {
+	for _, sub := range subscriptions {
+		qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
+		if qualifiedName == requestedSubscription {
+			if !userHasAccess(&sub, username, groups) {
+				return nil, &AccessDeniedError{Subscription: requestedSubscription}
+			}
+			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
+				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
+			}
+			return buildAuthorizedResponse(&sub, requestedSubscription, requestedModel, authorizedSet)
+		}
+	}
+
+	if !strings.Contains(requestedSubscription, "/") {
+		for _, sub := range subscriptions {
+			if sub.Name != requestedSubscription {
+				continue
+			}
+			if !userHasAccess(&sub, username, groups) {
+				return nil, &AccessDeniedError{Subscription: requestedSubscription}
+			}
+			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
+				return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
+			}
+			return buildAuthorizedResponse(&sub, requestedSubscription, requestedModel, authorizedSet)
+		}
+	}
+
+	return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
 }
 
 // Select implements the subscription selection logic.
@@ -197,60 +261,24 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		return nil, &NoSubscriptionError{}
 	}
 
-	// Sort by priority (desc), then maxLimit (desc)
 	sortSubscriptionsByPriority(subscriptions)
 
-	// Branch 1: Explicit subscription selection (with validation)
-	// Support both formats: "namespace/name" and bare "name"
-	if requestedSubscription != "" {
-		// First, try exact qualified match (namespace/name)
-		for _, sub := range subscriptions {
-			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
-			if qualifiedName == requestedSubscription {
-				if !userHasAccess(&sub, username, groups) {
-					return nil, &AccessDeniedError{Subscription: requestedSubscription}
-				}
-				// Validate subscription includes the requested model
-				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
-					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
-				}
-				// Check model health for Degraded subscriptions
-				if err := checkModelHealth(&sub, requestedModel); err != nil {
-					return nil, err
-				}
-				return toResponseWithResolvedModel(&sub, requestedModel), nil
-			}
+	var authorizedSet map[authpolicy.ModelKey]bool
+	if s.accessChecker != nil {
+		authorizedSet = s.accessChecker.AuthorizedModels(groups, username)
+		if authorizedSet == nil {
+			authorizedSet = map[authpolicy.ModelKey]bool{}
 		}
-
-		// If no qualified match found and request is bare name (no '/'), try bare name matching
-		if !strings.Contains(requestedSubscription, "/") {
-			for _, sub := range subscriptions {
-				if sub.Name != requestedSubscription {
-					continue
-				}
-				if !userHasAccess(&sub, username, groups) {
-					return nil, &AccessDeniedError{Subscription: requestedSubscription}
-				}
-				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
-					return nil, &ModelNotInSubscriptionError{Subscription: requestedSubscription, Model: requestedModel}
-				}
-				// Check model health for Degraded subscriptions
-				if err := checkModelHealth(&sub, requestedModel); err != nil {
-					return nil, err
-				}
-				return toResponseWithResolvedModel(&sub, requestedModel), nil
-			}
-		}
-
-		// Request had '/' but no match found
-		return nil, &SubscriptionNotFoundError{Subscription: requestedSubscription}
 	}
 
-	// Branch 2: Auto-selection
+	if requestedSubscription != "" {
+		return selectExplicit(subscriptions, requestedSubscription, requestedModel, username, groups, authorizedSet)
+	}
+
+	// Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
 		if userHasAccess(&sub, username, groups) {
-			// If model is specified, only include subscriptions that contain that model
 			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 				continue
 			}
@@ -258,19 +286,29 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		}
 	}
 
+	// Filter auto-selection candidates by model authorization before ambiguity check
+	modelMatched := len(accessibleSubs) > 0
+	if requestedModel != "" && authorizedSet != nil {
+		authorizedSubs := make([]subscription, 0, len(accessibleSubs))
+		for i := range accessibleSubs {
+			if isResolvedModelAuthorized(&accessibleSubs[i], requestedModel, authorizedSet) {
+				authorizedSubs = append(authorizedSubs, accessibleSubs[i])
+			}
+		}
+		if modelMatched && len(authorizedSubs) == 0 {
+			return nil, &AccessDeniedError{}
+		}
+		accessibleSubs = authorizedSubs
+	}
+
 	if len(accessibleSubs) == 0 {
 		return nil, &NoSubscriptionError{}
 	}
 
 	if len(accessibleSubs) == 1 {
-		// Check model health for Degraded subscriptions
-		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
-			return nil, err
-		}
-		return toResponseWithResolvedModel(&accessibleSubs[0], requestedModel), nil
+		return buildAuthorizedResponse(&accessibleSubs[0], accessibleSubs[0].Name, requestedModel, authorizedSet)
 	}
 
-	// User has multiple subscriptions - require explicit selection
 	subNames := make([]string, len(accessibleSubs))
 	for i, sub := range accessibleSubs {
 		subNames[i] = sub.Name
@@ -306,7 +344,15 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 	}
 
 	sortSubscriptionsByPriority(accessible)
-	return toResponse(&accessible[0]), nil
+	resp := toResponse(&accessible[0])
+	if s.accessChecker != nil {
+		authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
+		if authorizedSet == nil {
+			authorizedSet = map[authpolicy.ModelKey]bool{}
+		}
+		resp.ModelRefs = filterAuthorizedModels(resp.ModelRefs, authorizedSet)
+	}
+	return resp, nil
 }
 
 // loadSubscriptions fetches and parses MaaSSubscription resources.
@@ -743,6 +789,9 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 	var authorizedSet map[authpolicy.ModelKey]bool
 	if s.accessChecker != nil {
 		authorizedSet = s.accessChecker.AuthorizedModels(groups, username)
+		if authorizedSet == nil {
+			authorizedSet = map[authpolicy.ModelKey]bool{}
+		}
 	}
 
 	result := []SubscriptionInfo{}
