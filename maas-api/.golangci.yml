@@ -30,6 +30,7 @@ linters:
     - funcorder
     - godoclint
     - noinlineerr
+    - goconst
   settings:
     errcheck:
       check-type-assertions: true

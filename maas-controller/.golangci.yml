@@ -131,7 +131,7 @@ linters:
         path: pkg/reconciler/externalmodel/reconciler\.go
       - linters:
           - modernize
-        text: "(omitzero|mapsloop|rangeint):"
+        text: "(omitzero|mapsloop|rangeint|newexpr):"
       - linters:
           - lll
         source: "^// \\+kubebuilder:"
