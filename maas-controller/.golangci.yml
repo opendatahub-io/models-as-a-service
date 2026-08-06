@@ -58,6 +58,9 @@ linters:
       ignore-string-values:
         - "true"
         - "false"
+    modernize:
+      disable:
+        - newexpr
     gocritic:
       enabled-checks:
         - deferInLoop
@@ -131,7 +134,7 @@ linters:
         path: pkg/reconciler/externalmodel/reconciler\.go
       - linters:
           - modernize
-        text: "(omitzero|mapsloop|rangeint|newexpr):"
+        text: "(omitzero|mapsloop|rangeint):"
       - linters:
           - lll
         source: "^// \\+kubebuilder:"
