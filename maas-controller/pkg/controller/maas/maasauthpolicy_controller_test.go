@@ -850,19 +850,10 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		},
 	}
 
-	// Pre-create gateway-default-auth (deployed by Tenant reconciler in real clusters)
-	gwDefaultAuth := &unstructured.Unstructured{}
-	gwDefaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	gwDefaultAuth.SetName(gatewayDefaultAuthPolicyName)
-	gwDefaultAuth.SetNamespace(gatewayNS)
-	gwDefaultAuth.SetLabels(map[string]string{
-		"app.kubernetes.io/managed-by": "maas-controller",
-	})
-
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, policy1, policy2, gwDefaultAuth).
+		WithObjects(model, route, policy1, policy2).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -872,13 +863,6 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		InfraNamespace:   "maas-system",
 		GatewayNamespace: gatewayNS,
 		GatewayName:      "maas-default-gateway",
-	}
-
-	// Verify gateway-default-auth exists before reconciliation
-	defaultAuth := &unstructured.Unstructured{}
-	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); err != nil {
-		t.Fatalf("gateway-default-auth should exist before reconciliation: %v", err)
 	}
 
 	// Reconcile both policies to create the aggregated AuthPolicy
@@ -896,13 +880,6 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy); err != nil {
 		t.Fatalf("gateway AuthPolicy not found before deletion: %v", err)
-	}
-
-	// Verify gateway-default-auth was DELETED (superseded by maas-gateway-auth)
-	defaultAuth = &unstructured.Unstructured{}
-	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); !apierrors.IsNotFound(err) {
-		t.Errorf("gateway-default-auth should be deleted when maas-gateway-auth exists, got: %v", err)
 	}
 
 	// Delete policy1 (but policy2 still exists)
@@ -925,41 +902,45 @@ func TestMaaSAuthPolicyReconciler_MultiplePoliciesDeletion(t *testing.T) {
 		t.Fatalf("Reconcile policy2 deletion: %v", err)
 	}
 
-	// Gateway AuthPolicy should NOW BE DELETED (no remaining parents).
+	// maas-gateway-auth should STILL EXIST after deleting all MaaSAuthPolicy CRs,
+	// but reset to base version with empty model access.
 	authPolicy = &unstructured.Unstructured{}
 	authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy)
-	if !apierrors.IsNotFound(err) {
-		t.Errorf("gateway AuthPolicy should be deleted after deleting last parent policy, but got: %v", err)
+	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, authPolicy); err != nil {
+		t.Fatalf("maas-gateway-auth should be kept after deleting last parent policy, but got: %v", err)
 	}
 
-	// gateway-default-auth should be RECREATED (deny-all restored for unconfigured models)
-	defaultAuth = &unstructured.Unstructured{}
-	defaultAuth.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, defaultAuth); err != nil {
-		t.Errorf("gateway-default-auth should be recreated after last MaaSAuthPolicy is deleted: %v", err)
-	}
-
-	// Verify the recreated policy scopes deny-all to model inference paths only,
-	// so management endpoints (/v1/*, /maas-api/*) remain accessible.
-	defaults, ok, _ := unstructured.NestedMap(defaultAuth.Object, "spec", "defaults")
+	// Verify the rego was reset to empty model access "{}"
+	spec, ok, _ := unstructured.NestedMap(authPolicy.Object, "spec")
 	if !ok {
-		t.Fatal("gateway-default-auth missing spec.defaults")
+		t.Fatal("maas-gateway-auth missing spec after reset")
 	}
-	whenSlice, ok, _ := unstructured.NestedSlice(defaults, "when")
-	if !ok || len(whenSlice) == 0 {
-		t.Fatal("gateway-default-auth should have a 'when' predicate to scope deny-all to model inference paths")
+	defaults, ok, _ := unstructured.NestedMap(spec, "defaults")
+	if !ok {
+		t.Fatal("maas-gateway-auth missing spec.defaults after reset")
 	}
-	whenEntry, entryOk := whenSlice[0].(map[string]any)
-	if !entryOk {
-		t.Fatal("gateway-default-auth 'when' entry is not a map")
+	rules, ok, _ := unstructured.NestedMap(defaults, "rules")
+	if !ok {
+		t.Fatal("maas-gateway-auth missing spec.defaults.rules after reset")
 	}
-	predicate, ok, _ := unstructured.NestedString(whenEntry, "predicate")
-	if !ok || predicate == "" {
-		t.Fatal("gateway-default-auth 'when' predicate should not be empty")
+	authzRules, ok, _ := unstructured.NestedMap(rules, "authorization")
+	if !ok {
+		t.Fatal("maas-gateway-auth missing authorization rules after reset")
 	}
-	if predicate != celModelIdentityAvailable {
-		t.Errorf("gateway-default-auth 'when' predicate mismatch:\ngot:  %s\nwant: %s", predicate, celModelIdentityAvailable)
+	groupMembership, ok := authzRules["require-group-membership"].(map[string]any)
+	if !ok {
+		t.Fatal("maas-gateway-auth missing require-group-membership rule after reset")
+	}
+	opa, ok := groupMembership["opa"].(map[string]any)
+	if !ok {
+		t.Fatal("require-group-membership missing opa block after reset")
+	}
+	rego, ok := opa["rego"].(string)
+	if !ok {
+		t.Fatal("require-group-membership missing rego after reset")
+	}
+	if !strings.Contains(rego, "model_access := {}") {
+		t.Errorf("rego should contain empty model_access after reset, got:\n%s", rego)
 	}
 }
 
@@ -1030,98 +1011,6 @@ func TestMaaSAuthPolicyReconciler_NonDefaultTenantDeletionPreservesSharedDefault
 	preserved.SetGroupVersionKind(sharedAuthPolicy.GroupVersionKind())
 	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNamespace}, preserved); err != nil {
 		t.Fatalf("shared default gateway AuthPolicy should be preserved: %v", err)
-	}
-}
-
-// TestMaaSAuthPolicyReconciler_EnsureDefaultAuthUpgrade verifies that
-// ensureGatewayDefaultAuthPolicy updates an existing gateway-default-auth that
-// was created by an older controller version without the 'when' predicate.
-func TestMaaSAuthPolicyReconciler_EnsureDefaultAuthUpgrade(t *testing.T) {
-	const gatewayNS = "gateway-ns"
-
-	oldPolicy := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "kuadrant.io/v1",
-			"kind":       "AuthPolicy",
-			"metadata": map[string]any{
-				"name":      gatewayDefaultAuthPolicyName,
-				"namespace": gatewayNS,
-			},
-			"spec": map[string]any{
-				"targetRef": map[string]any{
-					"group": "gateway.networking.k8s.io",
-					"kind":  "Gateway",
-					"name":  "maas-gateway",
-				},
-				"defaults": map[string]any{
-					"rules": map[string]any{
-						"authentication": map[string]any{},
-						"authorization": map[string]any{
-							"deny-unconfigured-models": map[string]any{
-								"metrics":  false,
-								"priority": int64(0),
-								"patternMatching": map[string]any{
-									"patterns": []any{
-										map[string]any{
-											"operator": "eq",
-											"selector": "context.request.http.method",
-											"value":    "__deny_unconfigured_models__",
-										},
-									},
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-
-	c := fake.NewClientBuilder().
-		WithScheme(scheme).
-		WithObjects(oldPolicy).
-		Build()
-
-	rec := &MaaSAuthPolicyReconciler{
-		Client:           c,
-		GatewayNamespace: gatewayNS,
-		GatewayName:      "maas-gateway",
-	}
-
-	log := logr.Discard()
-	if err := rec.ensureGatewayDefaultAuthPolicy(context.Background(), log); err != nil {
-		t.Fatalf("ensureGatewayDefaultAuthPolicy failed: %v", err)
-	}
-
-	updated := &unstructured.Unstructured{}
-	updated.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	if err := c.Get(context.Background(), types.NamespacedName{Name: gatewayDefaultAuthPolicyName, Namespace: gatewayNS}, updated); err != nil {
-		t.Fatalf("failed to get gateway-default-auth after update: %v", err)
-	}
-
-	defaults, ok, _ := unstructured.NestedMap(updated.Object, "spec", "defaults")
-	if !ok {
-		t.Fatal("gateway-default-auth missing spec.defaults after upgrade")
-	}
-	whenSlice, ok, _ := unstructured.NestedSlice(defaults, "when")
-	if !ok || len(whenSlice) == 0 {
-		t.Fatal("gateway-default-auth should have a 'when' predicate after upgrade")
-	}
-	whenEntry, entryOk := whenSlice[0].(map[string]any)
-	if !entryOk {
-		t.Fatal("gateway-default-auth 'when' entry is not a map")
-	}
-	predicate, ok, _ := unstructured.NestedString(whenEntry, "predicate")
-	if !ok || predicate == "" {
-		t.Fatal("gateway-default-auth 'when' predicate should not be empty after upgrade")
-	}
-	if predicate != celModelIdentityAvailable {
-		t.Errorf("gateway-default-auth 'when' predicate mismatch after upgrade:\ngot:  %s\nwant: %s", predicate, celModelIdentityAvailable)
-	}
-
-	// Calling again should be a no-op (unchanged)
-	if err := rec.ensureGatewayDefaultAuthPolicy(context.Background(), log); err != nil {
-		t.Fatalf("second call to ensureGatewayDefaultAuthPolicy failed: %v", err)
 	}
 }
 

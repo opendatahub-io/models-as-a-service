@@ -438,11 +438,9 @@ const (
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
 const maasGatewayAuthPolicyName = "maas-gateway-auth"
 
-// gatewayDefaultAuthPolicyName is the static deny-all AuthPolicy deployed by the Tenant
-// reconciler. It must be deleted when maas-gateway-auth is created (two gateway-level
-// AuthPolicies on the same target conflict in Kuadrant), and restored when the last
-// MaaSAuthPolicy is removed so unconfigured models remain denied.
-const gatewayDefaultAuthPolicyName = "gateway-default-auth"
+// legacyGatewayDefaultAuthPolicyName is the pre-#912 static deny AuthPolicy removed in
+// favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
+const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
 // gatewayAuthzCacheKeySelector builds the cache-key expression for gateway-level
 // model authorization checks: "userId|groups|modelIdentity".
@@ -1427,7 +1425,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 			return false, fmt.Errorf("failed to create gateway AuthPolicy: %w", err)
 		}
 		log.Info("gateway AuthPolicy created", "name", authPolicyName, "namespace", gatewayNamespace)
-		r.deleteGatewayDefaultAuthPolicy(ctx, log)
 		return true, nil
 	}
 
@@ -1447,14 +1444,12 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	}
 	if specMatchesDesired(spec, currentSpec) {
 		log.Info("gateway AuthPolicy unchanged, skipping update", "name", authPolicyName)
-		r.deleteGatewayDefaultAuthPolicy(ctx, log)
 		return false, nil
 	}
 	if err := r.Update(ctx, existing); err != nil {
 		return false, fmt.Errorf("failed to update gateway AuthPolicy: %w", err)
 	}
 	log.Info("gateway AuthPolicy updated", "name", authPolicyName, "namespace", gatewayNamespace)
-	r.deleteGatewayDefaultAuthPolicy(ctx, log)
 	return true, nil
 }
 
@@ -1707,22 +1702,20 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
 			isNonDefaultTenant := tenantID != ""
 			if isNonDefaultTenant && isDefaultGateway {
-				log.Info("skipping gateway AuthPolicy cleanup: non-default tenant falling back to default gateway",
+				log.Info("skipping gateway AuthPolicy reset: non-default tenant using shared default gateway",
 					"tenantID", tenantID,
 					"tenantNamespace", policy.Namespace,
 					"gatewayNamespace", gatewayNs,
 					"gatewayName", gatewayName)
 			} else {
-				if err := r.deleteGatewayAuthPolicy(ctx, log, policy.Namespace, gatewayNs, gatewayName); err != nil {
-					log.Error(err, "failed to delete gateway AuthPolicy")
+				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
+				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
+				if _, err := r.reconcileGatewayAuthPolicy(ctx, log, "{}", oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
+					log.Error(err, "failed to reset gateway auth to base version")
 					return ctrl.Result{}, err
 				}
-				if r.TenantNamespace == "" || policy.Namespace == r.TenantNamespace {
-					if err := r.ensureGatewayDefaultAuthPolicy(ctx, log); err != nil {
-						log.Error(err, "failed to restore gateway-default-auth")
-						return ctrl.Result{}, err
-					}
-				}
+				log.Info("reset maas-gateway-auth to base version (empty model access)",
+					"gatewayNamespace", gatewayNs, "gatewayName", gatewayName)
 			}
 		}
 
@@ -1734,129 +1727,54 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 	return ctrl.Result{}, nil
 }
 
-// deleteGatewayAuthPolicy removes the tenant's Gateway-level AuthPolicy when no
-// MaaSAuthPolicy CRs remain in that tenant namespace.
-func (r *MaaSAuthPolicyReconciler) deleteGatewayAuthPolicy(ctx context.Context, log logr.Logger, tenantNamespace, gatewayNs, gatewayName string) error {
-	// Use legacy name for default gateway (backward compatibility), dynamic name for tenant gateways
-	authPolicyName := maasGatewayAuthPolicyName
-	if gatewayNs != r.GatewayNamespace || gatewayName != r.GatewayName {
-		// This is a tenant-specific gateway, use dynamic naming
-		authPolicyName = fmt.Sprintf("%s-maas-auth", gatewayName)
+// ensureBaseGatewayAuthPolicy bootstraps maas-gateway-auth with empty model access when
+// missing. On the shared default gateway it also removes legacy gateway-default-auth left
+// over from pre-#912 clusters. Existing policies are left unchanged.
+func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
+	ctx context.Context, log logr.Logger,
+	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
+) error {
+	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
+	if gatewayNamespace == r.GatewayNamespace && gatewayName == r.GatewayName {
+		r.deleteLegacyGatewayDefaultAuthPolicy(ctx, log)
 	}
 
-	gwPolicy := &unstructured.Unstructured{}
-	gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	gwPolicy.SetName(authPolicyName)
-	gwPolicy.SetNamespace(gatewayNs)
-
-	if err := r.Delete(ctx, gwPolicy); err != nil {
-		if apierrors.IsNotFound(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to delete gateway AuthPolicy %s/%s: %w", gatewayNs, authPolicyName, err)
+	existing := &unstructured.Unstructured{}
+	existing.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	if err := r.Get(ctx, client.ObjectKey{Name: authPolicyName, Namespace: gatewayNamespace}, existing); err == nil {
+		return nil
+	} else if !apierrors.IsNotFound(err) {
+		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
-	log.Info("gateway AuthPolicy deleted (no remaining MaaSAuthPolicies)", "name", authPolicyName, "namespace", gatewayNs, "tenantNamespace", tenantNamespace)
-	return nil
+
+	_, err := r.reconcileGatewayAuthPolicy(ctx, log, "{}", oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName)
+	return err
 }
 
-// deleteGatewayDefaultAuthPolicy removes the static deny-all gateway-default-auth policy
-// so it does not conflict with the dynamic maas-gateway-auth policy on the same Gateway.
-func (r *MaaSAuthPolicyReconciler) deleteGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) {
+func (r *MaaSAuthPolicyReconciler) deleteLegacyGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) {
 	policy := &unstructured.Unstructured{}
 	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	policy.SetName(gatewayDefaultAuthPolicyName)
+	policy.SetName(legacyGatewayDefaultAuthPolicyName)
 	policy.SetNamespace(r.GatewayNamespace)
-
-	if err := r.Delete(ctx, policy); err != nil {
-		if !apierrors.IsNotFound(err) {
-			log.Error(err, "failed to delete gateway-default-auth (non-fatal)", "name", gatewayDefaultAuthPolicyName)
-		}
-		return
-	}
-	log.Info("deleted gateway-default-auth (superseded by maas-gateway-auth)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
-}
-
-// ensureGatewayDefaultAuthPolicy recreates the static deny-all gateway-default-auth policy
-// after the last MaaSAuthPolicy is removed, so unconfigured model routes remain denied.
-// Management endpoints (/v1/*, /maas-api/*) are excluded so they remain accessible even
-// when no MaaSAuthPolicy CRs exist (e.g. fresh cluster with zero subscriptions).
-func (r *MaaSAuthPolicyReconciler) ensureGatewayDefaultAuthPolicy(ctx context.Context, log logr.Logger) error {
-	policy := &unstructured.Unstructured{}
-	policy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	policy.SetName(gatewayDefaultAuthPolicyName)
-	policy.SetNamespace(r.GatewayNamespace)
-
-	spec := r.gatewayDefaultAuthSpec()
 
 	existing := &unstructured.Unstructured{}
 	existing.SetGroupVersionKind(policy.GroupVersionKind())
-	if err := r.Get(ctx, client.ObjectKeyFromObject(policy), existing); err == nil {
-		snapshot := existing.DeepCopy()
-		if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
-			return fmt.Errorf("failed to set gateway-default-auth spec for update: %w", err)
+	if err := r.Get(ctx, client.ObjectKeyFromObject(policy), existing); err != nil {
+		if apierrors.IsNotFound(err) {
+			return
 		}
-		if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
-			log.V(1).Info("gateway-default-auth unchanged, skipping update", "name", gatewayDefaultAuthPolicyName)
-			return nil
-		}
-		if err := r.Update(ctx, existing); err != nil {
-			return fmt.Errorf("failed to update gateway-default-auth: %w", err)
-		}
-		log.Info("gateway-default-auth updated", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
-		return nil
+		log.Error(err, "failed to get legacy gateway-default-auth for cleanup (non-fatal)")
+		return
 	}
-
-	policy.SetLabels(map[string]string{
-		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-controller",
-		"app.kubernetes.io/component":  "default-policy",
-	})
-	if err := unstructured.SetNestedMap(policy.Object, spec, "spec"); err != nil {
-		return fmt.Errorf("failed to set gateway-default-auth spec: %w", err)
+	if !isManaged(existing) {
+		return
 	}
-	if err := r.Create(ctx, policy); err != nil {
-		if apierrors.IsAlreadyExists(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to create gateway-default-auth: %w", err)
+	if err := r.Delete(ctx, existing); err != nil && !apierrors.IsNotFound(err) {
+		log.Error(err, "failed to delete legacy gateway-default-auth (non-fatal)")
+		return
 	}
-	log.Info("restored gateway-default-auth (no remaining MaaSAuthPolicies)", "name", gatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
-	return nil
-}
-
-func (r *MaaSAuthPolicyReconciler) gatewayDefaultAuthSpec() map[string]any {
-	return map[string]any{
-		"targetRef": map[string]any{
-			"group": "gateway.networking.k8s.io",
-			"kind":  "Gateway",
-			"name":  r.GatewayName,
-		},
-		"defaults": map[string]any{
-			"when": []any{
-				map[string]any{
-					"predicate": celModelIdentityAvailable,
-				},
-			},
-			"rules": map[string]any{
-				"authentication": map[string]any{},
-				"authorization": map[string]any{
-					"deny-unconfigured-models": map[string]any{
-						"metrics":  false,
-						"priority": int64(0),
-						"patternMatching": map[string]any{
-							"patterns": []any{
-								map[string]any{
-									"operator": "eq",
-									"selector": "context.request.http.method",
-									"value":    "__deny_unconfigured_models__",
-								},
-							},
-						},
-					},
-				},
-			},
-		},
-	}
+	log.Info("deleted legacy gateway-default-auth (superseded by maas-gateway-auth)",
+		"name", legacyGatewayDefaultAuthPolicyName, "namespace", r.GatewayNamespace)
 }
 
 // discoverXAPIKeyNeeded lists ExternalModel CRs from inference.opendatahub.io/v1alpha1
@@ -2129,12 +2047,12 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
-	// On startup, ensure any existing gateway-default-auth has the correct
-	// spec (with when predicate). This handles upgrades from older controller
-	// versions that created the policy without management-endpoint exclusions.
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		startLog := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("phase", "startup")
-		return r.ensureGatewayDefaultAuthPolicy(ctx, startLog)
+		if err := r.ensureBaseGatewayAuthPolicy(ctx, startLog, nil, false, "", r.GatewayNamespace, r.GatewayName); err != nil {
+			startLog.Error(err, "failed to ensure base maas-gateway-auth on startup (non-fatal)")
+		}
+		return nil
 	})); err != nil {
 		return err
 	}

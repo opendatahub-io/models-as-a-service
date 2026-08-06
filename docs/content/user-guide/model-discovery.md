@@ -83,7 +83,7 @@ Each model in the `data` array contains:
 |-------|-------------|
 | `id` | Model identifier used in inference requests |
 | `kind` | Backend type: `LLMInferenceService` or `ExternalModel` |
-| `url` | Full endpoint URL for the model |
+| `url` | Path-based endpoint URL for the model (legacy). For body-based routing, use the gateway base URL with `/v1/chat/completions` instead (see [Inference](inference.md)). |
 | `ready` | Whether the model is currently available (`true`/`false`) |
 | `modelDetails.displayName` | Human-friendly model name |
 | `modelDetails.description` | Model description |
@@ -112,17 +112,42 @@ If a model doesn't appear in the list, check:
 
 ## Using Model Information
 
-### Get the Model URL
+### Make an Inference Request
 
-Extract the URL for a specific model:
+Use the model `id` with the gateway's body-based endpoint:
+
+```bash
+MODEL_NAME=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
+    -H "Authorization: Bearer ${API_KEY}" | \
+    jq -re '[.data[] | select(.ready==true)][0].id') || \
+    { echo "No ready models found"; exit 1; }
+
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}]}" \
+  "${MAAS_API_URL}/v1/chat/completions"
+```
+
+!!! tip "Model ID format"
+    For on-cluster models (LLMInferenceService), the `id` is a publisher ID like `publishers/llm/models/facebook/opt-125m`. For external models, it is typically the model name (e.g. `gpt-4o`). Always use the `id` from the API response.
+
+See [Inference](inference.md) for full examples including streaming and multi-turn conversations.
+
+### Get the Path-Based Model URL (Legacy)
+
+The `url` field provides a per-model endpoint for path-based routing:
 
 ```bash
 MODEL_URL=$(curl -s "${MAAS_API_URL}/maas-api/v1/models" \
     -H "Authorization: Bearer ${API_KEY}" | \
-    jq -r '.data[] | select(.id=="llama-2-7b-chat") | .url')
+    jq -re '[.data[] | select(.ready==true)][0].url') || \
+    { echo "No ready models found"; exit 1; }
 
 echo "Model URL: ${MODEL_URL}"
 ```
+
+See [Inference - Path-Based Routing](inference.md#path-based-routing-legacy) for details.
 
 ### Check Model Readiness
 

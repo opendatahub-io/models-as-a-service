@@ -70,32 +70,34 @@ Each API key is bound to one MaaSSubscription at creation time. `GET /v1/models`
 ```bash
 MODELS=$(curl -sS ${HOST}/maas-api/v1/models \
     -H "Content-Type: application/json" \
-    -H "Authorization: Bearer $API_KEY" | jq -r .) && \
+    -H "Authorization: Bearer ${API_KEY}" | jq -r .) && \
 echo $MODELS | jq . && \
-MODEL_NAME=$(echo $MODELS | jq -r '.data[0].id') && \
-MODEL_URL=$(echo $MODELS | jq -r '.data[0].url') && \
-echo "Model URL: $MODEL_URL"
+MODEL_NAME=$(echo $MODELS | jq -re '[.data[] | select(.ready==true)][0].id') && \
+echo "Model: $MODEL_NAME"
 ```
 
 ### 4. Test Model Inference Endpoint
 
-Send a request to the model’s OpenAI-compatible **chat completions** API (expect **200 OK**). This example uses **`POST /v1/chat/completions`** with a `messages` array. If your backend only implements **`/v1/completions`** (prompt-based) or another route, adjust the path and JSON body accordingly.
+Send a request to the OpenAI-compatible **chat completions** endpoint (expect **200 OK**). The gateway routes the request based on the `model` field in the body:
 
 ```bash
-curl -sS -H "Authorization: Bearer $API_KEY" \
+curl -sS -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/chat/completions" | jq
+  "${HOST}/v1/chat/completions" | jq
 ```
+
+!!! note "Legacy path-based endpoint"
+    You can also use the per-model `url` from the model listing response (e.g. `${MODEL_URL}/v1/chat/completions`). Both path-based and body-based endpoints are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ### 6. Test Authorization Enforcement
 
-Send a request to the model endpoint without a token (should get a 401 Unauthorized response):
+Send a request without a token (should get a 401 Unauthorized response):
 
 ```bash
 curl -sS -H "Content-Type: application/json" \
   -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
-  "${MODEL_URL}/v1/chat/completions" -v
+  "${HOST}/v1/chat/completions" -v
 ```
 
 ### 7. Test Rate Limiting
@@ -105,10 +107,10 @@ Send multiple requests to trigger rate limit (should get 200 OK followed by 429 
 ```bash
 for i in {1..16}; do
   curl -sS -o /dev/null -w "%{http_code}\n" \
-    -H "Authorization: Bearer $API_KEY" \
+    -H "Authorization: Bearer ${API_KEY}" \
     -H "Content-Type: application/json" \
     -d "{\"model\": \"${MODEL_NAME}\", \"messages\": [{\"role\": \"user\", \"content\": \"Hello\"}], \"max_tokens\": 50}" \
-    "${MODEL_URL}/v1/chat/completions"
+    "${HOST}/v1/chat/completions"
 done
 ```
 

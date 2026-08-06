@@ -66,6 +66,7 @@ from test_helper import (
     TRLP_TEST_MODEL_REF,                                                                                                                                                              
     TRLP_TEST_MODEL_PATH,
     TRLP_TEST_MODEL_ID,
+    DISTINCT_MODEL_REF,
     UNCONFIGURED_MODEL_PATH,
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
@@ -2125,14 +2126,17 @@ class TestStatusReporting:
             _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
             sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
 
-            # Create a temporary model
-            _create_test_maas_model(model_name, llmis_name=MODEL_REF, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            # Create a temporary model backed by the distinct-tier LLMIS fixture.
+            # Do not reuse MODEL_REF (facebook-opt-125m-simulated): a second MaaSModelRef
+            # for that LLMIS stays Pending because the canonical ref already owns the route.
+            _create_test_maas_model(model_name, llmis_name=DISTINCT_MODEL_REF, namespace=MODEL_NAMESPACE)
 
-            # Create auth policy and subscription for the model
+            # Create auth policy and subscription for the model (governance pairing required
+            # before the MaaSModelRef can reach Ready).
             _create_test_auth_policy(auth_name, model_name, users=[sa_user])
             _create_test_subscription(subscription_name, model_name, users=[sa_user])
 
+            _wait_for_maas_model_ready(model_name, namespace=MODEL_NAMESPACE)
             _wait_for_maas_auth_policy_phase(auth_name)
             _wait_for_maas_subscription_phase(subscription_name)
 

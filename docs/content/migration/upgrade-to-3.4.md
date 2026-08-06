@@ -562,6 +562,9 @@ kubectl get tokenratelimitpolicy -n llm
 
 ## Phase 6: Validation
 
+!!! note "Body-based routing"
+    The curl examples in this section use path-based URLs for continuity with the migration context. For new integrations, use the body-based endpoint (`https://${HOST}/v1/chat/completions` with the model in the request body). See [Inference](../user-guide/inference.md) for details.
+
 ### 6.1 Test Authorized Access
 
 ```bash
