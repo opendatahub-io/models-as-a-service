@@ -989,6 +989,9 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
 					},
 					Volumes: []corev1.Volume{
 						{
@@ -1045,6 +1048,9 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 								RunAsNonRoot:             boolPtr(true),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
 						},
