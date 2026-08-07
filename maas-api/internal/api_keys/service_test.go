@@ -1267,7 +1267,6 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 }
 
 func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
-	//nolint:unqueryvet // False positive - not a SQL query
 	return m.Select(nil, "", "", "")
 }
 

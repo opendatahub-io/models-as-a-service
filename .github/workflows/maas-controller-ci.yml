@@ -53,7 +53,7 @@ jobs:
           cache: true
           cache-dependency-path: ${{ env.PROJECT_DIR }}/go.sum
 
-      - name: Run govulncheck (non-blocking until go-toolset ships >= 1.25.12)
+      - name: "Run govulncheck (non-blocking: GO-2026-5940 in kedacore/keda@v2.18.3 fixed in v2.20.0, blocked by controller-runtime pin)"
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.6.0 ./... || true
 
   test:
