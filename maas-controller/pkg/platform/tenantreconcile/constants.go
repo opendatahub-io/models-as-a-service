@@ -78,6 +78,7 @@ const (
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
+	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
 
 	// Base IPP resource names in kustomize manifests. Per-tenant deployments suffix
 	// these with "-{tenantID}" (default tenant keeps unsuffixed names).
@@ -231,6 +232,10 @@ func MaaSAPIServingCertName(tenantID string) string {
 
 func PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingReaderClusterRoleBindingName, tenantID)
+}
+
+func UsageLogsEnvoyFilterName(tenantID string) string {
+	return resourceNameForTenant(baseUsageLogsEnvoyFilterName, tenantID)
 }
 
 // TenantIdentifierFor extracts the tenant identifier from a tenant config object.

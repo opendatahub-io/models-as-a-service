@@ -1173,15 +1173,16 @@ func main() {
 	}
 	aitenantDeletionTimeout := parseAITenantDeletionTimeout()
 	if err := (&maas.AITenantReconciler{
-		Client:            mgr.GetClient(),
-		Scheme:            mgr.GetScheme(),
-		APIReader:         mgr.GetAPIReader(),
-		AppNamespace:      infraNamespace,
-		TenantNamespace:   maasSubscriptionNamespace,
-		AITenantNamespace: aitenantNamespace,
-		GatewayName:       gatewayName,
-		GatewayNamespace:  gatewayNamespace,
-		DeletionTimeout:   aitenantDeletionTimeout,
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		APIReader:           mgr.GetAPIReader(),
+		AppNamespace:        infraNamespace,
+		TenantNamespace:     maasSubscriptionNamespace,
+		AITenantNamespace:   aitenantNamespace,
+		GatewayName:         gatewayName,
+		GatewayNamespace:    gatewayNamespace,
+		DeletionTimeout:     aitenantDeletionTimeout,
+		MonitoringNamespace: monitoringNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "AITenant")
 		os.Exit(1)
