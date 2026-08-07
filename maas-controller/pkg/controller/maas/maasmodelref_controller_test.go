@@ -33,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -40,6 +41,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1446,5 +1448,192 @@ func TestRegisterWatchWhenCRDAppears_OnlyFiredForMatchingCRD(t *testing.T) {
 
 	if called != 1 {
 		t.Errorf("makeSource called %d times, want 1", called)
+	}
+}
+
+// TestCheckModelIdentityConflict_AliasNotResolved verifies that when
+// ResolvedModelAlias is blank, the condition is set to Unknown.
+func TestCheckModelIdentityConflict_AliasNotResolved(t *testing.T) {
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "test-model", Namespace: "default", Generation: 1},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
+
+	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionUnknown {
+		t.Errorf("expected Unknown, got %v", cond.Status)
+	}
+	if cond.Reason != "AliasNotResolved" {
+		t.Errorf("expected reason AliasNotResolved, got %q", cond.Reason)
+	}
+	if cond.ObservedGeneration != 1 {
+		t.Errorf("expected observedGeneration 1, got %d", cond.ObservedGeneration)
+	}
+}
+
+// TestCheckModelIdentityConflict_NoConflicts verifies that when the alias is
+// resolved and unique, the condition is True.
+func TestCheckModelIdentityConflict_NoConflicts(t *testing.T) {
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: "publishers/default/models/unique-model"},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(model).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
+
+	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected True, got %v", cond.Status)
+	}
+	if cond.Reason != "UniqueIdentity" {
+		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	}
+}
+
+// TestCheckModelIdentityConflict_ConflictDetected verifies that when two
+// MaaSModelRefs share the same ResolvedModelAlias, the condition is False.
+func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
+	const sharedAlias = "publishers/default/models/shared-model"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: sharedAlias},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: "default"},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: sharedAlias},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
+
+	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionFalse {
+		t.Errorf("expected False, got %v", cond.Status)
+	}
+	if cond.Reason != "ModelNameConflict" {
+		t.Errorf("expected reason ModelNameConflict, got %q", cond.Reason)
+	}
+}
+
+func findCondition(conditions []metav1.Condition, condType string) *metav1.Condition {
+	for i := range conditions {
+		if conditions[i].Type == condType {
+			return &conditions[i]
+		}
+	}
+	return nil
+}
+
+// fakeQueue collects enqueued requests without rate-limiting.
+type fakeQueue struct {
+	workqueue.TypedRateLimitingInterface[reconcile.Request]
+	items []reconcile.Request
+}
+
+func (q *fakeQueue) Add(item reconcile.Request) { q.items = append(q.items, item) }
+
+func TestEnqueueSiblingsWithAlias(t *testing.T) {
+	const (
+		aliasA = "publishers/default/models/a"
+		aliasB = "publishers/default/models/b"
+		ns     = "default"
+	)
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: ns},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: aliasA},
+	}
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: ns},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: aliasA},
+	}
+	modelC := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-c", Namespace: ns},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: aliasB},
+	}
+	modelNoAlias := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-none", Namespace: ns},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB, modelC, modelNoAlias).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+
+	tests := []struct {
+		name     string
+		changed  *maasv1alpha1.MaaSModelRef
+		oldAlias string
+		want     []string
+	}{
+		{
+			name:    "create with aliasA enqueues only model-b",
+			changed: modelA,
+			want:    []string{"model-b"},
+		},
+		{
+			name:     "alias change from A to B enqueues model-b (old) and model-c (new)",
+			changed:  &maasv1alpha1.MaaSModelRef{ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: ns}, Status: maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: aliasB}},
+			oldAlias: aliasA,
+			want:     []string{"model-b", "model-c"},
+		},
+		{
+			name:    "empty alias skips enqueue",
+			changed: modelNoAlias,
+			want:    nil,
+		},
+		{
+			name:    "create with aliasB enqueues only model-c",
+			changed: modelC,
+			want:    nil, // model-c is the changed object itself — no other aliasB siblings
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			q := &fakeQueue{}
+			r.enqueueSiblingsWithAlias(context.Background(), tc.changed, q, tc.oldAlias)
+			var got []string
+			for _, req := range q.items {
+				got = append(got, req.Name)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("enqueued %v, want %v", got, tc.want)
+			}
+			for i, name := range tc.want {
+				if got[i] != name {
+					t.Errorf("enqueued[%d] = %q, want %q", i, got[i], name)
+				}
+			}
+		})
 	}
 }

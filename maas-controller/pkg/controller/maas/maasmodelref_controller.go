@@ -527,9 +527,28 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// current: a newly created/deleted sibling, or one whose resolved alias
 		// changed, can introduce or resolve a conflict for every other model in
 		// the namespace even though those models' own specs didn't change.
-		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
-			r.mapModelRefSiblings,
-		), builder.WithPredicates(resolvedModelAliasChangedPredicate{}))
+		//
+		// Only siblings sharing the affected alias are enqueued (not the entire
+		// namespace) to avoid O(N²) fan-out in namespaces with many models.
+		Watches(&maasv1alpha1.MaaSModelRef{}, &handler.Funcs{
+			CreateFunc: func(ctx context.Context, e event.CreateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				if m, ok := e.Object.(*maasv1alpha1.MaaSModelRef); ok {
+					r.enqueueSiblingsWithAlias(ctx, m, q, "")
+				}
+			},
+			UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				oldM, ok1 := e.ObjectOld.(*maasv1alpha1.MaaSModelRef)
+				newM, ok2 := e.ObjectNew.(*maasv1alpha1.MaaSModelRef)
+				if ok1 && ok2 && oldM.Status.ResolvedModelAlias != newM.Status.ResolvedModelAlias {
+					r.enqueueSiblingsWithAlias(ctx, newM, q, oldM.Status.ResolvedModelAlias)
+				}
+			},
+			DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				if m, ok := e.Object.(*maasv1alpha1.MaaSModelRef); ok {
+					r.enqueueSiblingsWithAlias(ctx, m, q, "")
+				}
+			},
+		})
 
 	const llmisvcCRD = "llminferenceservices.serving.kserve.io"
 	llmisvcExists := crdExists(ctx, mgr.GetAPIReader(), llmisvcCRD)
@@ -625,30 +644,32 @@ func (r *MaaSModelRefReconciler) mapHTTPRouteToMaaSModelRefs(ctx context.Context
 	return requests
 }
 
-// mapModelRefSiblings returns reconcile requests for every other MaaSModelRef
-// in the same namespace as the changed one, so model-identity-conflict
-// detection re-evaluates when a sibling's resolved alias appears, disappears,
-// or changes.
-func (r *MaaSModelRefReconciler) mapModelRefSiblings(ctx context.Context, obj client.Object) []reconcile.Request {
-	changed, ok := obj.(*maasv1alpha1.MaaSModelRef)
-	if !ok {
-		return nil
+// enqueueSiblingsWithAlias enqueues only the sibling MaaSModelRefs whose
+// ResolvedModelAlias matches the current alias of the changed object or, on an
+// update, the previous alias (so siblings that previously conflicted can clear
+// their condition). Empty aliases are skipped — they cannot produce collisions.
+func (r *MaaSModelRefReconciler) enqueueSiblingsWithAlias(ctx context.Context, changed *maasv1alpha1.MaaSModelRef, q workqueue.TypedRateLimitingInterface[reconcile.Request], oldAlias string) {
+	if changed == nil {
+		return
+	}
+	newAlias := changed.Status.ResolvedModelAlias
+	if newAlias == "" && oldAlias == "" {
+		return
 	}
 	var siblings maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &siblings, client.InNamespace(changed.Namespace)); err != nil {
 		logr.FromContextOrDiscard(ctx).Error(err, "failed to list sibling MaaSModelRefs", "namespace", changed.Namespace)
-		return nil
+		return
 	}
-	var requests []reconcile.Request
 	for _, m := range siblings.Items {
 		if m.Name == changed.Name {
 			continue
 		}
-		requests = append(requests, reconcile.Request{
-			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
-		})
+		if (newAlias != "" && m.Status.ResolvedModelAlias == newAlias) ||
+			(oldAlias != "" && m.Status.ResolvedModelAlias == oldAlias) {
+			q.Add(reconcile.Request{NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace}})
+		}
 	}
-	return requests
 }
 
 // mapMaaSSubscriptionToMaaSModelRefs returns reconcile requests for all MaaSModelRefs

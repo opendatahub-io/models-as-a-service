@@ -26,7 +26,6 @@ import (
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -78,6 +77,17 @@ func (r *MaaSModelRefReconciler) findModelAliasConflicts(ctx context.Context, mo
 // visible via `kubectl describe`/`oc get events` without spamming an event on
 // every reconcile.
 func (r *MaaSModelRefReconciler) checkModelIdentityConflict(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) {
+	if model.Status.ResolvedModelAlias == "" {
+		apimeta.SetStatusCondition(&model.Status.Conditions, metav1.Condition{
+			Type:               ConditionModelIdentityUnique,
+			Status:             metav1.ConditionUnknown,
+			Reason:             "AliasNotResolved",
+			Message:            "Model alias has not been resolved yet; conflict status is unknown",
+			ObservedGeneration: model.GetGeneration(),
+		})
+		return
+	}
+
 	prev := apimeta.FindStatusCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 
 	conflicts, err := r.findModelAliasConflicts(ctx, model)
@@ -158,26 +168,4 @@ func pluralS(n int) string {
 		return ""
 	}
 	return "s"
-}
-
-// resolvedModelAliasChangedPredicate fires on Create/Delete of any MaaSModelRef
-// (a new sibling may introduce or remove a conflict) and on Update only when
-// status.resolvedModelAlias changed — this keeps conflict detection reactive
-// without re-triggering siblings on unrelated status churn (e.g. endpoint or
-// runtime-readiness changes).
-type resolvedModelAliasChangedPredicate struct{}
-
-func (resolvedModelAliasChangedPredicate) Create(event.CreateEvent) bool   { return true }
-func (resolvedModelAliasChangedPredicate) Delete(event.DeleteEvent) bool   { return true }
-func (resolvedModelAliasChangedPredicate) Generic(event.GenericEvent) bool { return false }
-func (resolvedModelAliasChangedPredicate) Update(e event.UpdateEvent) bool {
-	oldModel, ok := e.ObjectOld.(*maasv1alpha1.MaaSModelRef)
-	if !ok {
-		return true
-	}
-	newModel, ok := e.ObjectNew.(*maasv1alpha1.MaaSModelRef)
-	if !ok {
-		return true
-	}
-	return oldModel.Status.ResolvedModelAlias != newModel.Status.ResolvedModelAlias
 }
