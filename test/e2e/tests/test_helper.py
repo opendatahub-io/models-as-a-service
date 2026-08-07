@@ -35,9 +35,9 @@ Environment variables (all optional unless noted):
   - E2E_UNCONFIGURED_MODEL_PATH: Path to unconfigured model (default: /llm/e2e-unconfigured-facebook-opt-125m-simulated)
   - E2E_UNCONFIGURED_MODEL_NAME: Unconfigured served model name (default: test/e2e-unconfigured-model)
   - E2E_DISTINCT_MODEL_REF: First distinct model ref (default: e2e-distinct-simulated)
-  - E2E_DISTINCT_MODEL_ID: Canonical BBR model ID for first distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model)
+  - E2E_DISTINCT_MODEL_ID: Model ID for first distinct model as returned by /v1/models (default: matches DISTINCT_MODEL_REF)
   - E2E_DISTINCT_MODEL_2_REF: Second distinct model ref (default: e2e-distinct-2-simulated)
-  - E2E_DISTINCT_MODEL_2_ID: Canonical BBR model ID for second distinct model (default: publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2)
+  - E2E_DISTINCT_MODEL_2_ID: Model ID for second distinct model as returned by /v1/models (default: matches DISTINCT_MODEL_2_REF)
   - E2E_TRLP_TEST_MODEL_REF: TRLP test model ref (default: e2e-trlp-test-simulated)                                                                                                   
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
@@ -72,9 +72,9 @@ MODEL_PATH = os.environ.get("E2E_MODEL_PATH", "/llm/facebook-opt-125m-simulated"
 MODEL_NAME = os.environ.get("E2E_MODEL_NAME", "facebook/opt-125m")
 MODEL_REF = os.environ.get("E2E_MODEL_REF", "facebook-opt-125m-simulated")
 MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
-# Canonical BBR model ID as returned by GET /v1/models (publishers/{namespace}/models/{spec.model.name}).
-# Clients must use this form in the "model" field when targeting the BBR gateway endpoint.
-MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODEL_NAMESPACE}/models/{MODEL_NAME}")
+# Model ID as returned by GET /v1/models (spec.modelRef.name from the MaaSModelRef).
+# This is the LLMIS name that the MaaSModelRef references.
+MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", MODEL_REF)
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
@@ -122,7 +122,7 @@ PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m
 PREMIUM_MODEL_PATH = os.environ.get("E2E_PREMIUM_MODEL_PATH", "/llm/premium-simulated-simulated-premium")
 PREMIUM_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_PREMIUM_MODEL_CANONICAL_ID",
-    f"publishers/{MODEL_NAMESPACE}/models/{PREMIUM_MODEL_NAME}",
+    PREMIUM_MODEL_REF,
 )
 PREMIUM_SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_PREMIUM_SIMULATOR_SUBSCRIPTION", "premium-simulator-subscription")
 SIMULATOR_ACCESS_POLICY = os.environ.get("E2E_SIMULATOR_ACCESS_POLICY", "simulator-access")
@@ -130,10 +130,10 @@ UNCONFIGURED_MODEL_REF = os.environ.get("E2E_UNCONFIGURED_MODEL_REF", "e2e-uncon
 UNCONFIGURED_MODEL_PATH = os.environ.get("E2E_UNCONFIGURED_MODEL_PATH", "/llm/e2e-unconfigured-facebook-opt-125m-simulated")
 UNCONFIGURED_MODEL_NAME = os.environ.get("E2E_UNCONFIGURED_MODEL_NAME", "test/e2e-unconfigured-model")
 DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simulated")
-# Canonical BBR form: publishers/{namespace}/models/{spec.model.name}
-DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
+# Model ID as returned by /v1/models (= spec.modelRef.name = LLMIS name)
+DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", DISTINCT_MODEL_REF)
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
-DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2")
+DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", DISTINCT_MODEL_2_REF)
 TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
 TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
 TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
