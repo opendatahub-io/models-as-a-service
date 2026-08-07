@@ -1336,7 +1336,9 @@ def _create_llmis(
         namespace: Namespace to create LLMIS in
         gateway_name: Gateway name to route through
         gateway_namespace: Gateway namespace (default: openshift-ingress)
-        model_name: Served model ID (spec.model.name and simulator --model)
+        model_name: spec.model.name (the model identity used for BBR/ResolvedModelAlias).
+            Defaults to "facebook/opt-125m"; override to test model-identity-collision
+            scenarios where two LLMISs intentionally share a model name.
     """
     _apply_cr({
         "apiVersion": "serving.kserve.io/v1alpha1",
