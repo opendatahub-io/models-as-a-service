@@ -2386,6 +2386,12 @@ func TestMaaSAuthPolicyReconciler_PublisherIDModelAccess(t *testing.T) {
 			t.Errorf("model_access should contain publisher ID key %q, rego:\n%s", publisherID, rego)
 		}
 	})
+
+	t.Run("model_access contains bare CRD name key for BBR short-name headers", func(t *testing.T) {
+		if !strings.Contains(rego, `"`+modelRefName+`"`) {
+			t.Errorf("model_access should contain bare CRD name key %q for BBR, rego:\n%s", modelRefName, rego)
+		}
+	})
 }
 
 // TestMaaSAuthPolicyReconciler_ExternalModelAccess verifies that the gateway

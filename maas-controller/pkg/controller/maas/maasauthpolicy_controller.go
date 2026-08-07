@@ -1547,15 +1547,42 @@ func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.C
 
 // resolveHeaderModelKeys returns alternate model_access keys that match the value
 // ipp-pre sets in the X-Gateway-Model-Name header for body-based routing.
-// Reads MaaSModelRef.status.resolvedModelAlias, which the modelref controller
-// populates from the backing CRD (publisher ID for LLMISvc, targetModel for ExternalModel).
+// Includes the bare MaaSModelRef name so that BBR short-name headers
+// (e.g. "llama-3-1-8b-instruct") resolve against the model_access map,
+// unless another MaaSModelRef with the same name exists in a different namespace
+// (ambiguous — bare name suppressed to avoid incorrect authorization).
+// Also includes MaaSModelRef.status.resolvedModelAlias when populated (publisher
+// ID for LLMISvc, targetModel for ExternalModel).
 func (r *MaaSAuthPolicyReconciler) resolveHeaderModelKeys(ctx context.Context, ref maasv1alpha1.ModelRef) []string {
 	modelRef := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, modelRef); err != nil {
+		// Lookup failed — return empty to avoid unverified bare-name aliases.
 		return nil
 	}
-	if modelRef.Status.ResolvedModelAlias == "" {
+
+	// Check if another MaaSModelRef with the same name exists in a different
+	// namespace. If so, suppress the bare name to avoid ambiguous authorization.
+	bareNameSafe := true
+	var allRefs maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &allRefs); err == nil {
+		for i := range allRefs.Items {
+			if allRefs.Items[i].Name == ref.Name && allRefs.Items[i].Namespace != ref.Namespace {
+				bareNameSafe = false
+				break
+			}
+		}
+	} else {
+		bareNameSafe = false
+	}
+
+	if modelRef.Status.ResolvedModelAlias == "" || modelRef.Status.ResolvedModelAlias == ref.Name {
+		if bareNameSafe {
+			return []string{ref.Name}
+		}
 		return nil
+	}
+	if bareNameSafe {
+		return []string{modelRef.Status.ResolvedModelAlias, ref.Name}
 	}
 	return []string{modelRef.Status.ResolvedModelAlias}
 }

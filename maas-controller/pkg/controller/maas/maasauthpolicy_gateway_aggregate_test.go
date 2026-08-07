@@ -40,10 +40,20 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 	)
 	policyOtherNamespace.Spec.Subjects.Users = []string{"user-z"}
 
+	// MaaSModelRef objects are required for resolveHeaderModelKeys to emit bare-name aliases.
+	modelRefA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "llm"},
+		Spec:       maasv1alpha1.MaaSModelSpec{ModelRef: maasv1alpha1.ModelReference{Kind: "LLMInferenceService", Name: "model-a"}},
+	}
+	modelRefB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-b", Namespace: "llm"},
+		Spec:       maasv1alpha1.MaaSModelSpec{ModelRef: maasv1alpha1.ModelReference{Kind: "LLMInferenceService", Name: "model-b"}},
+	}
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(policyA, policyB, policyOtherNamespace).
+		WithObjects(policyA, policyB, policyOtherNamespace, modelRefA, modelRefB).
 		Build()
 
 	r := &MaaSAuthPolicyReconciler{
@@ -59,8 +69,9 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 		t.Fatalf("aggregateModelSubjectAllowlists returned error: %v", err)
 	}
 
-	if len(allowlists) != 2 {
-		t.Fatalf("expected 2 model allowlist entries, got %d", len(allowlists))
+	// 4 entries: canonical "llm/model-a", "llm/model-b" + bare-name aliases "model-a", "model-b"
+	if len(allowlists) != 4 {
+		t.Fatalf("expected 4 model allowlist entries, got %d: %v", len(allowlists), keysOf(allowlists))
 	}
 
 	modelA := allowlists["llm/model-a"]
@@ -69,6 +80,15 @@ func TestAggregateModelSubjectAllowlistsAndGatewaySpec(t *testing.T) {
 	}
 	if got, want := strings.Join(modelA.Users, ","), "user-a,user-b"; got != want {
 		t.Fatalf("model-a users = %q, want %q", got, want)
+	}
+
+	// BBR bare-name alias must carry the same allowlist as the canonical key.
+	bareA := allowlists["model-a"]
+	if got, want := strings.Join(bareA.Groups, ","), "group-a,group-b"; got != want {
+		t.Fatalf("bare model-a groups = %q, want %q", got, want)
+	}
+	if got, want := strings.Join(bareA.Users, ","), "user-a,user-b"; got != want {
+		t.Fatalf("bare model-a users = %q, want %q", got, want)
 	}
 
 	modelB := allowlists["llm/model-b"]
@@ -160,6 +180,11 @@ func TestAggregateModelSubjectAllowlistsModelNameAliases(t *testing.T) {
 		t.Fatalf("aggregateModelSubjectAllowlists returned error: %v", err)
 	}
 
+	// 3 entries: canonical "llm/model-a", resolved alias "claude-opus-4-8", bare name "model-a"
+	if len(allowlists) != 3 {
+		t.Fatalf("expected 3 model allowlist entries, got %d: %v", len(allowlists), keysOf(allowlists))
+	}
+
 	alias, ok := allowlists["claude-opus-4-8"]
 	if !ok {
 		t.Fatalf("expected alias entry for claude-opus-4-8, got keys: %v", keysOf(allowlists))
@@ -171,9 +196,109 @@ func TestAggregateModelSubjectAllowlistsModelNameAliases(t *testing.T) {
 		t.Fatalf("alias users = %q, want %q", got, want)
 	}
 
+	// BBR bare-name alias must also be present so short X-Gateway-Model-Name headers work.
+	bare, ok := allowlists["model-a"]
+	if !ok {
+		t.Fatalf("expected bare-name entry for model-a, got keys: %v", keysOf(allowlists))
+	}
+	if got, want := strings.Join(bare.Users, ","), "user-a"; got != want {
+		t.Fatalf("bare model-a users = %q, want %q", got, want)
+	}
+
 	// Canonical namespace/name entry must be unaffected by aliasing.
 	if got, want := strings.Join(allowlists["llm/model-a"].Users, ","), "user-a"; got != want {
 		t.Fatalf("llm/model-a users = %q, want %q", got, want)
+	}
+}
+
+func TestAggregateModelSubjectAllowlistsSuppressesBareNameOnCollision(t *testing.T) {
+	const policyNamespace = "models-as-a-service"
+
+	// Two policies referencing models with the same CRD name but different namespaces.
+	policyA := newMaaSAuthPolicy(
+		"policy-a",
+		policyNamespace,
+		"group-a",
+		maasv1alpha1.ModelRef{Name: "shared-model", Namespace: "llm"},
+	)
+	policyA.Spec.Subjects.Users = []string{"user-a"}
+
+	policyB := newMaaSAuthPolicy(
+		"policy-b",
+		policyNamespace,
+		"group-b",
+		maasv1alpha1.ModelRef{Name: "shared-model", Namespace: "other-ns"},
+	)
+	policyB.Spec.Subjects.Users = []string{"user-b"}
+
+	// Two MaaSModelRefs with the same name in different namespaces.
+	modelRefA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-model", Namespace: "llm"},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "LLMInferenceService", Name: "shared-model"},
+		},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: "alias-a",
+		},
+	}
+	modelRefB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "shared-model", Namespace: "other-ns"},
+		Spec: maasv1alpha1.MaaSModelSpec{
+			ModelRef: maasv1alpha1.ModelReference{Kind: "LLMInferenceService", Name: "shared-model"},
+		},
+		Status: maasv1alpha1.MaaSModelStatus{
+			ResolvedModelAlias: "alias-b",
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(policyA, policyB, modelRefA, modelRefB).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "opendatahub",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+	}
+
+	allowlists, err := r.aggregateModelSubjectAllowlists(context.Background(), policyNamespace)
+	if err != nil {
+		t.Fatalf("aggregateModelSubjectAllowlists returned error: %v", err)
+	}
+
+	// Bare-name key "shared-model" must NOT be present (collision suppressed).
+	if _, ok := allowlists["shared-model"]; ok {
+		t.Fatalf("bare-name key 'shared-model' should be suppressed when name collides across namespaces, got keys: %v", keysOf(allowlists))
+	}
+
+	// Canonical namespace/name keys must still be present.
+	if _, ok := allowlists["llm/shared-model"]; !ok {
+		t.Fatalf("expected canonical key 'llm/shared-model', got keys: %v", keysOf(allowlists))
+	}
+	if _, ok := allowlists["other-ns/shared-model"]; !ok {
+		t.Fatalf("expected canonical key 'other-ns/shared-model', got keys: %v", keysOf(allowlists))
+	}
+
+	// Resolved aliases should still be present.
+	if _, ok := allowlists["alias-a"]; !ok {
+		t.Fatalf("expected resolved alias 'alias-a', got keys: %v", keysOf(allowlists))
+	}
+	if _, ok := allowlists["alias-b"]; !ok {
+		t.Fatalf("expected resolved alias 'alias-b', got keys: %v", keysOf(allowlists))
+	}
+
+	// Verify correct subjects on canonical keys.
+	llmEntry := allowlists["llm/shared-model"]
+	if got, want := strings.Join(llmEntry.Users, ","), "user-a"; got != want {
+		t.Fatalf("llm/shared-model users = %q, want %q", got, want)
+	}
+	otherEntry := allowlists["other-ns/shared-model"]
+	if got, want := strings.Join(otherEntry.Users, ","), "user-b"; got != want {
+		t.Fatalf("other-ns/shared-model users = %q, want %q", got, want)
 	}
 }
 

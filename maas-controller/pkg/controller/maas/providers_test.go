@@ -56,6 +56,7 @@ func testRESTMapper() apimeta.RESTMapper {
 	m := apimeta.NewDefaultRESTMapper(nil)
 	ns := nsRestScope{}
 	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModel"}, ns)
+	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSModelRef"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSAuthPolicy"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "MaaSSubscription"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "Gateway"}, ns)

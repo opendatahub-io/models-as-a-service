@@ -1290,6 +1290,70 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 					t.Errorf("ResolvedModel = %q, want %q", result.ResolvedModel, tc.canonicalRef)
 				}
 			})
+
+			t.Run("bare CRD name resolves to MaaSModelRef identity for BBR short names", func(t *testing.T) {
+				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+				result, err := selector.Select([]string{"g1"}, "", "", tc.modelName)
+				if err != nil {
+					t.Fatalf("Select: %v", err)
+				}
+				if result.ResolvedModel != tc.canonicalRef {
+					t.Errorf("ResolvedModel = %q, want canonical %q", result.ResolvedModel, tc.canonicalRef)
+				}
+			})
 		})
+	}
+}
+
+func TestSelector_AmbiguousBareNameNotResolved(t *testing.T) {
+	log := logger.New(false)
+
+	// Two MaaSModelRefs with the same CRD name in different namespaces.
+	modelRefA := createMaaSModelRef("shared-model", "llm", "LLMInferenceService")
+	modelRefB := createMaaSModelRef("shared-model", "other-ns", "LLMInferenceService")
+
+	// Subscription that includes the model in namespace "llm".
+	sub := createSubscriptionWithModelRefs("test-sub", []string{"g1"}, []map[string]any{
+		{"name": "shared-model", "namespace": "llm"},
+	})
+
+	selector := subscription.NewSelector(
+		log,
+		&fakeLister{subscriptions: []*unstructured.Unstructured{sub}},
+		&fakeModelLister{items: []*unstructured.Unstructured{modelRefA, modelRefB}},
+		nil,
+	)
+
+	// The bare name "shared-model" is ambiguous (exists in both "llm" and "other-ns").
+	// resolveModelAlias should NOT resolve it — fail closed.
+	// findModelRef still matches by bare CRD name so Select succeeds,
+	// but ResolvedModel must remain as the unresolved bare name.
+	//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+	result, err := selector.Select([]string{"g1"}, "", "", "shared-model")
+	if err != nil {
+		t.Fatalf("Select: %v", err)
+	}
+	if result.ResolvedModel != "shared-model" {
+		t.Errorf("ResolvedModel = %q, want unresolved bare name %q", result.ResolvedModel, "shared-model")
+	}
+
+	// Verify that a unique bare name IS resolved to canonical form.
+	modelRefUnique := createMaaSModelRef("unique-model", "llm", "LLMInferenceService")
+	subUnique := createSubscriptionWithModelRefs("unique-sub", []string{"g1"}, []map[string]any{
+		{"name": "unique-model", "namespace": "llm"},
+	})
+	selectorUnique := subscription.NewSelector(
+		log,
+		&fakeLister{subscriptions: []*unstructured.Unstructured{subUnique}},
+		&fakeModelLister{items: []*unstructured.Unstructured{modelRefUnique}},
+		nil,
+	)
+	//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+	resultUnique, err := selectorUnique.Select([]string{"g1"}, "", "", "unique-model")
+	if err != nil {
+		t.Fatalf("Select (unique): %v", err)
+	}
+	if resultUnique.ResolvedModel != "llm/unique-model" {
+		t.Errorf("ResolvedModel = %q, want canonical %q", resultUnique.ResolvedModel, "llm/unique-model")
 	}
 }

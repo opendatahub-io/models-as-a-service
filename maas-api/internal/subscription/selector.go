@@ -76,9 +76,12 @@ func (s *Selector) buildModelIndex() map[string]*unstructured.Unstructured {
 	return index
 }
 
-// resolveModelAlias maps a body-based-routing model identity (e.g. publisher ID
-// or targetModel) back to canonical "namespace/name" using MaaSModelRef
-// status.resolvedModelAlias. Returns the input unchanged when no alias matches.
+// resolveModelAlias maps a body-based-routing model identity back to canonical
+// "namespace/name". Checks two forms:
+//  1. status.resolvedModelAlias (publisher ID for LLMISvc, targetModel for ExternalModel)
+//  2. Bare MaaSModelRef CRD name (short name from BBR X-Gateway-Model-Name header)
+//
+// Returns the input unchanged when no match is found.
 func (s *Selector) resolveModelAlias(requestedModel string) string {
 	if s.modelLister == nil || requestedModel == "" {
 		return requestedModel
@@ -91,6 +94,26 @@ func (s *Selector) resolveModelAlias(requestedModel string) string {
 		alias, found, _ := unstructured.NestedString(u.Object, "status", "resolvedModelAlias")
 		if found && alias == requestedModel {
 			return u.GetNamespace() + "/" + u.GetName()
+		}
+	}
+	// Also resolve bare MaaSModelRef CRD names so BBR short-name headers
+	// (e.g. "llama-3-1-8b-instruct") map to canonical "namespace/name".
+	// When multiple MaaSModelRefs share the same name across namespaces,
+	// return the input unchanged (fail closed — ambiguous name).
+	if !strings.Contains(requestedModel, "/") {
+		var match *unstructured.Unstructured
+		ambiguous := false
+		for _, u := range items {
+			if u.GetName() == requestedModel {
+				if match != nil {
+					ambiguous = true
+					break
+				}
+				match = u
+			}
+		}
+		if match != nil && !ambiguous {
+			return match.GetNamespace() + "/" + match.GetName()
 		}
 	}
 	return requestedModel
