@@ -75,7 +75,7 @@ spec:
               name: usage-logs-all
             labelName: model
             matchers:
-              - '{service_name="models-as-a-service", model!="-"}'
+              - '{service_name="models-as-a-service", model!="-", subscription!="-"}'
     - kind: ListVariable
       spec:
         name: view_by
@@ -343,6 +343,13 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "value #4"
+                header: "Failed requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -356,8 +363,13 @@ spec:
                     sum by (user_id, model, subscription) (sum_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user"
+                    | user_id!="-" | user_id=~"$user"
                     | unwrap tokens_total [$__range]))
+                    or
+                    (sum by (user_id, model, subscription) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="error"}
+                    | user_id!="-" | user_id=~"$user" [$__range])) * 0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -370,7 +382,12 @@ spec:
                     sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id!="-" | user_id=~"$user" [$__range]))
+                    or
+                    (sum by (user_id, model, subscription) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="error"}
+                    | user_id!="-" | user_id=~"$user" [$__range])) * 0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -383,12 +400,35 @@ spec:
                     sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id!="-" | user_id=~"$user" [$__range]))
                     or
                     (sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range])) * 0)
+                    | user_id!="-" | user_id=~"$user" [$__range])) * 0)
+                    or
+                    (sum by (user_id, model, subscription) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="error"}
+                    | user_id!="-" | user_id=~"$user" [$__range])) * 0)
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-all
+                  query: >-
+                    sum by (user_id, model, subscription) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="error"}
+                    | user_id!="-" | user_id=~"$user" [$__range]))
+                    or
+                    (sum by (user_id, model, subscription) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | user_id!="-" | user_id=~"$user" [$__range])) * 0)
 
   layouts:
     - kind: Grid

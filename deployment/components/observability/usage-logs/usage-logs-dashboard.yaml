@@ -56,7 +56,7 @@ spec:
               name: usage-logs-multi-tenancy
             labelName: model
             matchers:
-              - '{service_name="models-as-a-service", model!="-"}'
+              - '{service_name="models-as-a-service", model!="-", subscription!="-"}'
     - kind: ListVariable
       spec:
         name: view_by
@@ -293,6 +293,13 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "value #4"
+                header: "Failed requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -305,8 +312,15 @@ spec:
                   query: >-
                     sum by (model, subscription, key_name) (sum_over_time(
                     {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="hit"}
                     | unwrap tokens_total [$__range]))
+                    or
+                    (sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="error"}
+                    [$__range])) * 0)
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -318,25 +332,60 @@ spec:
                   query: >-
                     sum by (model, subscription, key_name) (count_over_time(
                     {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    [$__range]))
-          - kind: TimeSeriesQuery
-            spec:
-              plugin:
-                kind: LokiTimeSeriesQuery
-                spec:
-                  datasource:
-                    kind: LokiDatasource
-                    name: usage-logs-multi-tenancy
-                  query: >-
-                    sum by (model, subscription, key_name) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="hit"}
                     [$__range]))
                     or
                     (sum by (model, subscription, key_name) (count_over_time(
                     {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="error"}
+                    [$__range])) * 0)
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="rate_limit"}
+                    [$__range]))
+                    or
+                    (sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="hit"}
+                    [$__range])) * 0)
+                    or
+                    (sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="error"}
+                    [$__range])) * 0)
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="error"}
+                    [$__range]))
+                    or
+                    (sum by (model, subscription, key_name) (count_over_time(
+                    {service_name="models-as-a-service",
+                    subscription=~"$subscription", subscription!="-",
+                    model=~"$model", response_type="hit"}
                     [$__range])) * 0)
 
   layouts:
