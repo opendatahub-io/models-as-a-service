@@ -189,6 +189,11 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       - [ ] Upgrade RHCL to v1.4.1 or later
 
+17. **Gateway pod OOMKilled or CPU-throttled under load**: The Sail Operator sets default istio-proxy resource limits (2 CPU, 1Gi memory) that are too low for high-concurrency workloads or when RHCL Wasm filters are active.
+      - [ ] Check for OOMKill events: `kubectl get events -n openshift-ingress --field-selector reason=OOMKilling`
+      - [ ] Check pod restarts: `kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway`
+      - [ ] Follow the ConfigMap + parametersRef workaround in [Gateway Resource Tuning](../advanced-administration/gateway-resource-tuning.md)
+
 ## Conflicting AuthPolicy Detection
 
 MaaS automatically detects non-MaaS AuthPolicies (e.g., from KServe or other controllers) that target the same HTTPRoutes used by MaaS-governed models. When a conflict is detected, MaaS sets a `ConflictingAuthPolicy` condition on the affected MaaSAuthPolicy resource and emits a Kubernetes warning event.
