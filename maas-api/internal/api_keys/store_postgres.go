@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"encoding/json"
 
 	"github.com/lib/pq"
 
@@ -48,8 +49,10 @@ func NewPostgresStore(db *sql.DB, log *logger.Logger, tenantName string) *Postgr
 // API key string (sk-oai-{embedded_key_id}_{secret}).
 //
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
+// labels are stored as JSONB (NULL if empty) for efficient lookups and filtering.
 func (s *PostgresStore) AddKey(
 	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
+	labels map[string]string,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
@@ -74,12 +77,30 @@ func (s *PostgresStore) AddKey(
 		userGroups = []string{}
 	}
 
+    // Marshal labels to JSONB (NULL if empty)
+    var labelsJSON []byte
+    var err error
+    if len(labels) > 0 {
+        labelsJSON, err = json.Marshal(labels)
+        if err != nil {
+            return fmt.Errorf("failed to marshal labels: %w", err)
+        }
+    }
+
 	query := `
-		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11)
+		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral, labels)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
 	`
+
+    var labelsParam any
+    if labelsJSON != nil {
+        labelsParam = labelsJSON
+    } else {
+        labelsParam = nil
+    }
+
 	// Use pq.Array to handle PostgreSQL TEXT[] type
-	_, err := s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, tenant, time.Now().UTC(), expiresAt, ephemeral)
+	_, err = s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, tenant, time.Now().UTC(), expiresAt, ephemeral, labelsParam)
 	if err != nil {
 		return fmt.Errorf("failed to insert API key: %w", err)
 	}
@@ -259,6 +280,18 @@ func (s *PostgresStore) Search(
 		argPos++
 	}
 
+    // Add labels containment filter
+    if len(filters.LabelsContain) > 0 {
+        // Convert filter to JSONB for @> containment operator
+        filterJSON, err := json.Marshal(filters.LabelsContain)
+        if err != nil {
+            return nil, fmt.Errorf("failed to marshal labels filter: %w", err)
+        }
+        whereClauses = append(whereClauses, fmt.Sprintf("labels @> $%d::jsonb", argPos))
+        args = append(args, filterJSON)
+        argPos++
+    }
+
 	// Build final WHERE clause
 	whereClause := ""
 	if len(whereClauses) > 0 {
@@ -285,7 +318,7 @@ func (s *PostgresStore) Search(
 
 	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
 	query := fmt.Sprintf(`
-		SELECT id, name, description, subscription, tenant, username, created_at, expires_at, %s AS status, last_used_at, ephemeral
+		SELECT id, name, description, subscription, tenant, username, created_at, expires_at, %s AS status, last_used_at, ephemeral, labels
 		FROM api_keys
 		%s
 		%s
@@ -306,6 +339,7 @@ func (s *PostgresStore) Search(
 		var key ApiKey
 		var createdAt, expiresAt, lastUsedAt sql.NullTime
 		var description sql.NullString
+		var labelsJSON []byte
 
 		err := rows.Scan(
 			&key.ID,
@@ -319,6 +353,7 @@ func (s *PostgresStore) Search(
 			&key.Status,
 			&lastUsedAt,
 			&key.Ephemeral,
+			&labelsJSON,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("failed to scan API key: %w", err)
@@ -336,6 +371,14 @@ func (s *PostgresStore) Search(
 		}
 		if lastUsedAt.Valid {
 			key.LastUsedAt = lastUsedAt.Time.Format(time.RFC3339)
+		}
+
+		// Parse labels JSONB
+		if labelsJSON != nil {
+			if err := json.Unmarshal(labelsJSON, &key.Labels); err != nil {
+				s.logger.Warn("Failed to unmarshal labels", "keyId", key.ID, "error", err)
+				key.Labels = nil // Set to nil on unmarshal error (defensive)
+			}
 		}
 
 		keys = append(keys, key)
@@ -363,7 +406,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	query := `
 		SELECT id, name, description, username, subscription, tenant, created_at, expires_at,
 			CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END AS status,
-			last_used_at, ephemeral
+			last_used_at, ephemeral, labels
 		FROM api_keys
 		WHERE id = $1 AND tenant = $2
 	`
@@ -373,8 +416,9 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var createdAt time.Time
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
+    var labelsJSON []byte
 
-	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral); err != nil {
+	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON); err != nil {
 		if err == sql.ErrNoRows {
 			return nil, ErrKeyNotFound
 		}
@@ -391,6 +435,14 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	if lastUsedAt.Valid {
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
+
+    // Parse labels JSONB
+    if labelsJSON != nil {
+        if err := json.Unmarshal(labelsJSON, &k.Labels); err != nil {
+            s.logger.Warn("Failed to unmarshal labels", "keyId", keyID, "error", err)
+            k.Labels = nil // Set to a safe value (empty map) on unmarshal error (defensive)
+        }
+    }
 
 	return &k, nil
 }

@@ -26,7 +26,15 @@ const (
 	apiKeySubscriptionResolutionErrMsg  = "Unable to resolve a subscription for this API key" //nolint:gosec // G101: public JSON error text, not a credential
 )
 
+// Regular expressions to match invalid control characters in key name and label values.
 var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
+var invalidLabelCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
+// Kubernetes-style label keys: optional DNS prefix + name
+// https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
+// Prefix: DNS subdomain (alphanumeric, dots, hyphens) ending with /
+// Name: alphanumeric, dots, underscores, hyphens
+// Examples: "environment", "app.kubernetes.io/name", "company.com/project-id".
+var validLabelKeyPattern = regexp.MustCompile(`^([a-zA-Z0-9]([a-zA-Z0-9.-]*[a-zA-Z0-9])?/)?[a-zA-Z0-9]([a-zA-Z0-9._-]*[a-zA-Z0-9])?$`)
 
 // AdminChecker is an interface for checking if a user is an admin.
 // The SARAdminChecker implementation uses Kubernetes SubjectAccessReview
@@ -179,11 +187,12 @@ func (h *Handler) GetAPIKey(c *gin.Context) {
 // If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (or 1hr for ephemeral).
 // Users can only create keys for themselves - the key inherits the user's groups.
 type CreateAPIKeyRequest struct {
-	Name         string          `json:"name,omitempty"` // Required for regular keys, optional for ephemeral
-	Description  string          `json:"description,omitempty"`
-	Subscription string          `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
-	ExpiresIn    *token.Duration `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
-	Ephemeral    bool            `json:"ephemeral,omitempty"`    // Short-lived programmatic token (default: false)
+	Name         string            `json:"name,omitempty"` // Required for regular keys, optional for ephemeral
+	Description  string            `json:"description,omitempty"`
+	Subscription string            `json:"subscription,omitempty"` // Optional MaaSSubscription name; when omitted, highest-priority accessible subscription is used
+	ExpiresIn    *token.Duration   `json:"expiresIn,omitempty"`    // Optional - defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral)
+	Ephemeral    bool              `json:"ephemeral,omitempty"`    // Short-lived programmatic token (default: false)
+	Labels       map[string]string `json:"labels,omitempty"`       // Structured key-value pairs for API key metadata
 }
 
 // CreateAPIKey handles POST /v1/api-keys
@@ -206,6 +215,12 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	// Validate name requirement for non-ephemeral keys
 	if !req.Ephemeral && req.Name == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "name is required for non-ephemeral keys"})
+		return
+	}
+
+	// Validate labels if provided
+	if err := validateLabels(req.Labels); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 
@@ -250,7 +265,9 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 		expiresIn,
 		req.Ephemeral,
 		strings.TrimSpace(req.Subscription),
-		user.Tenant)
+		user.Tenant,
+		req.Labels,
+	)
 	if err != nil {
 		h.logger.Error("Failed to create API key", "error", err)
 		if errors.Is(err, ErrExpirationNotPositive) || errors.Is(err, ErrExpirationExceedsMax) {
@@ -301,6 +318,50 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 
 	// Return the key - THIS IS THE ONLY TIME THE PLAINTEXT IS SHOWN
 	c.JSON(http.StatusCreated, result)
+}
+
+// validateLabels validates the labels map for security and size constraints.
+// Labels are user-defined key-value pairs for organizing and filtering API keys.
+func validateLabels(labels map[string]string) error {
+    if labels == nil {
+        return nil
+    }
+    
+    // Limit number of label entries (prevent abuse)
+    if len(labels) > constant.MaxLabelsEntries {
+        return fmt.Errorf("labels cannot exceed %d key-value pairs", constant.MaxLabelsEntries)
+    }
+    
+    // Validate each key-value pair
+    for key, value := range labels {
+        // Key validation
+        if len(key) == 0 {
+            return errors.New("label keys cannot be empty")
+        }
+        if len(key) > constant.MaxLabelKeyLength {
+            return fmt.Errorf("label key '%s' exceeds %d characters", key, constant.MaxLabelKeyLength)
+        }
+        // Only allow alphanumerics, underscores, hyphens, dots (similar to K8s labels). 
+		// Use a package-level variable for comparison to avoid recomputing the regex every iteration of the loop.
+        if !validLabelKeyPattern.MatchString(key) {
+            return fmt.Errorf("label key '%s' contains invalid characters (only alphanumerics, dots, underscores, hyphens allowed)", key)
+        }
+        
+        // Value validation
+		if len(value) == 0 {
+			return fmt.Errorf("label value for key '%s' cannot be empty", key)
+		}
+        if len(value) > constant.MaxLabelValueLength {
+            return fmt.Errorf("label value for key '%s' exceeds %d characters", key, constant.MaxLabelValueLength)
+        }
+
+        // Reject control characters in values
+		if invalidLabelCharsPattern.MatchString(value) {
+            return fmt.Errorf("label value for key '%s' contains invalid control characters", key)
+        }
+    }
+    
+    return nil
 }
 
 // ValidateAPIKeyRequest is the request body for validating an API key.
@@ -532,6 +593,12 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": "pagination.offset must be non-negative",
 		})
+		return
+	}
+
+	// Validate the labels provided as a filter in the request.
+	if err := validateLabels(req.Filters.LabelsContain); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
 

@@ -36,6 +36,7 @@ type MetadataStore interface {
 	//     per-key salt encoded in the API key format (sk-oai-{embedded_key_id}_{secret})
 	//   - userGroups: array of user's groups (used for authorization)
 	//   - ephemeral: marks the key as short-lived for programmatic use
+	//   - labels: caller-validated key/value metadata; this layer does not re-validate or enforce limits.
 	//
 	// Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 	AddKey(ctx context.Context,
@@ -48,7 +49,8 @@ type MetadataStore interface {
 		subscription,
 		tenant string,
 		expiresAt *time.Time,
-		ephemeral bool) error
+		ephemeral bool,
+		labels map[string]string) error
 
 	// Search returns API keys matching the search criteria.
 	// Supports filtering, sorting, and pagination.

@@ -10,6 +10,7 @@ This guide covers what tests exist in the MaaS project, how to run them, and how
 | **Unit tests** | `maas-controller/pkg/` | Go | `make test` |
 | **E2E tests** | `test/e2e/tests/` | Python (pytest) | `run-tests-quick.sh`, `smoke.sh` |
 | **CI smoke / E2E** | `test/e2e/scripts/prow_run_smoke_test.sh` | Bash + pytest | Konflux integration |
+| **Integration tests** | `test/integration/postgres.sh` | Bash | See [Integration Tests (PostgreSQL)](#integration-tests-postgresql) |
 | **Integration tests** | [opendatahub-tests](https://github.com/opendatahub-io/opendatahub-tests) | Python (pytest) | ODH CI / Nightly |
 
 ### Repository Structure (Testing)
@@ -67,6 +68,25 @@ test/e2e/
     ```
 
 Both generate a `coverage.html` report in their respective directories.
+
+### Integration Tests (PostgreSQL)
+
+Integration tests for `maas-api` verify JSONB storage, GIN index queries, and NULL handling against a real PostgreSQL database.
+
+**Integration tests skip protection:**
+
+Note: `TestPostgres` is compiled with the other unit tests. To avoid the postgresql integration tests running during unit testing with `make test` the following must be true for the postgresql tests to be included in `make test`.
+
+- Build tag check (requires `-tags=integration`)
+- `testing.Short()` check (skipped in short mode)
+- Environment variable check (skips if `TEST_DATABASE_URL` not set)
+
+```bash
+./test/integration/postgresql.sh
+if [ $? -eq 0 ]; then 
+  echo "Integration tests passed" 
+fi
+```
 
 ### E2E Tests (Python)
 
