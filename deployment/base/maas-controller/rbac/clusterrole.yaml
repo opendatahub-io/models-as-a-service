@@ -293,6 +293,7 @@ rules:
   resources:
   - tenants
   verbs:
+  - delete
   - get
   - list
   - patch
