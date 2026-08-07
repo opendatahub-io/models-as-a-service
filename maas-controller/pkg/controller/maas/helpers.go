@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
@@ -57,7 +58,7 @@ func unstructuredConditionSignature(obj client.Object) string {
 	if len(conditions) == 0 {
 		return ""
 	}
-	var sig strings.Builder
+	entries := make([]string, 0, len(conditions))
 	for _, c := range conditions {
 		cond, ok := c.(map[string]any)
 		if !ok {
@@ -65,12 +66,10 @@ func unstructuredConditionSignature(obj client.Object) string {
 		}
 		typ, _ := cond["type"].(string)
 		status, _ := cond["status"].(string)
-		sig.WriteString(typ)
-		sig.WriteByte('=')
-		sig.WriteString(status)
-		sig.WriteByte(';')
+		entries = append(entries, typ+"="+status)
 	}
-	return sig.String()
+	sort.Strings(entries)
+	return strings.Join(entries, ";")
 }
 
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.

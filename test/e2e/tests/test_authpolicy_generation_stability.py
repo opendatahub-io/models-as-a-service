@@ -35,14 +35,18 @@ log = logging.getLogger(__name__)
 
 STABILITY_WINDOW = int(os.environ.get("E2E_GENERATION_STABILITY_WINDOW", "60"))
 POLL_INTERVAL = 5
+OC_TIMEOUT = 30
 
 
 def _get_authpolicy_generation(name: str = GATEWAY_AUTH_POLICY_NAME, namespace: str = GATEWAY_NAMESPACE) -> int | None:
     """Return metadata.generation of the AuthPolicy, or None if not found."""
-    result = subprocess.run(
-        ["oc", "get", "authpolicy", name, "-n", namespace, "-o", "jsonpath={.metadata.generation}"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["oc", "get", "authpolicy", name, "-n", namespace, "-o", "jsonpath={.metadata.generation}"],
+            capture_output=True, text=True, timeout=OC_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     try:
@@ -53,10 +57,13 @@ def _get_authpolicy_generation(name: str = GATEWAY_AUTH_POLICY_NAME, namespace: 
 
 def _get_authpolicy_resource_version(name: str = GATEWAY_AUTH_POLICY_NAME, namespace: str = GATEWAY_NAMESPACE) -> str | None:
     """Return metadata.resourceVersion (tracks any write including status)."""
-    result = subprocess.run(
-        ["oc", "get", "authpolicy", name, "-n", namespace, "-o", "jsonpath={.metadata.resourceVersion}"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = subprocess.run(
+            ["oc", "get", "authpolicy", name, "-n", namespace, "-o", "jsonpath={.metadata.resourceVersion}"],
+            capture_output=True, text=True, timeout=OC_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return None
     if result.returncode != 0:
         return None
     return result.stdout.strip() or None
@@ -95,7 +102,13 @@ class TestAuthPolicyGenerationStability:
             observations.append({"elapsed_s": elapsed, "generation": gen})
             log.info("  t+%ds: generation=%s", elapsed, gen)
 
-            if gen is not None and gen > initial_gen:
+            if gen is None:
+                pytest.fail(
+                    f"AuthPolicy {GATEWAY_AUTH_POLICY_NAME} unavailable after {elapsed}s. "
+                    f"Observations: {observations}"
+                )
+
+            if gen > initial_gen:
                 pytest.fail(
                     f"AuthPolicy generation increased from {initial_gen} to {gen} "
                     f"after {elapsed}s without any user changes. "

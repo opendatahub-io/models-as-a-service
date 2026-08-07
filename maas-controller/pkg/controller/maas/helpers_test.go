@@ -815,9 +815,9 @@ func TestUnstructuredConditionsChangedPredicate(t *testing.T) {
 		expected bool
 	}{
 		{
-			name:   "generation changed — passes through",
-			oldObj: makeObj(1, nil),
-			newObj: makeObj(2, nil),
+			name:     "generation changed — passes through",
+			oldObj:   makeObj(1, nil),
+			newObj:   makeObj(2, nil),
 			expected: true,
 		},
 		{
@@ -868,6 +868,18 @@ func TestUnstructuredConditionsChangedPredicate(t *testing.T) {
 			}),
 			newObj: makeObj(1, []map[string]any{
 				{"type": "Accepted", "status": "True", "message": "new message"},
+			}),
+			expected: false,
+		},
+		{
+			name: "same generation, conditions reordered — filtered out",
+			oldObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "True"},
+			}),
+			newObj: makeObj(1, []map[string]any{
+				{"type": "Enforced", "status": "True"},
+				{"type": "Accepted", "status": "True"},
 			}),
 			expected: false,
 		},
@@ -971,6 +983,16 @@ func TestSpecMatchesDesired(t *testing.T) {
 					"rules": map[string]any{},
 				},
 			},
+			expected: true,
+		},
+		{
+			name: "deeply nested empty map absent from current — treated as match",
+			desired: map[string]any{
+				"defaults": map[string]any{
+					"rules": map[string]any{"auth": map[string]any{}},
+				},
+			},
+			current:  map[string]any{},
 			expected: true,
 		},
 	}

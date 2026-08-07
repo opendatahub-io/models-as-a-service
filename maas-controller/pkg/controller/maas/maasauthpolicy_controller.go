@@ -1357,15 +1357,11 @@ func stripExtraFieldsSlice(current, desired []any) {
 // equivalent to absent prevents unnecessary Update() calls.
 func stripEmptyDesiredFields(desired, current map[string]any) {
 	for k, dv := range desired {
-		if _, exists := current[k]; exists {
-			if dMap, ok := dv.(map[string]any); ok {
-				if cMap, ok := current[k].(map[string]any); ok {
-					stripEmptyDesiredFields(dMap, cMap)
-				}
-			}
-			continue
+		if dMap, ok := dv.(map[string]any); ok {
+			cMap, _ := current[k].(map[string]any)
+			stripEmptyDesiredFields(dMap, cMap)
 		}
-		if isEmptyCollection(dv) {
+		if _, exists := current[k]; !exists && isEmptyCollection(dv) {
 			delete(desired, k)
 		}
 	}
