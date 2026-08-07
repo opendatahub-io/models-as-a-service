@@ -117,6 +117,11 @@ func RunPlatform(
 	if !ready {
 		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
 	}
+
+	if err := PruneLegacyCleanupResources(ctx, log, c, appNs, tenantID); err != nil {
+		return nil, fmt.Errorf("prune legacy cleanup resources: %w", err)
+	}
+
 	return &RunResult{Warnings: params.Warnings}, nil
 }
 

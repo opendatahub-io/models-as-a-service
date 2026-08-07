@@ -19,7 +19,6 @@ func TestBuildPlatformParams(t *testing.T) {
 	t.Run("if values are not set for optional fields, fall back to defaults", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
-		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
 
 		tenant := &maasv1alpha1.Tenant{
 			Spec: maasv1alpha1.TenantSpec{
@@ -44,14 +43,12 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
 		assert.Equal(t, DefaultMaaSAPIImage, got.MaaSAPIImage)
 		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
-		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, DefaultAPIKeyMaxExpirationDays, got.APIKeyMaxExpirationDays)
 	})
 
 	t.Run("if values are set for optional fields, they should prevail", func(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
 		t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
-		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
 
 		maxExpirationDays := int32(45)
 		tenant := &maasv1alpha1.Tenant{
@@ -79,7 +76,6 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
 		assert.Equal(t, "quay.io/example/maas-api:test", got.MaaSAPIImage)
 		assert.Equal(t, "quay.io/example/payload:test", got.PayloadProcessingImage)
-		assert.Equal(t, "quay.io/example/cleanup:test", got.MaaSAPIKeyCleanupImage)
 		assert.Equal(t, "45", got.APIKeyMaxExpirationDays)
 	})
 }
@@ -223,7 +219,7 @@ func int32Ptr(i int32) *int32 { return &i }
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:            "tenant-ns",
 		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
@@ -232,7 +228,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		SubscriptionNamespace:   "tenant-ns",
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
 		PayloadProcessingImage:  "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
 	}
 
@@ -262,10 +257,6 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, PayloadProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadDeployment, LabelTenantInstance))
 	// Default tenant (empty TenantIdentifier) must NOT have DISABLE_EXTERNAL_MODEL_CONTROLLER
 	assertEnvVarAbsent(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER")
-
-	if cleanupCronJob := findResource(resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(tenantID)); cleanupCronJob != nil {
-		assert.Equal(t, params.MaaSAPIKeyCleanupImage, requireContainerImage(t, cleanupCronJob, "spec", "jobTemplate", "spec", "template", "spec", "containers"))
-	}
 
 	httpRoute := requireResource(t, resources, GVKHTTPRoute, MaaSAPIRouteName(tenantID))
 	parentRefs, found, err := unstructured.NestedSlice(httpRoute.Object, "spec", "parentRefs")
@@ -454,7 +445,7 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	maasReplicas := int32(3)
 	payloadReplicas := int32(2)
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:              "tenant-ns",
 		ControllerNamespace:       "controller-ns",
 		GatewayNamespace:          "gateway-ns",
@@ -462,7 +453,6 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 		ClusterAudience:           "openshift-custom",
 		MaaSAPIImage:              "quay.io/example/maas-api:test",
 		PayloadProcessingImage:    "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:    "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays:   "45",
 		MaaSAPIReplicas:           &maasReplicas,
 		PayloadProcessingReplicas: &payloadReplicas,
@@ -486,7 +476,7 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	resources := renderOverlayResources(t, "ai-tenant-redteam")
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:            "ai-tenant-redteam",
 		ControllerNamespace:     "controller-ns",
 		GatewayNamespace:        "gateway-ns",
@@ -496,7 +486,6 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 		SubscriptionNamespace:   "ai-tenant-redteam",
 		MaaSAPIImage:            "quay.io/example/maas-api:test",
 		PayloadProcessingImage:  "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
 		APIKeyMaxExpirationDays: "45",
 	}
 
