@@ -8,9 +8,11 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -24,6 +26,51 @@ import (
 func deletionTimestampSet(e event.UpdateEvent) bool {
 	return e.ObjectOld.GetDeletionTimestamp().IsZero() &&
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
+}
+
+// unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
+// and Update events only when the object's generation changed or its status.conditions
+// actually transitioned (type+status pairs differ). This filters out noise from
+// external controllers bumping observedGeneration or annotations without meaningful
+// state change, while preserving the ability to react to spec changes and real
+// readiness transitions.
+type unstructuredConditionsChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (unstructuredConditionsChangedPredicate) Update(e event.UpdateEvent) bool {
+	if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+		return true
+	}
+	return unstructuredConditionSignature(e.ObjectOld) != unstructuredConditionSignature(e.ObjectNew)
+}
+
+// unstructuredConditionSignature extracts a compact string representing the
+// type=status pairs from status.conditions on an unstructured object. Two objects
+// with the same signature have identical condition states.
+func unstructuredConditionSignature(obj client.Object) string {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return ""
+	}
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if len(conditions) == 0 {
+		return ""
+	}
+	var sig strings.Builder
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := cond["type"].(string)
+		status, _ := cond["status"].(string)
+		sig.WriteString(typ)
+		sig.WriteByte('=')
+		sig.WriteString(status)
+		sig.WriteByte(';')
+	}
+	return sig.String()
 }
 
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.

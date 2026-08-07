@@ -24,6 +24,7 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -786,6 +787,199 @@ func TestParentRefTargetsGateway(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := parentRefTargetsGateway(tt.parentRef); got != tt.want {
 				t.Fatalf("parentRefTargetsGateway() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUnstructuredConditionsChangedPredicate(t *testing.T) {
+	pred := unstructuredConditionsChangedPredicate{}
+
+	makeObj := func(generation int64, conditions []map[string]any) *unstructured.Unstructured {
+		obj := &unstructured.Unstructured{}
+		obj.SetGeneration(generation)
+		if conditions != nil {
+			condSlice := make([]any, len(conditions))
+			for i, c := range conditions {
+				condSlice[i] = c
+			}
+			_ = unstructured.SetNestedSlice(obj.Object, condSlice, "status", "conditions")
+		}
+		return obj
+	}
+
+	tests := []struct {
+		name     string
+		oldObj   *unstructured.Unstructured
+		newObj   *unstructured.Unstructured
+		expected bool
+	}{
+		{
+			name:   "generation changed — passes through",
+			oldObj: makeObj(1, nil),
+			newObj: makeObj(2, nil),
+			expected: true,
+		},
+		{
+			name: "same generation, conditions unchanged — filtered out",
+			oldObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "True"},
+			}),
+			newObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "True"},
+			}),
+			expected: false,
+		},
+		{
+			name: "same generation, condition status changed — passes through",
+			oldObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "False"},
+			}),
+			newObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "True"},
+			}),
+			expected: true,
+		},
+		{
+			name: "same generation, new condition added — passes through",
+			oldObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+			}),
+			newObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True"},
+				{"type": "Enforced", "status": "True"},
+			}),
+			expected: true,
+		},
+		{
+			name:     "same generation, both have no conditions — filtered out",
+			oldObj:   makeObj(1, nil),
+			newObj:   makeObj(1, nil),
+			expected: false,
+		},
+		{
+			name: "same generation, condition message changed but status same — filtered out",
+			oldObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True", "message": "old message"},
+			}),
+			newObj: makeObj(1, []map[string]any{
+				{"type": "Accepted", "status": "True", "message": "new message"},
+			}),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := event.UpdateEvent{
+				ObjectOld: tt.oldObj,
+				ObjectNew: tt.newObj,
+			}
+			got := pred.Update(e)
+			if got != tt.expected {
+				t.Errorf("unstructuredConditionsChangedPredicate.Update() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestSpecMatchesDesired(t *testing.T) {
+	tests := []struct {
+		name     string
+		desired  map[string]any
+		current  map[string]any
+		expected bool
+	}{
+		{
+			name:     "identical specs",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			expected: true,
+		},
+		{
+			name:     "current has extra fields (server-added defaults)",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw"}, "strategy": "allValues"},
+			expected: true,
+		},
+		{
+			name:     "desired value differs from current",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw-new"}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw-old"}},
+			expected: false,
+		},
+		{
+			name:     "desired has empty map absent from current — treated as match",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw"}, "patterns": map[string]any{}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			expected: true,
+		},
+		{
+			name:     "desired has empty slice absent from current — treated as match",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw"}, "when": []any{}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			expected: true,
+		},
+		{
+			name:     "desired has non-empty slice absent from current — mismatch",
+			desired:  map[string]any{"targetRef": map[string]any{"name": "gw"}, "when": []any{"x"}},
+			current:  map[string]any{"targetRef": map[string]any{"name": "gw"}},
+			expected: false,
+		},
+		{
+			name: "nested extra fields stripped correctly",
+			desired: map[string]any{
+				"defaults": map[string]any{
+					"rules": map[string]any{
+						"auth": map[string]any{"plain": map[string]any{"selector": "req.headers.auth"}},
+					},
+				},
+			},
+			current: map[string]any{
+				"defaults": map[string]any{
+					"rules": map[string]any{
+						"auth": map[string]any{"plain": map[string]any{"selector": "req.headers.auth"}, "metrics": true},
+					},
+					"strategy": "atomic",
+				},
+			},
+			expected: true,
+		},
+		{
+			name: "int64 vs float64 normalized via JSON round-trip",
+			desired: map[string]any{
+				"priority": int64(1),
+			},
+			current: map[string]any{
+				"priority": float64(1),
+			},
+			expected: true,
+		},
+		{
+			name: "nested empty map absent from current — treated as match",
+			desired: map[string]any{
+				"defaults": map[string]any{
+					"rules": map[string]any{"auth": map[string]any{}},
+				},
+			},
+			current: map[string]any{
+				"defaults": map[string]any{
+					"rules": map[string]any{},
+				},
+			},
+			expected: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := specMatchesDesired(tt.desired, tt.current)
+			if got != tt.expected {
+				t.Errorf("specMatchesDesired() = %v, want %v", got, tt.expected)
 			}
 		})
 	}
