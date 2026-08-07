@@ -55,7 +55,6 @@ from test_helper import (
     _gateway_url,
     _get_cluster_token,
     _maas_api_url,
-    _poll_status,
     _wait_for_gateway_auth_enforced,
     _wait_reconcile,
 )
@@ -324,11 +323,20 @@ class TestPerTenantIPPRouting:
 
         _wait_for_gateway_auth_enforced()
         api_key = _create_default_api_key()
-        # Warm gateway allowlist after prior tests may reset maas-gateway-auth to {}.
-        warmup = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
-        assert warmup.status_code == 200, (
-            f"Default gateway inference warmup failed: {warmup.status_code} "
-            f"{redact_sensitive(warmup.text[:500])}"
+        # Warm default gateway after prior tests may leave auth/Envoy config stale.
+        # Poll with _post_hybrid_chat (which retries transient empty-403 / AUTH_FAILURE)
+        # to match the retry strategy used by the tenant gateway test.
+        deadline = time.time() + 90
+        warmup = None
+        while time.time() < deadline:
+            warmup = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
+            if warmup.status_code == 200:
+                break
+            time.sleep(2)
+        assert warmup is not None and warmup.status_code == 200, (
+            f"Default gateway inference warmup failed: "
+            f"{warmup.status_code if warmup else 'no response'} "
+            f"{redact_sensitive(warmup.text[:500]) if warmup else ''}"
         )
         response = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
         assert response.status_code == 200, (
