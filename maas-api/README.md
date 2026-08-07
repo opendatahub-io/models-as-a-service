@@ -44,17 +44,6 @@ PROJECT_DIR=$(git rev-parse --show-toplevel)
 kustomize build ${PROJECT_DIR}/deployment/base/networking | kubectl apply --server-side=true --force-conflicts -f -
 ```
 
-### Deploying Opendatahub KServe
-
-```shell
-PROJECT_DIR=$(git rev-parse --show-toplevel)
-kustomize build ${PROJECT_DIR}/deployment/components/odh/kserve | kubectl apply --server-side=true --force-conflicts -f -
-```
-
-> [!NOTE]
-> If it fails the first time, simply re-run. CRDs or Webhooks might not be established timely.
-> This approach is aligned with how odh-operator would process (requeue reconciliation).
-
 ### Deploying MaaS API for development
 
 ```shell
