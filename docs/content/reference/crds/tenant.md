@@ -35,6 +35,34 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 |-------|------|----------|-------------|
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
+| payloadProcessing | PayloadProcessingConfig | No | Replica count and autoscaling configuration for the payload-processing Deployment |
+
+---
+
+## PayloadProcessingConfig
+
+`spec.payloadProcessing` controls replica count and optional HPA-based autoscaling for the tenant's payload-processing Deployment.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| replicas | int32 | No | 1 | Sets the Deployment `spec.replicas`. When `autoscaling` is also configured, this value becomes the HPA `minReplicas` floor instead. Valid range: 1–100. |
+| autoscaling | PayloadProcessingAutoscaling | No | - | Presence of this section enables HPA-based autoscaling for payload-processing pods. |
+
+### PayloadProcessingAutoscaling
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| maxReplicas | int32 | No | 10 | HPA `maxReplicas`. Valid range: 1–100. |
+| targetCPUUtilization | int32 | No | 70 | HPA target CPU utilization percentage. Valid range: 1–100. |
+| targetMemoryUtilization | int32 | No | 80 | HPA target memory utilization percentage. Valid range: 1–100. |
+
+When autoscaling is enabled:
+- `spec.payloadProcessing.replicas` (if set) becomes the HPA `minReplicas` floor instead of directly setting `spec.replicas` on the Deployment.
+- The HPA manages the Deployment's replica count based on CPU and memory utilization thresholds.
+- Scale-down uses a 300s stabilization window and a 25%/60s policy to prevent flapping.
+- Scale-up reacts immediately (0s stabilization) with up to 100%/15s or 4 pods/15s (whichever is higher).
+
+Remove the `autoscaling` section to disable autoscaling. The HPA will be removed and the Deployment will revert to static replica management via `spec.payloadProcessing.replicas`.
 
 ---
 
@@ -93,10 +121,12 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 
 Optional metadata annotations that control per-tenant horizontal scaling.
 
+### Replica Count Overrides
+
 | Annotation | Default | Valid Range | Description |
 |------------|---------|-------------|-------------|
 | `maas.opendatahub.io/maas-api-replicas` | 1 | 1–100 | Overrides the maas-api Deployment replica count for this tenant |
-| `maas.opendatahub.io/payload-processing-replicas` | 1 | 1–100 | Overrides the payload-processing Deployment replica count for this tenant |
+| `maas.opendatahub.io/payload-processing-replicas` | 1 | 1–100 | **Deprecated:** use `spec.payloadProcessing.replicas` instead. Still supported during the migration window but will be removed in a future release. |
 
 When set, the controller patches the corresponding Deployment's `spec.replicas` during reconciliation. Invalid values (non-numeric, zero, negative, or exceeding 100) produce a `Degraded` status condition with a remediation message; the default replica count is preserved.
 
@@ -114,6 +144,25 @@ metadata:
     maas.opendatahub.io/maas-api-replicas: "3"
     maas.opendatahub.io/payload-processing-replicas: "2"
 spec:
+  apiKeys:
+    maxExpirationDays: 90
+```
+
+### Example: Autoscaling Payload Processing
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaasTenantConfig
+metadata:
+  name: default-tenant
+  namespace: models-as-a-service
+spec:
+  payloadProcessing:
+    replicas: 2                     # minimum replicas (HPA minReplicas floor)
+    autoscaling:
+      maxReplicas: 15               # maximum replicas (ceiling)
+      targetCPUUtilization: 60      # scale up when avg CPU > 60%
+      targetMemoryUtilization: 75   # scale up when avg memory > 75%
   apiKeys:
     maxExpirationDays: 90
 ```
