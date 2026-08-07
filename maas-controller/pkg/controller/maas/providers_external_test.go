@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -121,6 +122,47 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
+	}
+}
+
+func TestExternalModel_ReconcileRoute_TenantGateway(t *testing.T) {
+	const tenantNS = "ai-tenant-redteam"
+
+	model := newExternalModel("gpt-4o", tenantNS, "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", tenantNS, "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), tenantNS, "redteam-gateway", "openshift-ingress")
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "redteam", Namespace: testAITenantNamespace},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "redteam-gateway", Namespace: "openshift-ingress"},
+		},
+	}
+	tenantNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantNS,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "redteam",
+			},
+		},
+	}
+
+	r, _ := newTestReconciler(model, externalModelCR, route, aitenant, tenantNamespace)
+	r.GatewayName = "maas-default-gateway"
+	r.GatewayNamespace = "openshift-ingress"
+	r.DefaultTenantNamespace = "models-as-a-service"
+	r.AITenantNamespace = testAITenantNamespace
+	r.TenantNamespaceDiscoveryEnabled = true
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	err := handler.ReconcileRoute(context.Background(), log, model)
+	if err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+	}
+	if model.Status.HTTPRouteGatewayName != "redteam-gateway" {
+		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "redteam-gateway")
 	}
 }
 

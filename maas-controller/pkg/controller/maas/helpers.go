@@ -14,6 +14,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/gatewayresolve"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -243,37 +244,22 @@ func tenantGatewayRefForNamespace(
 	ctx context.Context,
 	c client.Reader,
 	tenantNamespace string,
+	aitenantNamespace string,
 	defaultTenantNamespace string,
 	fallbackGatewayName string,
 	fallbackGatewayNamespace string,
 	discoveryEnabled bool,
 ) (maasv1alpha1.TenantGatewayRef, error) {
-	tenant, err := fetchTenantForNamespace(ctx, c, tenantNamespace)
-	if err == nil {
-		platformContext, err := tenant.platformContext(
-			ctx,
-			c,
-			fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace),
-		)
-		if err != nil {
-			return maasv1alpha1.TenantGatewayRef{}, err
-		}
-		return platformContext.GatewayRef, nil
-	}
-	if apierrors.IsNotFound(err) && (tenantNamespace == defaultTenantNamespace || !discoveryEnabled) {
-		return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
-	}
-	if apierrors.IsNotFound(err) {
-		allowed, allowErr := tenantNamespaceAllowed(ctx, c, tenantNamespace, defaultTenantNamespace, discoveryEnabled)
-		if allowErr != nil {
-			return maasv1alpha1.TenantGatewayRef{}, allowErr
-		}
-		if !allowed {
-			return fallbackTenantGatewayRef(fallbackGatewayName, fallbackGatewayNamespace), nil
-		}
-		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("MaasTenantConfig %s/%s not found for discovered tenant namespace", tenantNamespace, maasv1alpha1.MaasTenantConfigInstanceName)
-	}
-	return maasv1alpha1.TenantGatewayRef{}, err
+	return gatewayresolve.ForNamespace(
+		ctx,
+		c,
+		tenantNamespace,
+		aitenantNamespace,
+		defaultTenantNamespace,
+		fallbackGatewayName,
+		fallbackGatewayNamespace,
+		discoveryEnabled,
+	)
 }
 
 func fallbackTenantGatewayRef(name, namespace string) maasv1alpha1.TenantGatewayRef {

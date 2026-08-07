@@ -676,18 +676,13 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 	defaultTenantWithoutRef := &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.TenantInstanceName, Namespace: defaultNamespace},
 	}
-	managedTenant := &maasv1alpha1.Tenant{
+	managedNamespace := &corev1.Namespace{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: "ai-tenant-team-managed",
+			Name: "ai-tenant-team-managed",
 			Labels: map[string]string{
 				tenantreconcile.LabelManagedByAITenant: "true",
 				tenantreconcile.LabelTenantName:        "team-managed",
 				tenantreconcile.LabelTenantNamespace:   "ai-tenant-team-managed",
-			},
-			Annotations: map[string]string{
-				tenantreconcile.AnnotationAITenantName:      "team-managed",
-				tenantreconcile.AnnotationAITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
 			},
 		},
 	}
@@ -726,7 +721,7 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			name:             "tenant with full gatewayRef",
 			tenantNamespace:  tenantNamespace,
 			discoveryEnabled: true,
-			objects:          []client.Object{fullTenant},
+			objects:          []client.Object{&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: tenantNamespace}}, fullTenant},
 			want: maasv1alpha1.TenantGatewayRef{
 				Name:      "team-a-gateway",
 				Namespace: "team-a-gateway-ns",
@@ -736,7 +731,7 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			name:             "AITenant-managed tenant resolves gateway from AITenant status",
 			tenantNamespace:  "ai-tenant-team-managed",
 			discoveryEnabled: true,
-			objects:          []client.Object{managedTenant, managedAITenant},
+			objects:          []client.Object{managedNamespace, managedAITenant},
 			want: maasv1alpha1.TenantGatewayRef{
 				Name:      "team-managed-gateway",
 				Namespace: "team-managed-gateway-ns",
@@ -746,7 +741,7 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			name:             "default tenant with empty gatewayRef falls back to flags",
 			tenantNamespace:  defaultNamespace,
 			discoveryEnabled: true,
-			objects:          []client.Object{defaultTenantWithoutRef},
+			objects:          []client.Object{&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: defaultNamespace}}, defaultTenantWithoutRef},
 			want: maasv1alpha1.TenantGatewayRef{
 				Name:      fallbackName,
 				Namespace: fallbackNS,
@@ -756,7 +751,7 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 			name:             "partial gatewayRef is invalid",
 			tenantNamespace:  "partial-ns",
 			discoveryEnabled: true,
-			objects:          []client.Object{partialTenant},
+			objects:          []client.Object{&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "partial-ns"}}, partialTenant},
 			wantErr:          true,
 		},
 		{
@@ -799,7 +794,7 @@ func TestTenantGatewayRefForNamespace(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.objects...).Build()
-			got, err := tenantGatewayRefForNamespace(context.Background(), c, tt.tenantNamespace, defaultNamespace, fallbackName, fallbackNS, tt.discoveryEnabled)
+			got, err := tenantGatewayRefForNamespace(context.Background(), c, tt.tenantNamespace, tenantreconcile.DefaultAITenantNamespace, defaultNamespace, fallbackName, fallbackNS, tt.discoveryEnabled)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("tenantGatewayRefForNamespace error = %v, wantErr %v", err, tt.wantErr)
 			}

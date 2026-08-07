@@ -254,6 +254,8 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  PAYLOAD_PROCESSING_IMAGE  Custom IPP (payload-processing) image (operator mode: patches
+                            maas-parameters ConfigMap; kustomize mode: same via maas-parameters)
   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
@@ -649,6 +651,9 @@ main() {
 
   if [[ "$maas_controller_exists" == "true" && "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
+    if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+      patch_maas_parameters_payload_processing_image "$NAMESPACE" || return 1
+    fi
   else
     # Direct-install path used when maas-controller is absent, or when
     # FORCE_OVERWRITE=true requests a full local re-apply and restart.

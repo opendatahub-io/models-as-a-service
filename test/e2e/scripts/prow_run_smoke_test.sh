@@ -24,6 +24,7 @@
 #   OPERATOR_CATALOG=quay.io/opendatahub/opendatahub-operator-catalog:pr-123 \
 #   MAAS_API_IMAGE=quay.io/opendatahub/maas-api:pr-456 \
 #   MAAS_CONTROLLER_IMAGE=quay.io/opendatahub/maas-controller:pr-42 \
+#   PAYLOAD_PROCESSING_IMAGE=quay.io/opendatahub/odh-ai-gateway-payload-processing:pr-99 \
 #   ./test/e2e/scripts/prow_run_smoke_test.sh
 #
 # ENVIRONMENT VARIABLES:
@@ -37,6 +38,10 @@
 #                    Example: quay.io/opendatahub/maas-api:pr-232
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (default: quay.io/opendatahub/maas-controller:latest)
 #                           Example: quay.io/opendatahub/maas-controller:pr-430
+#   PAYLOAD_PROCESSING_IMAGE - Custom IPP (payload-processing) image (optional)
+#                           Example: quay.io/opendatahub/odh-ai-gateway-payload-processing:pr-123
+#                           In DEPLOY_MODE=operator, deploy.sh patches maas-parameters and restarts
+#                           maas-controller so the Tenant reconciler deploys IPP with this image.
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional). Requires DEPLOY_MODE=operator
 #                           (ai-gateway-operator is only deployed by the ODH operator's own reconciler).
 #                           Example: quay.io/opendatahub/odh-ai-gateway-operator:odh-stable
@@ -106,6 +111,7 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 # ODH operator deployment
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
+export PAYLOAD_PROCESSING_IMAGE=${PAYLOAD_PROCESSING_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
@@ -292,6 +298,12 @@ deploy_maas_platform() {
     fi
     if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
         echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
+    fi
+    if [[ -n "${PAYLOAD_PROCESSING_IMAGE:-}" ]]; then
+        echo "Using custom payload-processing image: ${PAYLOAD_PROCESSING_IMAGE}"
+        if [[ "${DEPLOY_MODE}" != "operator" ]]; then
+            echo "  (also applied via maas-parameters in kustomize/direct-install mode)"
+        fi
     fi
     if [[ -n "${OPERATOR_CATALOG:-}" ]]; then
         echo "Using ODH catalog: ${OPERATOR_CATALOG}"

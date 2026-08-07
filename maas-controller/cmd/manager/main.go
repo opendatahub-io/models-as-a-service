@@ -1188,11 +1188,14 @@ func main() {
 	}
 
 	if err := (&externalmodel.Reconciler{
-		Client:           mgr.GetClient(),
-		Scheme:           mgr.GetScheme(),
-		Log:              ctrl.Log.WithName("controllers").WithName("ExternalModel"),
-		GatewayName:      gatewayName,
-		GatewayNamespace: gatewayNamespace,
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		Log:                             ctrl.Log.WithName("controllers").WithName("ExternalModel"),
+		GatewayName:                     gatewayName,
+		GatewayNamespace:                gatewayNamespace,
+		DefaultTenantNamespace:          maasSubscriptionNamespace,
+		AITenantNamespace:               aitenantNamespace,
+		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ExternalModel")
 		os.Exit(1)

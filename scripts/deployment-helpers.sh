@@ -353,6 +353,156 @@ patch_operator_related_images() {
   kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || true
 }
 
+# Patch maas-parameters with PAYLOAD_PROCESSING_IMAGE and restart maas-controller so the
+# Tenant reconciler reads RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE from the
+# updated ConfigMap. Required in operator mode: deploy.sh skips direct maas-controller
+# manifest apply when the ODH operator owns the Deployment, so PAYLOAD_PROCESSING_IMAGE
+# would otherwise be ignored (unlike MAAS_* images, which are patched on the ODH CSV).
+#
+# Arguments: <namespace>
+# Reads PAYLOAD_PROCESSING_IMAGE from the environment (no-op when unset).
+patch_maas_parameters_payload_processing_image() {
+  local namespace=$1
+  local image="${PAYLOAD_PROCESSING_IMAGE:-}"
+  [[ -n "$image" ]] || return 0
+
+  log_info "Patching maas-parameters payload-processing-image to ${image} (namespace: ${namespace})..."
+
+  if kubectl get configmap maas-parameters -n "$namespace" &>/dev/null; then
+    kubectl patch configmap maas-parameters -n "$namespace" --type merge \
+      -p "{\"data\":{\"payload-processing-image\":\"${image}\"}}" || {
+      log_error "Failed to patch maas-parameters ConfigMap"
+      return 1
+    }
+  else
+    local default_tag="odh-stable"
+    [[ "${DEV_MODE:-false}" == "true" ]] && default_tag="latest"
+    local cm_maas_api_image="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:${default_tag}}"
+    local cm_maas_controller_image="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:${default_tag}}"
+    local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
+    local cm_monitoring_namespace="${MONITORING_NAMESPACE:-opendatahub}"
+
+    kubectl create configmap maas-parameters -n "$namespace" \
+      --from-literal="maas-api-image=${cm_maas_api_image}" \
+      --from-literal="maas-controller-image=${cm_maas_controller_image}" \
+      --from-literal="payload-processing-image=${image}" \
+      --from-literal="maas-api-key-cleanup-image=${cm_cleanup_image}" \
+      --from-literal="monitoring-namespace=${cm_monitoring_namespace}" \
+      --dry-run=client -o yaml | kubectl apply -f - || {
+      log_error "Failed to create maas-parameters ConfigMap"
+      return 1
+    }
+  fi
+
+  if kubectl get deployment maas-controller -n "$namespace" &>/dev/null; then
+    log_info "Restarting maas-controller to pick up payload-processing image override..."
+    kubectl rollout restart deployment/maas-controller -n "$namespace" || {
+      log_error "Failed to restart maas-controller"
+      return 1
+    }
+    local timeout="${ROLLOUT_TIMEOUT:-120}"
+    if ! kubectl rollout status deployment/maas-controller -n "$namespace" --timeout="${timeout}s"; then
+      log_error "maas-controller rollout failed after payload-processing image patch (timeout: ${timeout}s)"
+      return 1
+    fi
+  fi
+
+  return 0
+}
+
+# Ensure the ODH Subscription uses the Konflux catalog (fast → 3.5.0-snapshot), not
+# community-operators / fast-3 (3.5.0-ea.2 with legacy --maas-api-namespace).
+# deploy.sh skips Subscription create when one already exists, so call this before deploy
+# on clusters that previously installed from community-operators.
+#
+# Reads: OPERATOR_CATALOG, OPERATOR_CHANNEL, OPERATOR_STARTING_CSV
+# Arguments: <namespace>  (default: opendatahub)
+ensure_odh_konflux_subscription() {
+  local namespace="${1:-${DEPLOYMENT_NAMESPACE:-opendatahub}}"
+  local catalog_image="${OPERATOR_CATALOG:-quay.io/opendatahub/opendatahub-operator-catalog:latest}"
+  local channel="${OPERATOR_CHANNEL:-fast}"
+  local starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-snapshot}"
+  local catalog_name="odh-custom-catalog"
+
+  create_custom_catalogsource "$catalog_name" "openshift-marketplace" "$catalog_image"
+
+  if kubectl get subscription opendatahub-operator -n "$namespace" &>/dev/null; then
+    local current_csv installed_csv sub_state
+    current_csv=$(kubectl get subscription opendatahub-operator -n "$namespace" -o jsonpath='{.status.currentCSV}' 2>/dev/null)
+    installed_csv=$(kubectl get subscription opendatahub-operator -n "$namespace" -o jsonpath='{.status.installedCSV}' 2>/dev/null)
+    sub_state=$(kubectl get subscription opendatahub-operator -n "$namespace" -o jsonpath='{.status.state}' 2>/dev/null)
+    if [[ "$current_csv" == *"-ea."* || "$sub_state" == "UpgradePending" ]]; then
+      log_warn "Subscription stuck on ${current_csv:-unknown} (${sub_state}); recreating for Konflux ${starting_csv}"
+      kubectl delete subscription opendatahub-operator -n "$namespace" --ignore-not-found
+      kubectl delete csv -n "$namespace" -l operators.coreos.com/opendatahub-operator.opendatahub.io --ignore-not-found 2>/dev/null || true
+      sleep 3
+    else
+      log_info "Updating opendatahub-operator Subscription: source=${catalog_name} channel=${channel} startingCSV=${starting_csv}"
+      kubectl patch subscription opendatahub-operator -n "$namespace" --type=merge -p "{
+        \"spec\": {
+          \"source\": \"${catalog_name}\",
+          \"channel\": \"${channel}\",
+          \"startingCSV\": \"${starting_csv}\",
+          \"installPlanApproval\": \"Manual\"
+        }
+      }" || {
+        log_error "Failed to patch opendatahub-operator Subscription"
+        return 1
+      }
+      approve_initial_installplan_if_manual "$namespace" "opendatahub-operator" "${CSV_TIMEOUT:-300}" || {
+        log_warn "InstallPlan approval may still be pending; check: oc get installplan -n ${namespace}"
+      }
+      if waitsubscriptioninstalled "$namespace" "opendatahub-operator"; then
+        current_csv=$(kubectl get subscription opendatahub-operator -n "$namespace" -o jsonpath='{.status.currentCSV}' 2>/dev/null)
+        log_info "opendatahub-operator Subscription currentCSV: ${current_csv:-unknown}"
+        [[ "$current_csv" != *"-ea."* ]] && return 0
+      fi
+      log_warn "Patch did not move off EA CSV; recreating Subscription"
+      kubectl delete subscription opendatahub-operator -n "$namespace" --ignore-not-found
+      kubectl delete csv -n "$namespace" -l operators.coreos.com/opendatahub-operator.opendatahub.io --ignore-not-found 2>/dev/null || true
+      sleep 3
+    fi
+  fi
+
+  if ! kubectl get subscription opendatahub-operator -n "$namespace" &>/dev/null; then
+    log_info "Creating opendatahub-operator Subscription: source=${catalog_name} channel=${channel} startingCSV=${starting_csv}"
+    cat <<EOF | kubectl apply -f -
+apiVersion: operators.coreos.com/v1alpha1
+kind: Subscription
+metadata:
+  name: opendatahub-operator
+  namespace: ${namespace}
+spec:
+  channel: ${channel}
+  installPlanApproval: Manual
+  name: opendatahub-operator
+  source: ${catalog_name}
+  sourceNamespace: openshift-marketplace
+  startingCSV: ${starting_csv}
+EOF
+  fi
+
+  approve_initial_installplan_if_manual "$namespace" "opendatahub-operator" "${CSV_TIMEOUT:-300}" || {
+    log_warn "InstallPlan approval may still be pending; check: oc get installplan -n ${namespace}"
+  }
+
+  if ! waitsubscriptioninstalled "$namespace" "opendatahub-operator"; then
+    log_error "opendatahub-operator Subscription did not reach installed state"
+    return 1
+  fi
+
+  local current_csv
+  current_csv=$(kubectl get subscription opendatahub-operator -n "$namespace" -o jsonpath='{.status.currentCSV}' 2>/dev/null)
+  log_info "opendatahub-operator Subscription currentCSV: ${current_csv:-unknown}"
+  if [[ "$current_csv" == *"-ea."* ]]; then
+    log_error "Still on EA CSV (${current_csv}). Expected Konflux 3.5 (e.g. ${starting_csv})."
+    log_error "Check: oc get installplan -n ${namespace}; oc describe subscription opendatahub-operator -n ${namespace}"
+    return 1
+  fi
+
+  return 0
+}
+
 # Patch Kuadrant/RHCL CSV to recognize OpenShift Gateway controller
 # This is required because Kuadrant needs to know about the Gateway API provider
 # Without this patch, Kuadrant shows "MissingDependency" and AuthPolicies won't be enforced
