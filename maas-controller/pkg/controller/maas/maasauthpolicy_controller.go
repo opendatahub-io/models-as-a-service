@@ -1699,12 +1699,26 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			if err != nil {
 				return ctrl.Result{}, err
 			}
+
+			// Guard: when MaasTenantConfig is already gone (AITenant cascade cleanup),
+			// fetchTenantIdentifier returns "" and fetchGatewayInfo falls back to the
+			// default gateway. Without this check, the controller misidentifies the
+			// deleted non-default tenant as the default tenant and resets the default
+			// gateway's maas-gateway-auth to empty model access.
+			isDefaultTenantNamespace := r.TenantNamespace == "" || policy.Namespace == r.TenantNamespace
 			isDefaultGateway := gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName
 			isNonDefaultTenant := tenantID != ""
+
 			if isNonDefaultTenant && isDefaultGateway {
 				log.Info("skipping gateway AuthPolicy reset: non-default tenant using shared default gateway",
 					"tenantID", tenantID,
 					"tenantNamespace", policy.Namespace,
+					"gatewayNamespace", gatewayNs,
+					"gatewayName", gatewayName)
+			} else if !isDefaultTenantNamespace && !isNonDefaultTenant && isDefaultGateway {
+				log.Info("skipping gateway AuthPolicy reset: policy namespace differs from default tenant namespace (MaasTenantConfig likely already deleted)",
+					"policyNamespace", policy.Namespace,
+					"defaultTenantNamespace", r.TenantNamespace,
 					"gatewayNamespace", gatewayNs,
 					"gatewayName", gatewayName)
 			} else {
