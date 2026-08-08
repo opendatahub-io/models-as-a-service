@@ -26,7 +26,7 @@ const (
 	TokenStatusRevoked = "revoked"
 )
 
-type MetadataStore interface {
+type MetadataStore interface { //nolint:interfacebloat // cohesive API key lifecycle: CRUD + bulk ops + tenant isolation
 	// AddKey stores an API key with hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
 	//
@@ -70,9 +70,14 @@ type MetadataStore interface {
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked or expired.
 	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
 
-	// InvalidateAll marks all active tokens for a user within a tenant as revoked.
-	// Returns the count of keys that were revoked.
-	InvalidateAll(ctx context.Context, username string, tenant string) (int, error)
+	// BulkRevoke marks all active keys matching the scope as revoked in a single
+	// atomic UPDATE. Filters by username and/or subscription (at least one must
+	// be non-empty). Returns the count of keys that were revoked.
+	BulkRevoke(ctx context.Context, username string, subscription string, tenant string) (int, error)
+
+	// BulkRevokeCount returns the number of active keys that would be revoked
+	// by a bulk revoke operation, without mutating any data.
+	BulkRevokeCount(ctx context.Context, username string, subscription string, tenant string) (int, error)
 
 	// InvalidateTenant marks all active tokens within a tenant as revoked.
 	// Returns the count of keys that were revoked.

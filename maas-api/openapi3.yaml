@@ -406,8 +406,18 @@ paths:
         post:
             tags:
                 - api-keys-v2
-            summary: Bulk revoke API keys for a user
-            description: Revokes all active API keys for a specific user. Regular users can only bulk revoke their own keys. Admins can bulk revoke any user's keys.
+            summary: Bulk revoke API keys by user and/or subscription
+            description: |
+                Revokes all active API keys matching the specified scope. At least one of
+                `username` or `subscription` must be provided.
+
+                **Authorization rules:**
+                - Regular users can bulk revoke their own keys (username = self).
+                - Subscription-scoped revocation requires admin privileges.
+                - Cross-user revocation requires admin privileges.
+
+                When `dryRun` is true, the response includes the count of keys that
+                would be revoked without performing any mutation.
             operationId: api-keys-v2#bulk-revoke
             requestBody:
                 required: true
@@ -415,21 +425,39 @@ paths:
                     application/json:
                         schema:
                             type: object
-                            required:
-                                - username
+                            anyOf:
+                                - required: [username]
+                                - required: [subscription]
                             properties:
                                 username:
                                     type: string
-                                    description: Username whose keys should be revoked
+                                    description: Username whose keys should be revoked.
+                                subscription:
+                                    type: string
+                                    description: Subscription name whose bound keys should be revoked. Admin-only.
+                                dryRun:
+                                    type: boolean
+                                    default: false
+                                    description: When true, returns the count of keys that would be revoked without performing any mutation.
                         examples:
                             revoke_own:
                                 summary: User revoking own keys
                                 value:
                                     username: "alice"
-                            admin_revoke:
-                                summary: Admin revoking user's keys
+                            admin_revoke_by_subscription:
+                                summary: Admin revoking all keys for a subscription
+                                value:
+                                    subscription: "premium-simulator-subscription"
+                            dry_run:
+                                summary: Dry-run preview (no mutation)
+                                value:
+                                    username: "alice"
+                                    dryRun: true
+                            combined_scope:
+                                summary: Admin revoking a user's keys in a specific subscription
                                 value:
                                     username: "bob"
+                                    subscription: "simulator-subscription"
             responses:
                 "200":
                     description: OK response.
@@ -440,15 +468,27 @@ paths:
                                 properties:
                                     revokedCount:
                                         type: integer
-                                        description: Number of keys that were revoked
+                                        description: Number of keys revoked (or that would be revoked in dry-run).
                                     message:
                                         type: string
-                                        description: Success message
-                            example:
-                                revokedCount: 5
-                                message: "Successfully revoked 5 active API key(s) for user alice"
+                                        description: Human-readable result message.
+                                    dryRun:
+                                        type: boolean
+                                        description: True when the request was a dry-run (no keys were mutated).
+                            examples:
+                                revoke_result:
+                                    summary: Successful revocation
+                                    value:
+                                        revokedCount: 5
+                                        message: "Successfully revoked 5 active API key(s) for user alice"
+                                dry_run_result:
+                                    summary: Dry-run result
+                                    value:
+                                        revokedCount: 3
+                                        message: "Dry run: 3 active key(s) would be revoked for subscription premium-simulator-subscription"
+                                        dryRun: true
                 "400":
-                    description: Bad Request. Invalid request.
+                    description: Bad Request. At least one of username or subscription is required.
                     content:
                         application/json:
                             schema:
@@ -456,15 +496,11 @@ paths:
                 "401":
                     description: Unauthorized response.
                 "403":
-                    description: Forbidden. User trying to revoke another user's keys.
+                    description: Forbidden. Admin privileges required for subscription-scoped or cross-user revocation.
                     content:
                         application/json:
                             schema:
                                 $ref: '#/components/schemas/ErrorResponse'
-                            example:
-                                error:
-                                    message: "Access denied: you can only bulk revoke your own API keys"
-                                    type: forbidden
     /v1/api-keys/config:
         get:
             tags:
