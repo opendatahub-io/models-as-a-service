@@ -74,6 +74,7 @@ nav:
       - Operator Setup: install/platform-setup.md
     - Installation:
       - Models-as-a-Service: install/maas-setup.md
+      - MaaS on xKS (non-OpenShift): install/xks-installation.md
       - Model Setup: install/model-setup.md
       - External Model Setup (Tech Preview): install/external-model-setup.md
       - Validation: install/validation.md
