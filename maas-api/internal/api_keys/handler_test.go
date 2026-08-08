@@ -2214,6 +2214,179 @@ func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
 	assert.Equal(t, StatusActive, key.Status, "tenant-b key 2 should remain active")
 }
 
+func TestBulkRevokeAPIKeys_BySubscription(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+	ctx := context.Background()
+
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-a-key-1", "h1", "Key 1", "", nil, "sub-alpha", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "bob", "sub-a-key-2", "h2", "Key 2", "", nil, "sub-alpha", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-b-key-1", "h3", "Key 3", "", nil, "sub-beta", "test-tenant", nil, false))
+
+	t.Run("AdminCanRevokeBySubscription", func(t *testing.T) {
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users", "system:authenticated"},
+			Tenant:   "test-tenant",
+		}
+
+		body := `{"subscription": "sub-alpha"}`
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(body))
+		c.Set("user", adminUser)
+
+		//nolint:contextcheck // gin handler receives context via *gin.Context
+		handler.BulkRevokeAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response BulkRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 2, response.RevokedCount, "should revoke both sub-alpha keys")
+
+		key, err := store.Get(ctx, "sub-b-key-1")
+		require.NoError(t, err)
+		assert.Equal(t, StatusActive, key.Status, "sub-beta key should remain active")
+	})
+
+	t.Run("NonAdminCannotRevokeBySubscription", func(t *testing.T) {
+		regularUser := &token.UserContext{
+			Username: "alice",
+			Groups:   []string{"system:authenticated"},
+			Tenant:   "test-tenant",
+		}
+
+		body := `{"subscription": "sub-beta"}`
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(body))
+		c.Set("user", regularUser)
+
+		handler.BulkRevokeAPIKeys(c)
+
+		assert.Equal(t, http.StatusForbidden, w.Code)
+	})
+
+	t.Run("AdminCanRevokeByUserAndSubscription", func(t *testing.T) {
+		store2 := NewMockStore()
+		service2 := NewServiceWithLogger(store2, cfg, fixedSubSelector{}, logger.Development())
+		handler2 := NewHandler(logger.Development(), service2, newMockAdminChecker(), nil)
+
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-1", "ch1", "K1", "", nil, "sub-x", "test-tenant", nil, false))
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-2", "ch2", "K2", "", nil, "sub-y", "test-tenant", nil, false))
+		require.NoError(t, store2.AddKey(ctx, "bob", "combo-3", "ch3", "K3", "", nil, "sub-x", "test-tenant", nil, false))
+
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users", "system:authenticated"},
+			Tenant:   "test-tenant",
+		}
+
+		body := `{"username": "alice", "subscription": "sub-x"}`
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(body))
+		c.Set("user", adminUser)
+
+		//nolint:contextcheck // gin handler receives context via *gin.Context
+		handler2.BulkRevokeAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response BulkRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 1, response.RevokedCount, "should only revoke alice's sub-x key")
+
+		key, _ := store2.Get(ctx, "combo-2")
+		assert.Equal(t, StatusActive, key.Status, "alice sub-y key should remain active")
+		key, _ = store2.Get(ctx, "combo-3")
+		assert.Equal(t, StatusActive, key.Status, "bob sub-x key should remain active")
+	})
+}
+
+func TestBulkRevokeAPIKeys_DryRun(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+	ctx := context.Background()
+
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-1", "dh1", "DK1", "", nil, "sub-a", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-2", "dh2", "DK2", "", nil, "sub-a", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-3", "dh3", "DK3", "", nil, "sub-b", "test-tenant", nil, false))
+
+	t.Run("DryRunDoesNotMutate", func(t *testing.T) {
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users", "system:authenticated"},
+			Tenant:   "test-tenant",
+		}
+
+		body := `{"username": "alice", "dryRun": true}`
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(body))
+		c.Set("user", adminUser)
+
+		//nolint:contextcheck // gin handler receives context via *gin.Context
+		handler.BulkRevokeAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response BulkRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 3, response.RevokedCount, "dry run should report 3 keys")
+		assert.True(t, response.DryRun, "should indicate dry run")
+
+		// Verify keys are still active
+		for _, id := range []string{"dr-key-1", "dr-key-2", "dr-key-3"} {
+			key, err := store.Get(ctx, id)
+			require.NoError(t, err)
+			assert.Equal(t, StatusActive, key.Status, "key %s should remain active after dry run", id)
+		}
+	})
+
+	t.Run("DryRunBySubscription", func(t *testing.T) {
+		adminUser := &token.UserContext{
+			Username: "admin",
+			Groups:   []string{"admin-users", "system:authenticated"},
+			Tenant:   "test-tenant",
+		}
+
+		body := `{"subscription": "sub-a", "dryRun": true}`
+		w := httptest.NewRecorder()
+		c, _ := gin.CreateTestContext(w)
+		c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/bulk-revoke", nil)
+		c.Request.Header.Set("Content-Type", "application/json")
+		c.Request.Body = io.NopCloser(strings.NewReader(body))
+		c.Set("user", adminUser)
+
+		handler.BulkRevokeAPIKeys(c)
+
+		assert.Equal(t, http.StatusOK, w.Code)
+		var response BulkRevokeResponse
+		err := json.Unmarshal(w.Body.Bytes(), &response)
+		require.NoError(t, err)
+		assert.Equal(t, 2, response.RevokedCount, "dry run should find 2 sub-a keys")
+		assert.True(t, response.DryRun)
+	})
+}
+
 // TestSearchAPIKeys_AdminCrossTenantIsolation verifies that admin privileges
 // do not bypass tenant isolation — an admin from tenant-B cannot see keys in tenant-A.
 func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
