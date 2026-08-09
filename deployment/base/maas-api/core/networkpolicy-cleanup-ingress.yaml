@@ -12,10 +12,14 @@ spec:
   - Ingress
   ingress:
   # Allow the maas-controller to call the internal tenant API-key revocation
-  # endpoint in-process when an AITenant is deleted. The controller runs in its
-  # own namespace, so match by pod label across all namespaces.
+  # endpoint when an AITenant is deleted. The controller runs in a separate
+  # namespace (opendatahub / redhat-ods-applications); both it and the infra
+  # namespace carry opendatahub.io/generated-namespace=true, so we use that
+  # label to scope to ODH-managed namespaces rather than opening all namespaces.
   - from:
-    - namespaceSelector: {}
+    - namespaceSelector:
+        matchLabels:
+          opendatahub.io/generated-namespace: "true"
       podSelector:
         matchLabels:
           app: maas-controller

@@ -104,7 +104,7 @@ cleanup_maas_resources() {
     kubectl delete networkpolicy maas-authorino-allow -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete role maas-api-db-secret maas-controller-leader-election-role -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete rolebinding maas-api-db-secret maas-controller-leader-election-rolebinding -n "$ns" --ignore-not-found 2>/dev/null || true
-    kubectl delete serviceaccount maas-api maas-controller -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete serviceaccount maas-api maas-api-cleanup maas-controller -n "$ns" --ignore-not-found 2>/dev/null || true
     echo "   ✅ MaaS resources cleaned from $ns"
 }
 
