@@ -935,7 +935,6 @@ func httpRevokeTenantAPIKeys(ctx context.Context, endpoint string, caBundle []by
 	}
 
 	httpClient := &http.Client{
-		Timeout: tenantAPIKeyRevocationTimeout,
 		Transport: &http.Transport{
 			TLSClientConfig: &tls.Config{RootCAs: pool, MinVersion: tls.VersionTLS12},
 		},
