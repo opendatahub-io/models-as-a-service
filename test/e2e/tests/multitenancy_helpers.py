@@ -1125,7 +1125,6 @@ def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:
         "deployment": per_tenant_resource_name("maas-api", tenant_name),
         "service": per_tenant_resource_name("maas-api", tenant_name),
         "httproute": per_tenant_resource_name("maas-api-route", tenant_name),
-        "cronjob": per_tenant_resource_name("maas-api-key-cleanup", tenant_name),
         "authpolicy": per_tenant_resource_name("maas-api-auth-policy", tenant_name),
     }
 
@@ -1146,7 +1145,6 @@ def aitenant_cleanup_resource_refs(case: dict[str, str]) -> list[tuple[str, str,
         ("deployment", maas_api_names["deployment"], INFRA_NAMESPACE),
         ("service", maas_api_names["service"], INFRA_NAMESPACE),
         ("httproute", maas_api_names["httproute"], INFRA_NAMESPACE),
-        ("cronjob", maas_api_names["cronjob"], INFRA_NAMESPACE),
         ("authpolicy", gateway_policy_names["gateway_authpolicy"], GATEWAY_NAMESPACE),
         ("tokenratelimitpolicy", gateway_policy_names["default_deny"], GATEWAY_NAMESPACE),
         ("destinationrule", gateway_policy_names["destinationrule"], GATEWAY_NAMESPACE),
