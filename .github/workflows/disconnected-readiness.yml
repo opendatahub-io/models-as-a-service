@@ -7,6 +7,6 @@ on:
 
 jobs:
   check:
-    uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@6f7fc06230f5eeabfd134d819219314d54f0c7e7 # v1
+    uses: opendatahub-io/disconnected-readiness-scorer/.github/workflows/disconnected-readiness-check.yml@cc5acfcdaccc4d89c1de154c4c21d9cf5e350209 # v1
     with:
       rules: ""
