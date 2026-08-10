@@ -19,22 +19,17 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
 
-  # Metrics Service also uses service-ca on OpenShift; strip it for xKS and expose HTTP.
+  # Insecure metrics on xKS: drop the dedicated metrics Service (OpenShift
+  # service-ca + ServiceMonitor path). Pod still exposes HTTP :8080 for local scrape.
   - target:
       kind: Service
       name: maas-controller-metrics
     patch: |
-      - op: remove
-        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
-      - op: replace
-        path: /spec/ports/0/name
-        value: metrics
-      - op: replace
-        path: /spec/ports/0/port
-        value: 8080
-      - op: replace
-        path: /spec/ports/0/targetPort
-        value: metrics
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: maas-controller-metrics
 
   # Remove OCP CA bundle injection (cert-manager CA injection is handled by the chart)
   - target:
@@ -44,10 +39,9 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
 
-  # Mount the webhook TLS secret into the controller deployment
-  # (Certificate is created by the rhai-on-xks-chart post-install hook).
-  # Replace (not merge) base volumes/volumeMounts so OpenShift metrics-certs
-  # from manager.yaml are dropped when SecureServing is disabled.
+  # Insecure metrics on xKS: keep base webhook + metrics volume mounts, but make
+  # metrics-certs optional so the missing service-ca Secret does not block startup.
+  # (Webhook cert is still created by the rhai-on-xks-chart post-install hook.)
   - target:
       kind: Deployment
       name: maas-controller
@@ -61,18 +55,6 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/ports/0/containerPort
         value: 8080
-      - op: replace
-        path: /spec/template/spec/containers/0/ports/0/name
-        value: metrics
       - op: add
-        path: /spec/template/spec/volumes
-        value:
-          - name: webhook-certs
-            secret:
-              secretName: maas-controller-webhook-cert
-      - op: add
-        path: /spec/template/spec/containers/0/volumeMounts
-        value:
-          - name: webhook-certs
-            mountPath: /tmp/k8s-webhook-server/serving-certs
-            readOnly: true
+        path: /spec/template/spec/volumes/1/secret/optional
+        value: true

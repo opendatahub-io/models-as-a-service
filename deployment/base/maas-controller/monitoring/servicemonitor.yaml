@@ -12,7 +12,7 @@ spec:
       app: maas-controller
   endpoints:
     - path: /metrics
-      port: https
+      port: metrics
       scheme: https
       interval: 30s
       bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token

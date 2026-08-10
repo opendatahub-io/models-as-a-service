@@ -93,7 +93,7 @@ spec:
         imagePullPolicy: Always
         ports:
         - containerPort: 8443
-          name: https
+          name: metrics
           protocol: TCP
         securityContext:
           allowPrivilegeEscalation: false

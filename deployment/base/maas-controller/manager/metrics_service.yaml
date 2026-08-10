@@ -12,9 +12,9 @@ metadata:
     service.beta.openshift.io/serving-cert-secret-name: maas-controller-metrics-tls
 spec:
   ports:
-    - name: https
+    - name: metrics
       port: 8443
       protocol: TCP
-      targetPort: https
+      targetPort: metrics
   selector:
     control-plane: maas-controller
