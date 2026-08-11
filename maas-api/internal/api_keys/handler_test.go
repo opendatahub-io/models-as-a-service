@@ -2220,9 +2220,9 @@ func TestBulkRevokeAPIKeys_BySubscription(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "sub-a-key-1", "h1", "Key 1", "", nil, "sub-alpha", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "bob", "sub-a-key-2", "h2", "Key 2", "", nil, "sub-alpha", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "sub-b-key-1", "h3", "Key 3", "", nil, "sub-beta", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-a-key-1", "h1", "Key 1", "", nil, "sub-alpha", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "bob", "sub-a-key-2", "h2", "Key 2", "", nil, "sub-alpha", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-b-key-1", "h3", "Key 3", "", nil, "sub-beta", "test-tenant", nil, false, nil))
 
 	t.Run("AdminCanRevokeBySubscription", func(t *testing.T) {
 		adminUser := &token.UserContext{
@@ -2278,9 +2278,9 @@ func TestBulkRevokeAPIKeys_BySubscription(t *testing.T) {
 		service2 := NewServiceWithLogger(store2, cfg, fixedSubSelector{}, logger.Development())
 		handler2 := NewHandler(logger.Development(), service2, newMockAdminChecker(), nil)
 
-		require.NoError(t, store2.AddKey(ctx, "alice", "combo-1", "ch1", "K1", "", nil, "sub-x", "test-tenant", nil, false))
-		require.NoError(t, store2.AddKey(ctx, "alice", "combo-2", "ch2", "K2", "", nil, "sub-y", "test-tenant", nil, false))
-		require.NoError(t, store2.AddKey(ctx, "bob", "combo-3", "ch3", "K3", "", nil, "sub-x", "test-tenant", nil, false))
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-1", "ch1", "K1", "", nil, "sub-x", "test-tenant", nil, false, nil))
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-2", "ch2", "K2", "", nil, "sub-y", "test-tenant", nil, false, nil))
+		require.NoError(t, store2.AddKey(ctx, "bob", "combo-3", "ch3", "K3", "", nil, "sub-x", "test-tenant", nil, false, nil))
 
 		adminUser := &token.UserContext{
 			Username: "admin",
@@ -2321,9 +2321,9 @@ func TestBulkRevokeAPIKeys_DryRun(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-1", "dh1", "DK1", "", nil, "sub-a", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-2", "dh2", "DK2", "", nil, "sub-a", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-3", "dh3", "DK3", "", nil, "sub-b", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-1", "dh1", "DK1", "", nil, "sub-a", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-2", "dh2", "DK2", "", nil, "sub-a", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-3", "dh3", "DK3", "", nil, "sub-b", "test-tenant", nil, false, nil))
 
 	t.Run("DryRunDoesNotMutate", func(t *testing.T) {
 		adminUser := &token.UserContext{

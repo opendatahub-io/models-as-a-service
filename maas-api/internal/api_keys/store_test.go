@@ -208,9 +208,9 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "alice", "sa-1", "sah1", "k1", "", nil, "sub-alpha", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "bob", "sa-2", "sah2", "k2", "", nil, "sub-alpha", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "alice", "sb-1", "sbh1", "k3", "", nil, "sub-beta", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "alice", "sa-1", "sah1", "k1", "", nil, "sub-alpha", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "bob", "sa-2", "sah2", "k2", "", nil, "sub-alpha", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "alice", "sb-1", "sbh1", "k3", "", nil, "sub-beta", "", nil, false, nil))
 
 		count, err := s.BulkRevoke(ctx, "", "sub-alpha", "", false)
 		require.NoError(t, err)
@@ -224,9 +224,9 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "alice", "us-1", "ush1", "k1", "", nil, "sub-x", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "alice", "us-2", "ush2", "k2", "", nil, "sub-y", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "bob", "us-3", "ush3", "k3", "", nil, "sub-x", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "alice", "us-1", "ush1", "k1", "", nil, "sub-x", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "alice", "us-2", "ush2", "k2", "", nil, "sub-y", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "bob", "us-3", "ush3", "k3", "", nil, "sub-x", "", nil, false, nil))
 
 		count, err := s.BulkRevoke(ctx, "alice", "sub-x", "", false)
 		require.NoError(t, err)
@@ -349,9 +349,9 @@ func TestBulkRevoke_ExcludesExpiredKeys(t *testing.T) {
 	pastExpiry := time.Now().Add(-time.Hour)
 	futureExpiry := time.Now().Add(24 * time.Hour)
 
-	require.NoError(t, store.AddKey(ctx, "alice", "active-1", "ah1", "key-a1", "", nil, "sub-1", "tenant-a", &futureExpiry, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "expired-1", "ah2", "key-a2", "", nil, "sub-1", "tenant-a", &pastExpiry, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "permanent-1", "ah3", "key-a3", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "active-1", "ah1", "key-a1", "", nil, "sub-1", "tenant-a", &futureExpiry, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "expired-1", "ah2", "key-a2", "", nil, "sub-1", "tenant-a", &pastExpiry, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "permanent-1", "ah3", "key-a3", "", nil, "sub-1", "tenant-a", nil, false, nil))
 
 	count, err := store.BulkRevoke(ctx, "alice", "", "tenant-a", true)
 	require.NoError(t, err)
