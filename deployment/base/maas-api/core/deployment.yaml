@@ -33,8 +33,7 @@ spec:
           value: "9090"
         - name: METRICS_SECURE
           value: "false"
-        - name: METRICS_CERT_DIR
-          value: "/tmp/k8s-metrics-server/metrics-certs"
+        # METRICS_CERT_DIR defaults in Go (DefaultMetricsCertDir); set explicitly in overlays/tls.
         resources:
           requests:
             memory: "128Mi"

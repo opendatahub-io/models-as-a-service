@@ -186,9 +186,14 @@ func remapServiceMonitorServerName(res *resource.Resource, appNamespace string) 
 		if !ok || serverName == "" {
 			continue
 		}
+		// Require overlayDefaultNamespace as the DNS namespace label (2nd segment),
+		// not merely a later substring (e.g. prometheus.monitoring.opendatahub.svc).
+		parts := strings.SplitN(serverName, ".", 3)
+		if len(parts) < 3 || parts[1] != overlayDefaultNamespace {
+			continue
+		}
 		rewritten := replaceHostNamespace(serverName, appNamespace)
-		// Only rewrite when the host was using the overlay default namespace.
-		if rewritten != serverName && strings.Contains(serverName, "."+overlayDefaultNamespace+".") {
+		if rewritten != serverName {
 			tlsCfg["serverName"] = rewritten
 			changed = true
 		}
