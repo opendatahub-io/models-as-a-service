@@ -183,6 +183,7 @@ func TestAITenantReconcile_ValidatesExistingGatewayAndCreatesBootstrapResources(
 	g.Expect(ns.Labels).To(HaveKeyWithValue(aitenantManagedLabel, "true"))
 	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/tenant-name", "team-a"))
 	g.Expect(ns.Labels).To(HaveKeyWithValue("maas.opendatahub.io/tenant-namespace", "ai-tenant-team-a"))
+	g.Expect(ns.Labels).To(HaveKeyWithValue(tenantreconcile.LabelGatewayAccess, "true"))
 
 	var updatedGateway gatewayapiv1.Gateway
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "team-a", Namespace: "openshift-ingress"}, &updatedGateway)).To(Succeed())
