@@ -1179,6 +1179,54 @@ def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
     )
 
 
+def _wait_for_httproute_accepted(name, namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for an HTTPRoute to be Accepted by at least one parent Gateway.
+
+    The HTTPRoute object existing in the API server only proves the
+    reconciler created it — the Gateway controller still needs to program it
+    into the data plane before real HTTP traffic will match it. Requests
+    sent before that happens race the gateway and get a plain 404 ("no
+    route"), which is easy to mistake for an auth failure since callers
+    usually assert on 401/403. Waiting on the gateway-level AuthPolicy
+    Enforced condition does NOT prove this route is ready — that policy is
+    a fixed-size singleton unrelated to any single HTTPRoute.
+
+    Args:
+        name: Name of the HTTPRoute
+        namespace: Namespace (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The HTTPRoute CR dict once Accepted
+
+    Raises:
+        TimeoutError: If no parent reports Accepted=True within timeout
+    """
+    deadline = time.time() + timeout
+    log.info(f"Waiting for HTTPRoute {namespace}/{name} to be Accepted (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("httproute", name, namespace)
+        if cr:
+            parents = (cr.get("status") or {}).get("parents") or []
+            for parent in parents:
+                if any(
+                    c.get("type") == "Accepted" and c.get("status") == "True"
+                    for c in parent.get("conditions") or []
+                ):
+                    log.info(f"HTTPRoute {namespace}/{name} is Accepted")
+                    return cr
+            log.debug(f"HTTPRoute {namespace}/{name}: no parent Accepted=True yet ({len(parents)} parent(s))")
+        time.sleep(2)
+
+    cr = _get_cr("httproute", name, namespace)
+    parents = (cr.get("status") or {}).get("parents") if cr else None
+    raise TimeoutError(
+        f"HTTPRoute {namespace}/{name} did not report Accepted=True within {timeout}s "
+        f"(parents={parents!r})"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Controller scaling utilities
 # ---------------------------------------------------------------------------
