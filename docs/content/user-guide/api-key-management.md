@@ -263,7 +263,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 - Rotating all credentials as part of security policy
 
 !!! note "Administrator bulk revocation"
-    Administrators can revoke keys for any user. See [API Key Administration](../configuration-and-management/api-key-administration.md#bulk-key-revocation).
+    Administrators can revoke keys for any user or for an entire subscription. See [API Key Administration](../configuration-and-management/api-key-administration.md#bulk-key-revocation) for subscription-scoped revocation, dry-run mode, and combined user+subscription scope.
 
 ---
 

@@ -91,6 +91,11 @@ type ModelReference struct {
 //     or UIDs appear in any status field.
 //   - RuntimeReady: whether the model backend is healthy and serving, independent
 //     of governance state.
+//   - ModelIdentityUnique: whether this model's ResolvedModelAlias collides with
+//     another MaaSModelRef in the same namespace. False on a collision — body-based
+//     routing cannot disambiguate two MaaSModelRefs with the same resolved alias, so
+//     requests may be routed to the wrong backend/subscription. Informational only;
+//     does not affect Phase.
 type MaaSModelStatus struct {
 	// Phase represents the current phase of the model.
 	// Pending = awaiting governance pairing or backend readiness.
@@ -143,6 +148,8 @@ type MaaSModelStatus struct {
 	//   - Ready: overall readiness (governance + runtime).
 	//   - GovernanceAttached: active MaaSSubscription + MaaSAuthPolicy pairing exists.
 	//   - RuntimeReady: backend is healthy and serving.
+	//   - ModelIdentityUnique: no other MaaSModelRef in this namespace resolves to the
+	//     same model alias (see MaaSModelStatus doc for details).
 	// +optional
 	Conditions []metav1.Condition `json:"conditions,omitempty"`
 }

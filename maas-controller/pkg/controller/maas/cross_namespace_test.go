@@ -114,10 +114,8 @@ func TestMaaSAuthPolicyReconciler_CrossNamespace(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
 	}
-	for _, key := range []string{modelNamespaceA + "/" + modelName, modelNamespaceB + "/" + modelName} {
-		if !strings.Contains(rego, key) {
-			t.Errorf("gateway rego should include aggregated model key %q, got: %s", key, rego)
-		}
+	if !strings.Contains(rego, "accessAllowed") {
+		t.Errorf("gateway rego should reference accessAllowed from subscription-info metadata, got: %s", rego)
 	}
 
 	// Verify no legacy per-model AuthPolicy exists in model namespaces or policy namespace.
@@ -197,7 +195,7 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
 
-	// Verify only referenced model appears in the gateway authorization rego map.
+	// Verify gateway rego is fixed-size (no model-specific data).
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gatewayAP); err != nil {
@@ -207,13 +205,8 @@ func TestMaaSAuthPolicyReconciler_SelectiveModelManagement(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
 	}
-	refKey := modelNamespaceA + "/" + modelName
-	unrefKey := modelNamespaceB + "/" + modelName
-	if !strings.Contains(rego, refKey) {
-		t.Errorf("gateway rego should include referenced model key %q", refKey)
-	}
-	if strings.Contains(rego, unrefKey) {
-		t.Errorf("gateway rego should not include unreferenced model key %q", unrefKey)
+	if !strings.Contains(rego, "accessAllowed") {
+		t.Errorf("gateway rego should reference accessAllowed, got: %s", rego)
 	}
 
 	// Verify no legacy per-model AuthPolicies are created.
@@ -314,8 +307,7 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 		}
 	}
 
-	// Aggregation is namespace-scoped per reconciling policy namespace. Because policy-b
-	// was reconciled last, gateway rego should include namespaceB and not namespaceA.
+	// Rego is now fixed-size — access checks are delegated to subscription-info metadata.
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: "maas-gateway-auth", Namespace: gatewayNS}, gatewayAP); err != nil {
@@ -325,11 +317,8 @@ func TestMaaSAuthPolicyReconciler_SameNameDifferentNamespaces(t *testing.T) {
 	if err != nil || !found {
 		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
 	}
-	if strings.Contains(rego, namespaceA+"/"+modelName) {
-		t.Errorf("gateway rego should not include model key %q after policy-b reconcile", namespaceA+"/"+modelName)
-	}
-	if !strings.Contains(rego, namespaceB+"/"+modelName) {
-		t.Errorf("gateway rego should include model key %q after policy-b reconcile", namespaceB+"/"+modelName)
+	if !strings.Contains(rego, "accessAllowed") {
+		t.Errorf("gateway rego should reference accessAllowed, got: %s", rego)
 	}
 }
 
@@ -662,13 +651,13 @@ func TestMaaSAuthPolicyReconciler_DuplicateNameAnnotationIsolation(t *testing.T)
 		t.Fatalf("Get gateway AuthPolicy: %v", err)
 	}
 
-	// The group from namespaceA's policy should appear in the gateway rego.
+	// Rego is now fixed-size — access checks are delegated to subscription-info metadata.
 	rego, found, err := unstructured.NestedString(gw.Object, "spec", "defaults", "rules", "authorization", "require-group-membership", "opa", "rego")
 	if err != nil || !found {
 		t.Fatalf("gateway require-group-membership rego missing: found=%v err=%v", found, err)
 	}
-	if !contains(rego, "team-a") {
-		t.Errorf("gateway rego should contain group %q for model %s/%s, rego=%s", "team-a", modelNamespace, modelName, rego)
+	if !strings.Contains(rego, "accessAllowed") {
+		t.Errorf("gateway rego should reference accessAllowed, got: %s", rego)
 	}
 }
 

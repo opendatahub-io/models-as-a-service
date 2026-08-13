@@ -429,18 +429,53 @@ func (m *MockStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey, err
 	return nil, ErrKeyNotFound
 }
 
-func (m *MockStore) InvalidateAll(ctx context.Context, username string, tenant string) (int, error) {
+// bulkRevokeMatch returns true if the key matches the bulk revoke scope.
+// Keys with a past expiresAt are treated as expired even when the persisted
+// status is still "active", consistent with the Get/Search auto-expire logic.
+func bulkRevokeMatch(k *storedKey, username, subscription, tenant string) bool {
+	if k.metadata.Status != StatusActive || k.metadata.Tenant != tenant {
+		return false
+	}
+	if !k.expiresAt.IsZero() && k.expiresAt.Before(time.Now().UTC()) {
+		return false
+	}
+	if username != "" && k.username != username {
+		return false
+	}
+	if subscription != "" && k.metadata.Subscription != subscription {
+		return false
+	}
+	return true
+}
+
+func (m *MockStore) BulkRevoke(ctx context.Context, username, subscription, tenant string, dryRun bool) (int, error) {
+	if username == "" && subscription == "" {
+		return 0, errors.New("at least one of username or subscription is required")
+	}
+
+	if dryRun {
+		m.mu.RLock()
+		defer m.mu.RUnlock()
+
+		count := 0
+		for _, k := range m.keys {
+			if bulkRevokeMatch(k, username, subscription, tenant) {
+				count++
+			}
+		}
+		return count, nil
+	}
+
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	count := 0
 	for _, k := range m.keys {
-		if k.username == username && k.metadata.Tenant == tenant && k.metadata.Status == StatusActive {
+		if bulkRevokeMatch(k, username, subscription, tenant) {
 			k.metadata.Status = StatusRevoked
 			count++
 		}
 	}
-
 	return count, nil
 }
 
