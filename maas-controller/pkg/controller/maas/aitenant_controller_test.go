@@ -4,6 +4,8 @@ package maas
 import (
 	"context"
 	"encoding/json"
+	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -3229,4 +3232,474 @@ func TestAITenantReconcile_DeletionTimeoutDisabledWhenZero(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res.RequeueAfter).To(BeNumerically(">", 0),
 		"should requeue for normal cleanup when timeout is disabled, not force-remove")
+}
+
+func efManifestPath(t *testing.T) string {
+	t.Helper()
+	_, testFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("cannot determine test file location")
+	}
+	return filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
+}
+
+func TestAITenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
+	const gwNS = "openshift-ingress"
+	const monitoringNS = "opendatahub"
+	const aitenantNS = tenantreconcile.DefaultAITenantNamespace
+
+	t.Run("disabled by default", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
+
+		// Verify ObservabilityReady condition is set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("UsageLoggingDisabled"))
+	})
+
+	t.Run("monitoring namespace empty sets condition", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // empty — not configured
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// No EnvoyFilter should be created
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when MonitoringNamespace is empty")
+
+		// Verify ObservabilityReady condition is set to False with correct reason
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
+	})
+
+	t.Run("enabled creates per-tenant filter for default tenant", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			AITenantNamespace:       aitenantNS,
+			EnvoyFilterManifestPath: efManifestPath(t),
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)).
+			To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
+		g.Expect(ef.GetName()).To(Equal("maas-model-access-logs"))
+		g.Expect(ef.GetNamespace()).To(Equal(gwNS))
+
+		// Verify collector address is patched
+		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		g.Expect(configPatches).NotTo(BeEmpty())
+		clusterPatch, _ := configPatches[0].(map[string]any)
+		endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
+		g.Expect(endpoints).NotTo(BeEmpty())
+		ep0, _ := endpoints[0].(map[string]any)
+		lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
+		g.Expect(lbEndpoints).NotTo(BeEmpty())
+		lbe0, _ := lbEndpoints[0].(map[string]any)
+		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
+		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"))
+
+		// Verify workloadSelector gateway is patched to the default tenant's gateway name
+		wsLabels, _, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(wsLabels).NotTo(BeEmpty())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal(tenantreconcile.DefaultAITenantName))
+
+		// Verify targetRefs removed (mutually exclusive with workloadSelector in Istio 1.26+)
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be cleared; mutually exclusive with workloadSelector")
+
+		// Verify ObservabilityReady condition is set to True
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		g.Expect(cond.Reason).To(Equal("EnvoyFilterApplied"))
+	})
+
+	t.Run("enabled creates per-tenant filter for named tenant", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "redteam",
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			AITenantNamespace:       aitenantNS,
+			EnvoyFilterManifestPath: efManifestPath(t),
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("redteam")
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)).
+			To(Succeed(), "per-tenant EnvoyFilter should exist")
+		g.Expect(ef.GetName()).To(Equal("maas-model-access-logs-redteam"))
+
+		// Verify workloadSelector gateway is patched to the named tenant's gateway
+		wsLabels, _, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(wsLabels).NotTo(BeEmpty())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("redteam"))
+
+		// Verify targetRefs removed
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be cleared")
+	})
+
+	t.Run("deletes existing when disabled", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(tenantreconcile.UsageLogsEnvoyFilterName(""))
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant, existingEF).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
+	})
+
+	t.Run("sets condition and deletes EF when Config not found", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		// No Config object — simulates Config CR being removed
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+		existingEF := &unstructured.Unstructured{}
+		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		existingEF.SetName(tenantreconcile.UsageLogsEnvoyFilterName(""))
+		existingEF.SetNamespace(gwNS)
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(aitenant, existingEF).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: monitoringNS,
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// EF should be deleted
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		err = cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when Config is not found")
+
+		// ObservabilityReady condition should be set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("ConfigNotFound"))
+	})
+
+	t.Run("sets ObservabilityReady condition when usageLogging enabled but MonitoringNamespace empty", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // deliberately empty
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred(), "should not return error — non-blocking degradation")
+
+		// No EnvoyFilter should be created
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		efName := tenantreconcile.UsageLogsEnvoyFilterName("")
+		getErr := cl.Get(context.Background(), client.ObjectKey{Name: efName, Namespace: gwNS}, ef)
+		g.Expect(apierrors.IsNotFound(getErr)).To(BeTrue(), "no EnvoyFilter should be created when MonitoringNamespace is empty")
+
+		// ObservabilityReady condition should be set to False
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
+	})
+
+	t.Run("sets EnvoyFilterSkipped condition when manifest not found", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:                  cl,
+			Scheme:                  s,
+			APIReader:               cl,
+			GatewayNamespace:        gwNS,
+			MonitoringNamespace:     monitoringNS,
+			AITenantNamespace:       aitenantNS,
+			EnvoyFilterManifestPath: "/nonexistent/path/envoyfilter.yaml",
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred(), "missing manifest is non-fatal")
+
+		// ObservabilityReady condition should be set to False with EnvoyFilterSkipped reason
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("EnvoyFilterSkipped"))
+	})
+
+	t.Run("sets UsageLoggingDisabled condition when usageLogging off and MonitoringNamespace empty", func(t *testing.T) {
+		g := NewWithT(t)
+		s := aitenantTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
+		}
+		aitenant := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, aitenant).Build()
+		r := &AITenantReconciler{
+			Client:              cl,
+			Scheme:              s,
+			APIReader:           cl,
+			GatewayNamespace:    gwNS,
+			MonitoringNamespace: "", // empty — MonitoringNamespace check is first, so condition is MonitoringNamespaceNotConfigured
+			AITenantNamespace:   aitenantNS,
+		}
+
+		err := r.ensureUsageLogsEnvoyFilter(context.Background(), aitenant)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		// MonitoringNamespace check fires first (before Config lookup)
+		cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionObservabilityReady)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("MonitoringNamespaceNotConfigured"))
+	})
+}
+
+func TestPatchEnvoyFilterWorkloadSelector(t *testing.T) {
+	t.Run("patches workloadSelector and removes targetRefs", func(t *testing.T) {
+		g := NewWithT(t)
+
+		// Start with a manifest that has targetRefs (legacy format)
+		ef := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "networking.istio.io/v1alpha3",
+				"kind":       "EnvoyFilter",
+				"spec": map[string]any{
+					"targetRefs": []any{
+						map[string]any{
+							"group": "gateway.networking.k8s.io",
+							"kind":  "Gateway",
+							"name":  "original-gateway",
+						},
+					},
+				},
+			},
+		}
+
+		err := patchEnvoyFilterWorkloadSelector(ef, "redteam-gateway")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		wsLabels, found, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(found).To(BeTrue())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("redteam-gateway"))
+
+		_, targetRefsFound, _ := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+		g.Expect(targetRefsFound).To(BeFalse(), "targetRefs must be removed; mutually exclusive with workloadSelector")
+	})
+
+	t.Run("patches existing workloadSelector", func(t *testing.T) {
+		g := NewWithT(t)
+
+		// Start with a manifest that already has workloadSelector
+		ef := &unstructured.Unstructured{
+			Object: map[string]any{
+				"apiVersion": "networking.istio.io/v1alpha3",
+				"kind":       "EnvoyFilter",
+				"spec": map[string]any{
+					"workloadSelector": map[string]any{
+						"labels": map[string]any{
+							"gateway.networking.k8s.io/gateway-name": "old-gateway",
+						},
+					},
+				},
+			},
+		}
+
+		err := patchEnvoyFilterWorkloadSelector(ef, "new-gateway")
+		g.Expect(err).NotTo(HaveOccurred())
+
+		wsLabels, found, _ := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
+		g.Expect(found).To(BeTrue())
+		g.Expect(wsLabels["gateway.networking.k8s.io/gateway-name"]).To(Equal("new-gateway"))
+	})
+}
+
+func TestUsageLogsEnvoyFilterName(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(tenantreconcile.UsageLogsEnvoyFilterName("")).To(Equal("maas-model-access-logs"))
+	g.Expect(tenantreconcile.UsageLogsEnvoyFilterName("redteam")).To(Equal("maas-model-access-logs-redteam"))
 }
