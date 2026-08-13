@@ -88,6 +88,14 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - GitHub Actions pinned to immutable commit SHAs.
 - `govulncheck` added for maas-api and maas-controller.
 
+**Bulk API key revocation enhancements**
+
+- Subscription-scoped bulk revoke: administrators can revoke all API keys bound to a specific `MaaSSubscription` in a single call.
+- Combined scope: revoke keys for a specific user within a specific subscription.
+- Dry-run mode (`dryRun: true`): preview how many keys would be revoked without mutating any data.
+- Structured audit records emitted for every actual bulk revoke operation (action, actor, scope, count, tenant).
+- See [API Key Administration](../configuration-and-management/api-key-administration.md) for usage examples.
+
 **Additional features**
 
 - OpenShift cluster TLS profiles honored for gateway and controller TLS configuration.

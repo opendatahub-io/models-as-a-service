@@ -252,3 +252,111 @@ func TestExtractGatewayMetadata_RejectsInternalServiceName(t *testing.T) {
 	assert.Contains(t, err.Error(), "not configured with an external hostname")
 	assert.Contains(t, err.Error(), "internal service name")
 }
+
+func TestSelectBestListener_HTTPBeforeHTTPS(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "http", "port": int64(80), "protocol": "HTTP", "hostname": "maas.example.com"},
+		map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS", "hostname": "maas.example.com"},
+	}
+	statusByName := map[string]map[string]any{
+		"http":  {"name": "http", "attachedRoutes": int64(3)},
+		"https": {"name": "https", "attachedRoutes": int64(3)},
+	}
+
+	port, protocol, hostname := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(443), port)
+	assert.Equal(t, protocolHTTPS, protocol)
+	assert.Equal(t, "maas.example.com", hostname)
+}
+
+func TestSelectBestListener_TLSProtocol(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "tls", "port": int64(8443), "protocol": "TLS", "hostname": "tls.example.com"},
+	}
+	statusByName := map[string]map[string]any{
+		"tls": {"name": "tls", "attachedRoutes": int64(1)},
+	}
+
+	port, protocol, _ := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(8443), port)
+	assert.Equal(t, protocolTLS, protocol)
+}
+
+func TestSelectBestListener_HTTPOnlyWhenHTTPSNotReady(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "http", "port": int64(80), "protocol": "HTTP", "hostname": "maas.example.com"},
+		map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS", "hostname": "maas.example.com"},
+	}
+	statusByName := map[string]map[string]any{
+		"http":  {"name": "http", "attachedRoutes": int64(2)},
+		"https": {"name": "https", "attachedRoutes": int64(0)},
+	}
+
+	port, protocol, _ := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(80), port)
+	assert.Equal(t, protocolHTTP, protocol)
+}
+
+func TestSelectBestListener_HTTPOnlyListeners(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "http", "port": int64(80), "protocol": "HTTP", "hostname": "maas.example.com"},
+	}
+	statusByName := map[string]map[string]any{
+		"http": {"name": "http", "attachedRoutes": int64(1)},
+	}
+
+	port, protocol, hostname := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(80), port)
+	assert.Equal(t, protocolHTTP, protocol)
+	assert.Equal(t, "maas.example.com", hostname)
+}
+
+func TestSelectBestListener_NoReadyListeners(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS"},
+	}
+	statusByName := map[string]map[string]any{
+		"https": {"name": "https", "attachedRoutes": int64(0)},
+	}
+
+	port, protocol, hostname := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(443), port)
+	assert.Equal(t, protocolHTTPS, protocol)
+	assert.Empty(t, hostname)
+}
+
+func TestSelectBestListener_IgnoresTCPListener(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "tcp", "port": int64(9090), "protocol": "TCP", "hostname": "tcp.example.com"},
+		map[string]any{"name": "https", "port": int64(443), "protocol": "HTTPS", "hostname": "maas.example.com"},
+	}
+	statusByName := map[string]map[string]any{
+		"tcp":   {"name": "tcp", "attachedRoutes": int64(1)},
+		"https": {"name": "https", "attachedRoutes": int64(1)},
+	}
+
+	port, protocol, hostname := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(443), port)
+	assert.Equal(t, protocolHTTPS, protocol)
+	assert.Equal(t, "maas.example.com", hostname)
+}
+
+func TestSelectBestListener_TCPOnlyNotUsedAsFallback(t *testing.T) {
+	specListeners := []any{
+		map[string]any{"name": "tcp", "port": int64(9090), "protocol": "TCP"},
+	}
+	statusByName := map[string]map[string]any{
+		"tcp": {"name": "tcp", "attachedRoutes": int64(1)},
+	}
+
+	port, protocol, _ := selectBestListener(specListeners, statusByName)
+
+	assert.Equal(t, int64(443), port)
+	assert.Equal(t, protocolHTTPS, protocol)
+}

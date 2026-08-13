@@ -8,8 +8,9 @@
 #   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators.
 #                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
 #   OPERATOR_CHANNEL   - Subscription channel (default: fast-3)
-#   OPERATOR_STARTING_CSV - Pin Subscription startingCSV (optional). When unset,
-#                           follow the channel head (latest in fast-3 by default).
+#   OPERATOR_STARTING_CSV - Pin Subscription startingCSV
+#                           (default: opendatahub-operator.v3.5.0-ea.2).
+#                           Set to "-" to follow the channel head instead.
 #   OPERATOR_INSTALL_PLAN_APPROVAL - Manual (default) or Automatic; use "-" to omit.
 #     Manual: blocks auto-upgrades; this script auto-approves only the first InstallPlan so install does not stall.
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
@@ -27,7 +28,7 @@ DATA_DIR="${REPO_ROOT}/scripts/data"
 NAMESPACE="${OPERATOR_NAMESPACE:-opendatahub}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
-OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
+OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 
@@ -125,9 +126,9 @@ else
   channel="${OPERATOR_CHANNEL:-fast-3}"
 fi
 
-# Follow the configured channel head by default unless OPERATOR_STARTING_CSV
-# explicitly pins a CSV.
-starting_csv="${OPERATOR_STARTING_CSV:-}"
+# Pin to ODH 3.5 EA2 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
+starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
+[[ "$starting_csv" == "-" ]] && starting_csv=""
 
 # Manual = no auto-upgrades; install_olm_operator still approves the first InstallPlan programmatically
 plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"

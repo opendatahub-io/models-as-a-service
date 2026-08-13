@@ -218,7 +218,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponseWithResolvedModel(&sub, requestedModel), nil
+				resp := toResponseWithResolvedModel(&sub, requestedModel)
+				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
+				return resp, nil
 			}
 		}
 
@@ -238,7 +240,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if err := checkModelHealth(&sub, requestedModel); err != nil {
 					return nil, err
 				}
-				return toResponseWithResolvedModel(&sub, requestedModel), nil
+				resp := toResponseWithResolvedModel(&sub, requestedModel)
+				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
+				return resp, nil
 			}
 		}
 
@@ -267,7 +271,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if err := checkModelHealth(&accessibleSubs[0], requestedModel); err != nil {
 			return nil, err
 		}
-		return toResponseWithResolvedModel(&accessibleSubs[0], requestedModel), nil
+		resp := toResponseWithResolvedModel(&accessibleSubs[0], requestedModel)
+		resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &accessibleSubs[0], requestedModel)
+		return resp, nil
 	}
 
 	// User has multiple subscriptions - require explicit selection
@@ -569,6 +575,25 @@ func userHasAccess(sub *subscription, username string, groups []string) bool {
 	}
 
 	return false
+}
+
+// isModelAccessAllowed checks MaaSAuthPolicy access for the resolved model.
+func (s *Selector) isModelAccessAllowed(groups []string, username string, sub *subscription, requestedModel string) bool {
+	if requestedModel == "" {
+		return true
+	}
+	if s.accessChecker == nil {
+		return false
+	}
+	ref := findModelRef(sub, requestedModel)
+	if ref == nil {
+		return false
+	}
+	authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
+	if authorizedSet == nil {
+		return false
+	}
+	return authorizedSet[authpolicy.ModelKey{Namespace: ref.Namespace, Name: ref.Name}]
 }
 
 // subscriptionIncludesModel checks if the subscription's modelRefs includes the requested model.
