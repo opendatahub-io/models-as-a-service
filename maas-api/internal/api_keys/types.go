@@ -147,14 +147,18 @@ type SearchAPIKeysResponse struct {
 // ============================================================
 
 // BulkRevokeRequest for POST /v1/api-keys/bulk-revoke.
+// At least one of Username or Subscription must be provided.
 type BulkRevokeRequest struct {
-	Username string `binding:"required" json:"username"`
+	Username     string `json:"username,omitempty"`
+	Subscription string `json:"subscription,omitempty"`
+	DryRun       bool   `json:"dryRun,omitempty"`
 }
 
 // BulkRevokeResponse returns count of revoked keys.
 type BulkRevokeResponse struct {
 	RevokedCount int    `json:"revokedCount"`
 	Message      string `json:"message"`
+	DryRun       bool   `json:"dryRun,omitempty"`
 }
 
 // TenantRevokeResponse returns count of revoked keys for tenant-wide cleanup.

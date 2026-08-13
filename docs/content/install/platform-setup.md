@@ -409,7 +409,7 @@ Now install the Gateway API controller for your platform:
 
     #### High-concurrency authentication timeout
 
-    RHCL configures the Kuadrant WASM plugin with an authentication service timeout of `200ms` by default. Under high concurrent request load, this short timeout can appear as intermittent HTTP `500` or `503` responses from gateway policy evaluation even when the model backend is healthy. If you see timeout-related failures during concurrent inference, increase `AUTH_SERVICE_TIMEOUT` to `2s` (`2000ms`) on the RHCL operator Subscription (`spec.config.env`).
+    RHCL configures the Kuadrant WASM plugin with an authentication service timeout of `200ms` by default. Under high concurrent request load, this short timeout can appear as intermittent HTTP `500` or `503` responses from gateway policy evaluation even when the model backend is healthy. To override the default, set `AUTH_SERVICE_TIMEOUT` to `2s` (`2000ms`) on the RHCL operator Subscription (`spec.config.env`).
 
     Set the RHCL Subscription name and namespace for your installation before patching. The manual install example above uses `kuadrant-operator` in `kuadrant-system`; RHOAI-managed clusters commonly use `rhcl-operator` in `rh-connectivity-link`.
 

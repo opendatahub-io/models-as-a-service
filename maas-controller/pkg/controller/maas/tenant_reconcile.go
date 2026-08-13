@@ -330,6 +330,12 @@ func (r *TenantReconciler) reconcilePlatform(
 		return &res, nil
 	}
 
+	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
+		log.Error(err, "failed to ensure gateway management auth, will retry")
+		res := ctrl.Result{RequeueAfter: 45 * time.Second}
+		return &res, nil
+	}
+
 	surfaceReplicaWarnings(tenant, runRes)
 
 	if runRes.DeploymentPending {
@@ -602,11 +608,6 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 			name:      tenantreconcile.MaaSAPIKeyCleanupCronJobName(tenantID),
 			namespace: appNs,
 		},
-		{
-			gvk:       tenantreconcile.GVKAuthPolicy,
-			name:      tenantreconcile.MaaSAPIAuthPolicyName(tenantID),
-			namespace: appNs,
-		},
 	}
 
 	gatewayResourcesToDelete := []struct {
@@ -761,4 +762,41 @@ func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr
 		return false, nil
 	}
 	return true, nil
+}
+
+// ensureGatewayManagementAuth bootstraps maas-gateway-auth when missing so /maas-api/*
+// management endpoints receive Authorino identity headers (RHOAIENG-81214).
+func (r *TenantReconciler) ensureGatewayManagementAuth(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) error {
+	tenantID, err := tenantreconcile.TenantIdentifierFor(tenant)
+	if err != nil {
+		return err
+	}
+
+	authR := &MaaSAuthPolicyReconciler{
+		Client:                          r.Client,
+		Scheme:                          r.Scheme,
+		InfraNamespace:                  r.appNamespaceForTenant(),
+		TenantNamespace:                 r.TenantNamespace,
+		GatewayName:                     r.GatewayName,
+		GatewayNamespace:                r.GatewayNamespace,
+		ClusterAudience:                 r.ClusterAudience,
+		MetadataCacheTTL:                r.MetadataCacheTTL,
+		AuthzCacheTTL:                   r.MetadataCacheTTL,
+		TenantNamespaceDiscoveryEnabled: r.TenantNamespaceDiscoveryEnabled,
+	}
+
+	gatewayNs, gatewayName, err := authR.fetchGatewayInfo(ctx, log, tenant.Namespace)
+	if err != nil {
+		return err
+	}
+	if tenantID != "" && gatewayNs == r.GatewayNamespace && gatewayName == r.GatewayName {
+		return nil
+	}
+
+	return authR.ensureBaseGatewayAuthPolicy(
+		ctx, log,
+		authR.fetchOIDCConfig(ctx, log, tenant.Namespace),
+		authR.discoverXAPIKeyNeeded(ctx, log),
+		tenantID, gatewayNs, gatewayName,
+	)
 }

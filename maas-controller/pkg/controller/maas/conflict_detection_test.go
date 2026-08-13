@@ -424,7 +424,7 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 
 	gatewayAP := &unstructured.Unstructured{}
 	gatewayAP.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-	gatewayAP.SetName("gateway-default-auth")
+	gatewayAP.SetName("gateway-scoped-auth")
 	gatewayAP.SetNamespace(namespace)
 	_ = unstructured.SetNestedMap(gatewayAP.Object, map[string]any{
 		"targetRef": map[string]any{

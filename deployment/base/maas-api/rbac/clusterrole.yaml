@@ -9,17 +9,15 @@ rules:
   resourceNames: ["maas-db-config"]
   verbs: ["get"]
 
-# SA token provider resources
+# Namespace read access
 - apiGroups: [""]
   resources: ["namespaces"]
-  verbs: ["get", "list", "watch", "create"]
+  verbs: ["get", "list", "watch"]
+
+# ServiceAccount read access (informer)
 - apiGroups: [""]
   resources: ["serviceaccounts"]
-  verbs: ["get", "list", "watch", "create", "delete"]
-- apiGroups: [""]
-  # Needed for TokenRequest API
-  resources: ["serviceaccounts/token"]
-  verbs: ["create"]
+  verbs: ["get", "list", "watch"]
 
 # Token review for authentication
 - apiGroups: ["authentication.k8s.io"]
@@ -31,27 +29,19 @@ rules:
   resources: ["subjectaccessreviews"]
   verbs: ["create"]
 
-
 # MaaS CRs for the models endpoint and subscription selector (cached via informer)
 - apiGroups: ["maas.opendatahub.io"]
   resources: ["maasauthpolicies", "maasmodelrefs", "maassubscriptions"]
   verbs: ["get", "list", "watch"]
 
-# HTTPRoutes (for future use, e.g. listing or resolving model routes)
-- apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes"]
-  verbs: ["get", "list", "watch"]
-
 # Gateways for /v1/tenants endpoint (gateway discovery)
-# Only 'get' needed - code uses .Get(gatewayName) not .List()
-# External hostname comes from Gateway status (status.addresses or listener.hostname)
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways"]
   verbs: ["get"]
 
-# Metrics and monitoring
+# Services for gateway internal hostname resolution (ResolveGatewayInternalHost)
 - apiGroups: [""]
-  resources: ["pods", "services", "endpoints"]
+  resources: ["services"]
   verbs: ["get", "list", "watch"]
 
 # OpenShift cluster TLS security profile (for honoring cluster-wide TLS policy)

@@ -17,6 +17,12 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
+const (
+	protocolHTTPS = "HTTPS"
+	protocolTLS   = "TLS"
+	protocolHTTP  = "HTTP"
+)
+
 // Handler handles /v1/tenant endpoint requests.
 type Handler struct {
 	log              *logger.Logger
@@ -163,50 +169,7 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		}
 	}
 
-	// Find first ready listener (has attached routes in status)
-	var port int64 = 443   // default
-	var protocol = "HTTPS" // default
-	var hostname string
-
-	for _, l := range specListenersRaw {
-		specListener, ok := l.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		// Get listener name to check status
-		listenerName, _ := specListener["name"].(string)
-		statusListener, hasStatus := statusListenersByName[listenerName]
-
-		// Check if listener is ready (has attached routes)
-		if hasStatus {
-			attachedRoutes, _ := statusListener["attachedRoutes"].(int64)
-			if attachedRoutes == 0 {
-				continue
-			}
-		} else {
-			// No status for this listener, skip
-			continue
-		}
-
-		// Extract port from spec
-		if portVal, ok := specListener["port"].(int64); ok {
-			port = portVal
-		}
-
-		// Extract protocol from spec
-		if protocolVal, ok := specListener["protocol"].(string); ok {
-			protocol = protocolVal
-		}
-
-		// Extract hostname from spec
-		if hostnameVal, ok := specListener["hostname"].(string); ok {
-			hostname = hostnameVal
-		}
-
-		// Use first ready listener
-		break
-	}
+	port, protocol, hostname := selectBestListener(specListenersRaw, statusListenersByName)
 
 	// Get external hostname from Gateway status
 	externalHost := hostname
@@ -240,7 +203,7 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 
 	// Build external URL
 	scheme := "https"
-	if protocol == "HTTP" {
+	if protocol == protocolHTTP {
 		scheme = "http"
 	}
 
@@ -257,4 +220,55 @@ func (h *Handler) extractGatewayMetadata(gateway map[string]any) (*GatewayMetada
 		ExternalURL: externalURL,
 		Port:        port,
 	}, nil
+}
+
+// selectBestListener picks the best ready listener from a Gateway spec.
+// Prefers HTTPS/TLS over HTTP to avoid redirect-induced POST→GET conversion.
+func selectBestListener(specListeners []any, statusByName map[string]map[string]any) (int64, string, string) {
+	var foundHTTP bool
+	var httpPort int64
+	var httpHostname string
+
+	for _, l := range specListeners {
+		specListener, ok := l.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		listenerName, _ := specListener["name"].(string)
+		statusListener, hasStatus := statusByName[listenerName]
+		if !hasStatus {
+			continue
+		}
+		attachedRoutes, _ := statusListener["attachedRoutes"].(int64)
+		if attachedRoutes == 0 {
+			continue
+		}
+
+		listenerProtocol := protocolHTTPS
+		if protocolVal, ok := specListener["protocol"].(string); ok {
+			listenerProtocol = protocolVal
+		}
+		listenerPort := int64(443)
+		if portVal, ok := specListener["port"].(int64); ok {
+			listenerPort = portVal
+		}
+		listenerHostname, _ := specListener["hostname"].(string)
+
+		if listenerProtocol == protocolHTTPS || listenerProtocol == protocolTLS {
+			return listenerPort, listenerProtocol, listenerHostname
+		}
+
+		if listenerProtocol == protocolHTTP && !foundHTTP {
+			foundHTTP = true
+			httpPort = listenerPort
+			httpHostname = listenerHostname
+		}
+	}
+
+	if foundHTTP {
+		return httpPort, protocolHTTP, httpHostname
+	}
+	// No ready listeners found; return safe defaults.
+	return 443, protocolHTTPS, ""
 }

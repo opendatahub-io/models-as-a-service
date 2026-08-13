@@ -4,7 +4,7 @@ This guide covers administrative operations for managing API keys across the Maa
 
 ## Bulk Key Revocation
 
-Platform administrators can revoke API keys for any user, which is useful for security incidents or offboarding.
+Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A **dry-run** mode is available to preview how many keys would be revoked before committing.
 
 ### Revoking All Keys for a User
 
@@ -19,13 +19,89 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
 
 This updates the status of all API keys belonging to the specified user to `revoked` in the database. The next validation request for any of those keys will reject them. Authorino may cache validation results briefly; revocation is effective as soon as the cache expires.
 
+### Revoking All Keys for a Subscription
+
+Revoke every active API key bound to a specific MaaSSubscription. This is useful when decommissioning a subscription or rotating all credentials for a particular access tier:
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"subscription": "premium-simulator-subscription"}'
+```
+
+### Combined Scope (User + Subscription)
+
+Revoke only a specific user's keys that are bound to a particular subscription:
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "subscription": "simulator-subscription"}'
+```
+
+### Dry-Run Mode
+
+Preview how many keys would be revoked without actually revoking them. The response returns only the count — no key IDs are exposed. Set `dryRun: true` with any scope (username, subscription, or both).
+
+**Dry-run by subscription:**
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"subscription": "simulator-subscription", "dryRun": true}'
+```
+
+**Dry-run by username:**
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "dryRun": true}'
+```
+
+**Dry-run with combined scope:**
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/bulk-revoke" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{"username": "alice", "subscription": "simulator-subscription", "dryRun": true}'
+```
+
+**Response (same structure for all dry-run scopes):**
+
+```json
+{
+  "revokedCount": 12,
+  "message": "Dry run: 12 active key(s) would be revoked for subscription simulator-subscription",
+  "dryRun": true
+}
+```
+
+### Request Fields
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `username` | Optional (at least one of `username` or `subscription` must be provided) | Target user whose keys should be revoked. Regular users can only specify their own username; specifying another user requires admin privileges. |
+| `subscription` | Optional (at least one of `username` or `subscription` must be provided) | MaaSSubscription name whose bound keys should be revoked. Admin-only. |
+| `dryRun` | Optional | When `true`, returns the count of keys that would be revoked without performing any mutation. Default: `false`. |
+
+### Authorization
+
 !!! warning "Administrative privilege required"
-    Only administrators with appropriate permissions can revoke other users' keys. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}`.
+    Subscription-scoped and cross-user revocation require admin privileges. Regular users can only revoke their own keys via `DELETE /v1/api-keys/{id}` or bulk revoke with their own username.
 
 ### Use Cases
 
 - **Security incident response**: Immediately cut off access for a compromised account
 - **User offboarding**: Revoke all keys when a user leaves the organization
+- **Subscription decommission**: Revoke all keys bound to a subscription before removing it
+- **Access tier migration**: Revoke keys for an old subscription after migrating users to a new one
+- **Impact assessment**: Use dry-run to preview the blast radius before executing a bulk revoke
 - **Policy enforcement**: Revoke keys that violate usage policies
 
 ---

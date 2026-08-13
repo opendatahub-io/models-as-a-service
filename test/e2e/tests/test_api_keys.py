@@ -303,8 +303,8 @@ class TestAPIKeyBulkOperations:
         # Verify keys are revoked
         for key_id in key_ids:
             r_check = requests.get(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=TLS_VERIFY)
-            if r_check.status_code == 200:
-                assert r_check.json().get("status") == "revoked"
+            assert r_check.status_code == 200, f"Failed to fetch key {key_id}: {r_check.status_code}"
+            assert r_check.json().get("status") == "revoked"
 
     def test_bulk_revoke_other_user_forbidden(self, api_keys_base_url: str, headers: dict):
         """Test 9: Bulk revoke - non-admin cannot bulk revoke other user's keys."""
@@ -346,6 +346,263 @@ class TestAPIKeyBulkOperations:
         data = r_bulk.json()
         assert data.get("revokedCount") >= 1
         print(f"[bulk-revoke] Admin successfully revoked {data.get('revokedCount')} keys for user {username}")
+
+    def test_bulk_revoke_by_subscription(self, api_keys_base_url: str, headers: dict, admin_headers: dict):
+        """Admin can bulk revoke all keys bound to a subscription."""
+        if not admin_headers:
+            pytest.skip("ADMIN_OC_TOKEN not set")
+
+        sub_name = f"e2e-bulk-sub-{os.urandom(4).hex()}"
+        ns = _ns()
+        sa_name = f"e2e-bulk-sa-{os.urandom(4).hex()}"
+
+        key_ids = []
+        try:
+            oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
+            sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
+            sa_headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+
+            _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
+            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+
+            for i in range(3):
+                r = _request_with_gateway_retry(
+                    requests.post,
+                    api_keys_base_url, headers=sa_headers,
+                    json={"name": f"sub-bulk-{i}", "subscription": sub_name},
+                    timeout=TIMEOUT, verify=TLS_VERIFY,
+                )
+                assert r.status_code in (200, 201), f"Failed to create key: {r.text}"
+                key_ids.append(r.json()["id"])
+
+            r_bulk = requests.post(
+                f"{api_keys_base_url}/bulk-revoke",
+                headers=admin_headers,
+                json={"subscription": sub_name},
+                timeout=30, verify=TLS_VERIFY,
+            )
+            assert r_bulk.status_code == 200
+            data = r_bulk.json()
+            assert data["revokedCount"] == 3, (
+                f"Expected exactly 3 revoked, got {data.get('revokedCount')}"
+            )
+            print(f"[bulk-revoke] Admin revoked {data['revokedCount']} keys for subscription {sub_name}")
+
+            for key_id in key_ids:
+                r_check = requests.get(f"{api_keys_base_url}/{key_id}", headers=admin_headers, timeout=30, verify=TLS_VERIFY)
+                assert r_check.status_code == 200, f"Failed to fetch key {key_id}: {r_check.status_code}"
+                assert r_check.json().get("status") == "revoked"
+
+        finally:
+            for kid in key_ids:
+                requests.delete(f"{api_keys_base_url}/{kid}", headers=sa_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+            _delete_cr("maassubscription", sub_name, namespace=ns)
+            _delete_cr("maasauthpolicy", f"{sub_name}-auth", namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            _wait_for_gateway_auth_enforced()
+
+    def test_bulk_revoke_by_subscription_forbidden_for_non_admin(self, api_keys_base_url: str, headers: dict):
+        """Non-admin cannot bulk revoke by subscription (requires admin)."""
+        r_bulk = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=headers,
+            json={"subscription": SIMULATOR_SUBSCRIPTION},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_bulk.status_code == 403, (
+            f"Expected 403 for non-admin subscription revoke, got {r_bulk.status_code}: {r_bulk.text}"
+        )
+        print("[bulk-revoke] Non-admin correctly got 403 for subscription-scoped revoke")
+
+    def test_bulk_revoke_dry_run(self, api_keys_base_url: str, headers: dict):
+        """Dry-run returns count without actually revoking."""
+        key_ids = []
+        for i in range(2):
+            r = requests.post(
+                api_keys_base_url, headers=headers,
+                json={"name": f"dry-run-{i}"},
+                timeout=30, verify=TLS_VERIFY,
+            )
+            assert r.status_code in (200, 201)
+            key_ids.append(r.json()["id"])
+
+        r_get = requests.get(f"{api_keys_base_url}/{key_ids[0]}", headers=headers, timeout=30, verify=TLS_VERIFY)
+        username = r_get.json().get("username") or r_get.json().get("owner")
+        assert username
+
+        r_dry = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=headers,
+            json={"username": username, "dryRun": True},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_dry.status_code == 200
+        data = r_dry.json()
+        assert data.get("dryRun") is True, "Response should indicate dry-run"
+        assert data.get("revokedCount") >= 2, (
+            f"Expected at least 2 in dry-run, got {data.get('revokedCount')}"
+        )
+        assert "keyIds" not in data, "Dry-run should not expose key IDs"
+        print(f"[bulk-revoke] Dry-run reported {data.get('revokedCount')} keys would be revoked")
+
+        for key_id in key_ids:
+            r_check = requests.get(f"{api_keys_base_url}/{key_id}", headers=headers, timeout=30, verify=TLS_VERIFY)
+            assert r_check.status_code == 200
+            assert r_check.json().get("status") == "active", (
+                f"Key {key_id} should still be active after dry-run"
+            )
+        print("[bulk-revoke] Keys confirmed still active after dry-run")
+
+    def test_bulk_revoke_dry_run_by_subscription(self, api_keys_base_url: str, headers: dict, admin_headers: dict):
+        """Admin dry-run by subscription returns correct key count."""
+        if not admin_headers:
+            pytest.skip("ADMIN_OC_TOKEN not set")
+
+        sub_name = f"e2e-dry-sub-{os.urandom(4).hex()}"
+        ns = _ns()
+        sa_name = f"e2e-dry-sa-{os.urandom(4).hex()}"
+
+        key_ids = []
+        try:
+            oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
+            sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
+            sa_headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+
+            _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
+            _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
+            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+
+            for i in range(2):
+                r = _request_with_gateway_retry(
+                    requests.post,
+                    api_keys_base_url, headers=sa_headers,
+                    json={"name": f"dry-sub-{i}", "subscription": sub_name},
+                    timeout=TIMEOUT, verify=TLS_VERIFY,
+                )
+                assert r.status_code in (200, 201)
+                key_ids.append(r.json()["id"])
+
+            r_dry = requests.post(
+                f"{api_keys_base_url}/bulk-revoke",
+                headers=admin_headers,
+                json={"subscription": sub_name, "dryRun": True},
+                timeout=30, verify=TLS_VERIFY,
+            )
+            assert r_dry.status_code == 200
+            data = r_dry.json()
+            assert data.get("dryRun") is True
+            assert data["revokedCount"] == 2
+            assert "keyIds" not in data, "Dry-run should not expose key IDs"
+            print(f"[bulk-revoke] Admin dry-run by subscription: {data['revokedCount']} keys would be revoked")
+
+            for key_id in key_ids:
+                r_check = requests.get(f"{api_keys_base_url}/{key_id}", headers=sa_headers, timeout=30, verify=TLS_VERIFY)
+                assert r_check.status_code == 200, f"Failed to fetch key {key_id}: {r_check.status_code}"
+                assert r_check.json().get("status") == "active", "Key should remain active after dry-run"
+
+        finally:
+            for kid in key_ids:
+                requests.delete(f"{api_keys_base_url}/{kid}", headers=sa_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+            _delete_cr("maassubscription", sub_name, namespace=ns)
+            _delete_cr("maasauthpolicy", f"{sub_name}-auth", namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            _wait_for_gateway_auth_enforced()
+
+    def test_bulk_revoke_combined_user_and_subscription(self, api_keys_base_url: str, headers: dict, admin_headers: dict):
+        """Admin can revoke keys for a specific user within a specific subscription.
+
+        Negative control: a second user's keys in the same subscription must remain active.
+        """
+        if not admin_headers:
+            pytest.skip("ADMIN_OC_TOKEN not set")
+
+        sub_name = f"e2e-combo-sub-{os.urandom(4).hex()}"
+        ns = _ns()
+        sa_name = f"e2e-combo-sa-{os.urandom(4).hex()}"
+        sa2_name = f"e2e-combo-sa2-{os.urandom(4).hex()}"
+
+        key_ids = []
+        key_ids_user2 = []
+        try:
+            oc_token = _create_sa_token(sa_name, namespace=MODEL_NAMESPACE)
+            sa_user = _sa_to_user(sa_name, namespace=MODEL_NAMESPACE)
+            sa_headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+
+            oc_token2 = _create_sa_token(sa2_name, namespace=MODEL_NAMESPACE)
+            sa_user2 = _sa_to_user(sa2_name, namespace=MODEL_NAMESPACE)
+            sa2_headers = {"Authorization": f"Bearer {oc_token2}", "Content-Type": "application/json"}
+
+            _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user, sa_user2])
+            _create_test_subscription(sub_name, MODEL_REF, users=[sa_user, sa_user2])
+            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+
+            for i in range(2):
+                r = _request_with_gateway_retry(
+                    requests.post,
+                    api_keys_base_url, headers=sa_headers,
+                    json={"name": f"combined-{i}", "subscription": sub_name},
+                    timeout=TIMEOUT, verify=TLS_VERIFY,
+                )
+                assert r.status_code in (200, 201)
+                key_ids.append(r.json()["id"])
+
+            r_u2 = _request_with_gateway_retry(
+                requests.post,
+                api_keys_base_url, headers=sa2_headers,
+                json={"name": "user2-key", "subscription": sub_name},
+                timeout=TIMEOUT, verify=TLS_VERIFY,
+            )
+            assert r_u2.status_code in (200, 201)
+            key_ids_user2.append(r_u2.json()["id"])
+
+            r_get = requests.get(f"{api_keys_base_url}/{key_ids[0]}", headers=sa_headers, timeout=30, verify=TLS_VERIFY)
+            username = r_get.json().get("username") or r_get.json().get("owner")
+            assert username
+
+            r_bulk = requests.post(
+                f"{api_keys_base_url}/bulk-revoke",
+                headers=admin_headers,
+                json={"username": username, "subscription": sub_name},
+                timeout=30, verify=TLS_VERIFY,
+            )
+            assert r_bulk.status_code == 200
+            data = r_bulk.json()
+            assert data["revokedCount"] == 2
+            print(f"[bulk-revoke] Admin revoked {data['revokedCount']} keys for {username} in {sub_name}")
+
+            # Negative control: second user's key must remain active
+            r_check = requests.get(
+                f"{api_keys_base_url}/{key_ids_user2[0]}", headers=admin_headers, timeout=30, verify=TLS_VERIFY,
+            )
+            assert r_check.status_code == 200, f"Failed to fetch user2 key: {r_check.status_code}"
+            assert r_check.json().get("status") == "active", "User2 key should remain active after combined-scope revoke"
+            print(f"[bulk-revoke] Negative control passed: user2 key {key_ids_user2[0]} still active")
+
+        finally:
+            for kid in key_ids + key_ids_user2:
+                requests.delete(f"{api_keys_base_url}/{kid}", headers=admin_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+            _delete_cr("maassubscription", sub_name, namespace=ns)
+            _delete_cr("maasauthpolicy", f"{sub_name}-auth", namespace=ns)
+            _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
+            _delete_sa(sa2_name, namespace=MODEL_NAMESPACE)
+            _wait_for_gateway_auth_enforced()
+
+    def test_bulk_revoke_missing_scope_returns_400(self, api_keys_base_url: str, headers: dict):
+        """Bulk revoke with empty body returns 400."""
+        r_bulk = requests.post(
+            f"{api_keys_base_url}/bulk-revoke",
+            headers=headers,
+            json={},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert r_bulk.status_code == 400, (
+            f"Expected 400 for empty scope, got {r_bulk.status_code}: {r_bulk.text}"
+        )
+        print("[bulk-revoke] Empty scope correctly returns 400")
 
 
 class TestAPIKeyExpiration:

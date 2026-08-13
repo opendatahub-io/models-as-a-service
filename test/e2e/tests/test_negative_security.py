@@ -2,7 +2,7 @@
 Negative-path and security-oriented E2E tests for MaaS.
 
 Validates that the platform correctly rejects abuse scenarios:
-- Header spoofing: client-supplied identity headers are stripped
+- Header spoofing: client-supplied X-MaaS identity headers are rejected at the gateway
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
 - AuthPolicy removal: access revoked when policy deleted
@@ -43,6 +43,7 @@ from test_helper import (
     UNCONFIGURED_MODEL_PATH,
     UNCONFIGURED_MODEL_REF,
     _create_api_key,
+    _create_api_key_raw,
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
@@ -52,6 +53,7 @@ from test_helper import (
     _inference,
     _maas_api_url,
     _poll_status,
+    _revoke_api_key,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -65,21 +67,107 @@ log = logging.getLogger(__name__)
 # ============================================================================
 
 class TestHeaderSpoofing:
-    """Verify that client-supplied identity headers cannot influence authorization.
+    """Verify that client-supplied identity headers cannot forge authorization.
 
-    The AuthPolicy is configured to strip identity headers (X-MaaS-Username,
-    X-MaaS-Group, X-MaaS-Key-Id) before forwarding to the model backend.
-    Only X-MaaS-Subscription is injected (from key-derived identity, not client).
+    AuthPolicy deny-client-identity-headers rejects requests that already carry
+    X-MaaS-Username / X-MaaS-Group. Authorino then injects trusted identity
+    headers only after successful authentication.
 
-    Security invariant: key-derived identity always wins over client-supplied headers.
+    Security invariant: client-supplied identity headers are denied, not trusted.
     """
 
-    def test_injected_identity_headers_ignored(self):
-        """Client injects X-MaaS-Username/Group/Key-Id — platform ignores them.
+    @pytest.mark.parametrize(
+        "forged_header,label",
+        [
+            ({"X-MaaS-Username": "cluster-admin"}, "X-MaaS-Username"),
+            (
+                {"X-MaaS-Group": '["system:cluster-admins","system:masters"]'},
+                "X-MaaS-Group",
+            ),
+        ],
+        ids=["username-only", "group-only"],
+    )
+    def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
+        """POST /v1/api-keys with a forged X-MaaS identity header must be denied.
 
-        Validates that Authorino strips attacker-controlled identity headers.
-        The request should succeed (200) using the real key-derived identity,
-        proving the spoofed headers had no effect on authorization.
+        Each denied header is asserted independently so a regression that only
+        drops username or only drops group cannot hide behind a combined spoof.
+
+        Under deny semantics there is no spoofed key to inspect — Authorino
+        rejects before maas-api runs, so the response must not contain key
+        material. A follow-up mint without forged headers still succeeds.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+
+        # Prove the gateway is ready for legitimate minting first.
+        # Revoke even if status/JSON assertions fail.
+        baseline_key_id = None
+        try:
+            baseline = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
+            assert baseline.status_code in (200, 201), (
+                f"Baseline API key mint failed before spoof check: "
+                f"{baseline.status_code} body_bytes={len(baseline.content)}"
+            )
+            baseline_key_id = baseline.json().get("id")
+        finally:
+            if baseline_key_id:
+                _revoke_api_key(oc_token, baseline_key_id)
+
+        spoofed_headers = {
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+            **forged_header,
+        }
+        url = f"{_maas_api_url()}/v1/api-keys"
+        body = {
+            "name": f"e2e-spoof-mint-{uuid.uuid4().hex[:8]}",
+            "subscription": SIMULATOR_SUBSCRIPTION,
+        }
+
+        # Do not use _request_with_gateway_retry here: empty 403 is the expected
+        # Authorino deny and must not be treated as transient propagation.
+        r = requests.post(url, headers=spoofed_headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+        # Never log response bodies from mint endpoints — a CVE regression
+        # could return a live sk-oai-* key into CI logs (CWE-532).
+        log.info(
+            "Forged %s key mint -> %s body_bytes=%d",
+            label,
+            r.status_code,
+            len(r.content),
+        )
+        assert r.status_code in (401, 403), (
+            f"Expected 401/403 denying forged {label} on key mint, "
+            f"got {r.status_code} body_bytes={len(r.content)}"
+        )
+        assert "sk-oai-" not in r.text, (
+            "Denied mint response must not contain API key material"
+        )
+
+        # Control: same token without forged headers can still mint.
+        # Revoke even if status/JSON/key-format assertions fail.
+        control_key_id = None
+        try:
+            control = _create_api_key_raw(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
+            assert control.status_code in (200, 201), (
+                f"Control mint without forged headers failed: "
+                f"{control.status_code} body_bytes={len(control.content)}"
+            )
+            control_body = control.json()
+            control_key_id = control_body.get("id")
+            assert control_body.get("key", "").startswith("sk-oai-"), (
+                "Control mint missing sk-oai- key prefix"
+            )
+        finally:
+            if control_key_id:
+                _revoke_api_key(oc_token, control_key_id)
+
+    def test_injected_identity_headers_rejected_on_inference(self):
+        """Client injects X-MaaS-Username/Group — gateway rejects the request.
+
+        With deny-client-identity-headers, forged identity headers are not
+        overwritten and ignored; the request is denied at Authorino.
         """
         # Earlier tests may have rewritten maas-gateway-auth; minting a key
         # against an unenforced gateway yields empty 403 flakes.
@@ -92,16 +180,19 @@ class TestHeaderSpoofing:
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 
-        # Shared gateway authorization state settles asynchronously between E2E cases.
-        # Require the secure steady state without failing on a brief propagation window.
-        r = _poll_status(api_key, 200, extra_headers=spoofed_headers, timeout=30)
+        r = _poll_status(api_key, (401, 403), extra_headers=spoofed_headers, timeout=30)
 
-        # Request succeeds with the REAL identity (API key owner), not the spoofed one.
-        # If spoofed headers were honored, the test user would gain cluster-admin access.
-        log.info("Spoofed identity headers -> %s", r.status_code)
-        assert r.status_code == 200, (
-            f"Expected 200 (spoofed headers stripped, real identity used), "
-            f"got {r.status_code}: {r.text[:500]}"
+        log.info(
+            "Spoofed identity headers on inference -> %s body_bytes=%d",
+            r.status_code,
+            len(r.content),
+        )
+        assert r.status_code in (401, 403), (
+            f"Expected 401/403 (forged identity headers denied), "
+            f"got {r.status_code} body_bytes={len(r.content)}"
+        )
+        assert "sk-oai-" not in r.text, (
+            "Denied inference response must not contain API key material"
         )
 
     def test_duplicate_subscription_headers_ignored(self):

@@ -88,6 +88,14 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - GitHub Actions pinned to immutable commit SHAs.
 - `govulncheck` added for maas-api and maas-controller.
 
+**Bulk API key revocation enhancements**
+
+- Subscription-scoped bulk revoke: administrators can revoke all API keys bound to a specific `MaaSSubscription` in a single call.
+- Combined scope: revoke keys for a specific user within a specific subscription.
+- Dry-run mode (`dryRun: true`): preview how many keys would be revoked without mutating any data.
+- Structured audit records emitted for every actual bulk revoke operation (action, actor, scope, count, tenant).
+- See [API Key Administration](../configuration-and-management/api-key-administration.md) for usage examples.
+
 **Additional features**
 
 - OpenShift cluster TLS profiles honored for gateway and controller TLS configuration.
@@ -100,6 +108,10 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - New AI Gateway base manifest entry point for modularized deployment.
 - Configurable Limitador scrape interval.
 - API key update debouncing.
+
+**Model access authorization externalized**
+
+- Model access checks moved from inline allowlists in the gateway AuthPolicy to `accessAllowed` metadata returned by maas-api during subscription selection. The gateway authorization rule is now fixed-size regardless of how many subscriptions or models exist, removing a scaling limit caused by per-model allowlists growing the AuthPolicy CR.
 
 ### Key Fixes
 

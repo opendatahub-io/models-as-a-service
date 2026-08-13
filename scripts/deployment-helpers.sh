@@ -365,7 +365,7 @@ patch_kuadrant_csv() {
   local namespace=$1
   local operator_prefix=$2
 
-  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes)..."
+  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes, auth service timeout)..."
 
   # Find the CSV
   local csv_name
@@ -386,12 +386,15 @@ patch_kuadrant_csv() {
   patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_CHECK_SERVICE_FAILURE_MODE" "deny" && patched_any=true
   patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_REPORT_SERVICE_FAILURE_MODE" "deny" && patched_any=true
 
+  # --- Auth service timeout (RHOAIENG-79789) ---
+  patch_csv_operator_container_env "$namespace" "$csv_name" "AUTH_SERVICE_TIMEOUT" "2s" && patched_any=true
+
   if [[ "$patched_any" != "true" ]]; then
-    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes)"
+    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes + auth timeout)"
     return 0
   fi
 
-  log_info "CSV patched (Gateway controller and/or rate limit failure modes)"
+  log_info "CSV patched (Gateway controller and/or rate limit failure modes and/or auth timeout)"
 
   # CRITICAL: Force delete the operator pod to pick up the new env var
   # OLM updates the deployment spec but doesn't always trigger a pod restart
@@ -419,10 +422,11 @@ patch_kuadrant_csv() {
 
     if echo "$pod_env" | grep '^ISTIO_GATEWAY_CONTROLLER_NAMES=' | grep -q 'openshift.io/gateway-controller/v1' \
       && echo "$pod_env" | grep -Fq 'RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny' \
-      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny'; then
-      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes)"
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny' \
+      && echo "$pod_env" | grep -Fq 'AUTH_SERVICE_TIMEOUT=2s'; then
+      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes + AUTH_SERVICE_TIMEOUT)"
     else
-      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes)"
+      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes / AUTH_SERVICE_TIMEOUT)"
     fi
 
     # Give the operator time to fully initialize with the new Gateway controller configuration

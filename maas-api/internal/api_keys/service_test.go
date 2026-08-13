@@ -415,7 +415,7 @@ func TestBulkRevokeAPIKeys_TenantScopedCount(t *testing.T) {
 	}
 
 	// Bulk revoke only tenant-a keys
-	count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "tenant-a")
+	count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "", "tenant-a", false)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count, "should revoke exactly the 3 keys in tenant-a")
 
@@ -632,7 +632,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 			require.NoError(t, store.AddKey(ctx, "alice", id, hash, "Key "+id, "", nil, "default-sub", "", nil, false))
 		}
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "alice", "", "", false)
 		require.NoError(t, err)
 		assert.Equal(t, 3, count)
 
@@ -650,7 +650,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		ctx := context.Background()
 		svc, _ := createTestService(t)
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "nobody", "")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "nobody", "", "", false)
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
 	})
@@ -664,24 +664,24 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		_, hash := createTestAPIKey(t)
 		require.NoError(t, store.AddKey(ctx, "bob", "idem-key", hash, "Idempotent Key", "", nil, "default-sub", "", nil, false))
 
-		count, err := svc.BulkRevokeAPIKeys(ctx, "bob", "")
+		count, err := svc.BulkRevokeAPIKeys(ctx, "bob", "", "", false)
 		require.NoError(t, err)
 		assert.Equal(t, 1, count)
 
 		// Second call: no active keys left
-		count, err = svc.BulkRevokeAPIKeys(ctx, "bob", "")
+		count, err = svc.BulkRevokeAPIKeys(ctx, "bob", "", "", false)
 		require.NoError(t, err)
 		assert.Equal(t, 0, count)
 	})
 
-	// Verify that empty username is rejected with an error.
-	t.Run("EmptyUsername", func(t *testing.T) {
+	// Verify that empty username and subscription is rejected with an error.
+	t.Run("EmptyUsernameAndSubscription", func(t *testing.T) {
 		ctx := context.Background()
 		svc, _ := createTestService(t)
 
-		_, err := svc.BulkRevokeAPIKeys(ctx, "", "")
+		_, err := svc.BulkRevokeAPIKeys(ctx, "", "", "", false)
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "username is required")
+		assert.Contains(t, err.Error(), "at least one of username or subscription is required")
 	})
 }
 
@@ -701,7 +701,7 @@ func TestBulkRevokeAPIKeys_ThenValidateAll(t *testing.T) {
 	}
 
 	// Bulk revoke all of carol's keys
-	count, err := svc.BulkRevokeAPIKeys(ctx, "carol", "")
+	count, err := svc.BulkRevokeAPIKeys(ctx, "carol", "", "", false)
 	require.NoError(t, err)
 	assert.Equal(t, 3, count)
 
