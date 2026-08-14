@@ -4,6 +4,7 @@ kind: Kustomization
 resources:
   - ../crd
   - ../rbac
+  - ../rbac/ocp
   - ../manager
   - ../monitoring
   - ../webhook
