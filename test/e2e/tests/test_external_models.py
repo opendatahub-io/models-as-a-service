@@ -239,7 +239,9 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
             pytest.fail(f"Failed to create API key: {r.status_code} {r.text}")
 
         api_key = r.json().get("key")
-        log.info(f"API key created: {api_key[:15]}...")
+        if not api_key:
+            pytest.fail("API key creation response missing 'key' field")
+        log.info("API key created")
 
         yield {
             "api_key": api_key,
