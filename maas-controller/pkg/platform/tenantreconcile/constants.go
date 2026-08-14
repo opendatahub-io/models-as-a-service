@@ -64,8 +64,13 @@ const (
 
 	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
 	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
+
+	// DefaultTenantKeyRevocationImage is the minimal image used to run the per-tenant
+	// API key revocation Job created on AITenant deletion (overridable via
+	// RELATED_IMAGE_UBI_MINIMAL_IMAGE). It only needs curl to call maas-api's
+	// internal revoke endpoint.
+	DefaultTenantKeyRevocationImage = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
@@ -73,13 +78,11 @@ const (
 	baseGatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
 	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
 	baseMaaSAPIRouteName                           = "maas-api-route"
-	baseMaaSAPIKeyCleanupCronJobName               = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
 	baseGatewayDestinationRuleName                 = "maas-api-backend-tls"
 	baseTelemetryPolicyName                        = "maas-telemetry"
 	baseIstioTelemetryName                         = "latency-per-subscription"
 	baseMaaSAPIDeploymentName                      = "maas-api"
 	baseMaaSAPIServiceName                         = "maas-api"
-	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 
@@ -106,13 +109,17 @@ const (
 	ConditionDeploymentsAvailable       = "DeploymentsAvailable"
 	ConditionTypeDegraded               = "Degraded"
 	ReadyConditionType                  = "Ready"
+
+	// Cleanup resource
+	LegacyMaaSAPIKeyCleanupCronJobName    = "maas-api-key-cleanup" //nolint:gosec // Kubernetes resource name, not a credential
+	LegacyMaaSAPICleanupNetworkPolicyName = "maas-api-cleanup-restrict"
 )
 
 // GVKs used for post-render and readiness (mirrors opendatahub-operator/pkg/cluster/gvk selections).
 var (
 	GVKDeployment           = schema.GroupVersionKind{Group: "apps", Version: "v1", Kind: "Deployment"}
-	GVKHTTPRoute            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	GVKCronJob              = schema.GroupVersionKind{Group: "batch", Version: "v1", Kind: "CronJob"}
+	GVKHTTPRoute            = schema.GroupVersionKind{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute"}
 	GVKAuthPolicy           = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"}
 	GVKTokenRateLimitPolicy = schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}
 	GVKDestinationRule      = schema.GroupVersionKind{Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule"}
@@ -169,8 +176,8 @@ func MaaSAPIRouteName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIRouteName, tenantID)
 }
 
-func MaaSAPIKeyCleanupCronJobName(tenantID string) string {
-	return resourceNameForTenant(baseMaaSAPIKeyCleanupCronJobName, tenantID)
+func LegacyMaaSAPIKeyCleanupCronJobNameForTenant(tenantID string) string {
+	return resourceNameForTenant(LegacyMaaSAPIKeyCleanupCronJobName, tenantID)
 }
 
 func GatewayDestinationRuleName(tenantID string) string {
