@@ -109,6 +109,10 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - Configurable Limitador scrape interval.
 - API key update debouncing.
 
+**Model access authorization externalized**
+
+- Model access checks moved from inline allowlists in the gateway AuthPolicy to `accessAllowed` metadata returned by maas-api during subscription selection. The gateway authorization rule is now fixed-size regardless of how many subscriptions or models exist, removing a scaling limit caused by per-model allowlists growing the AuthPolicy CR.
+
 ### Key Fixes
 
 - **CVE-2026-33815 / CVE-2026-33816:** pgx memory-safety and SQL injection fixes.
