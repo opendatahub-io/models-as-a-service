@@ -94,7 +94,7 @@ kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/desti
 kubectl apply -f ${PROJECT_DIR}/deployment/base/payload-processing/manager/envoy-filter.yaml
 
 # Deployment (substitute the image placeholder)
-PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/overlays/odh/params.env" | cut -d= -f2-)}"
+PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-$(grep '^payload-processing-image=' "${PROJECT_DIR}/deployment/base/maas-controller/default/params.env" | cut -d= -f2-)}"
 cat ${PROJECT_DIR}/deployment/base/payload-processing/manager/deployment.yaml | \
   sed "s|image: payload-processing|image: ${PAYLOAD_PROCESSING_IMAGE}|" | \
   kubectl apply -f -
@@ -272,23 +272,26 @@ echo "MaaS API key: ${KEY:0:20}..."
 ### Run Inference
 
 ```bash
-curl -sS "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+curl -sS "https://${GW_HOST}/v1/chat/completions" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $KEY" \
+  -H "Authorization: Bearer ${KEY}" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"say hello"}]}'
 ```
+
+!!! note "Legacy path-based endpoint"
+    You can also use the path-based URL: `https://${GW_HOST}/llm/gpt-4o/v1/chat/completions`. Both routing modes are supported. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ### Verify Auth Enforcement
 
 ```bash
-# Bogus key — expect 403
-curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+# Bogus key - expect 403
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer sk-oai-FAKE-KEY" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 
-# No auth — expect 401
-curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/llm/gpt-4o/v1/chat/completions" \
+# No auth - expect 401
+curl -sS -w "HTTP: %{http_code}\n" "https://${GW_HOST}/v1/chat/completions" \
   -H "Content-Type: application/json" \
   -d '{"model":"gpt-4o","messages":[{"role":"user","content":"hi"}]}'
 ```

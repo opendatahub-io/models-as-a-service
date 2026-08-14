@@ -14,10 +14,9 @@ spec:
   # any EnvoyFilter patches.
   # See: https://istio.io/latest/docs/reference/config/networking/envoy-filter/#EnvoyFilter
   priority: 10
-  targetRefs:
-    - group: gateway.networking.k8s.io
-      kind: Gateway
-      name: maas-default-gateway
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
   configPatches:
     # Stage 1: must run BEFORE the WasmPlugin so auth sees X-Gateway-Model-Name.
     - applyTo: HTTP_FILTER

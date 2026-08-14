@@ -342,13 +342,14 @@ func (s *Service) Search(
 	return s.store.Search(ctx, username, tenant, filters, sort, pagination)
 }
 
-// BulkRevokeAPIKeys revokes all active keys for a user
-// Returns count of revoked keys.
-func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username string, tenant string) (int, error) {
-	if username == "" {
-		return 0, errors.New("username is required")
+// BulkRevokeAPIKeys revokes all active keys matching the scope (username and/or subscription),
+// or performs a dry-run count when dryRun is true.
+// At least one of username or subscription must be provided.
+func (s *Service) BulkRevokeAPIKeys(ctx context.Context, username, subscription, tenant string, dryRun bool) (int, error) {
+	if username == "" && subscription == "" {
+		return 0, errors.New("at least one of username or subscription is required")
 	}
-	return s.store.InvalidateAll(ctx, username, tenant)
+	return s.store.BulkRevoke(ctx, username, subscription, tenant, dryRun)
 }
 
 // RevokeTenantAPIKeys revokes all active keys for a tenant.

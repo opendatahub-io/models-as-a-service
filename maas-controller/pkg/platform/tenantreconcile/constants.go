@@ -45,6 +45,10 @@ const (
 	// use this label to discover tenant namespaces dynamically.
 	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
 
+	// LabelGatewayAccess is set to "true" on tenant namespaces so that the MaaS Gateway
+	// allowedRoutes selector accepts HTTPRoutes from those namespaces.
+	LabelGatewayAccess = "maas.opendatahub.io/gateway-access"
+
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
 
@@ -66,7 +70,6 @@ const (
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
 	// For legacy/default tenant (empty tenantID), these values are used as-is.
-	baseGatewayDefaultAuthPolicyName               = "gateway-default-auth"
 	baseGatewayTokenRateLimitDefaultDenyPolicyName = "gateway-default-deny"
 	baseMaaSAPIAuthPolicyName                      = "maas-api-auth-policy"
 	baseMaaSAPIRouteName                           = "maas-api-route"
@@ -152,10 +155,6 @@ func resourceNameForTenant(baseName, tenantID string) string {
 		return baseName
 	}
 	return baseName + "-" + tenantID
-}
-
-func GatewayDefaultAuthPolicyName(tenantID string) string {
-	return resourceNameForTenant(baseGatewayDefaultAuthPolicyName, tenantID)
 }
 
 func GatewayTokenRateLimitDefaultDenyPolicyName(tenantID string) string {

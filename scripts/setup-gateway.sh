@@ -346,7 +346,7 @@ setup_route_mode() {
       kubectl apply --server-side=true -f -
   fi
 
-  # Apply configured allowedRoutes, or upgrade any pre-existing 'from: All' to the secure default
+  # Apply configured allowedRoutes and enforce the secure default on all listeners
   patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
 
   # Wait for Gateway to be Programmed

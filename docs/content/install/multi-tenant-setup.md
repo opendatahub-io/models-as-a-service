@@ -18,7 +18,7 @@ Each AITenant requires a dedicated Gateway. Gateways cannot be shared between AI
 Get the cluster domain and create the Gateway.
 
 The Gateway uses a per-tenant label selector for `allowedRoutes` so only explicitly
-labelled namespaces can attach HTTPRoutes — more secure than `from: All`. Label each
+labelled namespaces can attach HTTPRoutes. Label each
 namespace that needs access (infra namespace, model namespaces) before or after Gateway
 creation:
 

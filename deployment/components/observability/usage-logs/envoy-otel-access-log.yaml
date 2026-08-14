@@ -37,10 +37,9 @@ metadata:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/managed-by: maas-controller
 spec:
-  targetRefs:
-  - group: gateway.networking.k8s.io
-    kind: Gateway
-    name: maas-default-gateway
+  workloadSelector:
+    labels:
+      gateway.networking.k8s.io/gateway-name: maas-default-gateway
   configPatches:
 
   # ── Cluster: gRPC endpoint to OTel Collector ──────────────────────────

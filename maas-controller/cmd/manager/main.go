@@ -87,7 +87,6 @@ func init() {
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
-//+kubebuilder:rbac:groups=config.openshift.io,resources=apiservers,verbs=get;list;watch
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can

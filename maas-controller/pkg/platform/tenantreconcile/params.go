@@ -654,22 +654,15 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("write EnvoyFilter priority: %w", err)
 	}
 
-	targetRefs, found, err := unstructured.NestedSlice(r.Object, "spec", "targetRefs")
-	if err != nil {
-		return fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
+	if err := unstructured.SetNestedStringMap(r.Object,
+		map[string]string{"gateway.networking.k8s.io/gateway-name": params.GatewayName},
+		"spec", "workloadSelector", "labels"); err != nil {
+		return fmt.Errorf("write EnvoyFilter workloadSelector: %w", err)
 	}
-	if !found || len(targetRefs) == 0 {
-		return errors.New("EnvoyFilter targetRefs not found")
-	}
-	ref, ok := targetRefs[0].(map[string]any)
-	if !ok {
-		return errors.New("EnvoyFilter targetRefs[0] is not an object")
-	}
-	ref["name"] = params.GatewayName
-	targetRefs[0] = ref
-	if err := unstructured.SetNestedSlice(r.Object, targetRefs, "spec", "targetRefs"); err != nil {
-		return fmt.Errorf("write EnvoyFilter targetRefs: %w", err)
-	}
+	// targetRefs and workloadSelector are mutually exclusive (Istio 1.26+). Drop any
+	// leftover targetRefs from older manifests so SSA/admission never sees both.
+	unstructured.RemoveNestedField(r.Object, "spec", "targetRefs")
+	unstructured.RemoveNestedField(r.Object, "spec", "targetRef")
 
 	anchorName := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	beforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(params.TenantIdentifier), params.GatewayNamespace, 9004)

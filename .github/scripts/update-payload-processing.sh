@@ -26,7 +26,6 @@ echo "Image: ${IMAGE}"
 echo ""
 
 PARAMS_FILES=(
-    "deployment/overlays/odh/params.env"
     "deployment/base/maas-controller/default/params.env"
 )
 for file in "${PARAMS_FILES[@]}"; do
@@ -59,7 +58,6 @@ echo ""
 echo "Payload-processing pin update complete."
 cd "$PROJECT_ROOT"
 git diff --stat \
-    deployment/overlays/odh/params.env \
     deployment/base/maas-controller/default/params.env \
     deployment/base/payload-processing/manager/kustomization.yaml \
     maas-controller/pkg/platform/tenantreconcile/constants.go \

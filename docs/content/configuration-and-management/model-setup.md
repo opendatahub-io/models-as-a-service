@@ -182,12 +182,15 @@ kubectl get maasmodelref <modelref-name> -n <namespace>
 **3. Test inference request:**
 
 ```bash
-# Get MODEL_URL from step 1 above (data[].url field)
-curl -sS -H "Authorization: Bearer $API_KEY" \
+# Use the body-based endpoint (recommended) with the model id from step 1
+curl -sS -H "Authorization: Bearer ${API_KEY}" \
   -H "Content-Type: application/json" \
   -d '{"model": "my-model", "messages": [{"role": "user", "content": "Hello"}]}' \
-  "${MODEL_URL}/v1/chat/completions"
+  "${HOST}/v1/chat/completions"
 ```
+
+!!! note "Legacy path-based endpoint"
+    You can also use the per-model `url` from step 1: `${MODEL_URL}/v1/chat/completions`. See [Inference - Path-Based Routing](../user-guide/inference.md#path-based-routing-legacy) for details.
 
 ---
 

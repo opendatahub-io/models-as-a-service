@@ -57,10 +57,10 @@ Each branch produces and references a specific container image tag:
 
 | Branch | Image Tag | Built By | Manifests |
 |--------|-----------|----------|-----------|
-| `main` | `latest` | Tekton push pipeline (`odh-maas-*-push.yaml`) | `deployment/overlays/dev/` |
-| `stable` | `odh-stable` | Tekton push pipeline (`odh-maas-*-push-stable.yaml`) | `deployment/overlays/odh/` |
+| `main` | `latest` | Tekton push pipeline (`odh-maas-*-push.yaml`) | None |
+| `stable` | `odh-stable` | Tekton push pipeline (`odh-maas-*-push-stable.yaml`) | `deployment/base/maas-controller/default` |
 
-The ODH operator consumes manifests from `deployment/overlays/odh/` on the `stable` branch.
+`ai-gateway-operator` consumes the mirrored `deployment/base/maas-controller/base` (or `deployment/overlays/xks` on non-OpenShift platforms) from the `stable` branch.
 
 ## Release Notes
 

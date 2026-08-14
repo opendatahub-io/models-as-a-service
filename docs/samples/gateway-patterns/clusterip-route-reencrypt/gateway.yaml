@@ -22,7 +22,10 @@ spec:
       protocol: HTTPS
       allowedRoutes:
         namespaces:
-          from: All
+          from: Selector
+          selector:
+            matchLabels:
+              maas.opendatahub.io/gateway-access: "true"
       tls:
         certificateRefs:
           - group: ""

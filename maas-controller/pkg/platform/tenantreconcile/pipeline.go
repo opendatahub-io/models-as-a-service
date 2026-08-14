@@ -257,21 +257,22 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 			gatewayNamespace, efName, shown, PayloadProcessingEnvoyFilterPriority), nil
 	}
 
-	targetRefs, found, err := unstructured.NestedSlice(ef.Object, "spec", "targetRefs")
+	// Istio 1.26+: targetRefs and workloadSelector are mutually exclusive. MaaS
+	// EnvoyFilters use workloadSelector keyed by gateway-name (see params patch).
+	wsLabels, found, err := unstructured.NestedStringMap(ef.Object, "spec", "workloadSelector", "labels")
 	if err != nil {
-		return false, "", fmt.Errorf("read EnvoyFilter targetRefs: %w", err)
+		return false, "", fmt.Errorf("read EnvoyFilter workloadSelector: %w", err)
 	}
-	if !found || len(targetRefs) == 0 {
-		return false, fmt.Sprintf("EnvoyFilter %s/%s has no targetRefs", gatewayNamespace, efName), nil
-	}
-	ref, ok := targetRefs[0].(map[string]any)
-	if !ok {
-		return false, fmt.Sprintf("EnvoyFilter %s/%s targetRefs[0] is not an object", gatewayNamespace, efName), nil
-	}
-	if name, _ := ref["name"].(string); name != gatewayName {
+	const gatewayNameLabel = "gateway.networking.k8s.io/gateway-name"
+	if !found || wsLabels[gatewayNameLabel] == "" {
 		return false, fmt.Sprintf(
-			"EnvoyFilter %s/%s targetRefs[0].name=%q; expected gateway %q",
-			gatewayNamespace, efName, name, gatewayName), nil
+			"EnvoyFilter %s/%s has no workloadSelector.labels[%q]",
+			gatewayNamespace, efName, gatewayNameLabel), nil
+	}
+	if got := wsLabels[gatewayNameLabel]; got != gatewayName {
+		return false, fmt.Sprintf(
+			"EnvoyFilter %s/%s workloadSelector.labels[%q]=%q; expected gateway %q",
+			gatewayNamespace, efName, gatewayNameLabel, got, gatewayName), nil
 	}
 	return true, "", nil
 }

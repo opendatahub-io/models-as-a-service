@@ -365,7 +365,7 @@ patch_kuadrant_csv() {
   local namespace=$1
   local operator_prefix=$2
 
-  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes)..."
+  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes, auth service timeout)..."
 
   # Find the CSV
   local csv_name
@@ -386,12 +386,15 @@ patch_kuadrant_csv() {
   patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_CHECK_SERVICE_FAILURE_MODE" "deny" && patched_any=true
   patch_csv_operator_container_env "$namespace" "$csv_name" "RATELIMIT_REPORT_SERVICE_FAILURE_MODE" "deny" && patched_any=true
 
+  # --- Auth service timeout (RHOAIENG-79789) ---
+  patch_csv_operator_container_env "$namespace" "$csv_name" "AUTH_SERVICE_TIMEOUT" "2s" && patched_any=true
+
   if [[ "$patched_any" != "true" ]]; then
-    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes)"
+    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes + auth timeout)"
     return 0
   fi
 
-  log_info "CSV patched (Gateway controller and/or rate limit failure modes)"
+  log_info "CSV patched (Gateway controller and/or rate limit failure modes and/or auth timeout)"
 
   # CRITICAL: Force delete the operator pod to pick up the new env var
   # OLM updates the deployment spec but doesn't always trigger a pod restart
@@ -419,10 +422,11 @@ patch_kuadrant_csv() {
 
     if echo "$pod_env" | grep '^ISTIO_GATEWAY_CONTROLLER_NAMES=' | grep -q 'openshift.io/gateway-controller/v1' \
       && echo "$pod_env" | grep -Fq 'RATELIMIT_CHECK_SERVICE_FAILURE_MODE=deny' \
-      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny'; then
-      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes)"
+      && echo "$pod_env" | grep -Fq 'RATELIMIT_REPORT_SERVICE_FAILURE_MODE=deny' \
+      && echo "$pod_env" | grep -Fq 'AUTH_SERVICE_TIMEOUT=2s'; then
+      log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes + AUTH_SERVICE_TIMEOUT)"
     else
-      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes)"
+      log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes / AUTH_SERVICE_TIMEOUT)"
     fi
 
     # Give the operator time to fully initialize with the new Gateway controller configuration
@@ -1989,7 +1993,7 @@ build_allowed_routes_json() {
     labels_json+="}"
     if [[ "$labels_json" == "{}" ]]; then
       # No valid key=value pairs — fall back to the secure default instead of
-      # emitting matchLabels:{} which matches all namespaces (equivalent to from: All).
+      # emitting matchLabels:{} which matches all namespaces.
       log_warn "NAMESPACE_SELECTOR_LABELS has no valid key=value pairs; falling back to from: Same" >&2
       printf '{"namespaces":{"from":"Same"}}'
       return 0
@@ -2003,7 +2007,7 @@ build_allowed_routes_json() {
 # patch_gateway_allowed_routes <gateway_name> <gateway_namespace>
 #   Ensures ALL listeners' allowedRoutes on an existing Gateway match the desired
 #   configuration. Patches when:
-#     - Any listener has from: All (upgrades insecure default), OR
+#     - Any listener has an insecure allowedRoutes default, OR
 #     - ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS is set (applies user config)
 #   Skips when all listeners are already at a secure non-All state and no custom
 #   config is requested. Applies the same allowedRoutes to every listener so that
@@ -2031,12 +2035,17 @@ patch_gateway_allowed_routes() {
   local has_custom_config=false
   [[ -n "${ALLOWED_ROUTE_NAMESPACES:-}" || -n "${NAMESPACE_SELECTOR_LABELS:-}" ]] && has_custom_config=true
 
-  # Check whether any listener still carries the insecure from: All default.
+  # Check whether any listener still carries an insecure allowedRoutes default.
+  # Treat a read failure as needing a patch (fail closed) rather than silently skipping.
   local any_all=false
   local i current_from
   for ((i=0; i<listener_count; i++)); do
-    current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
-      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null || echo "")
+    if ! current_from=$(kubectl get gateway "$gateway_name" -n "$gateway_namespace" \
+      -o jsonpath="{.spec.listeners[$i].allowedRoutes.namespaces.from}" 2>/dev/null); then
+      log_warn "  Could not read listener $i allowedRoutes from Gateway ${gateway_namespace}/${gateway_name} — assuming patch needed"
+      any_all=true
+      break
+    fi
     [[ "$current_from" == "All" ]] && any_all=true && break
   done
 

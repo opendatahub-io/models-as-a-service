@@ -37,7 +37,7 @@ SUBSCRIPTION_NAMESPACE="models-as-a-service"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-quay.io/opendatahub/maas-api:latest}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-quay.io/opendatahub/maas-controller:latest}"
 
-_default_ipp_image=$(awk -F= '/^payload-processing-image=/ {print $2; exit}' "$PROJECT_ROOT/deployment/overlays/odh/params.env" 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")
+_default_ipp_image=$(awk -F= '/^payload-processing-image=/ {print $2; exit}' "$PROJECT_ROOT/deployment/base/maas-controller/default/params.env" 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")
 IPP_IMAGE="${IPP_IMAGE:-$_default_ipp_image}"
 PAYLOAD_PROCESSING_COMMIT="${PAYLOAD_PROCESSING_COMMIT:-${IPP_IMAGE##*:}}"
 
@@ -994,7 +994,7 @@ spec:
     protocol: HTTP
     allowedRoutes:
       namespaces:
-        from: All
+        from: Same
 EOF
 
   echo "  Waiting for Gateway to be programmed..."

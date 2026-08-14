@@ -1,0 +1,15 @@
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-controller-ocp-role
+rules:
+- apiGroups:
+  - config.openshift.io
+  resources:
+  - apiservers
+  - authentications
+  verbs:
+  - get
+  - list
+  - watch

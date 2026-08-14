@@ -65,7 +65,7 @@ MaaSAuthPolicy resources grant **permission** to access models. Each policy:
 - Lives in the `models-as-a-service` namespace
 - References one or more MaaSModelRef resources (by name and namespace)
 - Specifies which groups or users can access those models
-- Generates Authorino AuthPolicy resources for enforcement at the gateway
+- Access checks are evaluated by maas-api during subscription selection and surfaced as `accessAllowed` in the gateway's subscription-info metadata
 
 **Multiple policies per model**: You can create multiple MaaSAuthPolicies that reference the same model. The controller aggregates them—a user matching any policy gets access.
 
@@ -86,16 +86,14 @@ MaaSSubscription resources grant **quota** and define rate limits. Each subscrip
 For a user to access a model:
 
 1. **Authentication**: User presents an API key or identity token
-2. **Authorization check** (AuthPolicy):
-   - Does the user's groups match any MaaSAuthPolicy for this model?
-   - If no: 403 Forbidden
-3. **Quota check** (Subscription):
-   - Does the user's API key have a subscription that includes this model?
-   - If no: 403 Forbidden
-4. **Rate limit check** (TokenRateLimitPolicy):
+2. **Subscription selection and authorization** (AuthPolicy → maas-api):
+   - maas-api resolves which MaaSSubscription applies and checks the caller's groups/username against MaaSAuthPolicy rules for the requested model
+   - The result includes `accessAllowed` in the subscription-info metadata
+   - If the user has no matching MaaSAuthPolicy or MaaSSubscription: 403 Forbidden
+3. **Rate limit check** (TokenRateLimitPolicy):
    - Has the user exceeded token limits for this subscription?
    - If yes: 429 Too Many Requests
-5. **If all checks pass**: Request forwarded to model backend
+4. **If all checks pass**: Request forwarded to model backend
 
 ---
 

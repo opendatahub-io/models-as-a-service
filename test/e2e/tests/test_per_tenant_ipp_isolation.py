@@ -55,6 +55,8 @@ from test_helper import (
     _gateway_url,
     _get_cluster_token,
     _maas_api_url,
+    _poll_status,
+    _wait_for_gateway_auth_enforced,
     _wait_reconcile,
 )
 
@@ -74,6 +76,8 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
             **kwargs,
         )
         retryable = (response.status_code == 403 and not response.text.strip()) or (
+            response.status_code == 403 and "Access denied" in response.text
+        ) or (
             response.status_code == 500 and "AUTH_FAILURE" in response.text
         )
         if retryable and attempt < retries:
@@ -175,7 +179,8 @@ def _post_hybrid_chat(
     model_name: str = MODEL_NAME,
 ) -> requests.Response:
     """Send hybrid BBR: model-specific URL path plus served model name in the body."""
-    return requests.post(
+    return _request_with_gateway_retry(
+        requests.post,
         f"{gateway_url.rstrip('/')}{model_path}/v1/chat/completions",
         headers={
             "Authorization": f"Bearer {api_key}",
@@ -186,8 +191,6 @@ def _post_hybrid_chat(
             "messages": [{"role": "user", "content": "ipp routing test"}],
             "max_tokens": 3,
         },
-        timeout=45,
-        verify=TLS_VERIFY,
     )
 
 
@@ -223,18 +226,19 @@ class TestPerTenantIPPInfrastructure:
                 f"{names['processing_deployment']} TENANT_NAMESPACE mismatch: {env!r}"
             )
 
-    def test_per_tenant_envoyfilter_target_ref_isolated(self, ipp_tenant_cases):
+    def test_per_tenant_envoyfilter_workload_selector_isolated(self, ipp_tenant_cases):
         for case in ipp_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             target = envoyfilter_target_gateway(names["envoyfilter"], GATEWAY_NAMESPACE)
             assert target == case["gateway_name"], (
-                f"{names['envoyfilter']} must target gateway {case['gateway_name']}, got {target!r}"
+                f"{names['envoyfilter']} workloadSelector must select gateway "
+                f"{case['gateway_name']}, got {target!r}"
             )
 
         default_target = envoyfilter_target_gateway("payload-processing", GATEWAY_NAMESPACE)
         assert default_target == DEFAULT_GATEWAY_NAME, (
-            f"default payload-processing EnvoyFilter must target {DEFAULT_GATEWAY_NAME}, "
-            f"got {default_target!r}"
+            f"default payload-processing EnvoyFilter workloadSelector must select "
+            f"{DEFAULT_GATEWAY_NAME}, got {default_target!r}"
         )
 
     def test_per_tenant_envoyfilter_grpc_clusters(self, ipp_tenant_cases):
@@ -318,8 +322,14 @@ class TestPerTenantIPPRouting:
         default_names = per_tenant_ipp_names(DEFAULT_AITENANT_NAME)
         tenant_names = per_tenant_ipp_names(case_b["tenant_label_name"])
 
-        time.sleep(2)
+        _wait_for_gateway_auth_enforced()
         api_key = _create_default_api_key()
+        # Warm gateway allowlist after prior tests may reset maas-gateway-auth to {}.
+        warmup = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
+        assert warmup.status_code == 200, (
+            f"Default gateway inference warmup failed: {warmup.status_code} "
+            f"{redact_sensitive(warmup.text[:500])}"
+        )
         response = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
         assert response.status_code == 200, (
             f"Default gateway hybrid BBR failed: {response.status_code} "

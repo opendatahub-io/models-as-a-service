@@ -95,19 +95,21 @@ endif
 
 .PHONY: generate
 generate: $(CONTROLLER_GEN) ##	generate deepcopy code for API types
-	$(CONTROLLER_GEN) object paths="./api/..."
+	"$(CONTROLLER_GEN)" object paths="./api/..."
 
 .PHONY: manifests
 manifests: $(CONTROLLER_GEN) ##	generate CRD and RBAC manifests
-	$(CONTROLLER_GEN) crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
-	$(CONTROLLER_GEN) rbac:roleName=maas-controller-role paths="./..." output:rbac:dir=../deployment/base/maas-controller/rbac
+	"$(CONTROLLER_GEN)" crd paths="./api/..." output:crd:dir=../deployment/base/maas-controller/crd/bases
+	"$(CONTROLLER_GEN)" rbac:roleName=maas-controller-role paths=./cmd/... paths=./pkg/... paths=./api/... output:rbac:dir=../deployment/base/maas-controller/rbac
 	@mv ../deployment/base/maas-controller/rbac/role.yaml ../deployment/base/maas-controller/rbac/clusterrole.yaml
+	"$(CONTROLLER_GEN)" rbac:roleName=maas-controller-ocp-role paths=. output:rbac:dir=../deployment/base/maas-controller/rbac/ocp
+	@mv ../deployment/base/maas-controller/rbac/ocp/role.yaml ../deployment/base/maas-controller/rbac/ocp/clusterrole_ocp.yaml
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ##	run generate + manifests and fail if files changed (CI check)
-	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; then \
+	@if ! git diff --quiet HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml ../deployment/base/maas-controller/rbac/ocp/clusterrole_ocp.yaml; then \
 		echo "ERROR: Generated files are out of date. Please run 'make -C maas-controller generate manifests' from the repo root and commit the results."; \
-		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml; \
+		git diff --stat HEAD -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/clusterrole.yaml ../deployment/base/maas-controller/rbac/ocp/clusterrole_ocp.yaml; \
 		exit 1; \
 	fi
 	@UNTRACKED=$$(git ls-files --others --exclude-standard -- api/ ../deployment/base/maas-controller/crd/bases/ ../deployment/base/maas-controller/rbac/); \

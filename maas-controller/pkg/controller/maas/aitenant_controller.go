@@ -824,34 +824,26 @@ func (r *AITenantReconciler) deleteTenantGatewayAuthPolicy(ctx context.Context, 
 	}
 
 	authPolicyName := fmt.Sprintf("%s-maas-auth", gatewayRef.Name)
-	authPolicyNames := []string{authPolicyName}
 	if aitenant.Name == tenantreconcile.DefaultAITenantName {
-		authPolicyNames = []string{maasGatewayAuthPolicyName, gatewayDefaultAuthPolicyName}
+		authPolicyName = maasGatewayAuthPolicyName
 	}
 
-	for _, name := range authPolicyNames {
-		authPolicy := &unstructured.Unstructured{}
-		authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
-		authPolicy.SetName(name)
-		authPolicy.SetNamespace(gatewayRef.Namespace)
+	authPolicy := &unstructured.Unstructured{}
+	authPolicy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+	authPolicy.SetName(authPolicyName)
+	authPolicy.SetNamespace(gatewayRef.Namespace)
 
-		if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
-			if isNotFoundError(err) {
-				continue
-			}
-			return fmt.Errorf("get tenant gateway AuthPolicy %s/%s during AITenant deletion: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+	if err := r.get(ctx, client.ObjectKeyFromObject(authPolicy), authPolicy); err != nil {
+		if isNotFoundError(err) {
+			return nil
 		}
-		if !isManaged(authPolicy) {
-			continue
-		}
-		// gateway-default-auth has a generic name, so only delete the instance
-		// that the MaaS controller created. Preserve a same-named user policy.
-		if name == gatewayDefaultAuthPolicyName && authPolicy.GetLabels()["app.kubernetes.io/managed-by"] != "maas-controller" {
-			continue
-		}
-		if err := r.Delete(ctx, authPolicy); client.IgnoreNotFound(err) != nil {
-			return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
-		}
+		return fmt.Errorf("get tenant gateway AuthPolicy %s/%s during AITenant deletion: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
+	}
+	if !isManaged(authPolicy) {
+		return nil
+	}
+	if err := r.Delete(ctx, authPolicy); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete tenant gateway AuthPolicy %s/%s: %w", authPolicy.GetNamespace(), authPolicy.GetName(), err)
 	}
 	return nil
 }
@@ -1389,6 +1381,7 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, t
 	labels[aiGatewayTenantLabel] = aitenant.Name
 	labels[tenantreconcile.LabelTenantName] = aitenant.Name
 	labels[tenantreconcile.LabelTenantNamespace] = tenantNamespace
+	labels[tenantreconcile.LabelGatewayAccess] = "true"
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
@@ -1408,6 +1401,7 @@ func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, 
 	removeMapValueIfEqual(&labels, aiGatewayTenantLabel, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantName, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantNamespace, tenantNamespace)
+	removeMapValueIfEqual(&labels, tenantreconcile.LabelGatewayAccess, "true")
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()

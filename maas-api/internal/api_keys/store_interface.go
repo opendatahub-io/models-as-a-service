@@ -70,9 +70,13 @@ type MetadataStore interface {
 	// Returns ErrKeyNotFound if key doesn't exist, ErrInvalidKey if revoked or expired.
 	GetByHash(ctx context.Context, keyHash string) (*ApiKey, error)
 
-	// InvalidateAll marks all active tokens for a user within a tenant as revoked.
-	// Returns the count of keys that were revoked.
-	InvalidateAll(ctx context.Context, username string, tenant string) (int, error)
+	// BulkRevoke handles both actual revocation and dry-run counting in a single
+	// method. When dryRun is false, it marks all active, non-expired keys matching
+	// the scope as revoked in a single atomic UPDATE and returns the revoked count.
+	// When dryRun is true, it returns the count of keys that would be revoked
+	// without mutating any data. At least one of username or subscription must be
+	// non-empty.
+	BulkRevoke(ctx context.Context, username, subscription, tenant string, dryRun bool) (int, error)
 
 	// InvalidateTenant marks all active tokens within a tenant as revoked.
 	// Returns the count of keys that were revoked.
