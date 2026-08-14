@@ -11,15 +11,18 @@ spec:
   policyTypes:
   - Ingress
   ingress:
+  # Allow the maas-controller to call the internal tenant API-key revocation
+  # endpoint when an AITenant is deleted. The controller runs in a separate
+  # namespace (opendatahub / redhat-ods-applications); both it and the infra
+  # namespace carry opendatahub.io/generated-namespace=true, so we use that
+  # label to scope to ODH-managed namespaces rather than opening all namespaces.
   - from:
-    - podSelector:
+    - namespaceSelector:
         matchLabels:
-          app: maas-api-cleanup
-          app.kubernetes.io/name: maas-api
-          app.kubernetes.io/component: api
-          app.kubernetes.io/part-of: models-as-a-service
+          opendatahub.io/generated-namespace: "true"
+      podSelector:
+        matchLabels:
+          app: maas-controller
     ports:
-    - protocol: TCP
-      port: 8080
     - protocol: TCP
       port: 8443

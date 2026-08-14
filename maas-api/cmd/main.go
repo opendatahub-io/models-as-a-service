@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -152,11 +153,16 @@ func serve() error {
 	if err != nil {
 		return fmt.Errorf("failed to initialize token store: %w", err)
 	}
+	var cleanupWg sync.WaitGroup
 	defer func() {
+		cancel()
+		cleanupWg.Wait()
 		if err := store.Close(); err != nil {
 			log.Error("Failed to close token store", "error", err)
 		}
 	}()
+
+	startEphemeralCleanup(ctx, log, cfg, store, &cleanupWg)
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
@@ -217,6 +223,36 @@ func serve() error {
 func initStore(ctx context.Context, log *logger.Logger, cfg *config.Config) (api_keys.MetadataStore, error) { //nolint:ireturn // Returns MetadataStore interface by design.
 	log.Info("Connecting to PostgreSQL database...", "tenant", cfg.TenantName)
 	return api_keys.NewPostgresStoreFromURL(ctx, log, cfg.DBConnectionURL, cfg.TenantName)
+}
+
+// startEphemeralCleanup launches a background goroutine that periodically deletes
+// expired ephemeral API keys. When cleanup is disabled (interval <= 0) it logs and
+// returns without starting a goroutine. The goroutine stops when ctx is cancelled.
+func startEphemeralCleanup(ctx context.Context, log *logger.Logger, cfg *config.Config, store api_keys.MetadataStore, wg *sync.WaitGroup) {
+	if cfg.CleanupIntervalMinutes <= 0 {
+		log.Info("Ephemeral key cleanup disabled")
+		return
+	}
+
+	interval := time.Duration(cfg.CleanupIntervalMinutes) * time.Minute
+	log.Info("Ephemeral key cleanup enabled", "interval", interval)
+	wg.Go(func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				count, err := store.DeleteExpiredEphemeral(ctx)
+				if err != nil {
+					log.Error("Failed to cleanup expired ephemeral keys", "error", err)
+				} else if count > 0 {
+					log.Info("Ephemeral key cleanup completed", "deletedCount", count)
+				}
+			case <-ctx.Done():
+				return
+			}
+		}
+	})
 }
 
 func registerHandlers(
@@ -303,10 +339,10 @@ func registerHandlers(
 		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		tenantHandler.GetTenantInfo)
 
-	// Internal routes (no auth required - called by Authorino / CronJob)
+	// Internal routes (no auth required - called by Authorino / in-process cleanup)
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys) // TODO: consider remove endpoint if not public access
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
