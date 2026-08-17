@@ -1,3 +1,5 @@
+# Insecure metrics scrape (METRICS_SECURE=false in base/dev).
+# overlays/tls patches scheme to https with tlsConfig and bearer token.
 apiVersion: monitoring.coreos.com/v1
 kind: ServiceMonitor
 metadata:
@@ -15,13 +17,5 @@ spec:
   endpoints:
     - path: /metrics
       port: https
-      scheme: https
+      scheme: http
       interval: 30s
-      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-      tlsConfig:
-        ca:
-          configMap:
-            name: openshift-service-ca.crt
-            key: service-ca.crt
-        # name.namespace.svc — filled by kustomize replacements in default/
-        serverName: maas-api-metrics.maas-api.svc
