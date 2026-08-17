@@ -42,6 +42,11 @@ patches:
   # Insecure metrics on xKS: keep base webhook + metrics volume mounts, but make
   # metrics-certs optional so the missing service-ca Secret does not block startup.
   # (Webhook cert is still created by the rhai-on-xks-chart post-install hook.)
+  # Indices match base manager.yaml args ordering:
+  #   0: --leader-elect
+  #   1: --health-probe-bind-address=:8081
+  #   2: --metrics-bind-address=:8443  → patched to :8080
+  #   3: --metrics-secure=true         → patched to false
   - target:
       kind: Deployment
       name: maas-controller
