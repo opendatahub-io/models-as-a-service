@@ -1449,6 +1449,143 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 	}
 }
 
+// TestMaaSSubscriptionReconciler_TRLPIndependentOfTokenMetadata verifies that the
+// generated TokenRateLimitPolicy spec is identical whether or not the subscription
+// has tokenMetadata set. This proves that token rate limit bypass on RHCL 1.4.1
+// (RHOAIENG-75778) is NOT caused by our TRLP generation -- the controller produces
+// the same when/counters/rates regardless of tokenMetadata.
+func TestMaaSSubscriptionReconciler_TRLPIndependentOfTokenMetadata(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+	)
+
+	tests := []struct {
+		name          string
+		tokenMetadata *maasv1alpha1.TokenMetadata
+	}{
+		{
+			name:          "without tokenMetadata",
+			tokenMetadata: nil,
+		},
+		{
+			name: "with tokenMetadata",
+			tokenMetadata: &maasv1alpha1.TokenMetadata{
+				OrganizationID: "org-123",
+				CostCenter:     "cc-456",
+			},
+		},
+	}
+
+	// Collect the TRLP spec from each run and compare them.
+	var trlpSpecs []map[string]any
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+			route := newHTTPRoute(httpRouteName, namespace)
+
+			maasSub := &maasv1alpha1.MaaSSubscription{
+				ObjectMeta: metav1.ObjectMeta{Name: "sub-meta-test", Namespace: namespace},
+				Spec: maasv1alpha1.MaaSSubscriptionSpec{
+					Owner: maasv1alpha1.OwnerSpec{
+						Groups: []maasv1alpha1.GroupReference{{Name: "team-a"}},
+					},
+					ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+						{
+							Name:      modelName,
+							Namespace: namespace,
+							TokenRateLimits: []maasv1alpha1.TokenRateLimit{
+								{Limit: 50, Window: "1h"},
+							},
+						},
+					},
+					TokenMetadata: tc.tokenMetadata,
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(model, route, maasSub).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-meta-test", Namespace: namespace}}
+			if _, err := r.Reconcile(context.Background(), req); err != nil {
+				t.Fatalf("Reconcile: unexpected error: %v", err)
+			}
+
+			trlp := &unstructured.Unstructured{}
+			trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+			if err := c.Get(context.Background(), types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+				t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+			}
+
+			spec, found, err := unstructured.NestedMap(trlp.Object, "spec")
+			if err != nil || !found {
+				t.Fatalf("spec not found: found=%v err=%v", found, err)
+			}
+
+			// Verify the TRLP has the expected structure
+			limitKey := namespace + "-sub-meta-test-" + modelName + "-tokens"
+			limitsRaw, found, err := unstructured.NestedMap(spec, "limits", limitKey)
+			if err != nil || !found {
+				t.Fatalf("spec.limits.%s not found: found=%v err=%v", limitKey, found, err)
+			}
+
+			// Verify when predicate references selected_subscription_key (not tokenMetadata)
+			whenSlice, found, err := unstructured.NestedSlice(limitsRaw, "when")
+			if err != nil || !found || len(whenSlice) == 0 {
+				t.Fatal("when clause not found in TRLP limits")
+			}
+			whenMap, ok := whenSlice[0].(map[string]any)
+			if !ok {
+				t.Fatalf("when[0] is not map: %T", whenSlice[0])
+			}
+			predicate, ok := whenMap["predicate"].(string)
+			if !ok {
+				t.Fatal("when[0].predicate not a string")
+			}
+			expectedPredicate := fmt.Sprintf(
+				`auth.identity.selected_subscription_key == "%s/sub-meta-test@%s/%s" && !request.path.endsWith("/v1/models")`,
+				namespace, namespace, modelName,
+			)
+			if predicate != expectedPredicate {
+				t.Errorf("predicate = %q, want %q", predicate, expectedPredicate)
+			}
+
+			// Verify counters reference userid (not tokenMetadata fields)
+			countersSlice, found, err := unstructured.NestedSlice(limitsRaw, "counters")
+			if err != nil || !found || len(countersSlice) == 0 {
+				t.Fatal("counters not found in TRLP limits")
+			}
+			counterMap, ok := countersSlice[0].(map[string]any)
+			if !ok {
+				t.Fatalf("counters[0] is not map: %T", countersSlice[0])
+			}
+			if expr, ok := counterMap["expression"].(string); !ok || expr != "auth.identity.userid" {
+				t.Errorf("counter expression = %v, want %q", counterMap["expression"], "auth.identity.userid")
+			}
+
+			trlpSpecs = append(trlpSpecs, spec)
+		})
+	}
+
+	// The definitive check: specs must be identical regardless of tokenMetadata
+	if len(trlpSpecs) == 2 {
+		spec1 := fmt.Sprintf("%v", trlpSpecs[0])
+		spec2 := fmt.Sprintf("%v", trlpSpecs[1])
+		if spec1 != spec2 {
+			t.Errorf("TRLP specs differ with/without tokenMetadata:\nwithout: %s\nwith:    %s", spec1, spec2)
+		}
+	}
+}
+
 // TestMaaSSubscriptionReconciler_NoSpec verifies that a legacy subscription created
 // without a spec field is marked Failed without adding a finalizer.
 func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
