@@ -92,10 +92,10 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	if params.PayloadProcessingAutoscaling && params.PayloadProcessingReplicas != nil {
 		if *params.PayloadProcessingReplicas > params.PayloadProcessingMaxReplicas {
 			params.Warnings = append(params.Warnings, fmt.Sprintf(
-				"payload-processing-replicas (%d) exceeds payload-processing-max-replicas (%d); clamping max-replicas to match",
+				"spec.payloadProcessing.replicas (%d) exceeds spec.payloadProcessing.autoscaling.maxReplicas (%d); clamping maxReplicas to match",
 				*params.PayloadProcessingReplicas, params.PayloadProcessingMaxReplicas))
 			params.PayloadProcessingMaxReplicas = *params.PayloadProcessingReplicas
-			log.Info("Clamped payload-processing max-replicas to match min-replicas",
+			log.Info("Clamped spec.payloadProcessing.autoscaling.maxReplicas to match replicas",
 				"minReplicas", *params.PayloadProcessingReplicas,
 				"maxReplicas", params.PayloadProcessingMaxReplicas)
 		}

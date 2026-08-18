@@ -890,7 +890,7 @@ func TestBuildPlatformParams_PayloadProcessingSpec(t *testing.T) {
 		assert.Equal(t, int32(20), *got.PayloadProcessingReplicas)
 		assert.Equal(t, int32(20), got.PayloadProcessingMaxReplicas, "maxReplicas should be clamped to match minReplicas")
 		require.Len(t, got.Warnings, 1)
-		assert.Contains(t, got.Warnings[0], "exceeds payload-processing-max-replicas")
+		assert.Contains(t, got.Warnings[0], "exceeds spec.payloadProcessing.autoscaling.maxReplicas")
 	})
 
 	t.Run("spec replicas override annotation replicas", func(t *testing.T) {
