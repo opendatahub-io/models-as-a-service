@@ -22,6 +22,8 @@ from test_helper import E2E_CURL_POD_NAMESPACE
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("readonly")
+
 
 def _curl_pod_namespace() -> str:
     return os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)

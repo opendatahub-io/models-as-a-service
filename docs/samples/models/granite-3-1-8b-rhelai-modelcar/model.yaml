@@ -2,7 +2,7 @@
 #
 # ## Why you saw: `vllm: command not found` (often around “line 129” of a generated script)
 # KServe / OpenShift AI generates a launcher script that runs `vllm ...`. That only works when
-# the **predictor container image** is a vLLM runtime (e.g. rhaiis/vllm-*-rhel9) where `vllm`
+# the **predictor container image** is a vLLM runtime (e.g. rhaii/vllm-*-rhel9) where `vllm`
 # is on PATH.
 #
 # The image `registry.redhat.io/rhelai1/modelcar-granite-3-1-8b-starter-v1:1.4` is a **ModelCar**:
@@ -13,10 +13,10 @@
 # **Correct split:** `spec.model.uri` = `oci://…` modelcar (weights) + `template.containers[].image`
 # = Red Hat AI Inference Server vLLM image (CPU or CUDA tag per your cluster).
 #
-# Pin `rhaiis/vllm-cpu-rhel9` / `vllm-cuda-rhel9` tags to what your OpenShift AI / subscription documents.
+# Pin `rhaii/vllm-cpu-rhel9` / `vllm-cuda-rhel9` tags to what your OpenShift AI / subscription documents.
 # GPU: add nodeSelector/tolerations and `nvidia.com/gpu` limits; switch image to vllm-cuda-rhel9.
 #
-# Requires: registry.redhat.io pull secret, AVX2 for CPU inference (see RHAIIS docs).
+# Requires: registry.redhat.io pull secret, AVX2 for CPU inference (see RHAII docs).
 apiVersion: serving.kserve.io/v1alpha1
 kind: LLMInferenceService
 metadata:
@@ -38,7 +38,7 @@ spec:
     containers:
       - name: main
         # vLLM runtime (has `vllm` on PATH for the KServe launcher). NOT the modelcar image.
-        image: registry.redhat.io/rhaiis/vllm-cpu-rhel9:3.3.0
+        image: registry.redhat.io/rhaii/vllm-cpu-rhel9:3.4.1
         imagePullPolicy: IfNotPresent
         env:
           - name: VLLM_CPU_KVCACHE_SPACE

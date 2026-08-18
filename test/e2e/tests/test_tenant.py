@@ -6,6 +6,8 @@ import time
 
 import pytest
 
+from test_helper import _ns
+
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 
@@ -49,8 +51,9 @@ def _oc_json(args):
     return json.loads(result.stdout)
 
 
+pytestmark = pytest.mark.xdist_group("readonly")
+
 TENANT_NAME = "default-tenant"
-TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 TENANT_CRD = "maastenantconfigs.maas.opendatahub.io"
 
@@ -62,7 +65,7 @@ _KIND_PLURAL = {
 
 
 def _tenant_doc():
-    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", _ns(), "-o", "json"])
 
 
 def _tenant_status():
@@ -92,7 +95,7 @@ def require_tenant_crd():
 def require_tenant_singleton():
     if _tenant_status() is None:
         pytest.skip(
-            f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} not found (transitional skip: "
+            f"MaasTenantConfig {TENANT_NAME}/{_ns()} not found (transitional skip: "
             "maas-controller should create this on startup once CRDs and controller are installed)."
         )
 

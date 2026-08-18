@@ -141,10 +141,13 @@ def _inference_x_api_key(api_key, path=None, model_name=None):
     )
 
 
-pytestmark = pytest.mark.skipif(
-    not _crd_installed(IPP_EXTERNAL_MODEL_CRD),
-    reason=f"IPP ExternalModel CRD ({IPP_EXTERNAL_MODEL_CRD}) not installed",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _crd_installed(IPP_EXTERNAL_MODEL_CRD),
+        reason=f"IPP ExternalModel CRD ({IPP_EXTERNAL_MODEL_CRD}) not installed",
+    ),
+    pytest.mark.xdist_group("api_keys"),
+]
 
 
 @pytest.fixture(scope="module")

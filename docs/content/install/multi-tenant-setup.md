@@ -18,9 +18,10 @@ Each AITenant requires a dedicated Gateway. Gateways cannot be shared between AI
 Get the cluster domain and create the Gateway.
 
 The Gateway uses a per-tenant label selector for `allowedRoutes` so only explicitly
-labelled namespaces can attach HTTPRoutes. Label each
-namespace that needs access (infra namespace, model namespaces) before or after Gateway
-creation:
+labelled namespaces can attach HTTPRoutes. The controller automatically labels
+the infrastructure namespace with the gateway's `matchLabels` (see
+[Automatic infrastructure namespace labeling](../configuration-and-management/gateway-patterns.md#automatic-infrastructure-namespace-labeling)).
+Model namespaces still require manual labeling.
 
 ```bash
 TENANT_NAME="red-team"
@@ -30,11 +31,8 @@ GATEWAY_NAMESPACE="openshift-ingress"
 CERT_NAME="router-certs-default"
 GATEWAY_ACCESS_LABEL="maas.opendatahub.io/gateway-access-${TENANT_NAME}"
 
-# Label the namespaces that need to attach HTTPRoutes to this tenant Gateway.
-# At minimum: the infrastructure namespace where maas-api is deployed.
-# Also label any model namespaces (e.g. llm) where LLMInferenceServices run.
-INFRA_NS="odh-ai-gateway-infra"   # adjust if using RHOAI (redhat-ai-gateway-infra)
-oc label namespace "${INFRA_NS}" "${GATEWAY_ACCESS_LABEL}=true" --overwrite
+# Label model namespaces that need to attach HTTPRoutes to this tenant Gateway.
+# The infrastructure namespace is labeled automatically by the controller.
 # oc label namespace llm "${GATEWAY_ACCESS_LABEL}=true" --overwrite  # repeat for model namespaces
 
 cat <<EOF | oc apply -f -
@@ -116,16 +114,15 @@ oc get gateway ${TENANT_NAME} -n ${GATEWAY_NAMESPACE}
 
 !!! tip "Automated script"
     The `scripts/create-ai-tenant.sh` script automates Gateway and AITenant creation.
-    For multi-tenant deployments use the per-gateway label selector and label namespaces manually:
+    For multi-tenant deployments use the per-gateway label selector:
     ```bash
     NAMESPACE_SELECTOR_LABELS="maas.opendatahub.io/gateway-access-red-team=true" \
       ./scripts/create-ai-tenant.sh red-team
     ```
-    Then label the infra namespace and any model namespaces:
+    The controller labels the infrastructure namespace automatically. Label any
+    model namespaces manually:
     ```bash
-    oc label namespace odh-ai-gateway-infra \
-      maas.opendatahub.io/gateway-access-red-team=true --overwrite
-    # oc label namespace llm maas.opendatahub.io/gateway-access-red-team=true --overwrite
+    oc label namespace llm maas.opendatahub.io/gateway-access-red-team=true --overwrite
     ```
 
 ## 2. Create the AITenant CR

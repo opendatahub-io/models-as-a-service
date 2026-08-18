@@ -32,6 +32,7 @@ type ApiKey struct {
 	Status         Status   `json:"status"`                   // "active", "expired", "revoked"
 	LastUsedAt     string   `json:"lastUsedAt,omitempty"`     // Tracks when key was last used for validation
 	Ephemeral      bool     `json:"ephemeral"`                // Short-lived programmatic key
+	Labels         map[string]string `json:"labels,omitempty"`   // Structured key-value pairs for API key metadata
 }
 
 // ValidationResult holds the result of API key validation (for Authorino HTTP callback).
@@ -96,6 +97,9 @@ type SearchFilters struct {
 
 	// Ephemeral key filter
 	IncludeEphemeral *bool `json:"includeEphemeral,omitempty"` // Include ephemeral keys in results (default: false)
+
+	// Labels filter
+	LabelsContain  map[string]string `json:"labelsContain,omitempty"` // Filter by structured key-value pairs for API key metadata
 }
 
 // SortParams specifies sorting criteria.

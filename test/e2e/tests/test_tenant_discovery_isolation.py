@@ -20,6 +20,8 @@ from test_helper import E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+
 
 def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
     """Execute curl from inside cluster. Returns (status_code, response_body)"""

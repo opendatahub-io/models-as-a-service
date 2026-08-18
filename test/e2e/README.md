@@ -16,6 +16,12 @@ Existing cluster (skip deploy):
 SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
+Parallel pytest on an existing cluster (default 4 workers):
+
+```bash
+SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
+```
+
 Smoke helper only:
 
 ```bash
@@ -69,3 +75,36 @@ The dormant-mode regression inside `test_tenant_namespace_discovery.py` mutates 
 The S24/S4 suites are in the smoke list but intentionally skip until their backing implementation is present in the deployed build. Enable them with `ENABLE_S24_E2E=true` or `ENABLE_S4_E2E=true` plus `MAAS_API_BASE_URL_TENANT_A`, `MAAS_API_BASE_URL_TENANT_B`, `TENANT_A_NAMESPACE`, and `TENANT_B_NAMESPACE`.
 
 External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOKEN_URL`, `OIDC_CLIENT_ID`, `OIDC_USERNAME`, `OIDC_PASSWORD` per your deploy/test setup.
+
+## Parallel execution (pytest-xdist)
+
+By default, CI and `prow_run_smoke_test.sh` run tests in **two passes** when `E2E_PARALLEL_WORKERS=2`:
+
+1. **Pass 1:** `-m "not serial"` — parallel across files (`--dist=loadfile`)
+2. **Pass 2:** `-m serial` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests
+
+For fully serial debugging:
+
+```bash
+E2E_PARALLEL_WORKERS=1 ./run-tests-quick.sh
+```
+
+Parallel on an existing cluster:
+
+```bash
+SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
+```
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `E2E_PARALLEL_WORKERS` | `2` | Parallel workers for pass 1. Pass 2 (`@serial`) always runs on one worker. Set to `1` to run everything serially in one pass. |
+| `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
+| `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
+| `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
+| `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
+
+**19 `@serial` tests** (pass 2): verify with `pytest -m serial tests/ --collect-only -q`.
+
+**Worker tenant (Phase 3 pilot):** each xdist worker (`gw0`, `gw1`, …) bootstraps its own AITenant namespace with baseline `simulator-subscription` / `simulator-access` CRs. Non-serial tests in opted-in modules route `MAAS_SUBSCRIPTION_NAMESPACE`, `GATEWAY_HOST`, and `MAAS_API_BASE_URL` to that tenant for the duration of the test.
+
+Session fixtures suffix resource names with the worker id (for example `e2e-test-inference-key-w0`).

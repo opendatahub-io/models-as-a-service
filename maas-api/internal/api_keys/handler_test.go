@@ -17,6 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
@@ -187,7 +189,7 @@ func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	// Create a key via service so hash and subscription are correct
 	resp, err := service.CreateAPIKey(
 		context.Background(), "alice", []string{"system:authenticated"},
-		"Val Key", "", nil, false, "", "redteam",
+		"Val Key", "", nil, false, "", "redteam", nil,
 	)
 	require.NoError(t, err)
 
@@ -267,12 +269,12 @@ func TestSearchAPIKeys_EmptyRequest(t *testing.T) {
 
 	// Create test keys
 	ctx := context.Background()
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 	// Create a revoked key
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "key-3")
 	require.NoError(t, err)
@@ -318,7 +320,7 @@ func TestSearchAPIKeys_Pagination(t *testing.T) {
 		keyID := fmt.Sprintf("key-%d", i)
 		keyHash := fmt.Sprintf("hash-%d", i)
 		name := fmt.Sprintf("Key %d", i)
-		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(ctx, testUser.Username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 	}
 
@@ -419,9 +421,10 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	}
 
 	// Create active and revoked keys
-	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", nil, false, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
 	require.NoError(t, err)
@@ -545,9 +548,9 @@ func TestSearchAPIKeys_SubscriptionFilter(t *testing.T) {
 		Tenant:   "test-tenant",
 	}
 
-	err := store.AddKey(ctx, testUser.Username, "key-sub-a", "hash-a", "Key A", "", []string{"system:authenticated"}, "subscription-a", "test-tenant", nil, false)
+	err := store.AddKey(ctx, testUser.Username, "key-sub-a", "hash-a", "Key A", "", []string{"system:authenticated"}, "subscription-a", "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-sub-b", "hash-b", "Key B", "", []string{"system:authenticated"}, "subscription-b", "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-sub-b", "hash-b", "Key B", "", []string{"system:authenticated"}, "subscription-b", "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("FilterBySubscription", func(t *testing.T) {
@@ -605,11 +608,11 @@ func TestSearchAPIKeys_Sorting(t *testing.T) {
 	}
 
 	// Create keys with different names
-	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Charlie", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Alice", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Bob", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("DefaultSort_CreatedAtDesc", func(t *testing.T) {
@@ -732,7 +735,7 @@ func TestSearchAPIKeys_AdminVsRegularUser(t *testing.T) {
 			keyID := fmt.Sprintf("%s-key-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-%d", username, i)
 			name := fmt.Sprintf("%s Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 			require.NoError(t, err)
 		}
 	}
@@ -857,14 +860,14 @@ func TestSearchAPIKeys_AdminFiltersByUsernameAndStatus(t *testing.T) {
 			keyID := fmt.Sprintf("%s-active-%d", username, i)
 			keyHash := fmt.Sprintf("%s-hash-active-%d", username, i)
 			name := fmt.Sprintf("%s Active Key %d", username, i)
-			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+			err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 			require.NoError(t, err)
 		}
 		// Create 1 revoked key
 		keyID := fmt.Sprintf("%s-revoked", username)
 		keyHash := fmt.Sprintf("%s-hash-revoked", username)
 		name := fmt.Sprintf("%s Revoked Key", username)
-		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(ctx, username, keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 		err = store.Revoke(ctx, keyID)
 		require.NoError(t, err)
@@ -938,7 +941,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("alice-key-%d", i)
 		keyHash := fmt.Sprintf("alice-hash-%d", i)
 		name := fmt.Sprintf("Alice Key %d", i)
-		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 	}
 
@@ -946,7 +949,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 		keyID := fmt.Sprintf("bob-key-%d", i)
 		keyHash := fmt.Sprintf("bob-hash-%d", i)
 		name := fmt.Sprintf("Bob Key %d", i)
-		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(ctx, "bob", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 	}
 
@@ -1003,7 +1006,7 @@ func TestBulkRevokeAPIKeys(t *testing.T) {
 			keyID := fmt.Sprintf("alice-key-%d", i)
 			keyHash := fmt.Sprintf("alice-hash-%d", i)
 			name := fmt.Sprintf("Alice Key %d", i)
-			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+			err := store.AddKey(ctx, "alice", keyID, keyHash, name, "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 			require.NoError(t, err)
 		}
 
@@ -1263,9 +1266,9 @@ func TestGetAPIKeyHandler(t *testing.T) {
 	}
 
 	// Add keys to store
-	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(context.Background(), aliceKey.Username, aliceKey.ID, "hash1", aliceKey.Name, "", aliceKey.Groups, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(context.Background(), bobKey.Username, bobKey.ID, "hash2", bobKey.Name, "", bobKey.Groups, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	// Helper function to test successful key retrieval
@@ -1362,7 +1365,7 @@ func testRevokeKeySuccess(t *testing.T, user *token.UserContext) {
 	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
 
 	// Create alice's key
-	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -1406,7 +1409,7 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
 
 		// Create alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 
 		// Bob trying to revoke Alice's key
@@ -1476,7 +1479,7 @@ func TestRevokeAPIKeyHandler(t *testing.T) {
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
 
 		// Create and immediately revoke alice's key
-		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false)
+		err := store.AddKey(context.Background(), "alice", "alice-key-1", "hash1", "Alice's Key", "", []string{"tier-free"}, testSubscriptionName, "test-tenant", nil, false, nil)
 		require.NoError(t, err)
 		err = store.Revoke(context.Background(), "alice-key-1")
 		require.NoError(t, err)
@@ -1649,28 +1652,28 @@ func TestCleanupExpiredEphemeralKeys(t *testing.T) {
 	ctx := context.Background()
 
 	// Create regular active key (should NOT be deleted)
-	err := store.AddKey(ctx, "alice", "regular-key", "hash-1", "Regular Key", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(ctx, "alice", "regular-key", "hash-1", "Regular Key", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	// Create active ephemeral key with future expiration (should NOT be deleted)
 	futureExpiry := time.Now().Add(30 * time.Minute)
-	err = store.AddKey(ctx, "alice", "active-ephemeral", "hash-2", "Active Ephemeral", "", []string{"users"}, testSubscriptionName, "test-tenant", &futureExpiry, true)
+	err = store.AddKey(ctx, "alice", "active-ephemeral", "hash-2", "Active Ephemeral", "", []string{"users"}, testSubscriptionName, "test-tenant", &futureExpiry, true, nil)
 	require.NoError(t, err)
 
 	// Create expired ephemeral key (should be deleted)
 	pastExpiry := time.Now().Add(-1 * time.Hour)
-	err = store.AddKey(ctx, "alice", "expired-ephemeral", "hash-3", "Expired Ephemeral", "", []string{"users"}, testSubscriptionName, "test-tenant", &pastExpiry, true)
+	err = store.AddKey(ctx, "alice", "expired-ephemeral", "hash-3", "Expired Ephemeral", "", []string{"users"}, testSubscriptionName, "test-tenant", &pastExpiry, true, nil)
 	require.NoError(t, err)
 
 	// Create another expired ephemeral key (should be deleted)
 	pastExpiry2 := time.Now().Add(-2 * time.Hour)
-	err = store.AddKey(ctx, "bob", "expired-ephemeral-2", "hash-4", "Expired Ephemeral 2", "", []string{"users"}, testSubscriptionName, "test-tenant", &pastExpiry2, true)
+	err = store.AddKey(ctx, "bob", "expired-ephemeral-2", "hash-4", "Expired Ephemeral 2", "", []string{"users"}, testSubscriptionName, "test-tenant", &pastExpiry2, true, nil)
 	require.NoError(t, err)
 
 	// Create expired ephemeral key within 30-minute grace period (should NOT be deleted)
 	recentExpiry := time.Now().Add(-10 * time.Minute)
-	err = store.AddKey(ctx, "alice", "recently-expired-ephemeral", "hash-5", "Recently Expired Ephemeral",
-		"", []string{"users"}, testSubscriptionName, "test-tenant", &recentExpiry, true)
+	err = store.AddKey(ctx, "alice", "recently-expired-ephemeral", "hash-5", "Recently Expired Ephemeral", "", []string{"users"}, testSubscriptionName, 
+		"test-tenant", &recentExpiry, true, nil)
 	require.NoError(t, err)
 
 	t.Run("DeletesExpiredEphemeralKeys", func(t *testing.T) {
@@ -1728,9 +1731,9 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
 		handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
 
-		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
-		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false))
-		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false))
+		require.NoError(t, store.AddKey(ctx, "alice", "tenant-delete-1", "tenant-delete-hash-1", "Key 1", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false, nil))
+		require.NoError(t, store.AddKey(ctx, "bob", "tenant-delete-2", "tenant-delete-hash-2", "Key 2", "", []string{"users"}, testSubscriptionName, "test-tenant", nil, false, nil))
+		require.NoError(t, store.AddKey(ctx, "carol", "other-tenant-key", "other-tenant-hash", "Other", "", []string{"users"}, testSubscriptionName, "other-tenant", nil, false, nil))
 
 		w := httptest.NewRecorder()
 		c, _ := gin.CreateTestContext(w)
@@ -1813,18 +1816,18 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 	}
 
 	// Create regular keys
-	err := store.AddKey(ctx, testUser.Username, "regular-key-1", "hash-1", "Regular Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err := store.AddKey(ctx, testUser.Username, "regular-key-1", "hash-1", "Regular Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "regular-key-2", "hash-2", "Regular Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "regular-key-2", "hash-2", "Regular Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	// Create ephemeral keys
 	futureExpiry := time.Now().Add(1 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &futureExpiry, true)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &futureExpiry, true, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &futureExpiry, true)
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &futureExpiry, true, nil)
 	require.NoError(t, err)
 
 	t.Run("DefaultSearchExcludesEphemeral", func(t *testing.T) {
@@ -1871,19 +1874,19 @@ func TestSearchAPIKeys_ExpiredStatusComputation(t *testing.T) {
 
 	// Create a key that expired yesterday (stored as active, but past expiration)
 	pastExpiry := time.Now().Add(-24 * time.Hour)
-	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &pastExpiry, false)
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &pastExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with future expiration
 	futureExpiry := time.Now().Add(24 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &futureExpiry, false)
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key","", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &futureExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with no expiration
-	err = store.AddKey(ctx, testUser.Username, "permanent-key", "permanent-hash", "Permanent Key",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+	err = store.AddKey(ctx, testUser.Username, "permanent-key", "permanent-hash", "Permanent Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("SearchReturnsExpiredStatusForPastExpirationKeys", func(t *testing.T) {
@@ -1936,14 +1939,14 @@ func TestGetAPIKey_ExpiredStatusComputation(t *testing.T) {
 
 	// Create a key that expired yesterday
 	pastExpiry := time.Now().Add(-24 * time.Hour)
-	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &pastExpiry, false)
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &pastExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with future expiration
 	futureExpiry := time.Now().Add(24 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key",
-		"", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", &futureExpiry, false)
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+		"test-tenant", &futureExpiry, false, nil)
 	require.NoError(t, err)
 
 	t.Run("GetExpiredKeyReturnsExpiredStatus", func(t *testing.T) {
@@ -2042,9 +2045,7 @@ func TestCrossTenantAccessRejected(t *testing.T) {
 			h := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
 
 			ctx := context.Background()
-			err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "",
-				[]string{"system:authenticated"}, testSubscriptionName,
-				"tenant-a", nil, false)
+			err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 			require.NoError(t, err)
 
 			w := httptest.NewRecorder()
@@ -2078,11 +2079,11 @@ func TestSearchAPIKeys_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create keys for two tenants under same username
-	err := store.AddKey(ctx, "alice", "key-ta-1", "hash-ta1", "TA Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err := store.AddKey(ctx, "alice", "key-ta-1", "hash-ta1", "TA Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "key-ta-2", "hash-ta2", "TA Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err = store.AddKey(ctx, "alice", "key-ta-2", "hash-ta2", "TA Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "key-tb-1", "hash-tb1", "TB Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false)
+	err = store.AddKey(ctx, "alice", "key-tb-1", "hash-tb1", "TB Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false, nil)
 	require.NoError(t, err)
 
 	// Tenant-A user should only see tenant-A keys
@@ -2158,19 +2159,15 @@ func TestBulkRevokeAPIKeys_TenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create 2 keys for "alice" in tenant-a
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
 
 	// Create 2 keys for "alice" in tenant-b
-	err = store.AddKey(ctx, "alice", "tb-key-1", "hash-tb1", "TB Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false)
+	err = store.AddKey(ctx, "alice", "tb-key-1", "hash-tb1", "TB Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "tb-key-2", "hash-tb2", "TB Key 2", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false)
+	err = store.AddKey(ctx, "alice", "tb-key-2", "hash-tb2", "TB Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-b", nil, false, nil)
 	require.NoError(t, err)
 
 	// Admin from tenant-a bulk revokes "alice"
@@ -2223,9 +2220,9 @@ func TestBulkRevokeAPIKeys_BySubscription(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "sub-a-key-1", "h1", "Key 1", "", nil, "sub-alpha", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "bob", "sub-a-key-2", "h2", "Key 2", "", nil, "sub-alpha", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "sub-b-key-1", "h3", "Key 3", "", nil, "sub-beta", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-a-key-1", "h1", "Key 1", "", nil, "sub-alpha", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "bob", "sub-a-key-2", "h2", "Key 2", "", nil, "sub-alpha", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "sub-b-key-1", "h3", "Key 3", "", nil, "sub-beta", "test-tenant", nil, false, nil))
 
 	t.Run("AdminCanRevokeBySubscription", func(t *testing.T) {
 		adminUser := &token.UserContext{
@@ -2281,9 +2278,9 @@ func TestBulkRevokeAPIKeys_BySubscription(t *testing.T) {
 		service2 := NewServiceWithLogger(store2, cfg, fixedSubSelector{}, logger.Development())
 		handler2 := NewHandler(logger.Development(), service2, newMockAdminChecker(), nil)
 
-		require.NoError(t, store2.AddKey(ctx, "alice", "combo-1", "ch1", "K1", "", nil, "sub-x", "test-tenant", nil, false))
-		require.NoError(t, store2.AddKey(ctx, "alice", "combo-2", "ch2", "K2", "", nil, "sub-y", "test-tenant", nil, false))
-		require.NoError(t, store2.AddKey(ctx, "bob", "combo-3", "ch3", "K3", "", nil, "sub-x", "test-tenant", nil, false))
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-1", "ch1", "K1", "", nil, "sub-x", "test-tenant", nil, false, nil))
+		require.NoError(t, store2.AddKey(ctx, "alice", "combo-2", "ch2", "K2", "", nil, "sub-y", "test-tenant", nil, false, nil))
+		require.NoError(t, store2.AddKey(ctx, "bob", "combo-3", "ch3", "K3", "", nil, "sub-x", "test-tenant", nil, false, nil))
 
 		adminUser := &token.UserContext{
 			Username: "admin",
@@ -2324,9 +2321,9 @@ func TestBulkRevokeAPIKeys_DryRun(t *testing.T) {
 
 	ctx := context.Background()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-1", "dh1", "DK1", "", nil, "sub-a", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-2", "dh2", "DK2", "", nil, "sub-a", "test-tenant", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-3", "dh3", "DK3", "", nil, "sub-b", "test-tenant", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-1", "dh1", "DK1", "", nil, "sub-a", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-2", "dh2", "DK2", "", nil, "sub-a", "test-tenant", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "dr-key-3", "dh3", "DK3", "", nil, "sub-b", "test-tenant", nil, false, nil))
 
 	t.Run("DryRunDoesNotMutate", func(t *testing.T) {
 		adminUser := &token.UserContext{
@@ -2399,11 +2396,9 @@ func TestSearchAPIKeys_AdminCrossTenantIsolation(t *testing.T) {
 	ctx := context.Background()
 
 	// Create keys for "alice" in tenant-a
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("AdminFromTenantBSeesNoKeys", func(t *testing.T) {
@@ -2444,11 +2439,9 @@ func TestSearchAPIKeys_EmptyTenantNoResults(t *testing.T) {
 	ctx := context.Background()
 
 	// Create keys in tenant-a
-	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err := store.AddKey(ctx, "alice", "ta-key-1", "hash-ta1", "TA Key 1", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false)
+	err = store.AddKey(ctx, "alice", "ta-key-2", "hash-ta2", "TA Key 2", "", []string{"system:authenticated"}, testSubscriptionName, "tenant-a", nil, false, nil)
 	require.NoError(t, err)
 
 	// User from tenant-c (no keys exist) searches
@@ -2501,7 +2494,7 @@ func TestSearchAPIKeys_NoAuthContext(t *testing.T) {
 	// Seed data so we can verify no keys leak when there is no auth context.
 	ctx := context.Background()
 	err := store.AddKey(ctx, "alice", "key-1", "hash-1", "Key 1", "",
-		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false)
+		[]string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
 	t.Run("returns empty list when no auth headers at all", func(t *testing.T) {
@@ -2640,6 +2633,587 @@ func TestCreateAPIKey_NameValidation(t *testing.T) {
 			err := json.Unmarshal(w.Body.Bytes(), &response)
 			require.NoError(t, err)
 			assert.Contains(t, response["error"], tc.errMsg, "error message should mention %s for %s", tc.errMsg, tc.reason)
+		})
+	}
+}
+
+// TestValidateLabels_Success tests valid label configurations.
+func TestValidateLabels_Success(t *testing.T) {
+	tests := []struct {
+		name   string
+		labels map[string]string
+	}{
+		{
+			name:   "nil labels",
+			labels: nil,
+		},
+		{
+			name:   "empty labels",
+			labels: map[string]string{},
+		},
+		{
+			name: "single label",
+			labels: map[string]string{
+				"environment": "production",
+			},
+		},
+		{
+			name: "multiple valid labels",
+			labels: map[string]string{
+				"cmdb_id":      "AST123456",
+				"cost_center":  "CC-DATA-001",
+				"environment":  "production",
+				"project_code": "PROJ-ML-2024",
+				"owner_email":  "ml-team@company.com",
+			},
+		},
+		{
+			name: "kubernetes-style prefixed keys",
+			labels: map[string]string{
+				"app.kubernetes.io/name":    "maas",
+				"app.kubernetes.io/version": "1.0",
+				"company.com/project-id":    "PROJ-123",
+				"example.org/owner":         "ml-team",
+			},
+		},
+		{
+			name: "simple keys with dots underscores hyphens",
+			labels: map[string]string{
+				"some_underscore_key": "value",
+				"some-hyphen-key":     "value",
+				"some.dot.key":        "value",
+				"mixed.key_with-all":  "value",
+			},
+		},
+		{
+			name: "max entries (50)",
+			labels: makeLargeLabels(constant.MaxLabelsEntries),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLabels(tt.labels)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+// TestValidateLabels_Errors tests label validation failures.
+func TestValidateLabels_Errors(t *testing.T) {
+	tests := []struct {
+		name    string
+		labels  map[string]string
+		wantErr string
+	}{
+		{
+			name:    "too many entries",
+			labels:  makeLargeLabels(constant.MaxLabelsEntries + 1),
+			wantErr: fmt.Sprintf("cannot exceed %d", constant.MaxLabelsEntries),
+		},
+		{
+			name:    "empty key",
+			labels:  map[string]string{"": "value"},
+			wantErr: "label keys cannot be empty",
+		},
+		{
+			name:    "key too long",
+			labels:  map[string]string{strings.Repeat("a", constant.MaxLabelKeyLength+1): "value"},
+			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:    "empty value",
+			labels:  map[string]string{"key": ""},
+			wantErr: "label value for key 'key' cannot be empty",
+		},
+		{
+			name:    "value too long",
+			labels:  map[string]string{"key": strings.Repeat("a", constant.MaxLabelValueLength+1)},
+			wantErr: fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:    "invalid key - spaces",
+			labels:  map[string]string{"key with spaces": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - special chars",
+			labels:  map[string]string{"key!@#$": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - slash without prefix",
+			labels:  map[string]string{"key/slash/invalid": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - prefix with underscore",
+			labels:  map[string]string{"bad_prefix.com/name": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - starts with hyphen",
+			labels:  map[string]string{"-starts-with-hyphen": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - ends with hyphen",
+			labels:  map[string]string{"ends-with-hyphen-": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "invalid key - starts with dot",
+			labels:  map[string]string{".starts.with.dot": "value"},
+			wantErr: "contains invalid characters",
+		},
+		{
+			name:    "control characters in value - null",
+			labels:  map[string]string{"key": "value\x00null"},
+			wantErr: "invalid control characters",
+		},
+		{
+			name:    "control characters in value - newline",
+			labels:  map[string]string{"key": "value\nwith\nnewlines"},
+			wantErr: "invalid control characters",
+		},
+		{
+			name:    "control characters in value - tab",
+			labels:  map[string]string{"key": "value\twith\ttabs"},
+			wantErr: "invalid control characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateLabels(tt.labels)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+		})
+	}
+}
+
+// Helper function to create a map with a specific number of entries.
+func makeLargeLabels(count int) map[string]string {
+	labels := make(map[string]string)
+	for i := range count {
+		labels[fmt.Sprintf("key_%d", i)] = fmt.Sprintf("value_%d", i)
+	}
+	return labels
+}
+
+// TestCreateAPIKey_WithLabels tests creating an API key with labels.
+func TestCreateAPIKey_WithLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	labels := map[string]string{
+		"cmdb_id":      "AST123456",
+		"cost_center":  "CC-DATA-001",
+		"environment":  "production",
+		"project_code": "PROJ-ML-2024",
+	}
+
+	body := `{
+		"name": "prod-pipeline",
+		"description": "Production data processing",
+		"labels": {
+			"cmdb_id": "AST123456",
+			"cost_center": "CC-DATA-001",
+			"environment": "production",
+			"project_code": "PROJ-ML-2024"
+		}
+	}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var resp CreateAPIKeyResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// Verify labels are in the response
+	assert.Equal(t, labels, resp.Labels)
+
+	// Verify labels were stored
+	storedKey, err := store.Get(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.Equal(t, labels, storedKey.Labels)
+}
+
+// TestCreateAPIKey_WithoutLabels tests backward compatibility.
+func TestCreateAPIKey_WithoutLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	body := `{
+		"name": "legacy-key",
+		"description": "Key without labels"
+	}`
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusCreated, w.Code)
+
+	var resp CreateAPIKeyResponse
+	err := json.Unmarshal(w.Body.Bytes(), &resp)
+	require.NoError(t, err)
+
+	// Labels should be nil (not present in request)
+	assert.Nil(t, resp.Labels)
+
+	// Verify stored key also has nil labels
+	storedKey, err := store.Get(context.Background(), resp.ID)
+	require.NoError(t, err)
+	assert.Nil(t, storedKey.Labels)
+}
+
+// TestCreateAPIKey_InvalidLabels tests validation error responses.
+func TestCreateAPIKey_InvalidLabels(t *testing.T) {
+	tests := []struct {
+		name       string
+		labelsJSON string
+		wantStatus int
+		wantErr    string
+	}{
+		{
+			name:       "empty key",
+			labelsJSON: `{"": "value"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "label keys cannot be empty",
+		},
+		{
+			name:       "too many labels",
+			labelsJSON: makeLargeLabelsJSON(t, constant.MaxLabelsEntries+1),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "cannot exceed 50",
+		},
+		{
+			name:       "invalid key characters",
+			labelsJSON: `{"invalid key!": "value"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "invalid characters",
+		},
+		{
+			name:       "key too long",
+			labelsJSON: fmt.Sprintf(`{"%s": "value"}`, strings.Repeat("a", constant.MaxLabelKeyLength+1)),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:       "value too long",
+			labelsJSON: fmt.Sprintf(`{"key": "%s"}`, strings.Repeat("a", constant.MaxLabelValueLength+1)),
+			wantStatus: http.StatusBadRequest,
+			wantErr:    fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:       "control characters in value",
+			labelsJSON: `{"k": "val\u0000ue"}`,
+			wantStatus: http.StatusBadRequest,
+			wantErr:    "contains invalid control characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			svc := NewService(store, &config.Config{}, fixedSubSelector{})
+			handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+			body := fmt.Sprintf(`{"name": "test-key", "labels": %s}`, tt.labelsJSON)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"data-science"},
+				Tenant:   "test-tenant",
+			})
+
+			handler.CreateAPIKey(c)
+
+			assert.Equal(t, tt.wantStatus, w.Code)
+			
+			var errResp map[string]any
+			err := json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Contains(t, errResp["error"], tt.wantErr)
+		})
+	}
+}
+
+// TestCreateEphemeralKey_InvalidLabels verifies that label validation
+// is enforced for ephemeral keys with auto-generated names.
+func TestCreateEphemeralKey_InvalidLabels(t *testing.T) {
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	body := fmt.Sprintf(`{"ephemeral": true, "labels": {"%s": "value"}}`, strings.Repeat("a", constant.MaxLabelKeyLength+1))
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(body))
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"data-science"},
+		Tenant:   "test-tenant",
+	})
+
+	handler.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	var errResp map[string]any
+	err := json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Contains(t, errResp["error"], fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength))
+}
+
+// Helper to generate JSON for large labels map.
+func makeLargeLabelsJSON(t *testing.T, count int) string {
+	t.Helper()
+	labels := makeLargeLabels(count)
+	bytes, err := json.Marshal(labels)
+	require.NoError(t, err)
+	return string(bytes)
+}
+
+// TestSearchAPIKeys_ByLabels tests searching API keys by label filters.
+func TestSearchAPIKeys_ByLabels(t *testing.T) {
+	ctx := context.Background()
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+
+	// Create keys with different labels
+	err := store.AddKey(ctx, testUser.Username, "key-1", "hash-1", "Key 1", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cmdb_id": "AST123", "env": "prod"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-2", "hash-2", "Key 2", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cmdb_id": "AST456", "env": "dev"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-3", "hash-3", "Key 3", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false,
+		map[string]string{"cost_center": "CC-001"})
+	require.NoError(t, err)
+
+	err = store.AddKey(ctx, testUser.Username, "key-4", "hash-4", "Key 4", "",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false, nil) // No labels
+	require.NoError(t, err)
+
+	tests := []struct {
+		name          string
+		labelsContain map[string]string
+		wantIDs       []string
+	}{
+		{
+			name:          "search by cmdb_id exact match",
+			labelsContain: map[string]string{"cmdb_id": "AST123"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search by env",
+			labelsContain: map[string]string{"env": "prod"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search by cost_center",
+			labelsContain: map[string]string{"cost_center": "CC-001"},
+			wantIDs:       []string{"key-3"},
+		},
+		{
+			name:          "search by multiple labels (AND logic)",
+			labelsContain: map[string]string{"cmdb_id": "AST123", "env": "prod"},
+			wantIDs:       []string{"key-1"},
+		},
+		{
+			name:          "search with no matches",
+			labelsContain: map[string]string{"cmdb_id": "NONEXISTENT"},
+			wantIDs:       []string{},
+		},
+		{
+			name:          "search with empty filter returns all",
+			labelsContain: nil,
+			wantIDs:       []string{"key-1", "key-2", "key-3", "key-4"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			reqBody := SearchAPIKeysRequest{
+				Filters: &SearchFilters{
+					LabelsContain: tt.labelsContain,
+				},
+			}
+			body, _ := json.Marshal(reqBody)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", testUser)
+
+			handler.SearchAPIKeys(c)
+
+			assert.Equal(t, http.StatusOK, w.Code)
+
+			var resp SearchAPIKeysResponse
+			err := json.Unmarshal(w.Body.Bytes(), &resp)
+			require.NoError(t, err)
+
+			gotIDs := make([]string, len(resp.Data))
+			for i, key := range resp.Data {
+				gotIDs[i] = key.ID
+			}
+
+			assert.ElementsMatch(t, tt.wantIDs, gotIDs)
+		})
+	}
+}
+
+// TestGetAPIKey_WithLabels tests retrieving an API key that has labels.
+func TestGetAPIKey_WithLabels(t *testing.T) {
+	ctx := context.Background()
+	store := NewMockStore()
+	svc := NewService(store, &config.Config{}, fixedSubSelector{})
+	handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+	testUser := &token.UserContext{Username: "alice", Tenant: "test-tenant"}
+
+	labels := map[string]string{
+		"environment": "production",
+		"team":        "data-science",
+	}
+
+	err := store.AddKey(ctx, testUser.Username, "test-key-id", "hash", "Test Key", "Description",
+		[]string{}, testSubscriptionName, "test-tenant", nil, false, labels)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/v1/api-keys/test-key-id", nil)
+	c.Params = gin.Params{{Key: "id", Value: "test-key-id"}}
+	c.Set("user", testUser)
+
+	handler.GetAPIKey(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var key ApiKey
+	err = json.Unmarshal(w.Body.Bytes(), &key)
+	require.NoError(t, err)
+
+	assert.Equal(t, labels, key.Labels)
+}
+
+// TestSearchAPIKeys_InvalidLabelsContain verifies that labelsContain filters
+// in search requests are validated with the same rules as label creation.
+func TestSearchAPIKeys_InvalidLabelsContain(t *testing.T) {
+	tests := []struct {
+		name          string
+		labelsContain map[string]string
+		wantErr       string
+	}{
+		{
+			name:          "empty key",
+			labelsContain: map[string]string{"": "value"},
+			wantErr:       "label keys cannot be empty",
+		},
+		{
+			name:          "empty value",
+			labelsContain: map[string]string{"key": ""},
+			wantErr:       "cannot be empty",
+		},
+		{
+			name:          "too many labels",
+			labelsContain: makeLargeLabels(constant.MaxLabelsEntries + 1),
+			wantErr:       fmt.Sprintf("cannot exceed %d", constant.MaxLabelsEntries),
+		},
+		{
+			name:          "invalid key characters",
+			labelsContain: map[string]string{"invalid key!": "value"},
+			wantErr:       "invalid characters",
+		},
+		{
+			name:          "key too long",
+			labelsContain: map[string]string{strings.Repeat("a", constant.MaxLabelKeyLength+1): "value"},
+			wantErr:       fmt.Sprintf("exceeds %d characters", constant.MaxLabelKeyLength),
+		},
+		{
+			name:          "value too long",
+			labelsContain: map[string]string{"key": strings.Repeat("a", constant.MaxLabelValueLength+1)},
+			wantErr:       fmt.Sprintf("exceeds %d characters", constant.MaxLabelValueLength),
+		},
+		{
+			name:          "control characters in value",
+			labelsContain: map[string]string{"k": "val\x00ue"},
+			wantErr:       "contains invalid control characters",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store := NewMockStore()
+			svc := NewService(store, &config.Config{}, fixedSubSelector{})
+			handler := NewHandler(logger.Development(), svc, newMockAdminChecker(), nil)
+
+			reqBody := SearchAPIKeysRequest{
+				Filters: &SearchFilters{
+					LabelsContain: tt.labelsContain,
+				},
+			}
+			body, err := json.Marshal(reqBody)
+			require.NoError(t, err)
+
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys/search", strings.NewReader(string(body)))
+			c.Request.Header.Set("Content-Type", "application/json")
+			c.Set("user", &token.UserContext{
+				Username: "alice",
+				Groups:   []string{"data-science"},
+				Tenant:   "test-tenant",
+			})
+
+			handler.SearchAPIKeys(c)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+
+			var errResp map[string]any
+			err = json.Unmarshal(w.Body.Bytes(), &errResp)
+			require.NoError(t, err)
+			assert.Contains(t, errResp["error"], tt.wantErr)
 		})
 	}
 }
