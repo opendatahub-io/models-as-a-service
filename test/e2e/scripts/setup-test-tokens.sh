@@ -34,7 +34,9 @@ setup_test_user() {
 
     if ! oc get clusterrolebinding "${username}-binding" >/dev/null 2>&1; then
         echo "Creating cluster role binding for $username"
-        oc adm policy add-cluster-role-to-user "$cluster_role" "system:serviceaccount:${namespace}:${username}"
+        oc create clusterrolebinding "${username}-binding" \
+            --clusterrole="$cluster_role" \
+            --serviceaccount="${namespace}:${username}"
     else
         echo "Cluster role binding for $username already exists"
     fi

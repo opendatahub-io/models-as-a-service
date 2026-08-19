@@ -75,6 +75,7 @@ deploy_maas_platform() {
         if [[ -n "$ingress_cert_name" ]]; then
             local ca_tmp
             ca_tmp=$(mktemp)
+            trap 'rm -f "$ca_tmp"' RETURN
             if oc get secret "$ingress_cert_name" -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d > "$ca_tmp" 2>/dev/null && [[ -s "$ca_tmp" ]]; then
                 kubectl create configmap authorino-oidc-ca -n "$AUTHORINO_NAMESPACE" \
                     --from-file=ca.crt="$ca_tmp" --dry-run=client -o yaml | kubectl apply -f -
@@ -87,12 +88,13 @@ deploy_maas_platform() {
                     "subPath": "ca.crt", "readOnly": true
                   }}
                 ]' 2>/dev/null || echo "⚠️  Authorino CA volume may already be mounted"
-                oc rollout status deployment/authorino -n "$AUTHORINO_NAMESPACE" --timeout=120s
+                if ! oc rollout status deployment/authorino -n "$AUTHORINO_NAMESPACE" --timeout=120s; then
+                    echo "⚠️  WARNING: Authorino rollout did not complete within 120s, continuing anyway"
+                fi
                 echo "✅ Ingress CA mounted into Authorino"
             else
                 echo "⚠️  WARNING: Could not extract TLS cert from secret $ingress_cert_name"
             fi
-            rm -f "$ca_tmp"
         else
             echo "⚠️  WARNING: No defaultCertificate found on IngressController — Authorino may fail OIDC JWKS discovery"
         fi

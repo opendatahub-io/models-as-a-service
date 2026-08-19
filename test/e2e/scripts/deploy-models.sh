@@ -80,6 +80,10 @@ deploy_models() {
         echo "'$MAAS_SUBSCRIPTION_NAMESPACE' namespace already exists"
     fi
 
+    if ! [[ "$MAAS_SUBSCRIPTION_NAMESPACE" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$ ]]; then
+        echo "❌ ERROR: MAAS_SUBSCRIPTION_NAMESPACE is not a valid DNS-1123 label: '$MAAS_SUBSCRIPTION_NAMESPACE'"
+        exit 1
+    fi
     if ! (cd "$PROJECT_ROOT" && kustomize build test/e2e/fixtures/ | \
             sed "s/namespace: models-as-a-service/namespace: $MAAS_SUBSCRIPTION_NAMESPACE/g" | \
             kubectl apply -f -); then
