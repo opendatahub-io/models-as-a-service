@@ -4,11 +4,25 @@
 # =============================================================================
 # Deploys e2e test fixtures (LLMIS, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
 # and waits for models, governed refs, and AuthPolicies to be ready.
-# Sourced by prow_run_smoke_test.sh — assumes PROJECT_ROOT, deployment-helpers.sh,
-# and env var defaults are already set.
+# Can be sourced by prow_run_smoke_test.sh or run standalone.
 # =============================================================================
 
 set -euo pipefail
+
+# Bootstrap: find PROJECT_ROOT and source helpers if not already loaded.
+if [[ -z "${PROJECT_ROOT:-}" ]]; then
+    _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(cd "$_dir/../../.." && pwd)"
+fi
+[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
+
+# Env defaults (no-op if already set by orchestrator)
+GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
+GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
+GATEWAY_PROGRAMMED_TIMEOUT="${GATEWAY_PROGRAMMED_TIMEOUT:-600}"
+DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
+MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 
 wait_for_gateway_programmed() {
     local gateway_name="${1:-$GATEWAY_NAME}"

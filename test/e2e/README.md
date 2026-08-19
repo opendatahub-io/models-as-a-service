@@ -76,7 +76,7 @@ CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that se
 | 4. Validate | `prow_run_smoke_test.sh` | gateway reachability, auth chain, OIDC readiness |
 | 5. Test | `scripts/run_e2e_tests.sh` | pytest: two-pass xdist (parallel + serial) |
 
-`prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). Each phase script is standalone — deploy/test changes have smaller blast radius.
+`prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). `deploy-platform.sh` and `deploy-models.sh` are runnable standalone (they bootstrap `PROJECT_ROOT` and source helpers if not already loaded). `setup-test-tokens.sh` must be sourced (exports `TOKEN`/`ADMIN_OC_TOKEN` into the parent shell).
 
 `run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
 

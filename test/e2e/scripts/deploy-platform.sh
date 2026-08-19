@@ -3,11 +3,28 @@
 # MaaS Platform Deployment
 # =============================================================================
 # Installs cert-manager, ODH operator, and deploys MaaS via deploy.sh.
-# Sourced by prow_run_smoke_test.sh — assumes PROJECT_ROOT, deployment-helpers.sh,
-# and env var defaults are already set.
+# Can be sourced by prow_run_smoke_test.sh or run standalone.
 # =============================================================================
 
 set -euo pipefail
+
+# Bootstrap: find PROJECT_ROOT and source helpers if not already loaded.
+if [[ -z "${PROJECT_ROOT:-}" ]]; then
+    _dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PROJECT_ROOT="$(cd "$_dir/../../.." && pwd)"
+fi
+[[ "$(type -t find_project_root 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
+[[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
+
+# Env defaults (no-op if already set by orchestrator)
+DEPLOY_MODE="${DEPLOY_MODE:-kustomize}"
+INSECURE_HTTP="${INSECURE_HTTP:-false}"
+EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
+SKIP_AUTH_CHECK="${SKIP_AUTH_CHECK:-true}"
+export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
+export INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "${POLICY_ENGINE}")}"
+export AUTHORINO_NAMESPACE
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
@@ -75,7 +92,7 @@ deploy_maas_platform() {
         if [[ -n "$ingress_cert_name" ]]; then
             local ca_tmp
             ca_tmp=$(mktemp)
-            trap 'rm -f "$ca_tmp"' RETURN
+            trap "rm -f '$ca_tmp'; trap - RETURN" RETURN
             if oc get secret "$ingress_cert_name" -n openshift-ingress -o jsonpath='{.data.tls\.crt}' | base64 -d > "$ca_tmp" 2>/dev/null && [[ -s "$ca_tmp" ]]; then
                 kubectl create configmap authorino-oidc-ca -n "$AUTHORINO_NAMESPACE" \
                     --from-file=ca.crt="$ca_tmp" --dry-run=client -o yaml | kubectl apply -f -

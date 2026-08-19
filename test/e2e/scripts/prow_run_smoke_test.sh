@@ -121,39 +121,6 @@ phase_mark() {
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${name} ${event}" | tee -a "${ARTIFACTS_DIR}/phase-timings.txt"
 }
 
-apply_default_oidc_for_keycloak() {
-    [[ "${EXTERNAL_OIDC}" == "true" ]] || return 0
-    local cluster_domain
-    cluster_domain="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null)" || true
-    if [[ -z "$cluster_domain" ]]; then
-        echo "⚠️  Could not read cluster ingress domain; OIDC defaults for Keycloak not applied"
-        return 0
-    fi
-    local realm_base="https://keycloak.${cluster_domain}/realms/tenant-a"
-    export OIDC_ISSUER_URL="${OIDC_ISSUER_URL:-$realm_base}"
-    export OIDC_TOKEN_URL="${OIDC_TOKEN_URL:-${OIDC_ISSUER_URL}/protocol/openid-connect/token}"
-    export OIDC_CLIENT_ID="${OIDC_CLIENT_ID:-test-client}"
-    export OIDC_USERNAME="${OIDC_USERNAME:-alice_lead}"
-    export OIDC_PASSWORD="${OIDC_PASSWORD:-letmein}"
-    export OIDC_USERNAME_NO_ACCESS="${OIDC_USERNAME_NO_ACCESS:-dave_noaccess}"
-    export OIDC_PASSWORD_NO_ACCESS="${OIDC_PASSWORD_NO_ACCESS:-letmein}"
-    local realm_b_base="https://keycloak.${cluster_domain}/realms/tenant-b"
-    export OIDC_TOKEN_URL_TENANT_B="${OIDC_TOKEN_URL_TENANT_B:-${realm_b_base}/protocol/openid-connect/token}"
-    echo "OIDC for e2e (Keycloak tenant-a defaults): issuer=${OIDC_ISSUER_URL}"
-}
-
-require_external_oidc_config() {
-    local required_vars=(OIDC_ISSUER_URL OIDC_TOKEN_URL OIDC_CLIENT_ID OIDC_USERNAME OIDC_PASSWORD)
-    local missing=()
-    for var_name in "${required_vars[@]}"; do
-        [[ -z "${!var_name:-}" ]] && missing+=("$var_name")
-    done
-    if [[ ${#missing[@]} -gt 0 ]]; then
-        echo "❌ ERROR: EXTERNAL_OIDC=true requires: ${missing[*]}"
-        exit 1
-    fi
-}
-
 check_prerequisites() {
     echo "Checking prerequisites..."
     local current_user
