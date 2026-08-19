@@ -78,7 +78,7 @@ CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, which follows a **three-pha
 
 `run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
 
-Deploys MaaS with **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**, then pytest on the default smoke modules listed above (including `test_aitenant_lifecycle.py`, `test_tenant_namespace_discovery.py`, `test_gateway_scoped_authpolicy.py`, `test_multi_tenant_integration.py`, and the gated S24/S4 modules), then deployment validation; reports under `ARTIFACT_DIR` when set.
+Deployment uses **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**. Reports are written to `ARTIFACT_DIR` when set.
 
 Multi-tenancy discovery tests run by default in `prow_run_smoke_test.sh`, which sets `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` unless explicitly overridden and patches maas-controller before pytest. If set to `false`, `test_tenant_namespace_discovery.py` and `test_multi_tenant_integration.py` skip. When discovery is enabled, `test_namespace_scoping.py` skips (dormant-mode assumptions).
 

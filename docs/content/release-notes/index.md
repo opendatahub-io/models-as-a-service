@@ -161,10 +161,6 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 **Admission webhooks**
 - Validating webhooks for `MaaSAuthPolicy` and `MaaSSubscription` enforce namespace tenancy requirements
 
-### Known Limitations
-
-- **`tenant-gateway-isolation` rule is a stub.** The gateway policy includes an always-allow placeholder for multi-gateway tenant isolation. This will be replaced with a real hostname check in a future release.
-
 [Full Changelog](https://github.com/opendatahub-io/models-as-a-service/compare/v0.1.1...v0.2.0)
 
 ---

@@ -111,12 +111,37 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_external_oidc.py"
 )
 
-pytest_common_args=(
-    -v --disable-warnings
-    --capture=tee-sys --show-capture=all --log-level=INFO
-    "${e2e_test_files[@]}"
-    "${extra_pytest_args[@]}"
-)
+# If extra args include a path (file or directory), skip the default smoke list
+# so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
+# Resolve relative paths against TEST_DIR so they work regardless of cwd.
+resolved_extra_args=()
+has_path_arg=false
+for arg in "${extra_pytest_args[@]}"; do
+    if [[ -e "$TEST_DIR/$arg" ]]; then
+        resolved_extra_args+=("$TEST_DIR/$arg")
+        has_path_arg=true
+    elif [[ -e "$arg" ]]; then
+        resolved_extra_args+=("$arg")
+        has_path_arg=true
+    else
+        resolved_extra_args+=("$arg")
+    fi
+done
+
+if $has_path_arg; then
+    pytest_common_args=(
+        -v --disable-warnings
+        --capture=tee-sys --show-capture=all --log-level=INFO
+        "${resolved_extra_args[@]}"
+    )
+else
+    pytest_common_args=(
+        -v --disable-warnings
+        --capture=tee-sys --show-capture=all --log-level=INFO
+        "${e2e_test_files[@]}"
+        "${extra_pytest_args[@]}"
+    )
+fi
 
 # ── Run ──────────────────────────────────────────────────────────────────
 parallel_rc=0

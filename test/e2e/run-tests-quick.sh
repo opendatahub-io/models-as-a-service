@@ -9,11 +9,14 @@
 # Usage:
 #   ./run-tests-quick.sh [pytest args]
 #
+# By default runs the same smoke test file list as CI. Pass a file path
+# to override the list and run only that file.
+#
 # Examples:
-#   ./run-tests-quick.sh                          # Run all E2E tests
-#   ./run-tests-quick.sh -k test_auth             # Run tests matching "auth"
+#   ./run-tests-quick.sh                          # Run smoke suite (same as CI)
+#   ./run-tests-quick.sh -k test_auth             # Filter smoke suite by name
 #   ./run-tests-quick.sh --maxfail=2              # Stop after 2 failures
-#   ./run-tests-quick.sh tests/test_api_keys.py   # Run specific file
+#   ./run-tests-quick.sh tests/test_api_keys.py   # Run specific file (replaces smoke list)
 #
 # =============================================================================
 
