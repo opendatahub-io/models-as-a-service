@@ -66,15 +66,17 @@ Modules outside the explicit smoke list (for example `test_subscription_list_end
 
 ## CI
 
-CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, which follows a **three-phase model**:
+CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that sequences standalone scripts:
 
 | Phase | Script | Responsibility |
 |-------|--------|----------------|
-| 1. Deploy | `prow_run_smoke_test.sh` | Install RHCL, deploy MaaS, configure gateway |
-| 2. Validate | `prow_run_smoke_test.sh` | Wait for gateway reachability, verify auth chain |
-| 3. Test | `scripts/run_e2e_tests.sh` | pytest only: two-pass xdist, artifact paths |
+| 1. Deploy platform | `scripts/deploy-platform.sh` | cert-manager, ODH, deploy.sh, OIDC/Keycloak |
+| 2. Deploy models | `scripts/deploy-models.sh` | e2e fixtures (LLMIS, MaaSModelRef, AuthPolicy, Subscription) |
+| 3. Setup tokens | `scripts/setup-test-tokens.sh` | admin + regular user tokens (htpasswd / SA fallback) |
+| 4. Validate | `prow_run_smoke_test.sh` | gateway reachability, auth chain, OIDC readiness |
+| 5. Test | `scripts/run_e2e_tests.sh` | pytest: two-pass xdist (parallel + serial) |
 
-`prow_run_smoke_test.sh` is the thin orchestrator — it delegates pytest execution to `run_e2e_tests.sh`. Test-only PRs touch the runner and test files, not deploy helpers.
+`prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). Each phase script is standalone — deploy/test changes have smaller blast radius.
 
 `run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
 
