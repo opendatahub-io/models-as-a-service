@@ -7,10 +7,8 @@ rules:
   - apiGroups: [""]
     resources: ["configmaps"]
     verbs: ["get", "list", "watch"]
-  # apikey-injection plugin: controller-runtime informer cache requires list+watch
-  - apiGroups: [""]
-    resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+  # Secrets access is scoped per-namespace via operator-rbac-toolkit scoper
+  # (see payload-processing-secrets-reader ClusterRole + maas-controller scoper setup).
   # legacy-migration + model-provider-resolver: watches legacy maas ExternalModels
   - apiGroups: ["maas.opendatahub.io"]
     resources: ["externalmodels"]
