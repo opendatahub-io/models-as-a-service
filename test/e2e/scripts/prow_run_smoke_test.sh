@@ -718,21 +718,6 @@ run_e2e_tests() {
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
-    # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
-    mkdir -p "$ARTIFACTS_DIR"
-
-    if [[ ! -d "$test_dir/.venv" ]]; then
-        echo "Creating Python venv for e2e tests..."
-        python3 -m venv "$test_dir/.venv" --upgrade-deps
-    fi
-    source "$test_dir/.venv/bin/activate"
-    python -m pip install --upgrade pip --quiet
-    python -m pip install -r "$test_dir/requirements.txt" --quiet
-
-    local user
-    user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$ARTIFACTS_DIR/e2e-${user}.html"
-    local xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 
     echo "Running e2e tests with:"
     echo "  - TOKEN: $(echo "${TOKEN:-not set}" | cut -c1-20)..."
@@ -842,93 +827,14 @@ run_e2e_tests() {
         fi
     fi
 
-    # Run the default smoke e2e tests
+    # Delegate pytest execution to run_e2e_tests.sh (test-only changes
+    # touch that script, not this deploy/validate orchestrator).
+    export ARTIFACTS_DIR
+    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
-    E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
-    if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
-        export E2E_AUTHPOLICY_PHASE_TIMEOUT="${E2E_AUTHPOLICY_PHASE_TIMEOUT:-120}"
-        export E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT="${E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT:-90}"
-        export E2E_GATEWAY_ENFORCED_TIMEOUT="${E2E_GATEWAY_ENFORCED_TIMEOUT:-240}"
-        export E2E_MULTITENANCY_PHASE_TIMEOUT="${E2E_MULTITENANCY_PHASE_TIMEOUT:-180}"
-    fi
-
-    local -a e2e_test_files=(
-        "$test_dir/tests/test_api_keys.py"
-        "$test_dir/tests/test_namespace_scoping.py"
-        "$test_dir/tests/test_negative_security.py"
-        "$test_dir/tests/test_subscription.py"
-        "$test_dir/tests/test_models_endpoint.py"
-        "$test_dir/tests/test_external_models.py"
-        "$test_dir/tests/test_smoke.py"
-        "$test_dir/tests/test_tenant.py"
-        "$test_dir/tests/test_config_tenant.py"
-        "$test_dir/tests/test_tenant_discovery.py"
-        "$test_dir/tests/test_aitenant_lifecycle.py"
-        "$test_dir/tests/test_tenant_namespace_discovery.py"
-        "$test_dir/tests/test_tenant_discovery_isolation.py"
-        "$test_dir/tests/test_gateway_scoped_authpolicy.py"
-        "$test_dir/tests/test_multi_tenant_integration.py"
-        "$test_dir/tests/test_multi_tenant_maas_api.py"
-        "$test_dir/tests/test_tenant_model_inference.py"
-        "$test_dir/tests/test_tenant_auth_isolation.py"
-        "$test_dir/tests/test_tenant_subscription_isolation.py"
-        "$test_dir/tests/test_tenant_rate_limit_isolation.py"
-        "$test_dir/tests/test_per_tenant_ipp_isolation.py"
-        "$test_dir/tests/test_external_oidc.py"
-    )
-
-    local pytest_common_args=(
-        -v --disable-warnings
-        --capture=tee-sys --show-capture=all --log-level=INFO
-        "${e2e_test_files[@]}"
-    )
-
-    local parallel_rc=0 serial_rc=0
-    local xml_serial="${xml%.xml}-serial.xml"
-
-    if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
-        echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
-        if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-            --maxfail=5 \
-            -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
-            -m "not serial" \
-            --junitxml="$xml" \
-            --html="$html" --self-contained-html \
-            "${pytest_common_args[@]}"; then
-            parallel_rc=1
-        fi
-
-        echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
-        if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-            --maxfail=5 \
-            -m serial \
-            --junitxml="$xml_serial" \
-            --html="${html%.html}-serial.html" --self-contained-html \
-            "${pytest_common_args[@]}"; then
-            serial_rc=1
-        fi
-    else
-        echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=1)"
-        if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-            --maxfail=5 \
-            --junitxml="$xml" \
-            --html="$html" --self-contained-html \
-            "${pytest_common_args[@]}"; then
-            parallel_rc=1
-        fi
-    fi
-
-    if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 ]]; then
-        echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc})"
-        exit 1
-    fi
-
-    echo "✅ E2E tests completed"
-    echo " - JUnit XML : ${xml}"
-    if [[ -f "$xml_serial" ]]; then
-        echo " - JUnit XML (serial pass): ${xml_serial}"
-    fi
-    echo " - HTML      : ${html}"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    "${script_dir}/run_e2e_tests.sh"
 }
 
 

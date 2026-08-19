@@ -16,7 +16,7 @@ Existing cluster (skip deploy):
 SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-Parallel pytest on an existing cluster (default 4 workers):
+Parallel pytest on an existing cluster (default 7 workers):
 
 ```bash
 SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
@@ -66,7 +66,19 @@ Modules outside the explicit smoke list (for example `test_subscription_list_end
 
 ## CI
 
-CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`: deploys MaaS with **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**, then pytest on the default smoke modules listed above (including `test_aitenant_lifecycle.py`, `test_tenant_namespace_discovery.py`, `test_gateway_scoped_authpolicy.py`, `test_multi_tenant_integration.py`, and the gated S24/S4 modules), then deployment validation; reports under `ARTIFACT_DIR` when set.
+CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, which follows a **three-phase model**:
+
+| Phase | Script | Responsibility |
+|-------|--------|----------------|
+| 1. Deploy | `prow_run_smoke_test.sh` | Install RHCL, deploy MaaS, configure gateway |
+| 2. Validate | `prow_run_smoke_test.sh` | Wait for gateway reachability, verify auth chain |
+| 3. Test | `scripts/run_e2e_tests.sh` | pytest only: two-pass xdist, artifact paths |
+
+`prow_run_smoke_test.sh` is the thin orchestrator — it delegates pytest execution to `run_e2e_tests.sh`. Test-only PRs touch the runner and test files, not deploy helpers.
+
+`run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
+
+Deploys MaaS with **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**, then pytest on the default smoke modules listed above (including `test_aitenant_lifecycle.py`, `test_tenant_namespace_discovery.py`, `test_gateway_scoped_authpolicy.py`, `test_multi_tenant_integration.py`, and the gated S24/S4 modules), then deployment validation; reports under `ARTIFACT_DIR` when set.
 
 Multi-tenancy discovery tests run by default in `prow_run_smoke_test.sh`, which sets `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` unless explicitly overridden and patches maas-controller before pytest. If set to `false`, `test_tenant_namespace_discovery.py` and `test_multi_tenant_integration.py` skip. When discovery is enabled, `test_namespace_scoping.py` skips (dormant-mode assumptions).
 
@@ -78,9 +90,9 @@ External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOK
 
 ## Parallel execution (pytest-xdist)
 
-By default, CI and `prow_run_smoke_test.sh` run tests in **two passes** when `E2E_PARALLEL_WORKERS=2`:
+By default, `run_e2e_tests.sh` runs tests in **two passes** when `E2E_PARALLEL_WORKERS > 1` (default: 7):
 
-1. **Pass 1:** `-m "not serial"` — parallel across files (`--dist=loadfile`)
+1. **Pass 1:** `-m "not serial"` — parallel across files (`--dist=loadgroup`)
 2. **Pass 2:** `-m serial` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests
 
 For fully serial debugging:
@@ -97,7 +109,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `E2E_PARALLEL_WORKERS` | `2` | Parallel workers for pass 1. Pass 2 (`@serial`) always runs on one worker. Set to `1` to run everything serially in one pass. |
+| `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1. Pass 2 (`@serial`) always runs on one worker. Set to `1` to run everything serially in one pass. |
 | `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
