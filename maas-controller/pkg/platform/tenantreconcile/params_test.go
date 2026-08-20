@@ -444,6 +444,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	otlpMatchLabels, ok := otlpNSSelector["matchLabels"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, params.MonitoringNamespace, otlpMatchLabels["kubernetes.io/metadata.name"])
+	otlpPodSelector, ok := otlpPeer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	otlpPodMatchLabels, ok := otlpPodSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, otlpPodMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, otlpPodMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 
 	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
 	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")

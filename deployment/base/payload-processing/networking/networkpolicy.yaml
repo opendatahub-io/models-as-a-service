@@ -81,3 +81,7 @@ spec:
         - namespaceSelector:
             matchLabels:
               kubernetes.io/metadata.name: opendatahub
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: data-science-collector-collector
+              app.kubernetes.io/component: opentelemetry-collector

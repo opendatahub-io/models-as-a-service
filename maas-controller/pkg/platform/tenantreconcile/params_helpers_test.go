@@ -20,6 +20,8 @@ func TestNestedPortNumber(t *testing.T) {
 	assertPort(int64(4317), 4317, true)
 	assertPort(int(4317), 4317, true)
 	assertPort(int32(4317), 4317, true)
+	assertPort(float64(4317), 4317, true)
+	assertPort(float64(4317.5), 0, false)
 	assertPort(json.Number("4317"), 4317, true)
 	assertPort("4317", 0, false)
 }

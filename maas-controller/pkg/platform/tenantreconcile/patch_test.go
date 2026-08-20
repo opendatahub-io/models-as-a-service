@@ -421,6 +421,12 @@ func TestPatchNetworkPolicyOTLPEgress(t *testing.T) {
 										"kubernetes.io/metadata.name": "opendatahub",
 									},
 								},
+								"podSelector": map[string]any{
+									"matchLabels": map[string]any{
+										DefaultOTLPCollectorPodLabelKey:       DefaultOTLPCollectorService,
+										DefaultOTLPCollectorComponentLabelKey: DefaultOTLPCollectorComponentLabelValue,
+									},
+								},
 							},
 						},
 					},
@@ -446,6 +452,13 @@ func TestPatchNetworkPolicyOTLPEgress(t *testing.T) {
 	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "redhat-ods-monitoring", matchLabels["kubernetes.io/metadata.name"])
+
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, podMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, podMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 }
 
 func TestPatchNetworkPolicyOTLPEgressMissingRule(t *testing.T) {

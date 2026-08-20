@@ -33,6 +33,10 @@ EXPECTED_MANAGED_LABEL = "gateway.istio.io/managed"
 EXPECTED_MANAGED_VALUE = "istio.io-gateway-controller"
 EXT_PROC_PORT = 9004
 OTLP_EGRESS_PORT = 4317
+OTLP_COLLECTOR_POD_LABEL_KEY = "app.kubernetes.io/name"
+OTLP_COLLECTOR_POD_LABEL_VALUE = "data-science-collector-collector"
+OTLP_COLLECTOR_COMPONENT_LABEL_KEY = "app.kubernetes.io/component"
+OTLP_COLLECTOR_COMPONENT_LABEL_VALUE = "opentelemetry-collector"
 
 
 def _expected_monitoring_namespace() -> str:
@@ -128,6 +132,19 @@ class TestPayloadProcessingNetworkPolicyExists:
         assert match_labels.get("kubernetes.io/metadata.name") == expected_ns, (
             f"OTLP egress must target monitoring namespace {expected_ns!r}, "
             f"got {match_labels!r}"
+        )
+
+        pod_selector = peers[0].get("podSelector") or {}
+        pod_match_labels = pod_selector.get("matchLabels") or {}
+        assert pod_match_labels.get(OTLP_COLLECTOR_POD_LABEL_KEY) == OTLP_COLLECTOR_POD_LABEL_VALUE, (
+            f"OTLP egress must restrict destination to collector pods "
+            f"({OTLP_COLLECTOR_POD_LABEL_KEY}={OTLP_COLLECTOR_POD_LABEL_VALUE!r}), "
+            f"got pod matchLabels: {pod_match_labels!r}"
+        )
+        assert pod_match_labels.get(OTLP_COLLECTOR_COMPONENT_LABEL_KEY) == OTLP_COLLECTOR_COMPONENT_LABEL_VALUE, (
+            f"OTLP egress must restrict destination to OpenTelemetry collector component "
+            f"({OTLP_COLLECTOR_COMPONENT_LABEL_KEY}={OTLP_COLLECTOR_COMPONENT_LABEL_VALUE!r}), "
+            f"got pod matchLabels: {pod_match_labels!r}"
         )
 
     def test_ingress_does_not_hardcode_single_gateway(self):

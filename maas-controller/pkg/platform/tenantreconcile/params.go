@@ -786,6 +786,9 @@ func nestedPortNumber(v any) (int64, bool) {
 	case int32:
 		return int64(p), true
 	case float64:
+		if p != float64(int64(p)) {
+			return 0, false
+		}
 		return int64(p), true
 	case json.Number:
 		n, err := p.Int64()
@@ -832,6 +835,18 @@ func patchNetworkPolicyOTLPEgress(r *unstructured.Unstructured, monitoringNamesp
 		}
 		peer, ok := to[0].(map[string]any)
 		if !ok {
+			continue
+		}
+		podSelector, ok := peer["podSelector"].(map[string]any)
+		if !ok {
+			continue
+		}
+		podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if podMatchLabels[DefaultOTLPCollectorPodLabelKey] != DefaultOTLPCollectorService ||
+			podMatchLabels[DefaultOTLPCollectorComponentLabelKey] != DefaultOTLPCollectorComponentLabelValue {
 			continue
 		}
 		nsSelector, ok := peer["namespaceSelector"].(map[string]any)

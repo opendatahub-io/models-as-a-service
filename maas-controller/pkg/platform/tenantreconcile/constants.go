@@ -72,6 +72,12 @@ const (
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"
+	// DefaultOTLPCollectorPodLabelKey labels OpenTelemetry operator collector pods.
+	DefaultOTLPCollectorPodLabelKey = "app.kubernetes.io/name"
+	// DefaultOTLPCollectorComponentLabelKey labels OpenTelemetry operator collector pods.
+	DefaultOTLPCollectorComponentLabelKey = "app.kubernetes.io/component"
+	// DefaultOTLPCollectorComponentLabelValue is the component label on DSCI collector pods.
+	DefaultOTLPCollectorComponentLabelValue = "opentelemetry-collector"
 	// DefaultOTLPCollectorPort is the gRPC OTLP ingest port on the platform collector.
 	DefaultOTLPCollectorPort int32 = 4317
 	// DefaultOTELTracesSampler is the sampler accepted by the pinned llm-d build.
