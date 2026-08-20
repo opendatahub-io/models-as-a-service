@@ -52,12 +52,12 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 		assert.True(t, got)
 	})
 
-	t.Run("neither present", func(t *testing.T) {
+	t.Run("neither CR present assumes RHCL wasm path", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(scheme).Build()
 
 		got, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.True(t, got)
 	})
 }
 

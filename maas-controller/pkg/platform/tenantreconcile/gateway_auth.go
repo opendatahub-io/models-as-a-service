@@ -40,8 +40,11 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 	wp := &unstructured.Unstructured{}
 	wp.SetGroupVersionKind(gvkWasmPlugin)
 	if err := c.Get(ctx, key, wp); err != nil {
-		if apierrors.IsNotFound(err) {
-			return false, nil
+		if apierrors.IsNotFound(err) || apierrors.IsForbidden(err) {
+			// RHCL injects auth via envoy.filters.http.wasm without a kuadrant-{gateway}
+			// EnvoyFilter or WasmPlugin CR. Missing wasmplugin RBAC must not block reconcile;
+			// ext_proc patches anchored on envoy.filters.http.wasm still apply.
+			return true, nil
 		}
 		return false, fmt.Errorf("get WasmPlugin %s: %w", key, err)
 	}
