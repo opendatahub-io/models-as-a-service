@@ -53,6 +53,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	"sigs.k8s.io/controller-runtime/pkg/metrics/filters"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	crwebhook "sigs.k8s.io/controller-runtime/pkg/webhook"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -73,6 +74,10 @@ const (
 	tlsProfileFetchMaxRetries = 3
 	tlsProfileFetchTimeout    = 10 * time.Second
 	tlsProfileFetchRetryDelay = 2 * time.Second
+
+	// metricsCertDir is where OpenShift service-ca mounts the metrics serving cert.
+	// Must match the Deployment volumeMount added for SecureServing.
+	metricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
 )
 
 var tlsProfileRetryDelay = tlsProfileFetchRetryDelay
@@ -826,6 +831,32 @@ func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.Cance
 	}
 }
 
+// buildMetricsServerOptions configures the controller-runtime metrics endpoint.
+// When secureMetrics is true, metrics are served over HTTPS with authn/authz
+// filters and the cluster TLS profile applied (plus NextProtos).
+func buildMetricsServerOptions(
+	bindAddress string,
+	secureMetrics bool,
+	serverTLSOpt func(*tls.Config),
+	nextProtosOpt func(*tls.Config),
+) metricsserver.Options {
+	tlsOpts := []func(*tls.Config){nextProtosOpt}
+	if secureMetrics {
+		tlsOpts = []func(*tls.Config){serverTLSOpt, nextProtosOpt}
+	}
+
+	opts := metricsserver.Options{
+		BindAddress:   bindAddress,
+		SecureServing: secureMetrics,
+		TLSOpts:       tlsOpts,
+	}
+	if secureMetrics {
+		opts.FilterProvider = filters.WithAuthenticationAndAuthorization
+		opts.CertDir = metricsCertDir
+	}
+	return opts
+}
+
 // resolveInfraNamespace determines the infrastructure namespace for maas-api and maas-db-config.
 // Note: PostgreSQL itself can be external (e.g., AWS RDS) - only maas-api and the connection secret deploy here.
 // If infraNs is "AUTO", derives the namespace from the controller namespace.
@@ -927,6 +958,7 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 
 func main() {
 	var metricsAddr string
+	var secureMetrics bool
 	var enableLeaderElection bool
 	var probeAddr string
 	var gatewayName string
@@ -944,7 +976,9 @@ func main() {
 	var monitoringNamespace string
 	var usageLogsManifestPath string
 
-	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "The address the metrics endpoint binds to.")
+	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
+	flag.BoolVar(&secureMetrics, "metrics-secure", true,
+		"If true, serve metrics via HTTPS with authentication and authorization. Set false for non-OpenShift/xKS.")
 	flag.StringVar(&probeAddr, "health-probe-bind-address", ":8081", "The address the probe endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "leader-elect", false,
 		"Enable leader election for controller manager.")
@@ -1103,13 +1137,14 @@ func main() {
 		c.NextProtos = []string{"h2", "http/1.1"}
 	}
 
+	metricsServerOptions := buildMetricsServerOptions(
+		metricsAddr, secureMetrics, tlsConfig.serverTLSOpt, nextProtosOpt,
+	)
+
 	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
-		Scheme: scheme,
-		Cache:  cacheOpts,
-		Metrics: metricsserver.Options{
-			BindAddress: metricsAddr,
-			TLSOpts:     []func(*tls.Config){nextProtosOpt},
-		},
+		Scheme:                 scheme,
+		Cache:                  cacheOpts,
+		Metrics:                metricsServerOptions,
 		WebhookServer:          crwebhook.NewServer(crwebhook.Options{TLSOpts: []func(*tls.Config){tlsConfig.serverTLSOpt, nextProtosOpt}}),
 		HealthProbeBindAddress: probeAddr,
 		LeaderElection:         enableLeaderElection,
