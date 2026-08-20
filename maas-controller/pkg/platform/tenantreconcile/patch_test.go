@@ -461,6 +461,58 @@ func TestPatchNetworkPolicyOTLPEgress(t *testing.T) {
 	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, podMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 }
 
+func TestPatchNetworkPolicyOTLPEgressRewritesKustomizePollutedPodSelector(t *testing.T) {
+	np := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"spec": map[string]any{
+				"egress": []any{
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(4317), "protocol": "TCP"},
+						},
+						"to": []any{
+							map[string]any{
+								"namespaceSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"kubernetes.io/metadata.name": "opendatahub",
+									},
+								},
+								"podSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"app.kubernetes.io/name":      "payload-processing",
+										"app.kubernetes.io/component": "payload-processing",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchNetworkPolicyOTLPEgress(np, "redhat-ods-monitoring")
+	require.NoError(t, err)
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[0].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	peer, ok := to[0].(map[string]any)
+	require.True(t, ok)
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, podMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, podMatchLabels[DefaultOTLPCollectorComponentLabelKey])
+}
+
 func TestPatchNetworkPolicyOTLPEgressMissingRule(t *testing.T) {
 	np := &unstructured.Unstructured{
 		Object: map[string]any{

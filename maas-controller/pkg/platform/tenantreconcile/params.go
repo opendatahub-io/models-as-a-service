@@ -798,6 +798,13 @@ func nestedPortNumber(v any) (int64, bool) {
 	}
 }
 
+func otlpCollectorPeerMatchLabels() map[string]any {
+	return map[string]any{
+		DefaultOTLPCollectorPodLabelKey:       DefaultOTLPCollectorService,
+		DefaultOTLPCollectorComponentLabelKey: DefaultOTLPCollectorComponentLabelValue,
+	}
+}
+
 func patchNetworkPolicyOTLPEgress(r *unstructured.Unstructured, monitoringNamespace string) error {
 	if monitoringNamespace == "" {
 		return nil
@@ -837,25 +844,19 @@ func patchNetworkPolicyOTLPEgress(r *unstructured.Unstructured, monitoringNamesp
 		if !ok {
 			continue
 		}
-		podSelector, ok := peer["podSelector"].(map[string]any)
-		if !ok {
-			continue
-		}
-		podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if podMatchLabels[DefaultOTLPCollectorPodLabelKey] != DefaultOTLPCollectorService ||
-			podMatchLabels[DefaultOTLPCollectorComponentLabelKey] != DefaultOTLPCollectorComponentLabelValue {
-			continue
-		}
 		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
 		if !ok {
-			continue
+			nsSelector = map[string]any{}
+			peer["namespaceSelector"] = nsSelector
 		}
 		nsSelector["matchLabels"] = map[string]any{
 			"kubernetes.io/metadata.name": monitoringNamespace,
 		}
+		peer["podSelector"] = map[string]any{
+			"matchLabels": otlpCollectorPeerMatchLabels(),
+		}
+		to[0] = peer
+		rule["to"] = to
 		egress[i] = rule
 		return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 	}
