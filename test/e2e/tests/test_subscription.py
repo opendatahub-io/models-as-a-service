@@ -100,6 +100,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("api_keys")
+
 
 # Generated resource names (for TestManagedAnnotation)
 AUTH_POLICY_NAME = f"maas-auth-{MODEL_REF}"
@@ -140,10 +142,12 @@ def _get_default_api_key() -> str:
     """
     pid = os.getpid()
     if pid not in _default_api_key_cache:
+        from worker_tenant_fixtures import xdist_worker_suffix
+
         oc_token = _get_cluster_token()
         _default_api_key_cache[pid] = _create_api_key(
             oc_token,
-            name="e2e-default-key",
+            name=f"e2e-default-key-{xdist_worker_suffix()}",
             subscription=SIMULATOR_SUBSCRIPTION,
         )
     return _default_api_key_cache[pid]
@@ -381,6 +385,7 @@ class TestSubscriptionEnforcement:
 
     def test_subscribed_user_gets_200(self):
         """API key with matching group should access the model. Polls for AuthPolicy enforcement."""
+        _wait_for_gateway_auth_enforced()
         api_key = _get_default_api_key()
         r = _poll_status(api_key, 200, timeout=90)
         log.info(f"Subscribed API key -> {r.status_code}")
@@ -431,6 +436,7 @@ class TestSubscriptionEnforcement:
             _delete_cr("maasauthpolicy", "e2e-auth-pass-sub-fail")
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_rate_limit_exhaustion_gets_429(self):
         """
         Test that a user gets 429 when they actually exceed their token rate limit.
@@ -545,6 +551,7 @@ class TestSubscriptionEnforcement:
             _wait_reconcile()
             log.info("Cleaned up rate limit test resources")
 
+    @pytest.mark.serial
     def test_models_endpoint_exempt_from_rate_limiting(self):
         """
         Test that /v1/models endpoint remains accessible when token quota is exhausted.
@@ -680,6 +687,7 @@ class TestMultipleSubscriptionsPerModel:
     were AND'd, requiring a user to be in ALL subscriptions.
     """
 
+    @pytest.mark.serial
     def test_user_in_one_of_two_subscriptions_gets_200(self):
         """Add a 2nd subscription for a different group. API key only in the original
         group should still get 200 (not blocked by the 2nd sub's group check)."""
@@ -745,6 +753,7 @@ class TestMultipleAuthPoliciesPerModel:
             _delete_cr("maasauthpolicy", "e2e-premium-sa-auth")
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_delete_one_auth_policy_other_still_works(self):
         """Delete one of two auth policies for a model -> remaining still works."""
         ns = _ns()
@@ -777,6 +786,7 @@ class TestMultipleAuthPoliciesPerModel:
 class TestCascadeDeletion:
     """Tests that deleting CRs triggers proper cleanup and rebuilds."""
 
+    @pytest.mark.serial
     def test_delete_subscription_rebuilds_trlp(self):
         """Add a 2nd subscription, delete it -> TRLP rebuilt with only the original."""
         ns = _ns()
@@ -799,6 +809,7 @@ class TestCascadeDeletion:
         finally:
             _delete_cr("maassubscription", "e2e-temp-sub")
 
+    @pytest.mark.serial
     def test_trlp_persists_during_multi_subscription_deletion(self):
         """Validate CWE-693/CWE-400 fix: TRLP rebuilt in-place during deletion.
 
@@ -920,6 +931,7 @@ class TestCascadeDeletion:
                 _apply_cr(original_sub)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
         """Delete all subscriptions for a model -> access denied with 403 Forbidden.
 
@@ -1352,6 +1364,7 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_e2e_with_access_but_no_subscription_gets_403(self):
         """
         Test: User with access (MaaSAuthPolicy) but not in any subscription gets 403.
@@ -1444,6 +1457,7 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_with_sub, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_e2e_single_subscription_auto_selects(self):
         """
         Test: User with single subscription auto-selects without header (PR #427).
@@ -1642,6 +1656,7 @@ class TestE2ESubscriptionFlow:
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_e2e_group_based_auth_but_no_subscription_gets_403(self):
         """
         E2E test: Group-based auth, but user's group not in any subscription (failure case).
@@ -1943,6 +1958,7 @@ class TestStatusReporting:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_subscription_degraded_trlp_blocks_inference(self):
         """
         Test: Degraded subscription with TRLP not ready blocks inference.

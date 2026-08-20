@@ -1,0 +1,14 @@
+[tool.pytest.ini_options]
+markers = [
+    "serial: cluster-wide mutations; excluded from parallel pass 1 (see prow two-phase pytest)",
+    "slow: long-running test (may wait for token expiry)",
+    "xdist_group(name): pytest-xdist group marker for parallel test groups",
+    "readonly: read-only smoke and validation tests (no cluster mutations)",
+    "api_keys: API key CRUD, auth enforcement, subscription binding",
+    "models: /v1/models endpoint and gateway-scoped AuthPolicy",
+    "security: negative security paths and namespace scoping",
+    "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
+    "tenant_isolation: cross-tenant auth, rate-limit, subscription, and IPP isolation",
+    "external: external OIDC and ExternalModel integrations",
+]
+addopts = "--strict-markers"

@@ -154,18 +154,22 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	// Check dependencies and prerequisites
-	if result, err := r.checkDependenciesAndPrerequisites(ctx, &tenant); result != nil {
+	prereqReport, result, err := r.checkDependenciesAndPrerequisites(ctx, &tenant)
+	if result != nil {
 		return *result, err
 	}
 
 	// Run platform reconciliation
-	result, err = r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
+	runRes, result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
 	if result != nil {
 		return *result, err
 	}
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+
+	// Aggregate all warnings and set Degraded condition once
+	r.aggregateWarningsAndSetDegraded(&tenant, prereqReport, runRes)
 
 	// Cleanup legacy resources
 	r.attemptLegacyCleanup(ctx, log)
@@ -273,16 +277,16 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 	return mcfg, platformContext, nil, nil
 }
 
-func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (*ctrl.Result, error) {
+func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (tenantreconcile.PrerequisiteReport, *ctrl.Result, error) {
 	if err := tenantreconcile.CheckDependencies(ctx, r.Client); err != nil {
 		setDependenciesCondition(tenant, false, err.Error())
 		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", err.Error())
 		prerequisitesUnevaluatedCondition(tenant, "Prerequisites were not evaluated because required dependencies are not met")
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", err.Error()); err2 != nil {
-			return nil, err2
+			return tenantreconcile.PrerequisiteReport{}, nil, err2
 		}
 		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return &res, nil
+		return tenantreconcile.PrerequisiteReport{}, &res, nil
 	}
 	setDependenciesCondition(tenant, true, "")
 
@@ -302,13 +306,13 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 			LastTransitionTime: metav1.Now(),
 		})
 		if err := r.Status().Update(ctx, tenant); err != nil {
-			return nil, err
+			return tenantreconcile.PrerequisiteReport{}, nil, err
 		}
 		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return &res, nil
+		return tenantreconcile.PrerequisiteReport{}, &res, nil
 	}
 
-	return nil, nil
+	return rep, nil, nil
 }
 
 func (r *TenantReconciler) reconcilePlatform(
@@ -317,26 +321,24 @@ func (r *TenantReconciler) reconcilePlatform(
 	tenant *maasv1alpha1.MaasTenantConfig,
 	platformContext tenantreconcile.PlatformContext,
 	mcfg *maasv1alpha1.Config,
-) (*ctrl.Result, error) {
+) (*tenantreconcile.RunResult, *ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "PlatformReconcileFailed", err.Error()); err2 != nil {
-			return nil, err2
+			return nil, nil, err2
 		}
 		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return &res, nil
+		return nil, &res, nil
 	}
 
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
 		log.Error(err, "failed to ensure gateway management auth, will retry")
 		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return &res, nil
+		return nil, &res, nil
 	}
-
-	surfaceReplicaWarnings(tenant, runRes)
 
 	if runRes.DeploymentPending {
 		tenant.Status.Phase = "Pending"
@@ -350,22 +352,49 @@ func (r *TenantReconciler) reconcilePlatform(
 			LastTransitionTime: metav1.Now(),
 		})
 		if err := r.Status().Update(ctx, tenant); err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		res := ctrl.Result{RequeueAfter: 20 * time.Second}
-		return &res, nil
+		return nil, &res, nil
 	}
 
-	return nil, nil
+	return runRes, nil, nil
 }
 
-func surfaceReplicaWarnings(tenant *maasv1alpha1.MaasTenantConfig, runRes *tenantreconcile.RunResult) {
-	if len(runRes.Warnings) > 0 {
+func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
+	tenant *maasv1alpha1.MaasTenantConfig,
+	prereqReport tenantreconcile.PrerequisiteReport,
+	runRes *tenantreconcile.RunResult,
+) {
+	var allWarnings []string
+	hasPrereqWarnings := len(prereqReport.Warnings) > 0
+	hasReplicaWarnings := runRes != nil && len(runRes.Warnings) > 0
+
+	// Collect prerequisite warnings
+	if hasPrereqWarnings {
+		allWarnings = append(allWarnings, prereqReport.Warnings...)
+	}
+
+	// Collect replica warnings
+	if hasReplicaWarnings {
+		allWarnings = append(allWarnings, runRes.Warnings...)
+	}
+
+	// Set Degraded condition once with all aggregated warnings
+	if len(allWarnings) > 0 {
+		var reason string
+		switch {
+		case hasPrereqWarnings && hasReplicaWarnings:
+			reason = "MultipleWarnings"
+		case hasPrereqWarnings:
+			reason = "PrerequisitesWarning"
+		case hasReplicaWarnings:
+			reason = "InvalidReplicaAnnotation"
+		}
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
-			"InvalidReplicaAnnotation", strings.Join(runRes.Warnings, "; "))
-	} else if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
-		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
-			"Resolved", "")
+			reason, strings.Join(allWarnings, "; "))
+	} else {
+		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse, "NoWarnings", "")
 	}
 }
 

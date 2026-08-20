@@ -66,6 +66,7 @@
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
 #   GATEWAY_NAMESPACE - Namespace for payload-processing deployment checks (default: openshift-ingress)
 #   MODEL_NAMESPACE - Namespace of models and MaaSModelRefs (default: llm)
+#   E2E_PARALLEL_WORKERS - pytest-xdist worker count (default: 7, one per test group). Set to 1 for serial debugging.
 #
 # TIMEOUT CONFIGURATION (all in seconds, sourced from deployment-helpers.sh):
 #   Customize for CI/CD environments or slow clusters:
@@ -145,7 +146,11 @@ AITENANT_NAMESPACE="${AITENANT_NAMESPACE:-ai-tenants}"
 
 # Artifact collection: OpenShift CI provides ARTIFACT_DIR (docs.ci.openshift.org/docs/architecture/step-registry).
 # Files written here are collected to artifacts/<job>/<step>/ in Prow. Fallbacks: ARTIFACTS, LOG_DIR, or local reports.
+# Phase timings (RHOAIENG-82332): UTC start/end stamps for deploy_platform, deploy_models,
+# validate, pytest_pass1, and pytest_pass2 are appended to ${ARTIFACTS_DIR}/phase-timings.txt
+# (Konflux/Prow: artifacts/<job>/<step>/phase-timings.txt).
 ARTIFACTS_DIR="${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}"
+mkdir -p "$ARTIFACTS_DIR"
 
 # Source auth utils (patch_authorino_debug, collect_e2e_artifacts)
 source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
@@ -156,6 +161,15 @@ print_header() {
     echo "$1"
     echo "----------------------------------------"
     echo ""
+}
+
+# Record a UTC start/end stamp for a named CI phase. Appended to phase-timings.txt
+# so Konflux artifacts show how long deploy vs validate vs pytest actually took.
+phase_mark() {
+    local name="${1:?phase_mark requires a phase name}"
+    local event="${2:?phase_mark requires start or end}"
+    mkdir -p "$ARTIFACTS_DIR"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) ${name} ${event}" | tee -a "${ARTIFACTS_DIR}/phase-timings.txt"
 }
 
 wait_for_gateway_programmed() {
@@ -405,9 +419,14 @@ deploy_maas_platform() {
         fi
     fi
 
-    # Wait for DataScienceCluster (install-odh already waited; deploy may have updated)
+    # Wait for DataScienceCluster (install-odh already waited; deploy may have updated).
+    # Fail-fast: a non-Ready DSC will fail pytest later after ~40 more minutes.
     if ! wait_datasciencecluster_ready "default-dsc" "$CUSTOM_RESOURCE_TIMEOUT"; then
-        echo "⚠️  WARNING: DataScienceCluster readiness check had issues (timeout: ${CUSTOM_RESOURCE_TIMEOUT}s), continuing anyway"
+        echo "❌ ERROR: DataScienceCluster did not become ready (timeout: ${CUSTOM_RESOURCE_TIMEOUT}s)"
+        echo "Last DataScienceCluster conditions:"
+        kubectl get datasciencecluster default-dsc -o jsonpath='{range .status.conditions[*]}{.type}={.status} ({.reason}): {.message}{"\n"}{end}' 2>/dev/null \
+            || kubectl describe datasciencecluster default-dsc || true
+        exit 1
     fi
 
     # Wait for Authorino to be ready and auth service cluster to be healthy
@@ -415,6 +434,7 @@ deploy_maas_platform() {
     # once the operator creates the gateway→Authorino TLS EnvoyFilter at Gateway/AuthPolicy creation
     # time, not at first LLMInferenceService creation. Currently there's a chicken-egg problem where
     # auth checks fail before any model is deployed because the TLS config doesn't exist yet.
+    # Default remains true until models exist; AuthPolicy Enforced is gated after deploy_models.
     if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"
         echo "   This is a temporary workaround for the gateway→Authorino TLS chicken-egg problem"
@@ -422,7 +442,8 @@ deploy_maas_platform() {
         # Using configurable timeout (default suitable for Prow's 15m job limit)
         echo "Waiting for Authorino and auth service to be ready (namespace: ${AUTHORINO_NAMESPACE})..."
         if ! wait_authorino_ready "$AUTHORINO_NAMESPACE" "$AUTHORINO_TIMEOUT"; then
-            echo "⚠️  WARNING: Authorino readiness check had issues (timeout: ${AUTHORINO_TIMEOUT}s), continuing anyway"
+            echo "❌ ERROR: Authorino did not become ready (timeout: ${AUTHORINO_TIMEOUT}s)"
+            exit 1
         fi
     fi
 
@@ -523,7 +544,9 @@ deploy_models() {
         exit 1
     fi
 
-    wait_for_auth_policies_enforced
+    if ! wait_for_auth_policies_enforced; then
+        exit 1
+    fi
 }
 
 wait_for_auth_policies_enforced() {
@@ -556,8 +579,9 @@ wait_for_auth_policies_enforced() {
         echo "  Waiting... ($total policies found, not all enforced yet)"
         sleep 10
     done
-    echo "⚠️  WARNING: AuthPolicies not all enforced after ${timeout}s, tests may fail"
+    echo "❌ ERROR: AuthPolicies not all enforced after ${timeout}s"
     oc get authpolicies -A -o wide 2>/dev/null || true
+    return 1
 }
 
 validate_deployment() {
@@ -570,8 +594,14 @@ validate_deployment() {
         # maas-api deploys to the resolved infrastructure namespace.
         # validate-deployment.sh derives INFRA_NAMESPACE the same way.
         if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
-            echo "⚠️  First validation attempt failed, waiting 30 seconds and retrying..."
-            sleep 30
+            echo "⚠️  First validation attempt failed; polling gateway and core deployments then retrying..."
+            wait_for_gateway_programmed "$GATEWAY_NAME" "$GATEWAY_NAMESPACE" 60 || true
+            kubectl wait --for=condition=Available --timeout=60s \
+                "deployment/maas-controller" -n "$DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+            if [[ -n "${MAAS_API_DEPLOYMENT_NAMESPACE:-}" ]]; then
+                kubectl wait --for=condition=Available --timeout=60s \
+                    "deployment/maas-api" -n "$MAAS_API_DEPLOYMENT_NAMESPACE" 2>/dev/null || true
+            fi
             if ! "$PROJECT_ROOT/scripts/validate-deployment.sh"; then
                 echo "❌ ERROR: Deployment validation failed after retry"
                 exit 1
@@ -717,21 +747,6 @@ run_e2e_tests() {
     # TOKEN and ADMIN_OC_TOKEN are already exported by setup_test_tokens()
 
     local test_dir="$PROJECT_ROOT/test/e2e"
-    # Use ARTIFACTS_DIR so pytest reports go to Prow artifact collection (ARTIFACT_DIR)
-    mkdir -p "$ARTIFACTS_DIR"
-
-    if [[ ! -d "$test_dir/.venv" ]]; then
-        echo "Creating Python venv for e2e tests..."
-        python3 -m venv "$test_dir/.venv" --upgrade-deps
-    fi
-    source "$test_dir/.venv/bin/activate"
-    python -m pip install --upgrade pip --quiet
-    python -m pip install -r "$test_dir/requirements.txt" --quiet
-
-    local user
-    user="$(oc whoami 2>/dev/null || echo 'unknown')"
-    local html="$ARTIFACTS_DIR/e2e-${user}.html"
-    local xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 
     echo "Running e2e tests with:"
     echo "  - TOKEN: $(echo "${TOKEN:-not set}" | cut -c1-20)..."
@@ -841,41 +856,16 @@ run_e2e_tests() {
         fi
     fi
 
-    # Run the default smoke e2e tests
+    # Delegate pytest execution to run_e2e_tests.sh (test-only changes
+    # touch that script, not this deploy/validate orchestrator).
+    export ARTIFACTS_DIR
+    export E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
     export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
-    if ! PYTHONPATH="$test_dir:${PYTHONPATH:-}" pytest \
-        -v --maxfail=5 --disable-warnings \
-        --junitxml="$xml" \
-        --html="$html" --self-contained-html \
-        --capture=tee-sys --show-capture=all --log-level=INFO \
-        "$test_dir/tests/test_api_keys.py" \
-        "$test_dir/tests/test_namespace_scoping.py" \
-        "$test_dir/tests/test_negative_security.py" \
-        "$test_dir/tests/test_subscription.py" \
-        "$test_dir/tests/test_models_endpoint.py" \
-        "$test_dir/tests/test_external_models.py" \
-        "$test_dir/tests/test_tenant.py" \
-        "$test_dir/tests/test_aitenant_lifecycle.py" \
-        "$test_dir/tests/test_tenant_namespace_discovery.py" \
-        "$test_dir/tests/test_gateway_scoped_authpolicy.py" \
-        "$test_dir/tests/test_multi_tenant_integration.py" \
-        "$test_dir/tests/test_tenant_model_inference.py" \
-        "$test_dir/tests/test_multi_tenant_maas_api.py" \
-        "$test_dir/tests/test_tenant_auth_isolation.py" \
-        "$test_dir/tests/test_tenant_subscription_isolation.py" \
-        "$test_dir/tests/test_tenant_rate_limit_isolation.py" \
-        "$test_dir/tests/test_config_tenant.py" \
-        "$test_dir/tests/test_tenant_discovery.py" \
-        "$test_dir/tests/test_tenant_discovery_isolation.py" \
-        "$test_dir/tests/test_per_tenant_ipp_isolation.py" \
-        "$test_dir/tests/test_external_oidc.py" ; then
-        echo "❌ ERROR: E2E tests failed"
-        exit 1
-    fi
-
-    echo "✅ E2E tests completed"
-    echo " - JUnit XML : ${xml}"
-    echo " - HTML      : ${html}"
+    local script_dir
+    script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    phase_mark pytest start
+    "${script_dir}/run_e2e_tests.sh"
+    phase_mark pytest end
 }
 
 
@@ -1133,10 +1123,14 @@ if [[ "$SKIP_DEPLOYMENT" == "true" ]]; then
     echo "  Skipping deployment (SKIP_DEPLOYMENT=true)"
     echo "  Assuming MaaS platform and models are already deployed"
 else
+    phase_mark deploy_platform start
     deploy_maas_platform
+    phase_mark deploy_platform end
 
-    print_header "Deploying Models"  
+    print_header "Deploying Models"
+    phase_mark deploy_models start
     deploy_models
+    phase_mark deploy_models end
     patch_authorino_debug  # from auth_utils.sh
 fi
 
@@ -1169,7 +1163,9 @@ setup_test_tokens
 # The main oc session is still system:admin for any kubectl/oc commands.
 # ═══════════════════════════════════════════════════════════════════════════════
 print_header "Validating Deployment"
+phase_mark validate start
 validate_deployment
+phase_mark validate end
 
 print_header "Running E2E Tests"
 run_e2e_tests

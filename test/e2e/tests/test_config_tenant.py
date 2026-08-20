@@ -11,6 +11,8 @@ import time
 
 import pytest
 
+from test_helper import _ns
+
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 
@@ -54,13 +56,14 @@ def _oc_json(args):
     return json.loads(result.stdout)
 
 
+pytestmark = pytest.mark.xdist_group("readonly")
+
 CONFIG_CRD = "configs.maas.opendatahub.io"
 CONFIG_NAME = "default"
 CONFIG_KIND = "Config"
 CONFIG_API_PREFIX = "maas.opendatahub.io/"
 
 TENANT_NAME = "default-tenant"
-TENANT_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 CONTROLLER_DEPLOY_NS = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
@@ -72,7 +75,7 @@ def _config_doc():
 
 
 def _tenant_doc():
-    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", TENANT_NAMESPACE, "-o", "json"])
+    return _oc_json(["get", "maastenantconfig", TENANT_NAME, "-n", _ns(), "-o", "json"])
 
 
 def _aitenant_doc():
@@ -170,12 +173,12 @@ class TestConfigTenantOwnership:
         except subprocess.CalledProcessError as exc:
             if _oc_not_found(exc):
                 pytest.skip(
-                    f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} not found; run after tenant config bootstrap."
+                    f"MaasTenantConfig {TENANT_NAME}/{_ns()} not found; run after tenant config bootstrap."
                 )
             raise
         ref = _ref_to_config(doc.get("metadata", {}).get("ownerReferences"))
         assert ref is not None, (
-            f"MaasTenantConfig {TENANT_NAME}/{TENANT_NAMESPACE} should reference Config/{CONFIG_NAME} "
+            f"MaasTenantConfig {TENANT_NAME}/{_ns()} should reference Config/{CONFIG_NAME} "
             "(LifecycleReconciler links the anchor for GC)."
         )
 

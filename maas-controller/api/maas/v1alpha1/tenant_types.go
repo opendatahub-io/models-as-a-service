@@ -67,6 +67,10 @@ type TenantSpec struct {
 	// Telemetry contains configuration for telemetry and metrics collection.
 	// +kubebuilder:validation:Optional
 	Telemetry *TenantTelemetryConfig `json:"telemetry,omitempty"`
+
+	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
 }
 
 // TenantExternalOIDCConfig defines the external OIDC provider settings.
@@ -127,6 +131,45 @@ type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	MaxExpirationDays *int32 `json:"maxExpirationDays,omitempty"`
+}
+
+// TenantPayloadProcessingConfig defines scaling configuration for payload-processing pods.
+type TenantPayloadProcessingConfig struct {
+	// Replicas overrides the payload-processing Deployment replica count.
+	// When Autoscaling is enabled, this value sets the HPA minReplicas floor.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Autoscaling enables HPA-based horizontal pod autoscaling.
+	// When enabled, an HPA is created targeting the payload-processing Deployment.
+	// +kubebuilder:validation:Optional
+	Autoscaling *TenantAutoscalingConfig `json:"autoscaling,omitempty"`
+}
+
+// TenantAutoscalingConfig defines HPA autoscaling parameters for payload-processing.
+type TenantAutoscalingConfig struct {
+	// MaxReplicas is the upper limit for the HPA replica count.
+	// +kubebuilder:default=10
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	MaxReplicas *int32 `json:"maxReplicas,omitempty"`
+
+	// TargetCPUUtilization is the target average CPU utilization percentage.
+	// +kubebuilder:default=70
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TargetCPUUtilization *int32 `json:"targetCPUUtilization,omitempty"`
+
+	// TargetMemoryUtilization is the target average memory utilization percentage.
+	// +kubebuilder:default=80
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	TargetMemoryUtilization *int32 `json:"targetMemoryUtilization,omitempty"`
 }
 
 // TenantGatewayRef defines the reference to the global Gateway (Gateway API).

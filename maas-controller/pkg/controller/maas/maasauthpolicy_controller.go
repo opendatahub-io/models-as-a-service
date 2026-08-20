@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"sort"
 	"strings"
 	"time"
 
@@ -442,16 +441,6 @@ const maasGatewayAuthPolicyName = "maas-gateway-auth"
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
 
-// gatewayAuthzCacheKeySelector builds the cache-key expression for gateway-level
-// model authorization checks: "userId|groups|modelIdentity".
-// This prevents authz cache collisions across different model targets.
-func gatewayAuthzCacheKeySelector() string {
-	return fmt.Sprintf(
-		`(%s) + "|" + (%s).join(",") + "|" + %s`,
-		celUserID, celGroups, celModelIdentity,
-	)
-}
-
 // subscriptionGatewayCacheKeySelector builds the cache-key expression for the gateway-level
 // subscription-info and subscription-valid evaluators: "userId|groups|subscription|modelIdentity".
 // Model identity is derived dynamically from X-Gateway-Model-Name header or request path.
@@ -470,7 +459,6 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 //+kubebuilder:rbac:groups=discovery.k8s.io,resources=endpointslices,verbs=list;watch
-//+kubebuilder:rbac:groups=config.openshift.io,resources=authentications,verbs=get
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
@@ -527,19 +515,6 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Track missing models to include in status even when reconciliation skips them
 	missingModels := r.findMissingModelRefs(ctx, policy)
-
-	modelAllowlists, err := r.aggregateModelSubjectAllowlists(ctx, policy.Namespace)
-	if err != nil {
-		log.Error(err, "failed to aggregate per-model subjects for gateway AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to aggregate per-model access rules: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
-	}
-	modelAllowlistsJSON, err := json.Marshal(modelAllowlists)
-	if err != nil {
-		log.Error(err, "failed to marshal per-model subject aggregation")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to serialize per-model access rules: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
-	}
 
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
@@ -602,7 +577,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		}
 	}
 
-	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, string(modelAllowlistsJSON), oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
+	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
 		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot)
@@ -745,15 +720,10 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
-type modelSubjectAllowlist struct {
-	Users  []string `json:"users"`
-	Groups []string `json:"groups"`
-}
-
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
-func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON string, oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
+func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, tenantName, gatewayNamespace, gatewayName string) map[string]any {
 	// Construct tenant-specific maas-api service name using TenantIdentifier
 	// Default tenant (tenantID="") uses "maas-api", others use "maas-api-{tenantID}"
 	maasAPIServiceName := "maas-api"
@@ -836,84 +806,27 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(modelAccessJSON st
 
 	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
-	// tenantGatewayIsolationRule is a stub that always allows. It will be replaced with a real
-	// maas-api call to verify the API key's tenant matches the gateway hostname when multi-tenant
-	// hostname routing is productised (prevents a Coke key from working on a Pepsi gateway).
-	tenantGatewayIsolationRule := map[string]any{
-		"priority": int64(0),
-		"metrics":  false,
-		"opa": map[string]any{
-			"rego": `# Tenant hostname isolation stub.
-# Replace with a real maas-api call to validate that the API key's tenant
-# matches the gateway hostname (prevents Coke key on Pepsi gateway).
-allow { true }`,
-		},
-	}
-
-	requireGroupMembershipRego := fmt.Sprintf(`
-model_access := %s
-
-request_path := object.get(input.context.request.http, "path", "")
-request_headers := object.get(input.context.request.http, "headers", {})
-
-path_parts := [p | p := split(request_path, "/")[_]; p != ""]
-
-path_model_identity := sprintf("%%s/%%s", [path_parts[0], path_parts[1]]) {
-	count(path_parts) >= 2
-	path_parts[0] != "v1"
-	path_parts[0] != "maas-api"
-}
-
-header_model_identity := object.get(request_headers, "x-gateway-model-name", "")
-
-model_identity := path_model_identity {
-	path_model_identity != ""
-} else := header_model_identity {
-	header_model_identity != ""
-} else := ""
-
-username := input.auth.metadata.apiKeyValidation.username
-	{ object.get(input.auth, "metadata", {}).apiKeyValidation.username != "" }
-else := input.auth.identity.preferred_username
-	{ object.get(input.auth, "identity", {}).preferred_username != "" }
-else := input.auth.identity.sub
-	{ object.get(input.auth, "identity", {}).sub != "" }
-else := input.auth.identity.user.username
-	{ object.get(input.auth, "identity", {}).user.username != "" }
-else := ""
-
-groups := input.auth.metadata.apiKeyValidation.groups
-	{ object.get(input.auth, "metadata", {}).apiKeyValidation.groups != [] }
-else := input.auth.identity.groups
-	{ object.get(input.auth, "identity", {}).groups != [] }
-else := input.auth.identity.user.groups
-	{ object.get(input.auth, "identity", {}).user.groups != [] }
-else := []
-
-model_rules := object.get(model_access, model_identity, null)
-
-# Management endpoints (e.g. /v1/models, /maas-api/v1/api-keys) carry no model context.
-# Allow them here; subscription and rate-limit checks are gated by model-route conditions.
-allow {
-	model_identity == ""
-}
-
-# Inference path: deny by default when no MaaSAuthPolicy covers this model.
-# Allow only when the caller's username or a group is explicitly listed.
-allow {
-	model_rules != null
-	model_rules.users[_] == username
-}
-
-allow {
-	model_rules != null
-	g := groups[_]
-	model_rules.groups[_] == g
-}
-`, modelAccessJSON)
+	requireGroupMembershipRego := `allow {
+  object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
+}`
 
 	authorizationRules := map[string]any{
-		"tenant-gateway-isolation": tenantGatewayIsolationRule,
+		// Reject client-supplied identity headers; Authorino injects these after auth.
+		"deny-client-identity-headers": map[string]any{
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{
+						// CEL has() only works on message fields; use `in` for map keys.
+						"predicate": `!("x-maas-username" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-group" in request.headers)`,
+					},
+				},
+			},
+		},
 		"auth-valid": map[string]any{
 			"metrics":  false,
 			"priority": int64(0),
@@ -958,6 +871,11 @@ allow {
 			},
 		},
 		"require-group-membership": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celModelIdentityAvailable,
+				},
+			},
 			"metrics":  false,
 			"priority": int64(0),
 			"opa": map[string]any{
@@ -965,7 +883,7 @@ allow {
 			},
 			"cache": map[string]any{
 				"key": map[string]any{
-					"selector": gatewayAuthzCacheKeySelector(),
+					"selector": subscriptionGatewayCacheKeySelector(),
 				},
 				"ttl": r.authzCacheTTL(),
 			},
@@ -1349,7 +1267,7 @@ func stripExtraFieldsSlice(current, desired []any) {
 // reconcileGatewayAuthPolicy creates or updates the singleton Gateway-level AuthPolicy in
 // the gateway namespace. All MaaSAuthPolicy reconciliations converge on this one resource.
 func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
-	ctx context.Context, log logr.Logger, modelAccessJSON string,
+	ctx context.Context, log logr.Logger,
 	oidc *oidcConfig, xAPIKeyEnabled bool, tenantID, gatewayNamespace, gatewayName string,
 ) (bool, error) {
 	log.Info("reconcileGatewayAuthPolicy entered", "gatewayNamespace", gatewayNamespace, "gatewayName", gatewayName, "tenantID", tenantID, "xAPIKeyEnabled", xAPIKeyEnabled)
@@ -1361,7 +1279,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 		tenantName = tenantID
 	}
 
-	spec := r.buildGatewayAuthPolicySpec(modelAccessJSON, oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
+	spec := r.buildGatewayAuthPolicySpec(oidc, xAPIKeyEnabled, tenantID, tenantName, gatewayNamespace, gatewayName)
 	authPolicyName := r.gatewayAuthPolicyName(gatewayNamespace, gatewayName)
 	isTenantGateway := gatewayNamespace != r.GatewayNamespace || gatewayName != r.GatewayName
 
@@ -1504,60 +1422,6 @@ func (r *MaaSAuthPolicyReconciler) reconcileModelAuthPolicies(ctx context.Contex
 	}
 
 	return refs, nil
-}
-
-func (r *MaaSAuthPolicyReconciler) aggregateModelSubjectAllowlists(ctx context.Context, policyNamespace string) (map[string]modelSubjectAllowlist, error) {
-	var policies maasv1alpha1.MaaSAuthPolicyList
-	if err := r.List(ctx, &policies, client.InNamespace(policyNamespace)); err != nil {
-		return nil, fmt.Errorf("failed to list MaaSAuthPolicies for gateway aggregation: %w", err)
-	}
-
-	aggregate := make(map[string]modelSubjectAllowlist)
-	for _, p := range policies.Items {
-		if !p.GetDeletionTimestamp().IsZero() {
-			continue
-		}
-		for _, ref := range p.Spec.ModelRefs {
-			key := ref.Namespace + "/" + ref.Name
-			entry := aggregate[key]
-			for _, group := range p.Spec.Subjects.Groups {
-				if err := validateCELValue(group.Name, "group name"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s/%s: %w", p.Namespace, p.Name, err)
-				}
-				entry.Groups = append(entry.Groups, group.Name)
-			}
-			for _, user := range p.Spec.Subjects.Users {
-				if err := validateCELValue(user, "username"); err != nil {
-					return nil, fmt.Errorf("invalid subject in MaaSAuthPolicy %s/%s: %w", p.Namespace, p.Name, err)
-				}
-				entry.Users = append(entry.Users, user)
-			}
-			entry.Groups = deduplicateAndSort(entry.Groups)
-			entry.Users = deduplicateAndSort(entry.Users)
-			aggregate[key] = entry
-
-			for _, altKey := range r.resolveHeaderModelKeys(ctx, ref) {
-				aggregate[altKey] = entry
-			}
-		}
-	}
-
-	return aggregate, nil
-}
-
-// resolveHeaderModelKeys returns alternate model_access keys that match the value
-// ipp-pre sets in the X-Gateway-Model-Name header for body-based routing.
-// Reads MaaSModelRef.status.resolvedModelAlias, which the modelref controller
-// populates from the backing CRD (publisher ID for LLMISvc, targetModel for ExternalModel).
-func (r *MaaSAuthPolicyReconciler) resolveHeaderModelKeys(ctx context.Context, ref maasv1alpha1.ModelRef) []string {
-	modelRef := &maasv1alpha1.MaaSModelRef{}
-	if err := r.Get(ctx, client.ObjectKey{Name: ref.Name, Namespace: ref.Namespace}, modelRef); err != nil {
-		return nil
-	}
-	if modelRef.Status.ResolvedModelAlias == "" {
-		return nil
-	}
-	return []string{modelRef.Status.ResolvedModelAlias}
 }
 
 func (r *MaaSAuthPolicyReconciler) modelAuthPolicyExists(ctx context.Context, modelNamespace, modelName string) (bool, error) {
@@ -1724,11 +1588,11 @@ func (r *MaaSAuthPolicyReconciler) handleDeletion(ctx context.Context, log logr.
 			} else {
 				oidc := r.fetchOIDCConfig(ctx, log, policy.Namespace)
 				xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
-				if _, err := r.reconcileGatewayAuthPolicy(ctx, log, "{}", oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
+				if _, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName); err != nil {
 					log.Error(err, "failed to reset gateway auth to base version")
 					return ctrl.Result{}, err
 				}
-				log.Info("reset maas-gateway-auth to base version (empty model access)",
+				log.Info("reset maas-gateway-auth to base version",
 					"gatewayNamespace", gatewayNs, "gatewayName", gatewayName)
 			}
 		}
@@ -1761,7 +1625,7 @@ func (r *MaaSAuthPolicyReconciler) ensureBaseGatewayAuthPolicy(
 		return fmt.Errorf("failed to check gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, err)
 	}
 
-	_, err := r.reconcileGatewayAuthPolicy(ctx, log, "{}", oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName)
+	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNamespace, gatewayName)
 	return err
 }
 
@@ -2288,26 +2152,4 @@ func setGatewayOwnerReference(gateway *gatewayapiv1.Gateway, dependent metav1.Ob
 	}
 	owners = append(owners, ref)
 	dependent.SetOwnerReferences(owners)
-}
-
-// deduplicateAndSort removes duplicates from a string slice and sorts it.
-// This ensures stable output across reconciles, preventing spurious updates
-// caused by non-deterministic Kubernetes List order.
-func deduplicateAndSort(items []string) []string {
-	if len(items) == 0 {
-		return items
-	}
-	// Use a map to deduplicate
-	seen := make(map[string]bool, len(items))
-	for _, item := range items {
-		seen[item] = true
-	}
-	// Build deduplicated slice
-	result := make([]string, 0, len(seen))
-	for item := range seen {
-		result = append(result, item)
-	}
-	// Sort for deterministic output
-	sort.Strings(result)
-	return result
 }

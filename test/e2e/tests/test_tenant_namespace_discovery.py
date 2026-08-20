@@ -64,6 +64,8 @@ from multitenancy_helpers import (
 )
 from test_helper import MODEL_NAMESPACE, MODEL_REF, _wait_for_maas_auth_policy_phase, _wait_reconcile
 
+pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _require_multitenancy_prerequisites():

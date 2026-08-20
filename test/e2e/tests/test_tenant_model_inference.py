@@ -51,6 +51,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("tenant_isolation")
+
 
 # Multi-tenant model inference tests are enabled by default (Phase 1 implementation)
 # These tests validate that models route through tenant gateways correctly

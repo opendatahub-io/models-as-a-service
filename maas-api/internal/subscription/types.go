@@ -32,6 +32,9 @@ type SelectResponse struct {
 	// gateway AuthPolicy to build selected_subscription_key for TokenRateLimitPolicy.
 	ResolvedModel string `json:"resolvedModel,omitempty"`
 
+	// Access control (populated from MaaSAuthPolicy check)
+	AccessAllowed bool `json:"accessAllowed"` // no omitempty — false is a meaningful denial signal
+
 	// Health fields (populated from status and metadata)
 	Phase             string `json:"phase"`                       // Subscription phase: "Active", "Degraded", "Failed", "Pending", or "" (always serialized for Authorino OPA rules)
 	Ready             bool   `json:"ready"`                       // Whether subscription is ready (from Ready condition)

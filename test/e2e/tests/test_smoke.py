@@ -1,10 +1,13 @@
 import logging
 import json
+import pytest
 import requests
 from test_helper import chat, completions
 from conftest import TLS_VERIFY
 
 log = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.xdist_group("readonly")
 
 def _pp(obj) -> str:
     try:

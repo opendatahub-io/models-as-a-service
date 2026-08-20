@@ -70,6 +70,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("models")
+
 # Kuadrant gateway propagation can lag behind MaaS CR readiness.
 # MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
 # but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
@@ -311,6 +313,7 @@ class TestModelsEndpoint:
         log.info("✅ All prerequisites validated - proceeding with /v1/models tests")
         log.info("=" * 60)
 
+    @pytest.mark.serial
     def test_single_subscription_auto_select(self):
         """
         Test: User with exactly one accessible subscription can list models without
@@ -775,6 +778,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_different_modelrefs_same_model_id(self):
         """
         Test 7: Different modelRefs serving same model ID return separate entries.
@@ -1287,6 +1291,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_name, namespace=ns)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_empty_model_list(self):
         """
         Test 9: Empty model list should return [] not null.
@@ -2155,6 +2160,7 @@ class TestModelsEndpoint:
 
         log.info(f"✅ Unauthenticated request → {r.status_code}")
 
+    @pytest.mark.serial
     def test_central_models_endpoint_exempt_from_rate_limiting(self):
         """
         Test that the central /v1/models endpoint remains accessible when token quota is exhausted.

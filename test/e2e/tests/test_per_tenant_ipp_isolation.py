@@ -55,12 +55,13 @@ from test_helper import (
     _gateway_url,
     _get_cluster_token,
     _maas_api_url,
-    _poll_status,
     _wait_for_gateway_auth_enforced,
     _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5
@@ -90,6 +91,14 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
             )
             time.sleep(GATEWAY_PROPAGATION_DELAY)
             continue
+        if response.status_code not in (200, 201):
+            log.info(
+                "Gateway returned non-retryable %d (attempt %d/%d, body: %.300s)",
+                response.status_code,
+                attempt,
+                retries,
+                response.text[:300],
+            )
         return response
     return response
 
@@ -324,11 +333,32 @@ class TestPerTenantIPPRouting:
 
         _wait_for_gateway_auth_enforced()
         api_key = _create_default_api_key()
-        # Warm gateway allowlist after prior tests may reset maas-gateway-auth to {}.
-        warmup = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
-        assert warmup.status_code == 200, (
-            f"Default gateway inference warmup failed: {warmup.status_code} "
-            f"{redact_sensitive(warmup.text[:500])}"
+        # Retry transient auth propagation (403, 500 AUTH_FAILURE) but fail fast
+        # on terminal errors (404, 405, 422) that indicate misconfiguration.
+        _TRANSIENT_WARMUP = {403, 500, 502, 503}
+        deadline = time.time() + 90
+        warmup = None
+        while time.time() < deadline:
+            warmup = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
+            if warmup.status_code == 200:
+                break
+            if warmup.status_code not in _TRANSIENT_WARMUP:
+                log.warning(
+                    "Default gateway warmup got terminal %d, not retrying (body: %.300s)",
+                    warmup.status_code,
+                    redact_sensitive(warmup.text[:300]),
+                )
+                break
+            log.warning(
+                "Default gateway warmup got %d (body: %.300s), retrying...",
+                warmup.status_code,
+                redact_sensitive(warmup.text[:300]),
+            )
+            time.sleep(2)
+        assert warmup is not None and warmup.status_code == 200, (
+            f"Default gateway inference warmup failed: "
+            f"{warmup.status_code if warmup is not None else 'no response'} "
+            f"{redact_sensitive(warmup.text[:500]) if warmup is not None else ''}"
         )
         response = _post_hybrid_chat(_gateway_url(), MODEL_PATH, api_key)
         assert response.status_code == 200, (

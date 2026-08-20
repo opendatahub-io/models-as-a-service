@@ -14,6 +14,8 @@ from typing import Any, Optional
 import pytest
 import requests
 
+MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT", "120"))
+
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
@@ -268,7 +270,7 @@ def wait_for_status_phase(
     namespace: str,
     *,
     expected_phase: Optional[str | tuple[str, ...]] = None,
-    timeout: int = 120,
+    timeout: int = MULTITENANCY_PHASE_TIMEOUT,
     interval: int = 5,
 ) -> dict:
     def _predicate(obj: dict) -> bool:

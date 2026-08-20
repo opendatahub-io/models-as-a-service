@@ -48,6 +48,15 @@ spec:
             expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
         priority: 0
     authorization:
+      # Reject client-supplied identity headers; Authorino injects these after auth.
+      deny-client-identity-headers:
+        metrics: false
+        priority: 0
+        patternMatching:
+          patterns:
+            # CEL has() only works on message fields; use `in` for map keys (Authorino).
+            - predicate: '!("x-maas-username" in request.headers)'
+            - predicate: '!("x-maas-group" in request.headers)'
       # Check API key is valid (only for API key auth)
       api-key-valid:
         when:

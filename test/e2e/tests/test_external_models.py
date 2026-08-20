@@ -35,6 +35,8 @@ from test_helper import (
     _check_ipp_pods_deployed,
     _delete_cr,
     _get_cr,
+    _ns,
+    _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
 )
@@ -44,7 +46,8 @@ log = logging.getLogger(__name__)
 # ─── Configuration ──────────────────────────────────────────────────────────
 
 EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbingo.org"))
-SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
+def _subscription_ns():
+    return os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", _ns())
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
@@ -99,10 +102,13 @@ def _check_external_endpoint_reachable():
     return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _check_external_endpoint_reachable(),
-    reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _check_external_endpoint_reachable(),
+        reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
+    ),
+    pytest.mark.xdist_group("external"),
+]
 
 
 # ─── Fixture: Create external model resources ────────────────────────────────
@@ -115,136 +121,148 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
     """
     log.info(f"Setting up external model test fixture (endpoint: {EXTERNAL_ENDPOINT})...")
 
-    # Create a dummy secret (ExternalModel requires credentialRef).
-    # The apikey-injection plugin's secret store only watches Secrets carrying
-    # this label; without it credential lookups silently fail with a 500 at
-    # request time (masked by tests that only assert non-401/403).
-    _apply_cr({
-        "apiVersion": "v1",
-        "kind": "Secret",
-        "metadata": {
-            "name": f"{EXTERNAL_MODEL_NAME}-api-key",
-            "namespace": MODEL_NAMESPACE,
-            "labels": {"inference.llm-d.ai/ipp-managed": "true"},
-        },
-        "type": "Opaque",
-        "stringData": {"api-key": "e2e-test-key"},
-    })
-
-    # Create ExternalProvider CR (inference.opendatahub.io — canonical)
-    _apply_cr({
-        "apiVersion": "inference.opendatahub.io/v1alpha1",
-        "kind": "ExternalProvider",
-        "metadata": {"name": EXTERNAL_PROVIDER_NAME, "namespace": MODEL_NAMESPACE},
-        "spec": {
-            "provider": "openai",
-            "endpoint": EXTERNAL_ENDPOINT,
-            "auth": {
-                "type": "simple",
-                "secretRef": {"name": f"{EXTERNAL_MODEL_NAME}-api-key"},
+    try:
+        # Create a dummy secret (ExternalModel requires credentialRef).
+        # The apikey-injection plugin's secret store only watches Secrets carrying
+        # this label; without it credential lookups silently fail with a 500 at
+        # request time (masked by tests that only assert non-401/403).
+        _apply_cr({
+            "apiVersion": "v1",
+            "kind": "Secret",
+            "metadata": {
+                "name": f"{EXTERNAL_MODEL_NAME}-api-key",
+                "namespace": MODEL_NAMESPACE,
+                "labels": {"inference.llm-d.ai/ipp-managed": "true"},
             },
-        },
-    })
+            "type": "Opaque",
+            "stringData": {"api-key": "e2e-test-key"},
+        })
 
-    # Create ExternalModel CR (inference.opendatahub.io — canonical). This is
-    # what the IPP model-provider-resolver plugin watches to populate its
-    # model->provider store, and what maas-controller's externalModelHandler
-    # tries first when reconciling the MaaSModelRef.
-    _apply_cr({
-        "apiVersion": "inference.opendatahub.io/v1alpha1",
-        "kind": "ExternalModel",
-        "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
-        "spec": {
-            "externalProviderRefs": [
-                {
-                    "ref": {"name": EXTERNAL_PROVIDER_NAME},
-                    "targetModel": TARGET_MODEL,
-                    "apiFormat": "openai-chat",
-                    "path": "/v1/chat/completions",
+        # Create ExternalProvider CR (inference.opendatahub.io — canonical)
+        _apply_cr({
+            "apiVersion": "inference.opendatahub.io/v1alpha1",
+            "kind": "ExternalProvider",
+            "metadata": {"name": EXTERNAL_PROVIDER_NAME, "namespace": MODEL_NAMESPACE},
+            "spec": {
+                "provider": "openai",
+                "endpoint": EXTERNAL_ENDPOINT,
+                "auth": {
+                    "type": "simple",
+                    "secretRef": {"name": f"{EXTERNAL_MODEL_NAME}-api-key"},
                 },
-            ],
-        },
-    })
-
-    # Create MaaSModelRef
-    _apply_cr({
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSModelRef",
-        "metadata": {
-            "name": EXTERNAL_MODEL_NAME,
-            "namespace": MODEL_NAMESPACE,
-            "annotations": {
-                "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
-                "maas.opendatahub.io/provider": "openai",
             },
-        },
-        "spec": {
-            "modelRef": {"kind": "ExternalModel", "name": EXTERNAL_MODEL_NAME},
-        },
-    })
+        })
 
-    # Create MaaSAuthPolicy
-    _apply_cr({
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSAuthPolicy",
-        "metadata": {"name": EXTERNAL_AUTH_POLICY, "namespace": SUBSCRIPTION_NAMESPACE},
-        "spec": {
-            "modelRefs": [{"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE}],
-            "subjects": {"groups": [{"name": "system:authenticated"}]},
-        },
-    })
+        # Create ExternalModel CR (inference.opendatahub.io — canonical). This is
+        # what the IPP model-provider-resolver plugin watches to populate its
+        # model->provider store, and what maas-controller's externalModelHandler
+        # tries first when reconciling the MaaSModelRef.
+        _apply_cr({
+            "apiVersion": "inference.opendatahub.io/v1alpha1",
+            "kind": "ExternalModel",
+            "metadata": {"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
+            "spec": {
+                "externalProviderRefs": [
+                    {
+                        "ref": {"name": EXTERNAL_PROVIDER_NAME},
+                        "targetModel": TARGET_MODEL,
+                        "apiFormat": "openai-chat",
+                        "path": "/v1/chat/completions",
+                    },
+                ],
+            },
+        })
 
-    # Create MaaSSubscription
-    _apply_cr({
-        "apiVersion": "maas.opendatahub.io/v1alpha1",
-        "kind": "MaaSSubscription",
-        "metadata": {"name": EXTERNAL_SUBSCRIPTION, "namespace": SUBSCRIPTION_NAMESPACE},
-        "spec": {
-            "owner": {"groups": [{"name": "system:authenticated"}]},
-            "modelRefs": [
-                {
-                    "name": EXTERNAL_MODEL_NAME,
-                    "namespace": MODEL_NAMESPACE,
-                    "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+        # Create MaaSModelRef
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSModelRef",
+            "metadata": {
+                "name": EXTERNAL_MODEL_NAME,
+                "namespace": MODEL_NAMESPACE,
+                "annotations": {
+                    "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
+                    "maas.opendatahub.io/provider": "openai",
                 },
-            ],
-        },
-    })
+            },
+            "spec": {
+                "modelRef": {"kind": "ExternalModel", "name": EXTERNAL_MODEL_NAME},
+            },
+        })
 
-    # Wait for CRs to reconcile
-    _wait_for_maas_auth_policy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
-    _wait_for_maas_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
+        # Create MaaSAuthPolicy
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSAuthPolicy",
+            "metadata": {"name": EXTERNAL_AUTH_POLICY, "namespace": _subscription_ns()},
+            "spec": {
+                "modelRefs": [{"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE}],
+                "subjects": {"groups": [{"name": "system:authenticated"}]},
+            },
+        })
 
-    # Create API key for tests
-    log.info("Creating API key for external model tests...")
-    r = requests.post(
-        api_keys_base_url,
-        headers=headers,
-        json={"name": "e2e-external-model-key", "subscription": EXTERNAL_SUBSCRIPTION},
-        timeout=30,
-        verify=TLS_VERIFY,
-    )
-    if r.status_code not in (200, 201):
-        pytest.fail(f"Failed to create API key: {r.status_code} {r.text}")
+        # Create MaaSSubscription
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSSubscription",
+            "metadata": {"name": EXTERNAL_SUBSCRIPTION, "namespace": _subscription_ns()},
+            "spec": {
+                "owner": {"groups": [{"name": "system:authenticated"}]},
+                "modelRefs": [
+                    {
+                        "name": EXTERNAL_MODEL_NAME,
+                        "namespace": MODEL_NAMESPACE,
+                        "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
+                    },
+                ],
+            },
+        })
 
-    api_key = r.json().get("key")
-    log.info(f"API key created: {api_key[:15]}...")
+        # Wait for CRs to reconcile
+        _wait_for_maas_auth_policy_phase(EXTERNAL_AUTH_POLICY, namespace=_subscription_ns())
+        _wait_for_maas_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=_subscription_ns())
 
-    yield {
-        "api_key": api_key,
-        "gateway_url": gateway_url,
-    }
+        # MaaSAuthPolicy phase Active only proves the gateway's fixed-size,
+        # shared Kuadrant AuthPolicy (maas-gateway-auth) is Enforced — that
+        # singleton doesn't change when a MaaSAuthPolicy is added, so it says
+        # nothing about this ExternalModel's own HTTPRoute. Wait for the
+        # HTTPRoute itself to be Accepted by the gateway, otherwise
+        # TestExternalModelAuth's requests can race the data plane and get a
+        # plain 404 ("no route") instead of a proper 401/403.
+        _wait_for_httproute_accepted(EXTERNAL_MODEL_HTTPROUTE_NAME, namespace=MODEL_NAMESPACE)
 
-    # ── Cleanup ──
-    log.info("Cleaning up external model test fixtures...")
-    _delete_cr("maasauthpolicy", EXTERNAL_AUTH_POLICY, SUBSCRIPTION_NAMESPACE)
-    _delete_cr("maassubscription", EXTERNAL_SUBSCRIPTION, SUBSCRIPTION_NAMESPACE)
-    _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
-              {"metadata": {"finalizers": []}})
-    _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _delete_cr(EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _delete_cr(EXTERNAL_PROVIDER_KIND, EXTERNAL_PROVIDER_NAME, MODEL_NAMESPACE)
-    _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
+        # Create API key for tests
+        log.info("Creating API key for external model tests...")
+        r = requests.post(
+            api_keys_base_url,
+            headers=headers,
+            json={"name": "e2e-external-model-key", "subscription": EXTERNAL_SUBSCRIPTION},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        if r.status_code not in (200, 201):
+            pytest.fail(f"Failed to create API key: {r.status_code} {r.text}")
+
+        api_key = r.json().get("key")
+        if not api_key:
+            pytest.fail("API key creation response missing 'key' field")
+        log.info("API key created")
+
+        yield {
+            "api_key": api_key,
+            "gateway_url": gateway_url,
+        }
+    finally:
+        # ── Cleanup ──
+        log.info("Cleaning up external model test fixtures...")
+        _delete_cr("maasauthpolicy", EXTERNAL_AUTH_POLICY, _subscription_ns())
+        _delete_cr("maassubscription", EXTERNAL_SUBSCRIPTION, _subscription_ns())
+        _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
+                  {"metadata": {"finalizers": []}})
+        _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        _delete_cr(EXTERNAL_MODEL_KIND, EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        _delete_cr(EXTERNAL_PROVIDER_KIND, EXTERNAL_PROVIDER_NAME, MODEL_NAMESPACE)
+        _delete_cr("secret", f"{EXTERNAL_MODEL_NAME}-api-key", MODEL_NAMESPACE)
 
 
 # ─── Tests: Discovery ───────────────────────────────────────────────────────

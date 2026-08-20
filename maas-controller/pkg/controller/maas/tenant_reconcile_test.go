@@ -840,3 +840,110 @@ func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 	g.Expect(err).NotTo(HaveOccurred())
 	g.Expect(res).To(Equal(ctrl.Result{}))
 }
+
+func TestAggregateWarningsAndSetDegraded(t *testing.T) {
+	tests := []struct {
+		name            string
+		prereqWarnings  []string
+		replicaWarnings []string
+		wantReason      string
+		wantStatus      metav1.ConditionStatus
+		wantMessage     string
+	}{
+		{
+			name:            "no warnings",
+			prereqWarnings:  nil,
+			replicaWarnings: nil,
+			wantReason:      "NoWarnings",
+			wantStatus:      metav1.ConditionFalse,
+			wantMessage:     "",
+		},
+		{
+			name:            "single prerequisite warning",
+			prereqWarnings:  []string{"DSCI monitoring stack not available"},
+			replicaWarnings: nil,
+			wantReason:      "PrerequisitesWarning",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "DSCI monitoring stack not available",
+		},
+		{
+			name:            "multiple prerequisite warnings",
+			prereqWarnings:  []string{"DSCI monitoring stack not available", "Perses not available"},
+			replicaWarnings: nil,
+			wantReason:      "PrerequisitesWarning",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "DSCI monitoring stack not available; Perses not available",
+		},
+		{
+			name:            "single replica warning",
+			prereqWarnings:  nil,
+			replicaWarnings: []string{"invalid replica annotation on maas-api"},
+			wantReason:      "InvalidReplicaAnnotation",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "invalid replica annotation on maas-api",
+		},
+		{
+			name:            "multiple replica warnings",
+			prereqWarnings:  nil,
+			replicaWarnings: []string{"invalid replica annotation on maas-api", "invalid replica annotation on payload-processing"},
+			wantReason:      "InvalidReplicaAnnotation",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "invalid replica annotation on maas-api; invalid replica annotation on payload-processing",
+		},
+		{
+			name:            "both prerequisite and replica warnings",
+			prereqWarnings:  []string{"DSCI monitoring stack not available"},
+			replicaWarnings: []string{"invalid replica annotation on maas-api"},
+			wantReason:      "MultipleWarnings",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "DSCI monitoring stack not available; invalid replica annotation on maas-api",
+		},
+		{
+			name:            "multiple of both types",
+			prereqWarnings:  []string{"DSCI monitoring stack not available", "Perses not available"},
+			replicaWarnings: []string{"invalid replica annotation on maas-api", "invalid replica annotation on payload-processing"},
+			wantReason:      "MultipleWarnings",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "DSCI monitoring stack not available; Perses not available; invalid replica annotation on maas-api; invalid replica annotation on payload-processing",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			s := tenantTestScheme(t)
+
+			tenant := &maasv1alpha1.MaasTenantConfig{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:       "default-tenant",
+					Namespace:  "models-as-a-service",
+					Generation: 1,
+				},
+			}
+
+			prereqReport := tenantreconcile.PrerequisiteReport{
+				Warnings: tt.prereqWarnings,
+			}
+
+			var runRes *tenantreconcile.RunResult
+			if tt.replicaWarnings != nil {
+				runRes = &tenantreconcile.RunResult{
+					Warnings: tt.replicaWarnings,
+				}
+			}
+
+			r := &TenantReconciler{
+				Client: fake.NewClientBuilder().WithScheme(s).Build(),
+				Scheme: s,
+			}
+
+			r.aggregateWarningsAndSetDegraded(tenant, prereqReport, runRes)
+
+			degradedCond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+			g.Expect(degradedCond).NotTo(BeNil(), "Degraded condition should be set")
+			g.Expect(degradedCond.Status).To(Equal(tt.wantStatus), "Degraded status mismatch")
+			g.Expect(degradedCond.Reason).To(Equal(tt.wantReason), "Degraded reason mismatch")
+			g.Expect(degradedCond.Message).To(Equal(tt.wantMessage), "Degraded message mismatch")
+		})
+	}
+}

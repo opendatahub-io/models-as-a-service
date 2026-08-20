@@ -32,6 +32,8 @@ from multitenancy_helpers import (
 )
 from test_helper import _get_cluster_token, _delete_cr
 
+pytestmark = pytest.mark.xdist_group("tenant_isolation")
+
 
 def _mint_oidc_token_for_tenant(tenant: str) -> str:
     """Return a fresh OIDC access token for the given tenant ('a' or 'b').

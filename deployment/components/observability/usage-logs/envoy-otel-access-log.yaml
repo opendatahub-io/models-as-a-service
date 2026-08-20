@@ -2,8 +2,12 @@
 #
 # Emits structured usage logs for inference requests via OTel Access Log Service.
 #
-# Identity:  All identity fields from auth identity FILTER_STATE
-#            (wasm.kuadrant.auth.identity.*), set by Kuadrant WASM plugin.
+# Identity:  user_id, subscription, and groups from X-MaaS-Username /
+#            X-MaaS-Subscription / X-MaaS-Group (still present on Limitador
+#            429 local replies) or from header_to_metadata captured before
+#            payload-processing ext_proc strips the headers. Other identity
+#            fields remain on auth identity FILTER_STATE
+#            (wasm.kuadrant.auth.identity.*).
 # Model:     Composite filter wraps json_to_metadata, executing only on
 #            inference paths (suffix match: /v1/chat/completions, /v1/completions).
 #            Extracts "model" from request body (covers 429),
@@ -37,6 +41,10 @@ metadata:
     app.kubernetes.io/part-of: maas-observability
     app.kubernetes.io/managed-by: maas-controller
 spec:
+  # After payload-processing (priority 10). When both INSERT_AFTER wasm, the
+  # later-applied filter sits right after wasm and pushes ext_proc.ipp down:
+  #   wasm → header_to_metadata.identity → ext_proc.ipp
+  priority: 20
   workloadSelector:
     labels:
       gateway.networking.k8s.io/gateway-name: maas-default-gateway
@@ -60,6 +68,96 @@ spec:
                   socket_address:
                     address: usage-logs-collector.opendatahub.svc
                     port_value: 4317
+
+  # ── Identity header capture: header_to_metadata ───────────────────────────
+  #
+  # Captures X-MaaS-Username, X-MaaS-Subscription, and X-MaaS-Group into
+  # dynamic metadata BEFORE payload-processing ext_proc drops them.
+  #
+  # INSERT_AFTER wasm + priority 20 ensures correct ordering:
+  # - payload-processing EnvoyFilter has priority 10 (applied first)
+  # - This EnvoyFilter has priority 20 (applied second, later)
+  # - When both INSERT_AFTER wasm, the later-applied filter gets inserted right
+  #   after wasm, pushing ext_proc.ipp further down
+  # - Result: wasm → header_to_metadata → ext_proc.ipp
+  #
+  # This approach is resilient: if payload-processing is disabled/removed,
+  # header_to_metadata still inserts after wasm (unlike INSERT_BEFORE ext_proc.ipp
+  # which would fail if ext_proc.ipp doesn't exist).
+  #
+  # Filter order when payload-processing is enabled:
+  #   ext_proc.ipp-pre → wasm-auth → header_to_metadata → ext_proc.ipp
+  # Filter order when payload-processing is disabled:
+  #   ext_proc.ipp-pre → wasm-auth → header_to_metadata
+  #
+  # Note: key_id, key_name, organization_id are NOT set as request headers by
+  # AuthPolicy — they're only available in FILTER_STATE and are preserved below.
+  #
+  # Metadata namespace: envoy.filters.http.header_to_metadata
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: envoy.filters.http.wasm
+    patch:
+      operation: INSERT_AFTER
+      value:
+        name: envoy.filters.http.header_to_metadata.identity
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
+          request_rules:
+          - header: X-MaaS-Username
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: user_id
+              type: STRING
+          - header: X-MaaS-Subscription
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: subscription
+              type: STRING
+          - header: X-MaaS-Group
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: groups
+              type: STRING
+  # ODH/community Kuadrant injects auth via WasmPlugin (no envoy.filters.http.wasm).
+  # Only one of this patch and the wasm INSERT_AFTER above matches per cluster.
+  - applyTo: HTTP_FILTER
+    match:
+      context: GATEWAY
+      listener:
+        filterChain:
+          filter:
+            name: envoy.filters.network.http_connection_manager
+            subFilter:
+              name: extensions.istio.io/wasmplugin/openshift-ingress.kuadrant-maas-default-gateway
+    patch:
+      operation: INSERT_AFTER
+      value:
+        name: envoy.filters.http.header_to_metadata.identity
+        typed_config:
+          "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
+          request_rules:
+          - header: X-MaaS-Username
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: user_id
+              type: STRING
+          - header: X-MaaS-Subscription
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: subscription
+              type: STRING
+          - header: X-MaaS-Group
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: groups
+              type: STRING
 
   # ── Composite filter: json_to_metadata with path-based pattern matching ────
   #
@@ -344,15 +442,18 @@ spec:
                   value:
                     string_value: '%CEL(response.code >= 200 && response.code < 300 ? "hit" : (response.code == 429 ? "rate_limit" : "error"))%'
                 # ── Identity ──
+                # Prefer metadata captured by header_to_metadata after auth.
+                # Fall back to request headers when metadata namespace is unavailable
+                # (e.g., Limitador 429 before header_to_metadata runs).
                 - key: user_id
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.userid:PLAIN)%"
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["user_id"] : request.headers["x-maas-username"])%'
                 - key: subscription
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.selected_subscription:PLAIN)%"
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription"] : request.headers["x-maas-subscription"])%'
                 - key: groups
                   value:
-                    string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.groups:PLAIN)%"
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["groups"] : request.headers["x-maas-group"])%'
                 - key: key_id
                   value:
                     string_value: "%FILTER_STATE(wasm.kuadrant.auth.identity.keyId:PLAIN)%"

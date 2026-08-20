@@ -26,6 +26,9 @@ const (
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
 
 	// AnnotationPayloadProcessingReplicas overrides the payload-processing Deployment replica count for a tenant.
+	// When autoscaling is enabled via spec.payloadProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
@@ -44,6 +47,10 @@ const (
 	// by the AITenant reconciler (S11). The subscription/auth-policy controllers
 	// use this label to discover tenant namespaces dynamically.
 	LabelManagedByAITenant = "maas.opendatahub.io/managed-by-aitenant"
+
+	// LabelGatewayAccess is set to "true" on tenant namespaces so that the MaaS Gateway
+	// allowedRoutes selector accepts HTTPRoutes from those namespaces.
+	LabelGatewayAccess = "maas.opendatahub.io/gateway-access"
 
 	// DefaultAITenantNamespace is the default namespace where AITenant CRs are created.
 	DefaultAITenantNamespace = "ai-tenants"
@@ -125,6 +132,7 @@ var (
 	GVKPersesDashboard      = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard"}
 	GVKPersesDatasource     = schema.GroupVersionKind{Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDatasource"}
 	GVKCertificate          = schema.GroupVersionKind{Group: "cert-manager.io", Version: "v1", Kind: "Certificate"}
+	GVKHPA                  = schema.GroupVersionKind{Group: "autoscaling", Version: "v2", Kind: "HorizontalPodAutoscaler"}
 )
 
 // Resource naming functions for multi-tenant deployment.
@@ -222,6 +230,10 @@ func PayloadProcessingServiceAccountName(tenantID string) string {
 }
 
 func PayloadProcessingNetworkPolicyName(tenantID string) string {
+	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func PayloadProcessingHPAName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
 }
 

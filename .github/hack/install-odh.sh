@@ -8,8 +8,9 @@
 #   OPERATOR_CATALOG - Custom catalog image (optional). When unset, uses community-operators.
 #                      Set to e.g. quay.io/opendatahub/opendatahub-operator-catalog:latest for custom builds.
 #   OPERATOR_CHANNEL   - Subscription channel (default: fast-3)
-#   OPERATOR_STARTING_CSV - Pin Subscription startingCSV (optional). When unset,
-#                           follow the channel head (latest in fast-3 by default).
+#   OPERATOR_STARTING_CSV - Pin Subscription startingCSV
+#                           (default: opendatahub-operator.v3.5.0-ea.2).
+#                           Set to "-" to follow the channel head instead.
 #   OPERATOR_INSTALL_PLAN_APPROVAL - Manual (default) or Automatic; use "-" to omit.
 #     Manual: blocks auto-upgrades; this script auto-approves only the first InstallPlan so install does not stall.
 #   OPERATOR_IMAGE   - Custom operator image to patch into CSV (optional)
@@ -27,7 +28,7 @@ DATA_DIR="${REPO_ROOT}/scripts/data"
 NAMESPACE="${OPERATOR_NAMESPACE:-opendatahub}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
-OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-}"
+OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 
@@ -125,9 +126,9 @@ else
   channel="${OPERATOR_CHANNEL:-fast-3}"
 fi
 
-# Follow the configured channel head by default unless OPERATOR_STARTING_CSV
-# explicitly pins a CSV.
-starting_csv="${OPERATOR_STARTING_CSV:-}"
+# Pin to ODH 3.5 EA2 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
+starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
+[[ "$starting_csv" == "-" ]] && starting_csv=""
 
 # Manual = no auto-upgrades; install_olm_operator still approves the first InstallPlan programmatically
 plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
@@ -163,15 +164,17 @@ wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" 180 || {
   exit 1
 }
 
-# 5. Wait for webhook
+# 5. Wait for webhook (fail-fast: a non-ready operator webhook breaks DSCI/DSC apply)
 echo "5. Waiting for operator webhook..."
 wait_for_resource "deployment" "opendatahub-operator-controller-manager" "$NAMESPACE" 120 || {
-  log_warn "Webhook deployment not found after 120s, proceeding anyway..."
+  log_error "Webhook deployment not found after 120s"
+  exit 1
 }
 if kubectl get deployment opendatahub-operator-controller-manager -n "$NAMESPACE" &>/dev/null; then
   kubectl wait --for=condition=Available --timeout=120s \
-    deployment/opendatahub-operator-controller-manager -n "$NAMESPACE" 2>/dev/null || {
-    log_warn "Webhook deployment not fully ready, proceeding anyway..."
+    deployment/opendatahub-operator-controller-manager -n "$NAMESPACE" || {
+    log_error "Operator webhook deployment did not become Available"
+    exit 1
   }
 fi
 
@@ -209,6 +212,25 @@ EOF
   fi
 fi
 
+echo "   Waiting for DSCInitialization to be Ready..."
+dsci_ready=false
+for attempt in $(seq 1 30); do
+  dsci_phase=$(kubectl get dscinitialization default-dsci -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
+  dsci_cond=$(kubectl get dscinitialization default-dsci -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+  if [[ "$dsci_phase" == "Ready" ]] || [[ "$dsci_cond" == "True" ]]; then
+    echo "   DSCInitialization is Ready"
+    dsci_ready=true
+    break
+  fi
+  echo "   Waiting for DSCInitialization Ready (attempt ${attempt}/30, phase=${dsci_phase:-unknown}, Ready=${dsci_cond:-unknown})..."
+  sleep 10
+done
+if [[ "$dsci_ready" != "true" ]]; then
+  log_error "DSCInitialization did not become Ready after 300s"
+  kubectl describe dscinitialization default-dsci || true
+  exit 1
+fi
+
 # 7. Apply DataScienceCluster (KServe + ModelsAsService Managed)
 # The manifest filename retains "unmanaged" for backward compat; contents include
 # modelsAsService.managementState: Managed so the operator deploys maas-controller.
@@ -231,7 +253,8 @@ wait_datasciencecluster_ready "default-dsc" 600 || {
 # its pods are ready, any ConfigMap create/update fails with "no endpoints available".
 echo "9. Waiting for odh-model-controller webhook..."
 wait_for_validating_webhooks "$NAMESPACE" 180 || {
-  log_warn "Validating webhooks in $NAMESPACE not ready after 180s, proceeding anyway..."
+  log_error "Validating webhooks in $NAMESPACE not ready after 180s"
+  exit 1
 }
 
 echo ""

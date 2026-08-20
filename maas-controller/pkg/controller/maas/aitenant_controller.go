@@ -20,10 +20,12 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +72,8 @@ const (
 
 	aitenantAPIKeysRevokedAnnotation = "maas.opendatahub.io/api-keys-revoked" //nolint:gosec // Annotation name, not a credential.
 	aitenantAPIKeysRevokedCondition  = "APIKeysRevoked"
+
+	gatewayLabelsAnnotation = "maas.opendatahub.io/gateway-selector-labels"
 
 	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
 	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
@@ -210,12 +214,27 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 	}
 
-	if err := r.validateTenantGateway(ctx, gatewayRef); err != nil {
+	gw, err := r.validateTenantGateway(ctx, gatewayRef)
+	if err != nil {
 		setAITenantPhase(&aitenant, "Failed", "GatewayCheckFailed", err.Error())
 		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
+	if err := r.ensureInfraNamespaceGatewayLabels(ctx, gw); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "infra namespace gateway label reconciliation failed, continuing")
+		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
+			Type:               tenantreconcile.ConditionTypeDegraded,
+			Status:             metav1.ConditionTrue,
+			Reason:             "InfraNamespaceLabelFailed",
+			Message:            err.Error(),
+			ObservedGeneration: aitenant.Generation,
+			LastTransitionTime: metav1.Now(),
+		})
+	} else {
+		apimeta.RemoveStatusCondition(&aitenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 	}
 
 	if err := r.ensureGatewayClaim(ctx, &aitenant, gatewayRef); err != nil {
@@ -267,6 +286,11 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
+		).
+		Watches(
+			&gatewayapiv1.Gateway{},
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForGateway),
+			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
 		Complete(r)
 }
@@ -373,22 +397,186 @@ func (r *AITenantReconciler) ensureTenantNamespace(ctx context.Context, aitenant
 	return false, nil
 }
 
-func (r *AITenantReconciler) validateTenantGateway(ctx context.Context, ref maasv1alpha1.TenantGatewayRef) error {
+func (r *AITenantReconciler) validateTenantGateway(ctx context.Context, ref maasv1alpha1.TenantGatewayRef) (*gatewayapiv1.Gateway, error) {
 	if ref.Namespace == "" {
-		return errors.New("gateway namespace is required; set --gateway-namespace")
+		return nil, errors.New("gateway namespace is required; set --gateway-namespace")
 	}
 	if ref.Name == "" {
-		return errors.New("spec.gateway.name is required when AITenant name is empty")
+		return nil, errors.New("spec.gateway.name is required when AITenant name is empty")
 	}
 
 	var gateway gatewayapiv1.Gateway
 	key := client.ObjectKey{Namespace: ref.Namespace, Name: ref.Name}
 	if err := r.get(ctx, key, &gateway); err != nil {
 		if isNotFoundError(err) {
-			return fmt.Errorf("gateway %s/%s not found: the Gateway must be created by a network or cluster administrator before AITenant can be provisioned", key.Namespace, key.Name)
+			return nil, fmt.Errorf("gateway %s/%s not found: the Gateway must be created by a network or cluster administrator before AITenant can be provisioned", key.Namespace, key.Name)
 		}
-		return fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
+		return nil, fmt.Errorf("get Gateway %s/%s: %w", key.Namespace, key.Name, err)
 	}
+	return &gateway, nil
+}
+
+// parseOwnershipAnnotation parses the gateway-selector-labels annotation.
+func parseOwnershipAnnotation(raw string) (map[string][]string, error) {
+	if raw == "" {
+		return map[string][]string{}, nil
+	}
+	var ownership map[string][]string
+	if err := json.Unmarshal([]byte(raw), &ownership); err != nil {
+		return nil, err
+	}
+	return ownership, nil
+}
+
+// gatewayDesiredLabels extracts the union of matchLabels from all listeners
+// that use namespace-selector routing. Returns an error if two listeners on
+// the same gateway disagree on a label value.
+func gatewayDesiredLabels(gw *gatewayapiv1.Gateway) (map[string]string, error) {
+	desired := map[string]string{}
+	for _, listener := range gw.Spec.Listeners {
+		if listener.AllowedRoutes == nil || listener.AllowedRoutes.Namespaces == nil {
+			continue
+		}
+		ns := listener.AllowedRoutes.Namespaces
+		if ns.From == nil || *ns.From != gatewayapiv1.NamespacesFromSelector || ns.Selector == nil {
+			continue
+		}
+		for k, v := range ns.Selector.MatchLabels {
+			if existing, ok := desired[k]; ok && existing != v {
+				return nil, fmt.Errorf("gateway %s/%s has conflicting namespace selector values for label %q: listener %q wants %q but another listener wants %q",
+					gw.Namespace, gw.Name, k, listener.Name, v, existing)
+			}
+			desired[k] = v
+		}
+	}
+	return desired, nil
+}
+
+// ensureInfraNamespaceGatewayLabels applies the gateway's listener matchLabels
+// to the shared infrastructure namespace so that hardened gateways accept
+// per-tenant maas-api HTTPRoutes from it. It tracks label ownership via an
+// annotation to detect cross-gateway conflicts and remove stale labels when a
+// gateway's selector changes.
+func (r *AITenantReconciler) ensureInfraNamespaceGatewayLabels(ctx context.Context, gw *gatewayapiv1.Gateway) error {
+	desiredLabels, err := gatewayDesiredLabels(gw)
+	if err != nil {
+		return err
+	}
+
+	var infraNs corev1.Namespace
+	if err := r.get(ctx, client.ObjectKey{Name: r.AppNamespace}, &infraNs); err != nil {
+		if isNotFoundError(err) && len(desiredLabels) == 0 {
+			return nil
+		}
+		return fmt.Errorf("read infra namespace %s: %w", r.AppNamespace, err)
+	}
+
+	ownership, err := parseOwnershipAnnotation(infraNs.Annotations[gatewayLabelsAnnotation])
+	if err != nil {
+		return fmt.Errorf("unmarshal %s annotation on infra namespace %s: %w", gatewayLabelsAnnotation, r.AppNamespace, err)
+	}
+
+	// Conflict detection: reject if the desired value differs from an existing
+	// value that is either owned by another gateway or set out of band.
+	for k, v := range desiredLabels {
+		existing, present := infraNs.Labels[k]
+		if !present || existing == v {
+			continue
+		}
+		owners := ownership[k]
+		if len(owners) == 0 {
+			return fmt.Errorf("label %q on infra namespace %s already has value %q set outside the controller; gateway %q wants %q — resolve manually",
+				k, r.AppNamespace, existing, gw.Name, v)
+		}
+		otherOwners := len(owners) > 1 || owners[0] != gw.Name
+		if otherOwners {
+			otherName := owners[0]
+			if otherName == gw.Name && len(owners) > 1 {
+				otherName = owners[1]
+			}
+			return fmt.Errorf("conflicting gateway label %q on infra namespace %s: owned by gateway %q (value %q) but gateway %q wants %q",
+				k, r.AppNamespace, otherName, existing, gw.Name, v)
+		}
+	}
+
+	// Compute stale labels: keys owned by THIS gateway that are no longer desired.
+	var staleKeys []string
+	for k, owners := range ownership {
+		if !slices.Contains(owners, gw.Name) {
+			continue
+		}
+		if _, stillDesired := desiredLabels[k]; !stillDesired {
+			staleKeys = append(staleKeys, k)
+		}
+	}
+
+	// Check whether a patch is needed.
+	needsPatch := len(staleKeys) > 0
+	if !needsPatch {
+		for k, v := range desiredLabels {
+			if infraNs.Labels[k] != v {
+				needsPatch = true
+				break
+			}
+		}
+	}
+	if !needsPatch {
+		// Ensure the ownership annotation is up to date even when labels match.
+		ownershipChanged := false
+		for k := range desiredLabels {
+			if !slices.Contains(ownership[k], gw.Name) {
+				ownershipChanged = true
+				break
+			}
+		}
+		if !ownershipChanged {
+			return nil
+		}
+	}
+
+	// Build the patch: add desired labels, remove stale labels, update annotation.
+	// Use optimistic locking so concurrent reconciles for different tenants
+	// get a 409 Conflict instead of silently overwriting each other's ownership.
+	patch := client.MergeFromWithOptions(infraNs.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	if infraNs.Labels == nil {
+		infraNs.Labels = make(map[string]string)
+	}
+	for k, v := range desiredLabels {
+		infraNs.Labels[k] = v
+		if !slices.Contains(ownership[k], gw.Name) {
+			ownership[k] = append(ownership[k], gw.Name)
+		}
+	}
+	for _, k := range staleKeys {
+		ownership[k] = slices.DeleteFunc(ownership[k], func(s string) bool { return s == gw.Name })
+		if len(ownership[k]) == 0 {
+			delete(infraNs.Labels, k)
+			delete(ownership, k)
+		}
+	}
+
+	// Serialize updated ownership annotation.
+	if infraNs.Annotations == nil {
+		infraNs.Annotations = make(map[string]string)
+	}
+	if len(ownership) == 0 {
+		delete(infraNs.Annotations, gatewayLabelsAnnotation)
+	} else {
+		ownershipJSON, err := json.Marshal(ownership)
+		if err != nil {
+			return fmt.Errorf("marshal %s annotation: %w", gatewayLabelsAnnotation, err)
+		}
+		infraNs.Annotations[gatewayLabelsAnnotation] = string(ownershipJSON)
+	}
+
+	if err := r.Patch(ctx, &infraNs, patch); err != nil {
+		return fmt.Errorf("patch labels on infra namespace %s: %w", r.AppNamespace, err)
+	}
+
+	log := ctrl.LoggerFrom(ctx)
+	log.Info("applied gateway namespace-selector labels to infrastructure namespace",
+		"infraNamespace", r.AppNamespace, "gateway", gw.Name,
+		"applied", desiredLabels, "removed", staleKeys)
 	return nil
 }
 
@@ -403,6 +591,106 @@ func (r *AITenantReconciler) gatewayRefFor(aitenant *maasv1alpha1.AITenant) maas
 		}
 	}
 	return ref
+}
+
+// cleanupGatewayLabelsOnDelete removes labels from the infrastructure namespace
+// that were applied by the gateway belonging to the deleted AITenant.
+func (r *AITenantReconciler) cleanupGatewayLabelsOnDelete(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
+	gatewayRef := r.gatewayRefFor(aitenant)
+	if gatewayRef.Name == "" || gatewayRef.Namespace == "" {
+		return nil
+	}
+
+	var infraNs corev1.Namespace
+	if err := r.get(ctx, client.ObjectKey{Name: r.AppNamespace}, &infraNs); err != nil {
+		if isNotFoundError(err) {
+			return nil
+		}
+		return fmt.Errorf("read infra namespace %s: %w", r.AppNamespace, err)
+	}
+
+	log := ctrl.LoggerFrom(ctx)
+
+	ownership, err := parseOwnershipAnnotation(infraNs.Annotations[gatewayLabelsAnnotation])
+	if err != nil {
+		log.Error(err, "failed to parse gateway label ownership annotation, skipping label cleanup",
+			"infraNamespace", r.AppNamespace, "gateway", gatewayRef.Name)
+		return nil
+	}
+
+	// Find label keys owned (or co-owned) by the deleted tenant's gateway.
+	var keysToRemove []string
+	var keysToUnown []string
+	for k, owners := range ownership {
+		if !slices.Contains(owners, gatewayRef.Name) {
+			continue
+		}
+		if len(owners) == 1 {
+			keysToRemove = append(keysToRemove, k)
+		} else {
+			keysToUnown = append(keysToUnown, k)
+		}
+	}
+	if len(keysToRemove) == 0 && len(keysToUnown) == 0 {
+		return nil
+	}
+
+	patch := client.MergeFromWithOptions(infraNs.DeepCopy(), client.MergeFromWithOptimisticLock{})
+	for _, k := range keysToRemove {
+		delete(infraNs.Labels, k)
+		delete(ownership, k)
+	}
+	for _, k := range keysToUnown {
+		ownership[k] = slices.DeleteFunc(ownership[k], func(s string) bool { return s == gatewayRef.Name })
+	}
+	if infraNs.Annotations == nil {
+		infraNs.Annotations = make(map[string]string)
+	}
+	if len(ownership) == 0 {
+		delete(infraNs.Annotations, gatewayLabelsAnnotation)
+	} else {
+		ownershipJSON, err := json.Marshal(ownership)
+		if err != nil {
+			log.Error(err, "failed to marshal gateway label ownership annotation, skipping label cleanup",
+				"infraNamespace", r.AppNamespace, "gateway", gatewayRef.Name)
+			return nil
+		}
+		infraNs.Annotations[gatewayLabelsAnnotation] = string(ownershipJSON)
+	}
+
+	if err := r.Patch(ctx, &infraNs, patch); err != nil {
+		return fmt.Errorf("cleanup gateway labels on infra namespace %s: %w", r.AppNamespace, err)
+	}
+
+	log.Info("cleaned up gateway namespace-selector labels from infrastructure namespace",
+		"infraNamespace", r.AppNamespace, "gateway", gatewayRef.Name,
+		"removed", keysToRemove, "unowned", keysToUnown)
+	return nil
+}
+
+// enqueueAITenantForGateway maps Gateway events back to the AITenants that
+// reference them. This ensures that changes to a Gateway's allowedRoutes
+// selector are reflected on the infrastructure namespace labels.
+func (r *AITenantReconciler) enqueueAITenantForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
+	var list maasv1alpha1.AITenantList
+	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.aitenantNamespace())); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list AITenants for gateway mapper")
+		return nil
+	}
+
+	var requests []reconcile.Request
+	for i := range list.Items {
+		ref := r.gatewayRefFor(&list.Items[i])
+		if ref.Name == obj.GetName() && ref.Namespace == obj.GetNamespace() {
+			requests = append(requests, reconcile.Request{
+				NamespacedName: types.NamespacedName{
+					Name:      list.Items[i].Name,
+					Namespace: list.Items[i].Namespace,
+				},
+			})
+		}
+	}
+	return requests
 }
 
 func (r *AITenantReconciler) migrateLegacyTenantPlatformContext(ctx context.Context, aitenant *maasv1alpha1.AITenant, tenantNamespace string) (bool, error) {
@@ -667,6 +955,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, err
 	}
 
+	if err := r.cleanupGatewayLabelsOnDelete(ctx, aitenant); err != nil {
+		return ctrl.Result{}, err
+	}
+
 	base := aitenant.DeepCopy()
 	controllerutil.RemoveFinalizer(aitenant, aitenantFinalizer)
 	if err := r.Patch(ctx, aitenant, client.MergeFrom(base)); err != nil {
@@ -717,6 +1009,9 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	}
 	if err := r.deleteGatewayClaim(ctx, aitenant); err != nil {
 		log.Error(err, "best-effort deleteGatewayClaim failed during forced finalizer removal")
+	}
+	if err := r.cleanupGatewayLabelsOnDelete(ctx, aitenant); err != nil {
+		log.Error(err, "best-effort cleanupGatewayLabelsOnDelete failed during forced finalizer removal")
 	}
 
 	base := aitenant.DeepCopy()
@@ -989,6 +1284,9 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
+						SeccompProfile: &corev1.SeccompProfile{
+							Type: corev1.SeccompProfileTypeRuntimeDefault,
+						},
 					},
 					Volumes: []corev1.Volume{
 						{
@@ -1045,6 +1343,9 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 								RunAsNonRoot:             boolPtr(true),
 								Capabilities: &corev1.Capabilities{
 									Drop: []corev1.Capability{"ALL"},
+								},
+								SeccompProfile: &corev1.SeccompProfile{
+									Type: corev1.SeccompProfileTypeRuntimeDefault,
 								},
 							},
 						},
@@ -1381,6 +1682,7 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, t
 	labels[aiGatewayTenantLabel] = aitenant.Name
 	labels[tenantreconcile.LabelTenantName] = aitenant.Name
 	labels[tenantreconcile.LabelTenantNamespace] = tenantNamespace
+	labels[tenantreconcile.LabelGatewayAccess] = "true"
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()
@@ -1400,6 +1702,7 @@ func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, 
 	removeMapValueIfEqual(&labels, aiGatewayTenantLabel, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantName, aitenant.Name)
 	removeMapValueIfEqual(&labels, tenantreconcile.LabelTenantNamespace, tenantNamespace)
+	removeMapValueIfEqual(&labels, tenantreconcile.LabelGatewayAccess, "true")
 	obj.SetLabels(labels)
 
 	annotations := obj.GetAnnotations()

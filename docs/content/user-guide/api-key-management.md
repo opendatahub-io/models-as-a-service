@@ -31,15 +31,26 @@ MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
 
 ### Create an API Key
 
-Create a new API key with a name, description, and expiration:
+Create a new API key with a name, description, expiration and labels:
 
 ```bash
-API_KEY_RESPONSE=$(curl -sS \
+API_KEY_RESPONSE=$(curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys" \
   -H "Authorization: Bearer ${OC_TOKEN}" \
   -H "Content-Type: application/json" \
-  -X POST \
-  -d '{"name": "my-api-key", "description": "Key for model access", "expiresIn": "90d"}' \
-  "${MAAS_API_URL}/maas-api/v1/api-keys")
+  -d '{
+    "name": "my-api-key", 
+    "description": "Key for model access",
+    "expiresIn": "90d",
+    "labels": {
+      "cmdb_id": "AST123456",
+      "cost_center": "CC-DATA-001",
+      "environment": "production",
+      "acme.inc/project_code": "PROJ-ML-2024",
+      "owner_email": "ml-team@acme.inc",
+      "owner": "alice"
+    }
+    }' \
+  )
 
 API_KEY=$(echo $API_KEY_RESPONSE | jq -r .key)
 echo "API Key: ${API_KEY}"
@@ -60,20 +71,54 @@ echo "API Key: ${API_KEY}"
 | `expiresIn` | No | Key expiration duration. See [Expiration Format](#expiration-format) below. Omit to use configured maximum (typically 90 days). |
 | `subscription` | No | MaaSSubscription name to bind. Omit to auto-select highest priority. |
 | `ephemeral` | No | Set to `true` for short-lived keys (max 1 hour). See [Ephemeral Keys](#ephemeral-keys). |
+| `labels` | No | A JSON-formatted key/value pair for attaching labels to API keys that assist in API-key management. See below for formatting rules. |
 
-**Response:**
+**Full Request/Response Example:**
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys"   -H "Authorization: Bearer ${OC_TOKEN}"   -H "Content-Type: application/json"   -d '{
+    "name": "my-api-key", 
+    "description": "Key for model access",
+    "expiresIn": "90d",
+    "labels": {
+      "cmdb_id": "AST123456",
+      "cost_center": "CC-DATA-001",
+      "environment": "production",
+      "acme.inc/project_code": "PROJ-ML-2024",
+      "owner_email": "ml-team@acme.inc",
+      "owner": "alice"
+    }
+    }' | jq
+```
 
 ```json
 {
-  "id": "550e8400-e29b-41d4-a716-446655440000",
-  "key": "sk-oai-...",
+  "key": "<REDACTED_API_KEY>",
+  "keyPrefix": "<REDACTED_KEY_PREFIX>",
+  "id": "c2011e55-bd97-41e6-aab7-1b8ff6713d95",
   "name": "my-api-key",
-  "subscription": "premium-subscription",
-  "createdAt": "2026-04-28T12:00:00Z",
-  "expiresAt": "2026-07-27T12:00:00Z",
-  "ephemeral": false
+  "subscription": "simulator-subscription",
+  "createdAt": "2026-07-12T00:18:52Z",
+  "expiresAt": "2026-10-10T00:18:52Z",
+  "ephemeral": false,
+  "labels": {
+    "acme.inc/project_code": "PROJ-ML-2024",
+    "cmdb_id": "AST123456",
+    "cost_center": "CC-DATA-001",
+    "environment": "production",
+    "owner": "alice",
+    "owner_email": "ml-team@acme.inc"
+  }
 }
 ```
+
+**Label constraints**
+
+- **Key format:** Label keys follow Kubernetes label syntax: optional DNS subdomain prefix (a-zA-Z0-9?/) plus a name of alphanumerics, dots, underscores, and hyphens (must start/end alphanumeric). Examples: environment, app.kubernetes.io/name.
+- **Label creation:** Labels are ephemeral and can only be defined during API-key creation. This ensures strong auditability.
+- **Maximum entries:** The maximum number of labels is 50.
+- **Key length:** Maximum label key length is 128 characters.
+- **Value length:** Maximum label value length is 1024 characters.
 
 ### Subscription Binding
 
@@ -101,7 +146,10 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
   -H "Content-Type: application/json" \
   -d '{
     "filters": {
-      "status": ["active"]
+      "status": ["active"],
+      "labelsContain": {
+        "owner": "alice"
+      }
     },
     "sort": {
       "by": "created_at",
@@ -114,6 +162,22 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
   }' | jq .
 ```
 
+Search by multiple label fields (AND logic):
+
+```bash
+curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
+  -H "Authorization: Bearer $(oc whoami -t)" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "filters": {
+      "labelsContain": {
+        "environment": "production",
+        "acme.inc/project_code": "PROJ-ML-2024"
+      }
+    }
+  }' | jq
+```
+
 **Request options:**
 
 | Field | Description |
@@ -121,6 +185,7 @@ curl -sS -X POST "${MAAS_API_URL}/maas-api/v1/api-keys/search" \
 | `filters.username` | Filter by username. Admin-only; non-admin users can search only their own keys. |
 | `filters.status` | Filter by one or more statuses: `active`, `revoked`, `expired` |
 | `filters.includeEphemeral` | Include ephemeral keys (default: false) |
+| `filters.labelsContain` | Filter by one or more key/value pairs. Multiple labels are treated as an AND in the filter. |
 | `sort.by` | Sort field: `created_at` (default), `expires_at`, `last_used_at`, or `name` |
 | `sort.order` | Sort order: `desc` (default) or `asc` |
 | `pagination.limit` | Number of results per page (default: 50, max: 100) |
@@ -143,13 +208,21 @@ curl -sS "${MAAS_API_URL}/maas-api/v1/api-keys/${KEY_ID}" \
   "id": "550e8400-e29b-41d4-a716-446655440000",
   "name": "my-api-key",
   "description": "Key for model access",
-  "username": "alice",
+  "username": "admin",
+  "subscription": "simulator-subscription",
+  "tenant": "models-as-a-service",
+  "creationDate": "2026-07-12T01:27:45Z",
+  "expirationDate": "2026-10-10T01:27:45Z",
   "status": "active",
-  "subscription": "premium-subscription",
-  "creationDate": "2026-04-28T12:00:00Z",
-  "expirationDate": "2026-07-27T12:00:00Z",
-  "lastUsedAt": "2026-04-29T10:30:00Z",
-  "ephemeral": false
+  "ephemeral": false,
+  "labels": {
+    "acme.inc/project_code": "PROJ-ML-2024",
+    "cmdb_id": "AST123456",
+    "cost_center": "CC-DATA-001",
+    "environment": "production",
+    "owner": "alice",
+    "owner_email": "ml-team@acme.inc"
+  }
 }
 ```
 
