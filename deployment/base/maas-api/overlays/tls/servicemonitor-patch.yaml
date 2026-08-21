@@ -1,0 +1,19 @@
+# Secure metrics scrape (METRICS_SECURE=true). Matches deployment-patch.yaml.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: maas-api-metrics
+spec:
+  endpoints:
+    - path: /metrics
+      port: https
+      scheme: https
+      interval: 30s
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        ca:
+          configMap:
+            name: openshift-service-ca.crt
+            key: service-ca.crt
+        # name.namespace.svc — filled by kustomize replacements in this overlay
+        serverName: maas-api-metrics.maas-api.svc

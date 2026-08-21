@@ -1,0 +1,13 @@
+# Disable SecureServing metrics for local/dev (no OpenShift service-ca).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-api
+spec:
+  template:
+    spec:
+      containers:
+      - name: maas-api
+        env:
+        - name: METRICS_SECURE
+          value: "false"
