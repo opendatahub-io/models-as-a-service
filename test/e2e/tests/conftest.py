@@ -295,7 +295,7 @@ def model_base_url(model_catalog: dict, model_id: str, gateway_url: str) -> str:
         url = match.get("url")
         if url:
             path = urlparse(url).path
-            if path and path != "/":
+            if path.startswith("/") and path != "/":
                 return f"{gateway_url}{path}".rstrip("/")
     return f"{gateway_url}/llm/{model_id}".rstrip("/")
 
