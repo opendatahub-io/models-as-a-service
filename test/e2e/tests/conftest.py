@@ -282,13 +282,21 @@ def model_id(model_catalog: dict):
 
 @pytest.fixture(scope="session")
 def model_base_url(model_catalog: dict, model_id: str, gateway_url: str) -> str:
+    # E2E_MODEL_PATH provides an explicit path override for clusters that use per-model
+    # path-based routing (e.g. /llm/{model-name}) rather than BBR gateway-root routing.
+    # Without this, the catalog url field (gateway root on BBR clusters) produces a path
+    # of "" which resolves to gateway_root — a path with no HTTPRoute → 404.
+    path_override = os.environ.get("E2E_MODEL_PATH")
+    if path_override:
+        return f"{gateway_url}{path_override}".rstrip("/")
     items = (model_catalog.get("data") or model_catalog.get("models") or [])
     match = next((m for m in items if m.get("id") == model_id), None)
     if match:
         url = match.get("url")
         if url:
             path = urlparse(url).path
-            return f"{gateway_url}{path}".rstrip("/")
+            if path.startswith("/") and path != "/":
+                return f"{gateway_url}{path}".rstrip("/")
     return f"{gateway_url}/llm/{model_id}".rstrip("/")
 
 @pytest.fixture(scope="session")
