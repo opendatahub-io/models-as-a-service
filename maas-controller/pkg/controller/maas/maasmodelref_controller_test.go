@@ -133,22 +133,42 @@ func newLLMISvcRoute(llmisvcName, ns string) *gatewayapiv1.HTTPRoute {
 	}
 }
 
+// defaultTestAITenant returns an AITenant matching the default test gateway.
+// Used by newTestReconciler to enable auto-resolution from HTTPRoute gateway.
+func defaultTestAITenant() *maasv1alpha1.AITenant {
+	return &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: testAITenantNamespace,
+		},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Name:      testGatewayName,
+				Namespace: testGatewayNamespace,
+			},
+		},
+	}
+}
+
 // newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
 // with the field index and status subresource for MaaSModelRef. LLMInferenceService is
 // intentionally NOT a status subresource so that plain Update() can set its status.
+// A default AITenant is included so auto-resolution from HTTPRoute gateway works.
 func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
+	allObjects := append([]client.Object{defaultTestAITenant()}, objects...)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
-		WithObjects(objects...).
+		WithObjects(allObjects...).
 		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
 		Build()
 	return &MaaSModelRefReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		GatewayName:      testGatewayName,
-		GatewayNamespace: testGatewayNamespace,
+		Client:            c,
+		Scheme:            scheme,
+		GatewayName:       testGatewayName,
+		GatewayNamespace:  testGatewayNamespace,
+		AITenantNamespace: testAITenantNamespace,
 	}, c
 }
 

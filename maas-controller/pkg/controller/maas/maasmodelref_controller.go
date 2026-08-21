@@ -575,6 +575,12 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSAuthPolicyToMaaSModelRefs,
 		)).
+		// Watch AITenants so models without explicit spec.tenantRef are
+		// re-reconciled when a tenant is created, updated, or deleted —
+		// enabling auto-resolution of tenantRef from HTTPRoute gateway.
+		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapAITenantToMaaSModelRefs,
+		)).
 		Build(r)
 	if err != nil {
 		return err
@@ -718,6 +724,38 @@ func (r *MaaSModelRefReconciler) mapMaaSAuthPolicyToMaaSModelRefs(ctx context.Co
 	return requests
 }
 
+// mapAITenantToMaaSModelRefs returns reconcile requests for MaaSModelRefs that
+// may need re-reconciliation when an AITenant changes. This enables auto-resolution
+// of tenantRef from HTTPRoute gateway parentRefs.
+func (r *MaaSModelRefReconciler) mapAITenantToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
+	tenant, ok := obj.(*maasv1alpha1.AITenant)
+	if !ok {
+		return nil
+	}
+	var models maasv1alpha1.MaaSModelRefList
+	if err := r.List(ctx, &models); err != nil {
+		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModelRefs for AITenant watch")
+		return nil
+	}
+	var requests []reconcile.Request
+	for _, m := range models.Items {
+		switch {
+		case m.Spec.TenantRef == tenant.Name:
+			// Explicitly references this tenant
+		case m.Spec.TenantRef == "" && m.Status.ResolvedTenantRef == tenant.Name:
+			// Auto-resolved to this tenant (gateway may have changed)
+		case m.Spec.TenantRef == "" && m.Status.ResolvedTenantRef == "":
+			// Not yet resolved — this new/updated tenant might be the match
+		default:
+			continue
+		}
+		requests = append(requests, reconcile.Request{
+			NamespacedName: types.NamespacedName{Name: m.Name, Namespace: m.Namespace},
+		})
+	}
+	return requests
+}
+
 // mapLLMISvcToMaaSModelRefs returns reconcile requests for all MaaSModels that
 // reference the given LLMInferenceService by name in the same namespace.
 func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -743,4 +781,99 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, 
 		}
 	}
 	return requests
+}
+
+// resolveGatewayRef resolves the gateway reference for a MaaSModelRef.
+// When spec.tenantRef is set, it looks up the named AITenant in the AITenant
+// infrastructure namespace and uses its Status.GatewayRef directly.
+// When spec.tenantRef is empty, it auto-resolves the tenant by performing a
+// reverse lookup: finding the AITenant whose Status.GatewayRef matches a
+// gateway parentRef on the HTTPRoute. This relies on the enforced 1:1
+// Gateway-to-Tenant mapping.
+func (r *MaaSModelRefReconciler) resolveGatewayRef(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef, route *gatewayapiv1.HTTPRoute) (maasv1alpha1.TenantGatewayRef, error) {
+	if model.Spec.TenantRef != "" {
+		aitenant := &maasv1alpha1.AITenant{}
+		key := client.ObjectKey{
+			Name:      model.Spec.TenantRef,
+			Namespace: r.AITenantNamespace,
+		}
+		if err := r.Get(ctx, key, aitenant); err != nil {
+			if apierrors.IsNotFound(err) {
+				return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q not found in namespace %s", model.Spec.TenantRef, r.AITenantNamespace)
+			}
+			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to get AITenant %q: %w", model.Spec.TenantRef, err)
+		}
+		model.Status.ResolvedTenantRef = model.Spec.TenantRef
+		ref := aitenant.Status.GatewayRef
+		if ref.Name == "" || ref.Namespace == "" {
+			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q has no gateway reference in status", model.Spec.TenantRef)
+		}
+		log.V(4).Info("Resolved gateway from AITenant", "aiTenant", model.Spec.TenantRef, "gateway", fmt.Sprintf("%s/%s", ref.Namespace, ref.Name))
+		return ref, nil
+	}
+
+	return r.resolveGatewayRefFromHTTPRoute(ctx, log, model, route)
+}
+
+// resolveGatewayRefFromHTTPRoute auto-resolves the tenant by finding the
+// AITenant whose Status.GatewayRef matches a gateway parentRef on the
+// HTTPRoute. The 1:1 Gateway-to-Tenant mapping (enforced by the AITenant
+// webhook) guarantees at most one match.
+func (r *MaaSModelRefReconciler) resolveGatewayRefFromHTTPRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef, route *gatewayapiv1.HTTPRoute) (maasv1alpha1.TenantGatewayRef, error) {
+	if len(route.Spec.ParentRefs) == 0 {
+		model.Status.ResolvedTenantRef = ""
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("HTTPRoute %s/%s has no gateway parentRefs; cannot auto-resolve tenant", route.Namespace, route.Name)
+	}
+
+	tenantList := &maasv1alpha1.AITenantList{}
+	if err := r.List(ctx, tenantList, client.InNamespace(r.AITenantNamespace)); err != nil {
+		return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to list AITenants for auto-resolution: %w", err)
+	}
+
+	type gatewayKey struct{ name, namespace string }
+	tenantByGateway := make(map[gatewayKey]string, len(tenantList.Items))
+	for _, tenant := range tenantList.Items {
+		ref := tenant.Status.GatewayRef
+		if ref.Name != "" && ref.Namespace != "" {
+			tenantByGateway[gatewayKey{ref.Name, ref.Namespace}] = tenant.Name
+		}
+	}
+
+	for _, parentRef := range route.Spec.ParentRefs {
+		if !parentRefTargetsGateway(parentRef) {
+			continue
+		}
+
+		gwName := string(parentRef.Name)
+		gwNamespace := route.Namespace
+		if parentRef.Namespace != nil {
+			gwNamespace = string(*parentRef.Namespace)
+		}
+
+		if tenantName, ok := tenantByGateway[gatewayKey{gwName, gwNamespace}]; ok {
+			model.Status.ResolvedTenantRef = tenantName
+			ref := maasv1alpha1.TenantGatewayRef{Name: gwName, Namespace: gwNamespace}
+			log.Info("Auto-resolved tenant from HTTPRoute gateway",
+				"tenant", tenantName, "gateway", fmt.Sprintf("%s/%s", gwNamespace, gwName),
+				"model", fmt.Sprintf("%s/%s", model.Namespace, model.Name))
+			return ref, nil
+		}
+	}
+
+	model.Status.ResolvedTenantRef = ""
+	gwDescs := make([]string, 0, len(route.Spec.ParentRefs))
+	for _, pr := range route.Spec.ParentRefs {
+		if !parentRefTargetsGateway(pr) {
+			continue
+		}
+
+		ns := route.Namespace
+		if pr.Namespace != nil {
+			ns = string(*pr.Namespace)
+		}
+		gwDescs = append(gwDescs, fmt.Sprintf("%s/%s", ns, pr.Name))
+	}
+	return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("no AITenant found for any gateway referenced by HTTPRoute %s/%s (gateways: %v); "+
+		"ensure an AITenant exists with a matching gateway, or set spec.tenantRef explicitly",
+		route.Namespace, route.Name, gwDescs)
 }
