@@ -79,6 +79,11 @@ type Config struct {
 
 	MetricsPort int
 
+	// GatewayIdentityToken is a shared secret injected by the gateway AuthPolicy after
+	// successful authentication. maas-api rejects protected routes without a matching
+	// X-MaaS-Gateway-Auth header when this value is set.
+	GatewayIdentityToken string
+
 	// DiscoveryEnableHTTP2 enables HTTP/2 ALPN negotiation on the TLS client used
 	// by model discovery probes. Default: false (HTTP/1.1 only).
 	DiscoveryEnableHTTP2 bool
@@ -144,6 +149,7 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		GatewayIdentityToken:      env.GetString("GATEWAY_IDENTITY_TOKEN", ""),
 		DiscoveryEnableHTTP2:      discoveryEnableHTTP2,
 		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
 		OTELInsecure:              otelInsecure,

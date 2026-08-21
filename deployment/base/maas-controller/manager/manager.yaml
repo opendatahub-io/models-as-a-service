@@ -88,6 +88,12 @@ spec:
                 key: monitoring-namespace
                 name: maas-parameters
                 optional: true
+          - name: GATEWAY_IDENTITY_TOKEN
+            valueFrom:
+              secretKeyRef:
+                name: maas-gateway-identity
+                key: token
+                optional: true
         image: maas-controller
         name: manager
         imagePullPolicy: Always

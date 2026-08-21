@@ -16,6 +16,12 @@ spec:
           value: /etc/maas-api/tls/tls.key
         - name: SSL_CERT_DIR
           value: /etc/ssl/certs:/etc/ssl/certs/openshift-service-ca
+        - name: GATEWAY_IDENTITY_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: maas-gateway-identity
+              key: token
+              optional: true
         ports:
         - $patch: replace
         - containerPort: 8443
