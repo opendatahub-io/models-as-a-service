@@ -48,7 +48,8 @@ const (
 	managementStateRemoved    = "Removed"
 	managementStateUnmanaged  = "Unmanaged"
 
-	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
+	tenantFinalizer       = "maas.opendatahub.io/tenant-cleanup"
+	legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 )
 
 // tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.

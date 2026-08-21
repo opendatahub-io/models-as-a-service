@@ -25,6 +25,7 @@ from multitenancy_helpers import (
 )
 from test_helper import _get_cluster_token, _delete_cr, _wait_for_subscription_trlp_status
 
+pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
 # Tenant subscription isolation tests are enabled by default (Phase 1 implementation)
 

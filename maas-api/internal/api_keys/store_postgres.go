@@ -161,7 +161,6 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 	// Fetch limit+1 to determine hasMore
 	fetchLimit := params.Limit + 1
 
-	//nolint:gosec // Dynamic WHERE clause is safe - uses parameterized queries
 	query := fmt.Sprintf(`
 		SELECT id, name, description, subscription, tenant, created_at, expires_at, status, last_used_at, ephemeral
 		FROM api_keys
@@ -298,15 +297,26 @@ func (s *PostgresStore) Search(
 		whereClause = "WHERE " + strings.Join(whereClauses, " AND ")
 	}
 
+	// Enforce sort defaults and allowlist at the store boundary, independent of
+	// handler validation, to prevent SQL injection from any direct caller.
+	sortBy := sort.By
+	if !ValidSortFields[sortBy] {
+		sortBy = DefaultSortBy
+	}
+	sortOrder := strings.ToLower(sort.Order)
+	if !ValidSortOrders[sortOrder] {
+		sortOrder = DefaultSortOrder
+	}
+
 	// Build ORDER BY clause
-	orderByClause := fmt.Sprintf("ORDER BY %s %s", sort.By, strings.ToUpper(sort.Order))
+	orderByClause := fmt.Sprintf("ORDER BY %s %s", sortBy, strings.ToUpper(sortOrder))
 
 	// Handle NULL values for nullable timestamp columns (NULLS LAST)
-	if sort.By == "expires_at" || sort.By == "last_used_at" {
-		if sort.Order == "asc" {
-			orderByClause = fmt.Sprintf("ORDER BY %s ASC NULLS LAST", sort.By)
+	if sortBy == "expires_at" || sortBy == "last_used_at" {
+		if sortOrder == "asc" {
+			orderByClause = fmt.Sprintf("ORDER BY %s ASC NULLS LAST", sortBy)
 		} else {
-			orderByClause = fmt.Sprintf("ORDER BY %s DESC NULLS LAST", sort.By)
+			orderByClause = fmt.Sprintf("ORDER BY %s DESC NULLS LAST", sortBy)
 		}
 	}
 
@@ -316,7 +326,7 @@ func (s *PostgresStore) Search(
 	// Use effective status in SELECT to match WHERE clause filtering
 	effectiveStatusSelect := "CASE WHEN status = 'active' AND expires_at IS NOT NULL AND expires_at < NOW() THEN 'expired' ELSE status END"
 
-	//nolint:gosec // Dynamic ORDER BY is safe - sort.By/Order validated against allowlist in handler
+	//nolint:gosec // G201: Dynamic ORDER BY is safe - sortBy/sortOrder validated against ValidSortFields/ValidSortOrders above
 	query := fmt.Sprintf(`
 		SELECT id, name, description, subscription, tenant, username, created_at, expires_at, %s AS status, last_used_at, ephemeral, labels
 		FROM api_keys

@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"os"
 	"testing"
@@ -151,6 +152,75 @@ func TestTLSProfileForAdherence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildMetricsServerOptions(t *testing.T) {
+	serverTLSOpt := func(c *tls.Config) {
+		c.MinVersion = tls.VersionTLS13
+	}
+	nextProtosOpt := func(c *tls.Config) {
+		c.NextProtos = []string{"h2", "http/1.1"}
+	}
+
+	t.Run("secure enables HTTPS authn and profile TLSOpts", func(t *testing.T) {
+		opts := buildMetricsServerOptions(":8443", true, serverTLSOpt, nextProtosOpt)
+		if opts.BindAddress != ":8443" {
+			t.Fatalf("BindAddress = %q, want :8443", opts.BindAddress)
+		}
+		if !opts.SecureServing {
+			t.Fatal("SecureServing = false, want true")
+		}
+		if opts.FilterProvider == nil {
+			t.Fatal("FilterProvider = nil, want WithAuthenticationAndAuthorization")
+		}
+		if opts.CertDir != metricsCertDir {
+			t.Fatalf("CertDir = %q, want %q", opts.CertDir, metricsCertDir)
+		}
+		if len(opts.TLSOpts) != 2 {
+			t.Fatalf("TLSOpts len = %d, want 2 (profile + NextProtos)", len(opts.TLSOpts))
+		}
+
+		cfg := &tls.Config{}
+		for _, opt := range opts.TLSOpts {
+			opt(cfg)
+		}
+		if cfg.MinVersion != tls.VersionTLS13 {
+			t.Fatalf("MinVersion = %d, want TLS 1.3 from profile opt", cfg.MinVersion)
+		}
+		if got := len(cfg.NextProtos); got != 2 {
+			t.Fatalf("NextProtos len = %d, want 2", got)
+		}
+	})
+
+	t.Run("insecure keeps HTTP without FilterProvider or CertDir", func(t *testing.T) {
+		opts := buildMetricsServerOptions(":8080", false, serverTLSOpt, nextProtosOpt)
+		if opts.BindAddress != ":8080" {
+			t.Fatalf("BindAddress = %q, want :8080", opts.BindAddress)
+		}
+		if opts.SecureServing {
+			t.Fatal("SecureServing = true, want false")
+		}
+		if opts.FilterProvider != nil {
+			t.Fatal("FilterProvider should be nil when SecureServing is false")
+		}
+		if opts.CertDir != "" {
+			t.Fatalf("CertDir = %q, want empty", opts.CertDir)
+		}
+		if len(opts.TLSOpts) != 1 {
+			t.Fatalf("TLSOpts len = %d, want 1 (NextProtos only)", len(opts.TLSOpts))
+		}
+
+		cfg := &tls.Config{}
+		for _, opt := range opts.TLSOpts {
+			opt(cfg)
+		}
+		if cfg.MinVersion != 0 {
+			t.Fatalf("MinVersion = %d, want unset when insecure", cfg.MinVersion)
+		}
+		if got := len(cfg.NextProtos); got != 2 {
+			t.Fatalf("NextProtos len = %d, want 2", got)
+		}
+	})
 }
 
 func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *testing.T) {

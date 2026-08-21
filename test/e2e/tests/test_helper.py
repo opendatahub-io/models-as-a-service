@@ -87,6 +87,9 @@ GATEWAY_ENFORCED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "1
 # If the AuthPolicy CR is missing this long, fail fast (misconfigured name/namespace)
 # instead of burning the full GATEWAY_ENFORCED_TIMEOUT.
 GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSING_GRACE", "30"))
+# Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
+AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
+MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -964,7 +967,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
     )
 
 
-def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60, require_model_statuses=False):
+def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=MAAS_SUBSCRIPTION_PHASE_TIMEOUT, require_model_statuses=False):
     """Wait for MaaSSubscription to reach a specific phase.
 
     Args:
@@ -1064,7 +1067,7 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
     )
 
 
-def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
+def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=AUTHPOLICY_PHASE_TIMEOUT,
                                 require_auth_policies=False, require_enforced=True):
     """Wait for MaaSAuthPolicy to reach a specific phase.
 

@@ -48,6 +48,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("api_keys")
+
 
 def _validate_subscription_info_schema(sub):
     """Validate a SubscriptionInfo object has the expected structure."""

@@ -68,6 +68,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("api_keys")
+
 
 @pytest.fixture(scope="session", autouse=True)
 def _warm_gateway(api_keys_base_url: str, headers: dict):
@@ -1498,6 +1500,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_create_key_for_pending_subscription(self):
         """API key creation succeeds for Pending subscription."""
         ns = _ns()
@@ -1564,6 +1567,7 @@ class TestAPIKeySubscriptionPhases:
                 log.exception("Best-effort controller scale-up failed")
             _wait_reconcile()
 
+    @pytest.mark.serial
     def test_reject_key_for_unreconciled_subscription(self):
         """
         API key creation is rejected for unreconciled subscription (empty phase).

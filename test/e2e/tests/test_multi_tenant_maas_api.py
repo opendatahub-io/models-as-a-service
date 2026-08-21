@@ -32,6 +32,7 @@ from multitenancy_helpers import (
     wait_for_json,
 )
 
+pytestmark = pytest.mark.xdist_group("mt_lifecycle")
 
 # Multi-tenant maas-api tests are enabled by default (Phase 1 implementation)
 

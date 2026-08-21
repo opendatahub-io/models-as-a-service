@@ -20,6 +20,8 @@ event emission, then remove it and assert recovery.
 import json
 import uuid
 
+import pytest
+
 from multitenancy_helpers import DEFAULT_GATEWAY_NAME, _oc_run, wait_for_status_condition
 from test_helper import (
     GATEWAY_NAMESPACE,
@@ -28,6 +30,8 @@ from test_helper import (
     _create_maas_model_ref,
     _delete_cr,
 )
+
+pytestmark = pytest.mark.xdist_group("models")
 
 CONDITION = "ModelIdentityUnique"
 

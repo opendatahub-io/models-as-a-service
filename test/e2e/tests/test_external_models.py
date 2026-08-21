@@ -35,6 +35,7 @@ from test_helper import (
     _check_ipp_pods_deployed,
     _delete_cr,
     _get_cr,
+    _ns,
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -45,7 +46,8 @@ log = logging.getLogger(__name__)
 # ─── Configuration ──────────────────────────────────────────────────────────
 
 EXTERNAL_ENDPOINT = os.environ.get("E2E_EXTERNAL_ENDPOINT", os.environ.get("E2E_SIMULATOR_ENDPOINT", "httpbingo.org"))
-SUBSCRIPTION_NAMESPACE = os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service"))
+def _subscription_ns():
+    return os.environ.get("E2E_SUBSCRIPTION_NAMESPACE", _ns())
 EXTERNAL_SUBSCRIPTION = os.environ.get("E2E_EXTERNAL_SUBSCRIPTION", "e2e-external-subscription")
 EXTERNAL_AUTH_POLICY = os.environ.get("E2E_EXTERNAL_AUTH_POLICY", "e2e-external-access")
 RECONCILE_WAIT = int(os.environ.get("E2E_RECONCILE_WAIT", "12"))
@@ -100,10 +102,13 @@ def _check_external_endpoint_reachable():
     return False
 
 
-pytestmark = pytest.mark.skipif(
-    not _check_external_endpoint_reachable(),
-    reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not _check_external_endpoint_reachable(),
+        reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",
+    ),
+    pytest.mark.xdist_group("external"),
+]
 
 
 # ─── Fixture: Create external model resources ────────────────────────────────
@@ -189,7 +194,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         _apply_cr({
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "MaaSAuthPolicy",
-            "metadata": {"name": EXTERNAL_AUTH_POLICY, "namespace": SUBSCRIPTION_NAMESPACE},
+            "metadata": {"name": EXTERNAL_AUTH_POLICY, "namespace": _subscription_ns()},
             "spec": {
                 "modelRefs": [{"name": EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE}],
                 "subjects": {"groups": [{"name": "system:authenticated"}]},
@@ -200,7 +205,7 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         _apply_cr({
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "MaaSSubscription",
-            "metadata": {"name": EXTERNAL_SUBSCRIPTION, "namespace": SUBSCRIPTION_NAMESPACE},
+            "metadata": {"name": EXTERNAL_SUBSCRIPTION, "namespace": _subscription_ns()},
             "spec": {
                 "owner": {"groups": [{"name": "system:authenticated"}]},
                 "modelRefs": [
@@ -214,8 +219,8 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         })
 
         # Wait for CRs to reconcile
-        _wait_for_maas_auth_policy_phase(EXTERNAL_AUTH_POLICY, namespace=SUBSCRIPTION_NAMESPACE)
-        _wait_for_maas_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=SUBSCRIPTION_NAMESPACE)
+        _wait_for_maas_auth_policy_phase(EXTERNAL_AUTH_POLICY, namespace=_subscription_ns())
+        _wait_for_maas_subscription_phase(EXTERNAL_SUBSCRIPTION, namespace=_subscription_ns())
 
         # MaaSAuthPolicy phase Active only proves the gateway's fixed-size,
         # shared Kuadrant AuthPolicy (maas-gateway-auth) is Enforced — that
@@ -249,11 +254,9 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         }
     finally:
         # ── Cleanup ──
-        # Runs even if setup failed partway through (e.g. a TimeoutError from
-        # the waits above), so a failed run doesn't leak these CRs/Secret.
         log.info("Cleaning up external model test fixtures...")
-        _delete_cr("maasauthpolicy", EXTERNAL_AUTH_POLICY, SUBSCRIPTION_NAMESPACE)
-        _delete_cr("maassubscription", EXTERNAL_SUBSCRIPTION, SUBSCRIPTION_NAMESPACE)
+        _delete_cr("maasauthpolicy", EXTERNAL_AUTH_POLICY, _subscription_ns())
+        _delete_cr("maassubscription", EXTERNAL_SUBSCRIPTION, _subscription_ns())
         _patch_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
                   {"metadata": {"finalizers": []}})
         _delete_cr("maasmodelref", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
