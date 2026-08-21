@@ -99,14 +99,10 @@ class TestEmbeddingGovernance:
             pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
 
         oc_token = _get_cluster_token()
-        # Mint a key bound to any available subscription (won't match this model)
-        try:
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-emb-deny-{uuid.uuid4().hex[:8]}",
-            )
-        except Exception:
-            pytest.skip("Could not create API key for default-deny test")
+        api_key = _create_api_key(
+            oc_token,
+            name=f"e2e-emb-deny-{uuid.uuid4().hex[:8]}",
+        )
 
         r = _embedding_inference(api_key, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME)
         log.info(f"[embedding-deny] No auth/subscription -> {r.status_code}")
