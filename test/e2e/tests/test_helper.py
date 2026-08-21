@@ -146,7 +146,7 @@ EMBEDDING_MODEL_NAME = os.environ.get("E2E_EMBEDDING_MODEL_NAME", "test/e2e-embe
 EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
     "E2E_EMBEDDING_MODEL_CANONICAL_ID",
     f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
-) 
+)
 
 
 # ---------------------------------------------------------------------------
@@ -715,15 +715,16 @@ def _inference(api_key, path=None, extra_headers=None, model_name=None, max_toke
     )
 
 
-def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
+def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2, inference_fn=None):
     """Poll inference endpoint until expected HTTP status or timeout."""
+    inference_fn = inference_fn or _inference
     timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
     last = None
     last_err = None
     while time.time() < deadline:
         try:
-            r = _inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
+            r = inference_fn(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
             last_err = None
             ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
             if ok:
@@ -798,34 +799,9 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
 
 def _poll_embedding_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
     """Poll embedding endpoint until expected HTTP status or timeout."""
-    timeout = timeout or max(RECONCILE_WAIT * 3, 60)
-    deadline = time.time() + timeout
-    last = None
-    last_err = None
-    while time.time() < deadline:
-        try:
-            r = _embedding_inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
-            last_err = None
-            ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
-            if ok:
-                return r
-            last = r
-        except requests.RequestException as exc:
-            last_err = exc
-            log.debug(f"Transient request error while polling: {exc}")
-        except Exception as exc:
-            log.exception(f"Non-transient error while polling, failing fast: {exc}")
-            raise
-        time.sleep(poll_interval)
-    exp_str = expected if isinstance(expected, int) else " or ".join(str(e) for e in expected)
-    err_msg = f"Expected {exp_str} within {timeout}s"
-    if last is not None:
-        err_msg += f", last status: {last.status_code}"
-    if last_err is not None:
-        err_msg += f", last error: {last_err}"
-    if last is None and last_err is None:
-        err_msg += ", no response (all requests may have raised non-RequestException)"
-    raise AssertionError(err_msg)
+    return _poll_status(api_key, expected, path=path, extra_headers=extra_headers,
+                        model_name=model_name, timeout=timeout, poll_interval=poll_interval,
+                        inference_fn=_embedding_inference)
 
 
 # ---------------------------------------------------------------------------

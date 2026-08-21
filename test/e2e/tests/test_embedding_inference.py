@@ -23,12 +23,11 @@ import pytest
 import requests
 
 from test_helper import (
-    EMBEDDING_MODEL_CANONICAL_ID,
     EMBEDDING_MODEL_NAME,
     EMBEDDING_MODEL_PATH,
     EMBEDDING_MODEL_REF,
+    MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
-    TIMEOUT,
     TLS_VERIFY,
     _create_api_key,
     _create_test_auth_policy,
@@ -70,13 +69,12 @@ class TestEmbeddingPathRouting:
             usage = data.get("usage", {})
             assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
 
-    def test_embedding_bbr_llmisvc_200(self, gateway_url: str, api_key_headers: dict, model_name: str):
+    def test_embedding_bbr_llmisvc_200(self, gateway_url: str, api_key_headers: dict):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
-        canonical_id = f"publishers/{model_name.split('/')[0] if '/' in model_name else 'llm'}/models/{model_name}"
         url = f"{gateway_url}/v1/embeddings"
-        body = {"model": canonical_id, "input": "The quick brown fox"}
+        body = {"model": MODEL_CANONICAL_ID, "input": "The quick brown fox"}
         r = requests.post(url, headers=api_key_headers, json=body, timeout=30, verify=TLS_VERIFY)
-        log.info(f"[embedding-bbr] POST /v1/embeddings (model={canonical_id}) -> {r.status_code}")
+        log.info(f"[embedding-bbr] POST /v1/embeddings (model={MODEL_CANONICAL_ID}) -> {r.status_code}")
         assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
         if r.status_code == 200:
             data = r.json()
