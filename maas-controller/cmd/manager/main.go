@@ -29,6 +29,7 @@ import (
 	"time"
 
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	"github.com/opendatahub-io/operator-rbac-toolkit/pkg/scoper"
 	confv1 "github.com/openshift/api/config/v1"
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
@@ -92,6 +93,8 @@ func init() {
 }
 
 //+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;create;patch
+//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=rolebindings,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch
 
 // ensureManagedNamespaceWithClient checks whether a controller-managed namespace exists
 // and creates it if missing. It checks for existence first so that the controller can
@@ -1229,6 +1232,20 @@ func main() {
 		GatewayNamespace: gatewayNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "ExternalModel")
+		os.Exit(1)
+	}
+
+	if err := scoper.Setup(mgr, scoper.Config{
+		Targets: []scoper.ScopingTarget{
+			{
+				WatchGVK:               schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"},
+				ClusterRoleName:        "payload-processing-secrets-reader",
+				ManagedRoleBindingName: "payload-processing-secrets-rb",
+				TargetSA:               types.NamespacedName{Name: "payload-processing", Namespace: gatewayNamespace},
+			},
+		},
+	}); err != nil {
+		setupLog.Error(err, "unable to setup RBAC scoper for payload-processing secrets")
 		os.Exit(1)
 	}
 

@@ -1,18 +1,19 @@
 module github.com/opendatahub-io/models-as-a-service/maas-controller
 
-go 1.25.8
+go 1.26.0
 
 require (
 	github.com/go-logr/logr v1.4.3
 	github.com/kserve/kserve v0.19.0-rc0.0.20260715171408-85065ab905e4
 	github.com/onsi/gomega v1.41.0
+	github.com/opendatahub-io/operator-rbac-toolkit v0.1.0
 	github.com/openshift/api v0.0.0-20260317165824-54a3998d81eb
 	github.com/openshift/controller-runtime-common v0.0.0-20260428152732-64ee174f5e2e
 	github.com/stretchr/testify v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.35.3
 	k8s.io/apiextensions-apiserver v0.35.3
-	k8s.io/apimachinery v0.35.3
+	k8s.io/apimachinery v0.36.2
 	k8s.io/client-go v0.35.3
 	k8s.io/utils v0.0.0-20260319190234-28399d86e0b5
 	knative.dev/pkg v0.0.0-20260120122510-4a022ed9999a
@@ -110,6 +111,7 @@ require (
 	k8s.io/component-base v0.35.3 // indirect
 	k8s.io/klog/v2 v2.140.0 // indirect
 	k8s.io/kube-openapi v0.0.0-20260427204847-8949caaa1199 // indirect
+	k8s.io/streaming v0.36.2 // indirect
 	knative.dev/serving v0.48.1 // indirect
 	sigs.k8s.io/apiserver-network-proxy/konnectivity-client v0.31.2 // indirect
 	sigs.k8s.io/gateway-api-inference-extension v1.5.0 // indirect

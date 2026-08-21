@@ -43,6 +43,7 @@ linters:
     - godoclint
     - noinlineerr
     - testifylint
+    - modernize
   settings:
     errcheck:
       check-type-assertions: true

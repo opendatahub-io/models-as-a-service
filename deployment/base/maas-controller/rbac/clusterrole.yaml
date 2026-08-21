@@ -410,7 +410,6 @@ rules:
   resources:
   - clusterrolebindings
   - clusterroles
-  - rolebindings
   verbs:
   - create
   - delete
@@ -421,6 +420,7 @@ rules:
 - apiGroups:
   - rbac.authorization.k8s.io
   resources:
+  - rolebindings
   - roles
   verbs:
   - create
