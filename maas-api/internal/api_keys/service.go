@@ -30,8 +30,8 @@ var (
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
 type SubscriptionSelector interface {
-	Select(groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
-	SelectHighestPriority(groups []string, username string) (*subscription.SelectResponse, error)
+	Select(ctx context.Context, groups []string, username string, requestedSubscription string, requestedModel string) (*subscription.SelectResponse, error)
+	SelectHighestPriority(ctx context.Context, groups []string, username string) (*subscription.SelectResponse, error)
 }
 
 type Service struct {
@@ -166,9 +166,9 @@ func (s *Service) CreateAPIKey(
 	var selectErr error
 	if requestedSubscription != "" {
 		//nolint:unqueryvet,nolintlint // Select is subscription resolution, not a SQL query
-		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription, "")
+		subResp, selectErr = s.subSelector.Select(ctx, userGroups, username, requestedSubscription, "")
 	} else {
-		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
+		subResp, selectErr = s.subSelector.SelectHighestPriority(ctx, userGroups, username)
 	}
 	if selectErr != nil {
 		s.logger.Warn("Subscription selection failed when creating API key",

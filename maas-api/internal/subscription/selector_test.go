@@ -1,6 +1,7 @@
 package subscription_test
 
 import (
+	"context"
 	"errors"
 	"testing"
 
@@ -9,6 +10,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/authpolicy"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 const (
@@ -17,6 +19,7 @@ const (
 	phaseFailed                     = "Failed"
 	phasePending                    = "Pending"
 	phaseDegraded                   = "Degraded"
+	testTeamSubName                 = "team-sub"
 )
 
 // fakeLister implements subscription.Lister for testing.
@@ -276,7 +279,7 @@ func TestGetAllAccessible(t *testing.T) {
 			lister := &fakeLister{subscriptions: tt.subscriptions}
 			selector := subscription.NewSelector(log, lister, nil, nil)
 
-			result, err := selector.GetAllAccessible(tt.groups, tt.username)
+			result, err := selector.GetAllAccessible(context.Background(), tt.groups, tt.username)
 
 			if tt.expectError {
 				if err == nil {
@@ -336,7 +339,7 @@ func TestGetAllAccessible_ErrorHandling(t *testing.T) {
 		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{}}
 		selector := subscription.NewSelector(log, lister, nil, nil)
 
-		_, err := selector.GetAllAccessible(nil, "")
+		_, err := selector.GetAllAccessible(context.Background(), nil, "")
 		if err == nil {
 			t.Error("expected error when both groups and username are empty")
 		}
@@ -355,7 +358,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("high-sub", []string{"g1"}, nil, 50, defaultTestTokenRateLimit, "H", "d2"),
 		}}
 		sel := subscription.NewSelector(log, lister, nil, nil)
-		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		got, err := sel.SelectHighestPriority(context.Background(), []string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
 		}
@@ -370,7 +373,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("sub-b", []string{"g1"}, nil, 10, 20, "", ""),
 		}}
 		sel := subscription.NewSelector(log, lister, nil, nil)
-		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		got, err := sel.SelectHighestPriority(context.Background(), []string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
 		}
@@ -385,7 +388,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("alpha", []string{"g1"}, nil, 5, defaultTestTokenRateLimit, "", ""),
 		}}
 		sel := subscription.NewSelector(log, lister, nil, nil)
-		got, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		got, err := sel.SelectHighestPriority(context.Background(), []string{"g1"}, "")
 		if err != nil {
 			t.Fatalf("SelectHighestPriority: %v", err)
 		}
@@ -399,7 +402,7 @@ func TestSelectHighestPriority(t *testing.T) {
 			createSubscription("other", []string{"other-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
 		}}
 		sel := subscription.NewSelector(log, lister, nil, nil)
-		_, err := sel.SelectHighestPriority([]string{"g1"}, "")
+		_, err := sel.SelectHighestPriority(context.Background(), []string{"g1"}, "")
 		if err == nil {
 			t.Fatal("expected error")
 		}
@@ -557,7 +560,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			selector := subscription.NewSelector(log, lister, nil, nil)
 
 			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-			result, err := selector.Select([]string{"g1"}, "", "", "")
+			result, err := selector.Select(context.Background(), []string{"g1"}, "", "", "")
 
 			if tt.expectError {
 				if err == nil {
@@ -600,7 +603,7 @@ func TestSelector_ListAccessibleWithHealth(t *testing.T) {
 	lister := &fakeLister{subscriptions: subscriptions}
 	selector := subscription.NewSelector(log, lister, nil, nil)
 
-	results, err := selector.GetAllAccessible([]string{"g1"}, "")
+	results, err := selector.GetAllAccessible(context.Background(), []string{"g1"}, "")
 	if err != nil {
 		t.Fatalf("GetAllAccessible() error = %v", err)
 	}
@@ -792,7 +795,7 @@ func TestSelector_DegradedSubscriptionTRLPFiltering(t *testing.T) {
 			selector := subscription.NewSelector(log, lister, nil, nil)
 
 			//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-			result, err := selector.Select([]string{"g1"}, "", "", tt.requestedModel)
+			result, err := selector.Select(context.Background(), []string{"g1"}, "", "", tt.requestedModel)
 
 			if tt.expectError {
 				if err == nil {
@@ -944,7 +947,7 @@ func TestEnrichModelRefsSource(t *testing.T) {
 			lister := &fakeLister{subscriptions: []*unstructured.Unstructured{sub}}
 			selector := subscription.NewSelector(log, lister, modelLister, nil)
 
-			accessible, err := selector.GetAllAccessible([]string{"g1"}, "")
+			accessible, err := selector.GetAllAccessible(context.Background(), []string{"g1"}, "")
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -1173,7 +1176,7 @@ func TestSelect_AccessAllowed(t *testing.T) {
 			lister := &fakeLister{subscriptions: tt.subscriptions}
 			selector := subscription.NewSelector(log, lister, nil, tt.accessChecker)
 
-			result, err := selector.Select(tt.groups, tt.username, tt.requestedSubscription, tt.requestedModel)
+			result, err := selector.Select(context.Background(), tt.groups, tt.username, tt.requestedSubscription, tt.requestedModel)
 			if tt.wantError {
 				if err == nil {
 					t.Fatal("expected error, got nil")
@@ -1366,7 +1369,7 @@ func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 			}
 
 			selector := subscription.NewSelector(log, lister, nil, accessChecker)
-			result, err := selector.ListAccessibleForModel(tt.username, tt.groups, tt.modelID)
+			result, err := selector.ListAccessibleForModel(context.Background(), tt.username, tt.groups, tt.modelID)
 			if err != nil {
 				t.Fatalf("Unexpected error: %v", err)
 			}
@@ -1442,7 +1445,7 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 
 			t.Run("alias resolves to MaaSModelRef identity", func(t *testing.T) {
 				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-				result, err := selector.Select([]string{"g1"}, "", "", tc.alias)
+				result, err := selector.Select(context.Background(), []string{"g1"}, "", "", tc.alias)
 				if err != nil {
 					t.Fatalf("Select: %v", err)
 				}
@@ -1453,7 +1456,7 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 
 			t.Run("path-style identity is returned unchanged", func(t *testing.T) {
 				//nolint:unqueryvet,nolintlint // False positive - not a SQL query
-				result, err := selector.Select([]string{"g1"}, "", "", tc.canonicalRef)
+				result, err := selector.Select(context.Background(), []string{"g1"}, "", "", tc.canonicalRef)
 				if err != nil {
 					t.Fatalf("Select: %v", err)
 				}
@@ -1463,4 +1466,262 @@ func TestSelector_ResolvedModelFromAlias(t *testing.T) {
 			})
 		})
 	}
+}
+
+// fakeAdminChecker implements subscription.AdminChecker for testing.
+type fakeAdminChecker struct {
+	isAdmin bool
+	err     error
+}
+
+func (f *fakeAdminChecker) IsAdmin(_ context.Context, _ *token.UserContext) (bool, error) {
+	return f.isAdmin, f.err
+}
+
+func TestGetAllAccessible_AdminBypass(t *testing.T) {
+	log := logger.New(false)
+
+	t.Run("admin sees all subscriptions regardless of group membership", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("group-a-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+			createSubscription("group-b-sub", []string{"group-b"}, nil, 20, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		// Admin user not in any subscription groups
+		result, err := selector.GetAllAccessible(context.Background(), []string{"admin-users"}, "admin-user")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Fatalf("expected 2 subscriptions, got %d", len(result))
+		}
+	})
+
+	t.Run("non-admin still filtered by group membership", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("group-a-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+			createSubscription("group-b-sub", []string{"group-b"}, nil, 20, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: false})
+
+		result, err := selector.GetAllAccessible(context.Background(), []string{"group-a"}, "alice")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("expected 1 subscription, got %d", len(result))
+		}
+		if result[0].Name != "group-a-sub" {
+			t.Errorf("expected group-a-sub, got %q", result[0].Name)
+		}
+	})
+
+	t.Run("admin check error falls back to non-admin behavior", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("group-a-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+			createSubscription("group-b-sub", []string{"group-b"}, nil, 20, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{err: errors.New("SAR check failed")})
+
+		result, err := selector.GetAllAccessible(context.Background(), []string{"group-a"}, "alice")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 {
+			t.Fatalf("expected 1 subscription (fallback to non-admin), got %d", len(result))
+		}
+	})
+
+	t.Run("nil admin checker does not bypass group checks", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("group-a-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil) // no WithAdminChecker
+
+		result, err := selector.GetAllAccessible(context.Background(), []string{"other-group"}, "alice")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Fatalf("expected 0 subscriptions, got %d", len(result))
+		}
+	})
+
+	t.Run("typed nil admin checker does not bypass group checks", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("group-a-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		var nilChecker *fakeAdminChecker // typed nil
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(nilChecker)
+
+		result, err := selector.GetAllAccessible(context.Background(), []string{"other-group"}, "alice")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Fatalf("expected 0 subscriptions with typed-nil checker, got %d", len(result))
+		}
+	})
+}
+
+func TestSelect_AdminBypass(t *testing.T) {
+	log := logger.New(false)
+
+	t.Run("admin can auto-select subscription not in their groups", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription(testTeamSubName, []string{"team-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := selector.Select(context.Background(), []string{"admin-group"}, "admin-user", "", "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Name != testTeamSubName {
+			t.Errorf("expected team-sub, got %q", result.Name)
+		}
+	})
+
+	t.Run("admin can explicitly select subscription not in their groups", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription(testTeamSubName, []string{"team-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := selector.Select(context.Background(), []string{"admin-group"}, "admin-user", testTeamSubName, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Name != testTeamSubName {
+			t.Errorf("expected team-sub, got %q", result.Name)
+		}
+	})
+
+	t.Run("admin can explicitly select subscription by qualified name", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription(testTeamSubName, []string{"team-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		result, err := selector.Select(context.Background(), []string{"admin-group"}, "admin-user", "test-ns/"+testTeamSubName, "")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if result.Name != testTeamSubName {
+			t.Errorf("expected team-sub, got %q", result.Name)
+		}
+	})
+
+	t.Run("non-admin denied when not in subscription groups", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription(testTeamSubName, []string{"team-group"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: false})
+
+		//nolint:unqueryvet,nolintlint // False positive - not a SQL query
+		_, err := selector.Select(context.Background(), []string{"other-group"}, "user", testTeamSubName, "")
+		if err == nil {
+			t.Fatal("expected error for non-admin user not in subscription groups")
+		}
+		var accessDenied *subscription.AccessDeniedError
+		if !errors.As(err, &accessDenied) {
+			t.Fatalf("expected AccessDeniedError, got %T: %v", err, err)
+		}
+	})
+}
+
+func TestSelectHighestPriority_AdminBypass(t *testing.T) {
+	log := logger.New(false)
+
+	t.Run("admin sees all subscriptions for priority selection", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("low-priority-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+			createSubscription("high-priority-sub", []string{"group-b"}, nil, 50, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		got, err := selector.SelectHighestPriority(context.Background(), []string{"admin-group"}, "admin-user")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if got.Name != "high-priority-sub" {
+			t.Errorf("expected high-priority-sub, got %q", got.Name)
+		}
+	})
+
+	t.Run("non-admin limited to own groups for priority selection", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscription("low-priority-sub", []string{"group-a"}, nil, 10, defaultTestTokenRateLimit, "", ""),
+			createSubscription("high-priority-sub", []string{"group-b"}, nil, 50, defaultTestTokenRateLimit, "", ""),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: false})
+
+		got, err := selector.SelectHighestPriority(context.Background(), []string{"group-a"}, "user")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if got.Name != "low-priority-sub" {
+			t.Errorf("expected low-priority-sub (only accessible one), got %q", got.Name)
+		}
+	})
+}
+
+func TestListAccessibleForModel_AdminBypass(t *testing.T) {
+	log := logger.New(false)
+
+	t.Run("admin sees subscriptions for model regardless of group membership", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscriptionWithModelRefs("sub1", []string{"group-a"}, []map[string]any{
+				{"name": "model-x", "namespace": "ns1"},
+			}),
+			createSubscriptionWithModelRefs("sub2", []string{"group-b"}, []map[string]any{
+				{"name": "model-x", "namespace": "ns1"},
+			}),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: true})
+
+		result, err := selector.ListAccessibleForModel(context.Background(), "admin-user", []string{"admin-group"}, "model-x")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 2 {
+			t.Errorf("expected 2 subscriptions for admin, got %d", len(result))
+		}
+	})
+
+	t.Run("non-admin filtered by group membership for model listing", func(t *testing.T) {
+		lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+			createSubscriptionWithModelRefs("sub1", []string{"group-a"}, []map[string]any{
+				{"name": "model-x", "namespace": "ns1"},
+			}),
+			createSubscriptionWithModelRefs("sub2", []string{"group-b"}, []map[string]any{
+				{"name": "model-x", "namespace": "ns1"},
+			}),
+		}}
+		selector := subscription.NewSelector(log, lister, nil, nil).
+			WithAdminChecker(&fakeAdminChecker{isAdmin: false})
+
+		result, err := selector.ListAccessibleForModel(context.Background(), "user", []string{"group-a"}, "model-x")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 {
+			t.Errorf("expected 1 subscription, got %d", len(result))
+		}
+	})
 }

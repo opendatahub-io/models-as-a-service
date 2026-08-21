@@ -54,7 +54,7 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 	if returnAllModels {
 		// User token authentication - return all models across all accessible subscriptions
 		if h.subscriptionSelector != nil {
-			allSubs, err := h.subscriptionSelector.GetAllAccessible(userContext.Groups, userContext.Username)
+			allSubs, err := h.subscriptionSelector.GetAllAccessible(c.Request.Context(), userContext.Groups, userContext.Username)
 			if err != nil {
 				h.logger.Error("Failed to get all accessible subscriptions", "error", err)
 				c.JSON(http.StatusInternalServerError, gin.H{
@@ -80,7 +80,7 @@ func (h *ModelsHandler) selectSubscriptionsForListing(
 	// API key authentication - filter by the subscription bound to the key
 	if h.subscriptionSelector != nil {
 		//nolint:unqueryvet,nolintlint // Select is a method, not a SQL query
-		result, err := h.subscriptionSelector.Select(userContext.Groups, userContext.Username, requestedSubscription, "")
+		result, err := h.subscriptionSelector.Select(c.Request.Context(), userContext.Groups, userContext.Username, requestedSubscription, "")
 		if err != nil {
 			h.handleSubscriptionSelectionError(c, err)
 			return nil, true

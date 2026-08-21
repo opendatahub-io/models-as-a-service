@@ -19,14 +19,14 @@ import (
 
 type serviceTestSubSelector struct{}
 
-func (serviceTestSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
+func (serviceTestSubSelector) Select(_ context.Context, _ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
 		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 	}
 	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
 }
 
-func (serviceTestSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+func (serviceTestSubSelector) SelectHighestPriority(_ context.Context, _ []string, _ string) (*subscription.SelectResponse, error) {
 	return &subscription.SelectResponse{Name: "default-sub", Phase: "Active"}, nil
 }
 
@@ -924,14 +924,14 @@ type subSelectorStub struct {
 	highestName string
 }
 
-func (s subSelectorStub) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
+func (s subSelectorStub) Select(_ context.Context, _ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if s.selectErr != nil {
 		return nil, s.selectErr
 	}
 	return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 }
 
-func (s subSelectorStub) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+func (s subSelectorStub) SelectHighestPriority(_ context.Context, _ []string, _ string) (*subscription.SelectResponse, error) {
 	if s.highestPriorityErr != nil {
 		return nil, s.highestPriorityErr
 	}
@@ -1236,7 +1236,7 @@ type mockHealthSelector struct {
 	deleting bool
 }
 
-func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
+func (m *mockHealthSelector) Select(_ context.Context, _ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
 	// Simulate health validation that real selector does for API key creation
 	// API key creation path blocks Failed and unreconciled (empty phase)
 	if m.phase == "" {
@@ -1266,9 +1266,9 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 	return resp, nil
 }
 
-func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+func (m *mockHealthSelector) SelectHighestPriority(ctx context.Context, _ []string, _ string) (*subscription.SelectResponse, error) {
 	//nolint:unqueryvet // False positive - not a SQL query
-	return m.Select(nil, "", "", "")
+	return m.Select(ctx, nil, "", "", "")
 }
 
 func TestCreateAPIKey_GroupNameValidation(t *testing.T) {

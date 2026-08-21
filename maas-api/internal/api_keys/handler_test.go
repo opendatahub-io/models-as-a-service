@@ -30,14 +30,14 @@ const testSubscriptionName = "test-subscription"
 // fixedSubSelector satisfies SubscriptionSelector for handler tests (no cluster subscriptions).
 type fixedSubSelector struct{}
 
-func (fixedSubSelector) Select(_ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
+func (fixedSubSelector) Select(_ context.Context, _ []string, _ string, requested string, _ string) (*subscription.SelectResponse, error) {
 	if requested != "" {
 		return &subscription.SelectResponse{Name: requested, Phase: "Active"}, nil
 	}
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
-func (fixedSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+func (fixedSubSelector) SelectHighestPriority(_ context.Context, _ []string, _ string) (*subscription.SelectResponse, error) {
 	return &subscription.SelectResponse{Name: testSubscriptionName, Phase: "Active"}, nil
 }
 
@@ -47,14 +47,14 @@ type errSubSelector struct {
 	highestPriorityErr error
 }
 
-func (e errSubSelector) Select(_ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
+func (e errSubSelector) Select(_ context.Context, _ []string, _ string, _ string, _ string) (*subscription.SelectResponse, error) {
 	if e.selectErr != nil {
 		return nil, e.selectErr
 	}
 	return &subscription.SelectResponse{Name: "stub-sub", Phase: "Active"}, nil
 }
 
-func (e errSubSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
+func (e errSubSelector) SelectHighestPriority(_ context.Context, _ []string, _ string) (*subscription.SelectResponse, error) {
 	if e.highestPriorityErr != nil {
 		return nil, e.highestPriorityErr
 	}

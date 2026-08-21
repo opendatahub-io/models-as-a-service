@@ -67,7 +67,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		"requestedModel", req.RequestedModel,
 	)
 
-	response, err := h.selector.Select(req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
+	response, err := h.selector.Select(c.Request.Context(), req.Groups, req.Username, req.RequestedSubscription, req.RequestedModel)
 	if err != nil {
 		// NOTE: All error responses return http.StatusOK with error fields populated in SelectResponse.
 		// This is intentional for Authorino integration, which expects 200 OK responses with metadata
@@ -199,7 +199,7 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 		return
 	}
 
-	accessible, err := h.selector.GetAllAccessible(userContext.Groups, userContext.Username)
+	accessible, err := h.selector.GetAllAccessible(c.Request.Context(), userContext.Groups, userContext.Username)
 	if err != nil {
 		h.logger.Error("Failed to list subscriptions", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -252,7 +252,7 @@ func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
 		return
 	}
 
-	subs, err := h.selector.ListAccessibleForModel(userContext.Username, userContext.Groups, modelID)
+	subs, err := h.selector.ListAccessibleForModel(c.Request.Context(), userContext.Username, userContext.Groups, modelID)
 	if err != nil {
 		h.logger.Error("Failed to list subscriptions for model", "error", err, "model", modelID)
 		c.JSON(http.StatusInternalServerError, gin.H{

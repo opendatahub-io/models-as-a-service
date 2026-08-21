@@ -1,8 +1,10 @@
 package subscription
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -13,6 +15,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
 
 // Phase constants for MaaSSubscription status.
@@ -34,11 +37,19 @@ type ModelAccessChecker interface {
 	AuthorizedModels(groups []string, username string) map[authpolicy.ModelKey]bool
 }
 
+// AdminChecker checks whether a user has admin privileges.
+// Administrators bypass subscription group/user membership checks,
+// giving them visibility into all subscriptions.
+type AdminChecker interface {
+	IsAdmin(ctx context.Context, user *token.UserContext) (bool, error)
+}
+
 // Selector handles subscription selection logic.
 type Selector struct {
 	lister        Lister
 	modelLister   models.MaaSModelRefLister
 	accessChecker ModelAccessChecker
+	adminChecker  AdminChecker
 	logger        *logger.Logger
 }
 
@@ -54,6 +65,42 @@ func NewSelector(log *logger.Logger, lister Lister, modelLister models.MaaSModel
 		accessChecker: accessChecker,
 		logger:        log,
 	}
+}
+
+// WithAdminChecker returns the Selector with an AdminChecker configured.
+// When set, administrators bypass subscription group/user membership checks
+// and can see all subscriptions regardless of their group membership.
+// A typed nil (e.g. (*ConcreteType)(nil) stored in the interface) is
+// normalized to an untyped nil so isAdminUser's nil guard works correctly.
+func (s *Selector) WithAdminChecker(ac AdminChecker) *Selector {
+	if ac != nil {
+		v := reflect.ValueOf(ac)
+		if v.Kind() == reflect.Ptr && v.IsNil() {
+			ac = nil
+		}
+	}
+	s.adminChecker = ac
+	return s
+}
+
+// isAdminUser checks whether the user is an admin via the configured AdminChecker.
+// Returns false when no AdminChecker is configured or on error.
+func (s *Selector) isAdminUser(ctx context.Context, username string, groups []string) bool {
+	if s.adminChecker == nil {
+		return false
+	}
+	isAdmin, err := s.adminChecker.IsAdmin(ctx, &token.UserContext{
+		Username: username,
+		Groups:   groups,
+	})
+	if err != nil {
+		s.logger.Warn("Admin check failed, treating user as non-admin",
+			"username", logger.RedactValue(username),
+			"error", err,
+		)
+		return false
+	}
+	return isAdmin
 }
 
 // buildModelIndex builds a lookup map keyed by "namespace/name" from the MaaSModelRef cache.
@@ -117,7 +164,9 @@ type subscription struct {
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
-func (s *Selector) GetAllAccessible(groups []string, username string) ([]*SelectResponse, error) {
+// Administrators (as determined by the configured AdminChecker) bypass
+// subscription group/user membership checks and see all subscriptions.
+func (s *Selector) GetAllAccessible(ctx context.Context, groups []string, username string) ([]*SelectResponse, error) {
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
 	}
@@ -127,10 +176,12 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
 
+	admin := s.isAdminUser(ctx, username, groups)
+
 	accessible := make([]*SelectResponse, 0, len(subscriptions))
 	for _, sub := range subscriptions {
-		// Check user access
-		if !userHasAccess(&sub, username, groups) {
+		// Check user access (admins bypass group/user membership checks)
+		if !admin && !userHasAccess(&sub, username, groups) {
 			continue
 		}
 
@@ -181,7 +232,9 @@ func filterAuthorizedModels(refs []ModelRefInfo, authorizedSet map[authpolicy.Mo
 // Select implements the subscription selection logic.
 // Returns the selected subscription or an error if none found.
 // If requestedModel is provided, validates that the selected subscription includes that model.
-func (s *Selector) Select(groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error) {
+// Administrators (as determined by the configured AdminChecker) bypass
+// subscription group/user membership checks.
+func (s *Selector) Select(ctx context.Context, groups []string, username string, requestedSubscription string, requestedModel string) (*SelectResponse, error) {
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
 	}
@@ -197,6 +250,8 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		return nil, &NoSubscriptionError{}
 	}
 
+	admin := s.isAdminUser(ctx, username, groups)
+
 	// Sort by priority (desc), then maxLimit (desc)
 	sortSubscriptionsByPriority(subscriptions)
 
@@ -207,7 +262,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		for _, sub := range subscriptions {
 			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
 			if qualifiedName == requestedSubscription {
-				if !userHasAccess(&sub, username, groups) {
+				if !admin && !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
 				// Validate subscription includes the requested model
@@ -230,7 +285,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				if sub.Name != requestedSubscription {
 					continue
 				}
-				if !userHasAccess(&sub, username, groups) {
+				if !admin && !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
 				if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
@@ -253,7 +308,7 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	// Branch 2: Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) {
+		if admin || userHasAccess(&sub, username, groups) {
 			// If model is specified, only include subscriptions that contain that model
 			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
 				continue
@@ -286,7 +341,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 
 // SelectHighestPriority returns the accessible subscription with highest spec.priority
 // (then max token limit desc, then name asc for deterministic ties).
-func (s *Selector) SelectHighestPriority(groups []string, username string) (*SelectResponse, error) {
+// Administrators (as determined by the configured AdminChecker) bypass
+// subscription group/user membership checks.
+func (s *Selector) SelectHighestPriority(ctx context.Context, groups []string, username string) (*SelectResponse, error) {
 	if len(groups) == 0 && username == "" {
 		return nil, errors.New("either groups or username must be provided")
 	}
@@ -300,9 +357,11 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 		return nil, &NoSubscriptionError{}
 	}
 
+	admin := s.isAdminUser(ctx, username, groups)
+
 	var accessible []subscription
 	for _, sub := range subscriptions {
-		if userHasAccess(&sub, username, groups) {
+		if admin || userHasAccess(&sub, username, groups) {
 			accessible = append(accessible, sub)
 		}
 	}
@@ -759,11 +818,15 @@ func sortSubscriptionsByPriority(subs []subscription) {
 
 // ListAccessibleForModel returns subscriptions the user has access to
 // that include the specified model in their modelRefs.
-func (s *Selector) ListAccessibleForModel(username string, groups []string, modelID string) ([]SubscriptionInfo, error) {
+// Administrators (as determined by the configured AdminChecker) bypass
+// subscription group/user membership checks.
+func (s *Selector) ListAccessibleForModel(ctx context.Context, username string, groups []string, modelID string) ([]SubscriptionInfo, error) {
 	subscriptions, err := s.loadSubscriptions()
 	if err != nil {
 		return nil, fmt.Errorf("failed to load subscriptions: %w", err)
 	}
+
+	admin := s.isAdminUser(ctx, username, groups)
 
 	var authorizedSet map[authpolicy.ModelKey]bool
 	if s.accessChecker != nil {
@@ -773,7 +836,7 @@ func (s *Selector) ListAccessibleForModel(username string, groups []string, mode
 	result := []SubscriptionInfo{}
 	for _, sub := range subscriptions {
 		modelNamespaces := sub.findModelNamespaces(modelID)
-		if !userHasAccess(&sub, username, groups) || len(modelNamespaces) == 0 {
+		if (!admin && !userHasAccess(&sub, username, groups)) || len(modelNamespaces) == 0 {
 			continue
 		}
 
