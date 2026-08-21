@@ -577,9 +577,9 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 10)
+	require.Len(t, configPatches, 6)
 
-	cp, ok := configPatches[4].(map[string]any)
+	cp, ok := configPatches[0].(map[string]any)
 	require.True(t, ok)
 	anchor, found, err := unstructured.NestedString(cp,
 		"match", "listener", "filterChain", "filter", "subFilter", "name")

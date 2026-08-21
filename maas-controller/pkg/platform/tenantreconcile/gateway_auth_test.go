@@ -65,7 +65,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 		assert.False(t, got)
 	})
 
-	t.Run("WasmPlugin forbidden assumes wasm present for RHCL", func(t *testing.T) {
+	t.Run("WasmPlugin forbidden enables router fallback", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
 				switch obj.GetObjectKind().GroupVersionKind().Kind {
@@ -87,7 +87,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got)
+		assert.False(t, got)
 	})
 }
 

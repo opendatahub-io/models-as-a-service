@@ -911,61 +911,74 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 
 	routerStart := wasmFilterPatchCount
 	routerEnd := wasmFilterPatchCount + routerFallbackPatchCount
-	if !params.PayloadProcessingRouterExtProcFallback {
-		if len(configPatches) < routerEnd+routeDisablePatchCount {
-			return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
-				routerEnd+routeDisablePatchCount, len(configPatches))
-		}
+	minPatchCount := routerEnd + routeDisablePatchCount
+	if len(configPatches) < minPatchCount {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
+			minPatchCount, len(configPatches))
+	}
+
+	if params.PayloadProcessingRouterExtProcFallback {
+		// Router-only anchoring when kuadrant CRs are absent or wasmplugin RBAC denies GET.
+		// Drop wasm-anchored patches to avoid duplicate ext_proc on RHCL gateways that
+		// inject envoy.filters.http.wasm without kuadrant-{gateway} CRs.
+		configPatches = append(append([]any{}, configPatches[routerStart:routerEnd]...), configPatches[routerEnd:]...)
+	} else {
 		configPatches = append(append([]any{}, configPatches[:routerStart]...), configPatches[routerEnd:]...)
 	}
 
 	filterPatchCount := len(configPatches) - routeDisablePatchCount
 	routeDisablePatchBase := filterPatchCount
 	totalConfigPatches := len(configPatches)
-	if filterPatchCount < wasmFilterPatchCount || totalConfigPatches < wasmFilterPatchCount+routeDisablePatchCount {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
-			wasmFilterPatchCount+routeDisablePatchCount, len(configPatches))
-	}
 
 	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster, beforeCluster, afterCluster}
 	wasmSubFilters := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
 
-	for i := 0; i < wasmFilterPatchCount; i++ {
-		patch, ok := configPatches[i].(map[string]any)
-		if !ok {
-			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+	switch {
+	case params.PayloadProcessingRouterExtProcFallback:
+		if filterPatchCount != routerFallbackPatchCount {
+			return fmt.Errorf("EnvoyFilter configPatches: expected %d router filter patches, got %d",
+				routerFallbackPatchCount, filterPatchCount)
 		}
+		for i := 0; i < filterPatchCount; i++ {
+			patch, ok := configPatches[i].(map[string]any)
+			if !ok {
+				return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+			}
 
-		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
-		if err := unstructured.SetNestedField(patch, wasmSubFilters[i], subFilterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+			subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+			if err := unstructured.SetNestedField(patch, routerFilterName, subFilterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+			}
+
+			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+			if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			}
+
+			configPatches[i] = patch
 		}
+	case filterPatchCount == wasmFilterPatchCount:
+		for i, subFilter := range wasmSubFilters {
+			patch, ok := configPatches[i].(map[string]any)
+			if !ok {
+				return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+			}
 
-		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+			if err := unstructured.SetNestedField(patch, subFilter, subFilterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+			}
+
+			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+			if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			}
+
+			configPatches[i] = patch
 		}
-
-		configPatches[i] = patch
-	}
-
-	for i := wasmFilterPatchCount; i < filterPatchCount; i++ {
-		patch, ok := configPatches[i].(map[string]any)
-		if !ok {
-			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
-		}
-
-		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
-		if err := unstructured.SetNestedField(patch, routerFilterName, subFilterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
-		}
-
-		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
-		}
-
-		configPatches[i] = patch
+	default:
+		return fmt.Errorf("EnvoyFilter configPatches: expected %d wasm or %d router filter patches, got %d",
+			wasmFilterPatchCount, routerFallbackPatchCount, filterPatchCount)
 	}
 
 	// Final patches disable ext_proc on all non-inference maas-api routes.
