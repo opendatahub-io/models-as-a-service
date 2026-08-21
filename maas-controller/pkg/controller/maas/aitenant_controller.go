@@ -61,10 +61,12 @@ const (
 	aitenantManagedLabel = tenantreconcile.LabelManagedByAITenant
 	aiGatewayTenantLabel = tenantreconcile.LabelAIGatewayTenant
 
-	aitenantNameAnnotation      = tenantreconcile.AnnotationAITenantName
-	aitenantNamespaceAnnotation = tenantreconcile.AnnotationAITenantNamespace
-	aitenantCreatedAnnotation   = "maas.opendatahub.io/created-by-aitenant"
-	aitenantUIDAnnotation       = "maas.opendatahub.io/aitenant-uid"
+	aitenantNameAnnotation       = tenantreconcile.AnnotationAITenantName
+	aitenantNamespaceAnnotation  = tenantreconcile.AnnotationAITenantNamespace
+	aitenantCreatedAnnotation    = "maas.opendatahub.io/created-by-aitenant"
+	aitenantUIDAnnotation        = "maas.opendatahub.io/aitenant-uid"
+	legacyDeprecatedByAnnotation = "maas.opendatahub.io/deprecated-by"
+	legacyMigratedToAnnotation   = "maas.opendatahub.io/migrated-to"
 
 	aitenantTenantAdminRoleSuffix = "tenant-admin"
 	aitenantAccessRoleSuffix      = "object-admin"
@@ -113,7 +115,7 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants/finalizers,verbs=update
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
@@ -768,7 +770,10 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		}
 		return false, false, err
 	}
-	if err := r.markLegacyTenantDeprecated(ctx, tenantNamespace); err != nil {
+	if err := r.markLegacyTenantDeprecated(ctx, aitenant, tenantNamespace); err != nil {
+		return false, false, err
+	}
+	if err := r.cleanupMigratedLegacyTenant(ctx, aitenant, tenantNamespace); err != nil {
 		return false, false, err
 	}
 	if err := r.get(ctx, client.ObjectKeyFromObject(config), config); err != nil {
@@ -795,25 +800,102 @@ func (r *AITenantReconciler) copyLegacyTenantConfig(ctx context.Context, config 
 	return nil
 }
 
-func (r *AITenantReconciler) markLegacyTenantDeprecated(ctx context.Context, tenantNamespace string) error {
+func (r *AITenantReconciler) markLegacyTenantDeprecated(ctx context.Context, aitenant *maasv1alpha1.AITenant, tenantNamespace string) error {
 	var legacy maasv1alpha1.Tenant
 	key := client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: tenantNamespace}
 	if err := r.get(ctx, key, &legacy); err != nil {
 		return client.IgnoreNotFound(err)
+	}
+	if hasAITenantOwnerAnnotations(&legacy) && !ownedByAITenant(&legacy, aitenant) {
+		return nil
 	}
 	base := legacy.DeepCopy()
 	annotations := legacy.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations["maas.opendatahub.io/deprecated-by"] = maasv1alpha1.MaasTenantConfigKind
-	annotations["maas.opendatahub.io/migrated-to"] = maasv1alpha1.MaasTenantConfigInstanceName
+	annotations[legacyDeprecatedByAnnotation] = maasv1alpha1.MaasTenantConfigKind
+	annotations[legacyMigratedToAnnotation] = maasv1alpha1.MaasTenantConfigInstanceName
 	legacy.SetAnnotations(annotations)
 	controllerutil.RemoveFinalizer(&legacy, tenantFinalizer)
+	controllerutil.RemoveFinalizer(&legacy, legacyTenantFinalizer)
 	if equality.Semantic.DeepEqual(base, &legacy) {
 		return nil
 	}
-	return r.Patch(ctx, &legacy, client.MergeFrom(base))
+	return r.Patch(ctx, &legacy, client.MergeFromWithOptions(base, client.MergeFromWithOptimisticLock{}))
+}
+
+func (r *AITenantReconciler) cleanupMigratedLegacyTenant(
+	ctx context.Context,
+	aitenant *maasv1alpha1.AITenant,
+	tenantNamespace string,
+) error {
+	configKey := client.ObjectKey{
+		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+		Namespace: tenantNamespace,
+	}
+	var config maasv1alpha1.MaasTenantConfig
+	if err := r.get(ctx, configKey, &config); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !isExpectedAITenantManagedConfig(&config, aitenant, tenantNamespace) {
+		return nil
+	}
+
+	legacyKey := client.ObjectKey{
+		Name:      maasv1alpha1.TenantInstanceName,
+		Namespace: tenantNamespace,
+	}
+	var legacy maasv1alpha1.Tenant
+	if err := r.get(ctx, legacyKey, &legacy); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if hasAITenantOwnerAnnotations(&legacy) && !ownedByAITenant(&legacy, aitenant) {
+		return nil
+	}
+	if legacy.Annotations[legacyDeprecatedByAnnotation] != maasv1alpha1.MaasTenantConfigKind ||
+		legacy.Annotations[legacyMigratedToAnnotation] != maasv1alpha1.MaasTenantConfigInstanceName {
+		return nil
+	}
+	if legacy.Spec.APIKeys != nil &&
+		!equality.Semantic.DeepEqual(legacy.Spec.APIKeys, config.Spec.APIKeys) {
+		return nil
+	}
+	if legacy.Spec.Telemetry != nil &&
+		!equality.Semantic.DeepEqual(legacy.Spec.Telemetry, config.Spec.Telemetry) {
+		return nil
+	}
+
+	uid := legacy.UID
+	resourceVersion := legacy.ResourceVersion
+	preconditions := client.Preconditions{}
+	if uid != "" {
+		preconditions.UID = &uid
+	}
+	if resourceVersion != "" {
+		preconditions.ResourceVersion = &resourceVersion
+	}
+	if err := r.Delete(ctx, &legacy, preconditions); client.IgnoreNotFound(err) != nil {
+		return fmt.Errorf("delete migrated legacy Tenant %s/%s: %w", legacy.Namespace, legacy.Name, err)
+	}
+	return nil
+}
+
+func isExpectedAITenantManagedConfig(
+	config *maasv1alpha1.MaasTenantConfig,
+	aitenant *maasv1alpha1.AITenant,
+	tenantNamespace string,
+) bool {
+	if config == nil || aitenant == nil || config.Name != maasv1alpha1.MaasTenantConfigInstanceName ||
+		config.Namespace != tenantNamespace || !config.DeletionTimestamp.IsZero() ||
+		!ownedByAITenant(config, aitenant) {
+		return false
+	}
+	labels := config.GetLabels()
+	return labels["app.kubernetes.io/managed-by"] == "maas-controller" &&
+		labels[aitenantManagedLabel] == "true" &&
+		labels[tenantreconcile.LabelTenantName] == aitenant.Name &&
+		labels[tenantreconcile.LabelTenantNamespace] == tenantNamespace
 }
 
 func (r *AITenantReconciler) ensureTenantAdminRBAC(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
