@@ -70,6 +70,21 @@ const (
 	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
 	DefaultAPIKeyMaxExpirationDays = "90"
 
+	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
+	DefaultOTLPCollectorService = "data-science-collector-collector"
+	// DefaultOTLPCollectorPodLabelKey labels OpenTelemetry operator collector pods.
+	DefaultOTLPCollectorPodLabelKey = "app.kubernetes.io/name"
+	// DefaultOTLPCollectorComponentLabelKey labels OpenTelemetry operator collector pods.
+	DefaultOTLPCollectorComponentLabelKey = "app.kubernetes.io/component"
+	// DefaultOTLPCollectorComponentLabelValue is the component label on DSCI collector pods.
+	DefaultOTLPCollectorComponentLabelValue = "opentelemetry-collector"
+	// DefaultOTLPCollectorPort is the gRPC OTLP ingest port on the platform collector.
+	DefaultOTLPCollectorPort int32 = 4317
+	// DefaultOTELTracesSampler is the sampler accepted by the pinned llm-d build.
+	DefaultOTELTracesSampler = "parentbased_traceidratio"
+	// DefaultOTELTracesSamplerArg samples all traces on dev/CI clusters (use 0.1 in prod).
+	DefaultOTELTracesSamplerArg = "1.0"
+
 	// Resource name base constants for multi-tenant resources.
 	// These are used with tenant identifiers to create unique resource names per tenant.
 	// For legacy/default tenant (empty tenantID), these values are used as-is.

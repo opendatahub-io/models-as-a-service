@@ -324,7 +324,7 @@ func (r *TenantReconciler) reconcilePlatform(
 	mcfg *maasv1alpha1.Config,
 ) (*tenantreconcile.RunResult, *ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, mcfg)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
