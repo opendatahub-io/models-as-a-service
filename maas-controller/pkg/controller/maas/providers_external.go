@@ -129,8 +129,18 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		return fmt.Errorf("failed to get HTTPRoute %s/%s: %w", routeNS, routeName, err)
 	}
 
+	gatewayRef, err := h.r.resolveGatewayRef(ctx, log, model)
+	if err != nil {
+		return fmt.Errorf("resolve tenant gateway for model %s/%s: %w", model.Namespace, model.Name, err)
+	}
 	expectedGatewayName := h.r.gatewayName()
 	expectedGatewayNamespace := h.r.gatewayNamespace()
+	if gatewayRef.Name != "" {
+		expectedGatewayName = gatewayRef.Name
+		expectedGatewayNamespace = gatewayRef.Namespace
+		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantRef", model.Spec.TenantRef)
+	}
+
 	gatewayFound := false
 	gatewayAccepted := false
 	var gatewayName string
@@ -237,8 +247,12 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 		return fmt.Sprintf("https://%s", model.Status.HTTPRouteHostnames[0]), nil
 	}
 
-	gatewayName := h.r.gatewayName()
-	gatewayNS := h.r.gatewayNamespace()
+	gatewayName := model.Status.HTTPRouteGatewayName
+	gatewayNS := model.Status.HTTPRouteGatewayNamespace
+	if gatewayName == "" {
+		gatewayName = h.r.gatewayName()
+		gatewayNS = h.r.gatewayNamespace()
+	}
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
 	if err := h.r.Get(ctx, key, gateway); err != nil {

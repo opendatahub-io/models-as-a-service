@@ -115,45 +115,8 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	return nil
 }
 
-// resolveGatewayRef resolves the gateway reference for a MaaSModelRef.
-// When spec.tenantRef is set, it looks up the named AITenant in the AITenant
-// infrastructure namespace and uses its Status.GatewayRef directly.
-// When spec.tenantRef is empty, it falls back to the existing namespace-based
-// resolution via tenantGatewayRefForNamespace.
 func (h *llmisvcHandler) resolveGatewayRef(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (maasv1alpha1.TenantGatewayRef, error) {
-	if model.Spec.TenantRef != "" {
-		aitenant := &maasv1alpha1.AITenant{}
-		key := client.ObjectKey{
-			Name:      model.Spec.TenantRef,
-			Namespace: h.r.AITenantNamespace,
-		}
-		if err := h.r.Get(ctx, key, aitenant); err != nil {
-			if apierrors.IsNotFound(err) {
-				return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q not found in namespace %s", model.Spec.TenantRef, h.r.AITenantNamespace)
-			}
-			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to get AITenant %q: %w", model.Spec.TenantRef, err)
-		}
-		model.Status.ResolvedTenantRef = model.Spec.TenantRef
-		ref := aitenant.Status.GatewayRef
-		if ref.Name == "" || ref.Namespace == "" {
-			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q has no gateway reference in status", model.Spec.TenantRef)
-		}
-		log.V(4).Info("Resolved gateway from AITenant", "aiTenant", model.Spec.TenantRef, "gateway", fmt.Sprintf("%s/%s", ref.Namespace, ref.Name))
-		return ref, nil
-	}
-
-	// Fall back to namespace-based resolution using the default tenant namespace.
-	// Clear any previously resolved tenant (e.g. after spec.tenantRef is removed).
-	model.Status.ResolvedTenantRef = ""
-	return tenantGatewayRefForNamespace(
-		ctx,
-		h.r.Client,
-		model.Namespace,
-		h.r.DefaultTenantNamespace,
-		h.r.gatewayName(),
-		h.r.gatewayNamespace(),
-		h.r.TenantNamespaceDiscoveryEnabled,
-	)
+	return h.r.resolveGatewayRef(ctx, log, model)
 }
 
 func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {

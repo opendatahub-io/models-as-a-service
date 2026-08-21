@@ -22,6 +22,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/gatewayresolve"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -41,10 +42,13 @@ const (
 // handles cleanup when the ExternalModel is deleted — no finalizer needed.
 type Reconciler struct {
 	client.Client
-	Scheme           *runtime.Scheme
-	Log              logr.Logger
-	GatewayName      string
-	GatewayNamespace string
+	Scheme                          *runtime.Scheme
+	Log                             logr.Logger
+	GatewayName                     string
+	GatewayNamespace                string
+	DefaultTenantNamespace          string
+	AITenantNamespace               string
+	TenantNamespaceDiscoveryEnabled bool
 }
 
 func (r *Reconciler) gatewayName() string {
@@ -99,6 +103,9 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
+//+kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
@@ -135,8 +142,25 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	ns := extModel.Namespace
 	name := extModel.Name
 	resourceName := modelnaming.ExternalModelResourceName(name)
-	gwName := r.gatewayName()
-	gwNamespace := r.gatewayNamespace()
+	gatewayRef, err := gatewayresolve.ForNamespace(
+		ctx,
+		r.Client,
+		ns,
+		r.AITenantNamespace,
+		r.DefaultTenantNamespace,
+		r.gatewayName(),
+		r.gatewayNamespace(),
+		r.TenantNamespaceDiscoveryEnabled,
+	)
+	if err != nil {
+		return ctrl.Result{}, fmt.Errorf("resolve tenant gateway for ExternalModel %s/%s: %w", ns, name, err)
+	}
+	gwName := gatewayRef.Name
+	gwNamespace := gatewayRef.Namespace
+	if gwName == "" || gwNamespace == "" {
+		return ctrl.Result{}, fmt.Errorf("no gateway resolved for ExternalModel %s/%s", ns, name)
+	}
+	logger.V(4).Info("Using tenant gateway for ExternalModel", "gateway", fmt.Sprintf("%s/%s", gwNamespace, gwName))
 	labels := commonLabels(name)
 
 	// 1. ExternalName Service (backend for HTTPRoute)
