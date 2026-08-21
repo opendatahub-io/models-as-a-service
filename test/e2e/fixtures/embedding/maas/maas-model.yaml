@@ -1,0 +1,13 @@
+# MaaSModelRef for the embedding test simulator.
+# Used by e2e tests to validate embedding inference, TRLP enforcement, and default-deny.
+# LLMIS: e2e-embedding-simulated in namespace llm.
+# Serves model ID: test/e2e-embedding-model
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: e2e-embedding-simulated
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: e2e-embedding-simulated
