@@ -30,8 +30,6 @@ ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 pytestmark = pytest.mark.xdist_group("mt_lifecycle")
 
 ANNOTATION_CREATED_BY_AITENANT = "maas.opendatahub.io/created-by-aitenant"
-DEPRECATED_BY_ANNOTATION = "maas.opendatahub.io/deprecated-by"
-MIGRATED_TO_ANNOTATION = "maas.opendatahub.io/migrated-to"
 TENANT_NAME = "default-tenant"
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
@@ -425,7 +423,7 @@ class TestAITenantLifecycle:
         finally:
             _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
 
-    def test_aitenant_migrates_legacy_tenant_to_maas_tenant_config(self):
+    def test_aitenant_migrates_and_removes_legacy_tenant(self):
         if not _crd_exists(LEGACY_TENANT_CRD):
             pytest.skip(f"Missing CRD {LEGACY_TENANT_CRD}; legacy Tenant migration test is not applicable")
 
@@ -526,22 +524,12 @@ class TestAITenantLifecycle:
             assert "gatewayRef" not in (tenant_config.get("spec") or {})
             assert "externalOIDC" not in (tenant_config.get("spec") or {})
 
-            legacy_tenant = _wait_for_json(
+            _wait_for_not_found(
                 LEGACY_TENANT_KIND,
                 TENANT_NAME,
                 tenant_ns,
-                predicate=lambda obj: (
-                    (obj.get("metadata", {}).get("annotations") or {}).get(DEPRECATED_BY_ANNOTATION)
-                    == "MaasTenantConfig"
-                    and (obj.get("metadata", {}).get("annotations") or {}).get(MIGRATED_TO_ANNOTATION)
-                    == TENANT_NAME
-                ),
                 timeout=180,
             )
-            assert legacy_tenant["spec"]["gatewayRef"] == {
-                "namespace": GATEWAY_NAMESPACE,
-                "name": gateway_name,
-            }
         finally:
             _cleanup_aitenant_fixture(aitenant_name, gateway_name)
 
