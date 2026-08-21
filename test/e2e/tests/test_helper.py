@@ -137,9 +137,16 @@ DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simu
 DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
 DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2")
-TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
-TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
-TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
+TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model")
+EMBEDDING_MODEL_REF = os.environ.get("E2E_EMBEDDING_MODEL_REF", "e2e-embedding-simulated")
+EMBEDDING_MODEL_PATH = os.environ.get("E2E_EMBEDDING_MODEL_PATH", "/llm/e2e-embedding-simulated")
+EMBEDDING_MODEL_NAME = os.environ.get("E2E_EMBEDDING_MODEL_NAME", "test/e2e-embedding-model")
+EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_EMBEDDING_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
+) 
 
 
 # ---------------------------------------------------------------------------
@@ -765,6 +772,60 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+def embeddings(text: str, model_v1: str, headers: dict, model_name: str):
+    url = f"{model_v1}/embeddings"
+    body = {"model": model_name, "input": text}
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None):
+    """POST embeddings using an API key only (subscription is bound at mint)."""
+    path = path or MODEL_PATH
+    if model_name is None:
+        model_name = MODEL_NAME
+    url = f"{_gateway_url()}{path}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return requests.post(
+        url, headers=headers,
+        json={"model": model_name, "input": "Hello world"},
+        timeout=TIMEOUT, verify=TLS_VERIFY,
+    )
+
+
+def _poll_embedding_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
+    """Poll embedding endpoint until expected HTTP status or timeout."""
+    timeout = timeout or max(RECONCILE_WAIT * 3, 60)
+    deadline = time.time() + timeout
+    last = None
+    last_err = None
+    while time.time() < deadline:
+        try:
+            r = _embedding_inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
+            last_err = None
+            ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
+            if ok:
+                return r
+            last = r
+        except requests.RequestException as exc:
+            last_err = exc
+            log.debug(f"Transient request error while polling: {exc}")
+        except Exception as exc:
+            log.exception(f"Non-transient error while polling, failing fast: {exc}")
+            raise
+        time.sleep(poll_interval)
+    exp_str = expected if isinstance(expected, int) else " or ".join(str(e) for e in expected)
+    err_msg = f"Expected {exp_str} within {timeout}s"
+    if last is not None:
+        err_msg += f", last status: {last.status_code}"
+    if last_err is not None:
+        err_msg += f", last error: {last_err}"
+    if last is None and last_err is None:
+        err_msg += ", no response (all requests may have raised non-RequestException)"
+    raise AssertionError(err_msg)
 
 
 # ---------------------------------------------------------------------------
