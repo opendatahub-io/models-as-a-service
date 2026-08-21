@@ -37,7 +37,7 @@ from test_helper import (
     _gateway_url,
     _get_cluster_token,
     _get_cr,
-    _poll_embedding_status,
+    _poll_status,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
@@ -226,8 +226,9 @@ class TestEmbeddingGovernance:
                 subscription=subscription_name,
             )
 
-            r = _poll_embedding_status(
-                api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME, timeout=90
+            r = _poll_status(
+                api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME,
+                timeout=90, inference_fn=_embedding_inference,
             )
             data = r.json()
             assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"

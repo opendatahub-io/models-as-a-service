@@ -797,13 +797,6 @@ def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None
     )
 
 
-def _poll_embedding_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
-    """Poll embedding endpoint until expected HTTP status or timeout."""
-    return _poll_status(api_key, expected, path=path, extra_headers=extra_headers,
-                        model_name=model_name, timeout=timeout, poll_interval=poll_interval,
-                        inference_fn=_embedding_inference)
-
-
 # ---------------------------------------------------------------------------
 # IPP (Payload Processing) Helpers
 # ---------------------------------------------------------------------------
