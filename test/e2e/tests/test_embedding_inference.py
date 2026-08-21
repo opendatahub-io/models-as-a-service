@@ -57,17 +57,16 @@ class TestEmbeddingPathRouting:
         """POST /{ns}/{model}/v1/embeddings returns valid embedding response."""
         r = embeddings("The quick brown fox", model_v1, api_key_headers, model_name=model_name)
         log.info(f"[embedding] POST /v1/embeddings -> {r.status_code}")
-        assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
-        if r.status_code == 200:
-            data = r.json()
-            assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
-            assert len(data["data"]) > 0, "Empty data array"
-            first = data["data"][0]
-            assert "embedding" in first, f"Missing 'embedding' in data[0]: {list(first.keys())}"
-            assert isinstance(first["embedding"], list), "embedding should be a list of floats"
-            assert len(first["embedding"]) > 0, "embedding vector is empty"
-            usage = data.get("usage", {})
-            assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
+        data = r.json()
+        assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
+        assert len(data["data"]) > 0, "Empty data array"
+        first = data["data"][0]
+        assert "embedding" in first, f"Missing 'embedding' in data[0]: {list(first.keys())}"
+        assert isinstance(first["embedding"], list), "embedding should be a list of floats"
+        assert len(first["embedding"]) > 0, "embedding vector is empty"
+        usage = data.get("usage", {})
+        assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
 
     def test_embedding_bbr_llmisvc_200(self, gateway_url: str, api_key_headers: dict):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
@@ -75,10 +74,9 @@ class TestEmbeddingPathRouting:
         body = {"model": MODEL_CANONICAL_ID, "input": "The quick brown fox"}
         r = requests.post(url, headers=api_key_headers, json=body, timeout=30, verify=TLS_VERIFY)
         log.info(f"[embedding-bbr] POST /v1/embeddings (model={MODEL_CANONICAL_ID}) -> {r.status_code}")
-        assert r.status_code in (200, 404), f"unexpected {r.status_code}: {r.text[:500]}"
-        if r.status_code == 200:
-            data = r.json()
-            assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
+        data = r.json()
+        assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
 
     @pytest.mark.skip(reason="Depends on ExternalModel BBR gateway story")
     def test_embedding_bbr_external_model(self):
