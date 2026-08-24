@@ -1,6 +1,6 @@
 module github.com/opendatahub-io/models-as-a-service/maas-api
 
-go 1.26.7
+go 1.26.6
 
 require (
 	github.com/gin-contrib/cors v1.7.6
