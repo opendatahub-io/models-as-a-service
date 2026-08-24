@@ -40,16 +40,13 @@ func setPrerequisiteConditionsFromReport(tenant *maasv1alpha1.MaasTenantConfig, 
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
 			"PrerequisitesMissing", agg)
 	case len(rep.Warnings) > 0:
-		agg := strings.Join(rep.Warnings, "; ")
 		setTenantCondition(tenant, tenantreconcile.ConditionMaaSPrerequisitesAvailable, metav1.ConditionTrue,
 			"PrerequisitesMet", "Prerequisites satisfied; see Degraded for warnings")
-		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
-			"PrerequisitesWarning", agg)
+		// Note: Degraded is set by aggregateWarningsAndSetDegraded
 	default:
 		setTenantCondition(tenant, tenantreconcile.ConditionMaaSPrerequisitesAvailable, metav1.ConditionTrue,
 			"PrerequisitesMet", "All prerequisites are satisfied")
-		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionFalse,
-			"PrerequisitesMet", "All prerequisites are satisfied")
+		// Note: Degraded is set by aggregateWarningsAndSetDegraded
 	}
 }
 

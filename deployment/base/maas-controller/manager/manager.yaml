@@ -29,6 +29,8 @@ spec:
         args:
           - --leader-elect
           - --health-probe-bind-address=:8081
+          - --metrics-bind-address=:8443
+          - --metrics-secure=true
           - --controller-namespace=$(CONTROLLER_NAMESPACE)
           - --gateway-name=$(GATEWAY_NAME)
           - --gateway-namespace=$(GATEWAY_NAMESPACE)
@@ -90,7 +92,7 @@ spec:
         name: manager
         imagePullPolicy: Always
         ports:
-        - containerPort: 8080
+        - containerPort: 8443
           name: metrics
           protocol: TCP
         securityContext:
@@ -123,10 +125,17 @@ spec:
         - mountPath: /tmp/k8s-webhook-server/serving-certs
           name: webhook-cert
           readOnly: true
+        - mountPath: /tmp/k8s-metrics-server/metrics-certs
+          name: metrics-certs
+          readOnly: true
       volumes:
       - name: webhook-cert
         secret:
           defaultMode: 420
           secretName: maas-controller-webhook-cert
+      - name: metrics-certs
+        secret:
+          defaultMode: 420
+          secretName: maas-controller-metrics-tls
       serviceAccountName: maas-controller
       terminationGracePeriodSeconds: 30

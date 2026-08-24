@@ -61,6 +61,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("security")
+
 
 # ============================================================================
 # P0: Header Spoofing Tests
@@ -204,6 +206,11 @@ class TestHeaderSpoofing:
         """
         _wait_for_gateway_auth_enforced()
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
+
+        # Warm up: confirm the API key works with a normal request before
+        # testing duplicate headers. Under parallel load, Rego policy
+        # propagation can take longer than the 30s retry window below.
+        _poll_status(api_key, 200, timeout=60)
 
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
         # The requests library uses a dict for headers, so it cannot send two
@@ -353,6 +360,7 @@ class TestAuthPolicyRemoval:
     deleted, and subsequent requests with the API key should be denied.
     """
 
+    @pytest.mark.serial
     def test_authpolicy_deletion_revokes_access(self):
         """Create auth policy, delete it, verify legacy per-model AuthPolicy is absent.
 

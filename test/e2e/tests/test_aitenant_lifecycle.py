@@ -14,7 +14,7 @@ from multitenancy_helpers import (
     remove_gateway_access_label,
     wait_for_gateway_programmed,
 )
-from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE
+from test_helper import DEPLOYMENT_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _ns
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
@@ -27,13 +27,12 @@ CONFIG_NAME = "default"
 DEFAULT_AITENANT_BOOTSTRAPPED_ANNOTATION = "maas.opendatahub.io/default-aitenant-bootstrapped"
 ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
+pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+
 ANNOTATION_CREATED_BY_AITENANT = "maas.opendatahub.io/created-by-aitenant"
-DEPRECATED_BY_ANNOTATION = "maas.opendatahub.io/deprecated-by"
-MIGRATED_TO_ANNOTATION = "maas.opendatahub.io/migrated-to"
 TENANT_NAME = "default-tenant"
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
-MAAS_SUBSCRIPTION_NAMESPACE = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
 GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
@@ -301,7 +300,7 @@ class TestAITenantLifecycle:
             predicate=_aitenant_ready,
             timeout=240,
         )
-        assert aitenant["status"]["tenantNamespace"] == MAAS_SUBSCRIPTION_NAMESPACE
+        assert aitenant["status"]["tenantNamespace"] == _ns()
         assert aitenant["status"]["gatewayRef"] == {
             "namespace": GATEWAY_NAMESPACE,
             "name": GATEWAY_NAME,
@@ -324,17 +323,17 @@ class TestAITenantLifecycle:
         assert gateway_annotations.get("maas.opendatahub.io/aitenant-name") is None
         assert gateway_annotations.get("maas.opendatahub.io/aitenant-namespace") is None
 
-        namespace = _wait_for_json("namespace", MAAS_SUBSCRIPTION_NAMESPACE, timeout=180)
+        namespace = _wait_for_json("namespace", _ns(), timeout=180)
         namespace_labels = namespace["metadata"].get("labels") or {}
         assert namespace_labels["maas.opendatahub.io/managed-by-aitenant"] == "true"
         assert namespace_labels["ai-gateway.opendatahub.io/tenant"] == DEFAULT_AITENANT_NAME
         assert namespace_labels["maas.opendatahub.io/tenant-name"] == DEFAULT_AITENANT_NAME
-        assert namespace_labels["maas.opendatahub.io/tenant-namespace"] == MAAS_SUBSCRIPTION_NAMESPACE
+        assert namespace_labels["maas.opendatahub.io/tenant-namespace"] == _ns()
 
         tenant_config = _wait_for_json(
             TENANT_CONFIG_KIND,
             TENANT_NAME,
-            MAAS_SUBSCRIPTION_NAMESPACE,
+            _ns(),
             predicate=_maas_tenant_config_ready,
             timeout=180,
         )
@@ -424,7 +423,7 @@ class TestAITenantLifecycle:
         finally:
             _cleanup_aitenant_fixture(case["aitenant_name"], case["gateway_name"])
 
-    def test_aitenant_migrates_legacy_tenant_to_maas_tenant_config(self):
+    def test_aitenant_migrates_and_removes_legacy_tenant(self):
         if not _crd_exists(LEGACY_TENANT_CRD):
             pytest.skip(f"Missing CRD {LEGACY_TENANT_CRD}; legacy Tenant migration test is not applicable")
 
@@ -525,22 +524,12 @@ class TestAITenantLifecycle:
             assert "gatewayRef" not in (tenant_config.get("spec") or {})
             assert "externalOIDC" not in (tenant_config.get("spec") or {})
 
-            legacy_tenant = _wait_for_json(
+            _wait_for_not_found(
                 LEGACY_TENANT_KIND,
                 TENANT_NAME,
                 tenant_ns,
-                predicate=lambda obj: (
-                    (obj.get("metadata", {}).get("annotations") or {}).get(DEPRECATED_BY_ANNOTATION)
-                    == "MaasTenantConfig"
-                    and (obj.get("metadata", {}).get("annotations") or {}).get(MIGRATED_TO_ANNOTATION)
-                    == TENANT_NAME
-                ),
                 timeout=180,
             )
-            assert legacy_tenant["spec"]["gatewayRef"] == {
-                "namespace": GATEWAY_NAMESPACE,
-                "name": gateway_name,
-            }
         finally:
             _cleanup_aitenant_fixture(aitenant_name, gateway_name)
 
@@ -604,7 +593,7 @@ class TestAITenantLifecycle:
         """RHOAIENG-66836: non-default AITenant must not use models-as-a-service tenant namespace."""
         suffix = uuid.uuid4().hex[:8]
         aitenant_name = f"e2e-derive-{suffix}"
-        reserved_ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+        reserved_ns = _ns()
         expected_ns = f"ai-tenant-{aitenant_name}"
         gateway_name = aitenant_name
 

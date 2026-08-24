@@ -221,12 +221,14 @@ spec:
 
 #### 5. HTTPRoute
 
-Attach workloads to the Gateway. The Gateway `allowedRoutes` uses a label selector —
-label each namespace that needs to attach HTTPRoutes before applying:
+Attach workloads to the Gateway. The Gateway `allowedRoutes` uses a label selector.
+The controller automatically labels the infrastructure namespace (see
+[Automatic infrastructure namespace labeling](#automatic-infrastructure-namespace-labeling)).
+Label any additional namespaces (e.g. model namespaces) manually:
 
 ```bash
-# Replace <application-namespace> with opendatahub or redhat-ods-applications
-oc label namespace <application-namespace> maas.opendatahub.io/gateway-access=true --overwrite
+# Label model namespaces that need to attach HTTPRoutes
+oc label namespace <model-namespace> maas.opendatahub.io/gateway-access=true --overwrite
 ```
 
 This example routes all traffic to `maas-api`:
@@ -327,6 +329,66 @@ kubectl get secret maas-gw-service-tls -n openshift-ingress
 | `503` from the Route | Gateway Service not ready or certificate not yet provisioned | Wait for `service-ca-operator` to provision `maas-gw-service-tls`; check `kubectl get secret -n openshift-ingress` |
 | TLS handshake failure (re-encrypt) | Service CA cert not trusted by the Router | Ensure `tls.destinationCACertificate` contains the service CA bundle from `signing-cabundle` ConfigMap in `openshift-service-ca` namespace |
 | `certificateRefs` name mismatch | Secret name in Gateway does not match ConfigMap annotation | Verify both reference the same Secret name (`maas-gw-service-tls`) |
+
+## Automatic infrastructure namespace labeling
+
+When a Gateway uses `allowedRoutes.namespaces.from: Selector` with `matchLabels`,
+the MaaS controller automatically applies those labels to the infrastructure
+namespace (where `maas-api-route` HTTPRoutes live). This ensures the Gateway
+accepts MaaS API routes without manual labeling of the infra namespace.
+
+Model namespaces still require manual labeling — the controller only manages the
+infrastructure namespace.
+
+### How it works
+
+Each time an AITenant is reconciled, the controller reads the Gateway's listener
+`matchLabels` and applies them to the infra namespace. An annotation
+(`maas.opendatahub.io/gateway-selector-labels`) tracks which gateway owns each
+label so that labels can be cleaned up when a tenant is deleted or a gateway's
+selector changes.
+
+When multiple gateways share the same label (e.g. both use
+`maas-gateway-access=true`), all are recorded as co-owners. Deleting one
+tenant does not remove a label that another tenant's gateway still requires.
+
+The controller also watches for Gateway spec changes and re-reconciles the
+affected AITenants automatically.
+
+### Conflict errors
+
+Two situations produce reconciliation errors visible in the AITenant status
+(condition `type: Degraded`, `reason: InfraNamespaceLabelFailed`):
+
+**Intra-gateway conflict:** A single gateway has two listeners that disagree on a
+label value (e.g. listener `https` wants `env=prod` and listener `https-alt`
+wants `env=staging`). Fix the gateway so all listeners use the same value for
+each label key.
+
+**Cross-gateway conflict:** Two gateways want different values for the same label
+key. For example, gateway-a set `env=prod` and gateway-b wants `env=staging`.
+Use distinct label keys per gateway (e.g. `gateway-a-access=true` and
+`gateway-b-access=true`) or ensure both use the same value.
+
+A co-owner cannot change a shared label's value while other gateways still
+depend on the current value. The conflicting tenant's AITenant status reports
+which gateway owns the contested label.
+
+### Limitations
+
+- Only `matchLabels` is supported. Gateways using `matchExpressions` require
+  manual namespace configuration.
+- The controller does not label model namespaces — only the infrastructure
+  namespace.
+- Labels not selected by any managed Gateway are not tracked in the ownership
+  annotation. The controller does not manage or clean up those labels. Remove
+  them manually if they are no longer needed:
+  ```bash
+  oc label namespace <infra-namespace> <label-key>-
+  ```
+- If an existing label on the infrastructure namespace conflicts with a
+  gateway's desired value, the controller rejects the reconciliation rather
+  than overwriting it. Resolve the conflict manually before retrying.
 
 ## MaaS integration
 

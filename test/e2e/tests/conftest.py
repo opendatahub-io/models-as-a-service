@@ -7,6 +7,100 @@ import requests
 
 from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
 
+# Populated during collection; read by session fixtures to decide whether this
+# worker needs a per-group tenant or should use the default cluster tenant.
+_WORKER_XDIST_GROUPS: set[str] = set()
+
+# Groups whose tests run against a per-worker tenant instead of the default.
+# readonly / mt_lifecycle / tenant_isolation manage their own tenants or are read-only.
+# Disabled: worker tenant bootstrap creates subscriptions referencing default-gateway
+# models (llm namespace), but worker tenants have their own gateways → subscription
+# phase=Failed. Re-enable once _apply_baseline_stack provisions per-tenant models.
+_GROUPS_NEEDING_WORKER_TENANT: set[str] = set()
+
+
+def _xdist_worker_suffix() -> str:
+    """Stable suffix for per-worker session fixtures under pytest-xdist."""
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "master")
+    if worker == "master":
+        return "main"
+    return worker.replace("gw", "w")
+
+
+@pytest.fixture(scope="session")
+def worker_tenant():
+    """One AITenant per xdist worker with baseline auth/subscriptions.
+
+    Yields None (fall back to default tenant) when:
+    - E2E_USE_WORKER_TENANT=false
+    - Running without xdist (serial pass 2)
+    - This worker's group doesn't need a dedicated tenant (readonly,
+      mt_lifecycle, tenant_isolation manage their own)
+    """
+    from worker_tenant_fixtures import (
+        bootstrap_worker_tenant,
+        build_worker_tenant_case,
+        teardown_worker_tenant,
+        worker_tenant_enabled,
+    )
+
+    if not worker_tenant_enabled():
+        yield None
+        return
+
+    # Pass 2 runs without xdist; serial tests must stay on the default tenant.
+    if os.environ.get("PYTEST_XDIST_WORKER", "master") == "master":
+        yield None
+        return
+
+    # Skip tenant bootstrap for groups that are read-only or self-manage tenants.
+    if _WORKER_XDIST_GROUPS and not (_WORKER_XDIST_GROUPS & _GROUPS_NEEDING_WORKER_TENANT):
+        yield None
+        return
+
+    case = build_worker_tenant_case(_xdist_worker_suffix())
+    try:
+        case = bootstrap_worker_tenant(case)
+        print(
+            f"[worker_tenant] worker={_xdist_worker_suffix()} "
+            f"namespace={case['tenant_ns']} gateway={case['gateway_host']}"
+        )
+        yield case
+    finally:
+        teardown_worker_tenant(case)
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _activate_worker_tenant_env(worker_tenant):
+    """Set env vars so runtime reads (test_helper._ns(), module constants) see the worker tenant."""
+    if not worker_tenant:
+        yield
+        return
+    os.environ["MAAS_SUBSCRIPTION_NAMESPACE"] = worker_tenant["tenant_ns"]
+    os.environ["GATEWAY_HOST"] = worker_tenant["gateway_host"]
+    os.environ["MAAS_API_BASE_URL"] = worker_tenant["base_url"]
+    os.environ["E2E_GATEWAY_AUTH_POLICY_NAME"] = worker_tenant["gateway_authpolicy_name"]
+    yield
+
+
+def pytest_collection_modifyitems(config, items):
+    """Tag @serial tests and record xdist_group membership for this worker.
+
+    xdist_group alone does not block other workers from touching shared cluster
+    state (simulator-subscription, UNCONFIGURED model auth, MODEL_REF TRLP churn).
+    CI runs serial tests in a second pass.
+
+    _WORKER_XDIST_GROUPS is populated here (before session fixtures) so the
+    worker_tenant fixture knows whether to bootstrap a tenant.
+    """
+    for item in items:
+        if item.get_closest_marker("serial"):
+            item.add_marker(pytest.mark.xdist_group("serial"))
+        group_marker = item.get_closest_marker("xdist_group")
+        if group_marker and group_marker.args:
+            _WORKER_XDIST_GROUPS.add(group_marker.args[0])
+
+
 # TLS verification flag - set E2E_SKIP_TLS_VERIFY=true to disable cert verification
 TLS_VERIFY = os.environ.get("E2E_SKIP_TLS_VERIFY", "").lower() != "true"
 
@@ -45,15 +139,19 @@ if _GATEWAY_ROUTE_HOST:
 
 
 @pytest.fixture(scope="session")
-def gateway_host() -> str:
+def gateway_host(worker_tenant) -> str:
     """
     Gateway hostname. Primary source of truth for endpoint URLs.
     Can be set via GATEWAY_HOST or derived from MAAS_API_BASE_URL.
+    When a worker_tenant is active, uses the tenant's gateway host.
     """
+    if worker_tenant:
+        return worker_tenant["gateway_host"]
+
     host = os.environ.get("GATEWAY_HOST", "")
     if host:
         return host
-    
+
     # Fall back to deriving from MAAS_API_BASE_URL
     url = os.environ.get("MAAS_API_BASE_URL", "")
     if url:
@@ -65,7 +163,7 @@ def gateway_host() -> str:
         if "://" in url:
             url = url.split("://", 1)[1]
         return url
-    
+
     raise RuntimeError("GATEWAY_HOST or MAAS_API_BASE_URL env var is required")
 
 
@@ -99,10 +197,14 @@ def is_https() -> bool:
 
 
 @pytest.fixture(scope="session")
-def maas_api_base_url(gateway_host: str, is_https: bool) -> str:
+def maas_api_base_url(gateway_host: str, is_https: bool, worker_tenant) -> str:
     """
     MaaS API base URL. Derived from GATEWAY_HOST or MAAS_API_BASE_URL.
+    When a worker_tenant is active, uses the tenant's base URL.
     """
+    if worker_tenant:
+        return worker_tenant["base_url"]
+
     # If explicitly set, use it
     url = os.environ.get("MAAS_API_BASE_URL", "")
     if url:
@@ -180,13 +282,21 @@ def model_id(model_catalog: dict):
 
 @pytest.fixture(scope="session")
 def model_base_url(model_catalog: dict, model_id: str, gateway_url: str) -> str:
+    # E2E_MODEL_PATH provides an explicit path override for clusters that use per-model
+    # path-based routing (e.g. /llm/{model-name}) rather than BBR gateway-root routing.
+    # Without this, the catalog url field (gateway root on BBR clusters) produces a path
+    # of "" which resolves to gateway_root — a path with no HTTPRoute → 404.
+    path_override = os.environ.get("E2E_MODEL_PATH")
+    if path_override:
+        return f"{gateway_url}{path_override}".rstrip("/")
     items = (model_catalog.get("data") or model_catalog.get("models") or [])
     match = next((m for m in items if m.get("id") == model_id), None)
     if match:
         url = match.get("url")
         if url:
             path = urlparse(url).path
-            return f"{gateway_url}{path}".rstrip("/")
+            if path.startswith("/") and path != "/":
+                return f"{gateway_url}{path}".rstrip("/")
     return f"{gateway_url}/llm/{model_id}".rstrip("/")
 
 @pytest.fixture(scope="session")
@@ -241,11 +351,12 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     from multitenancy_helpers import response_summary
 
     sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
-    print("[api_key] Creating API key for inference tests (subscription bound at mint)...")
+    key_name = f"e2e-test-inference-key-{_xdist_worker_suffix()}"
+    print(f"[api_key] Creating API key for inference tests ({key_name})...")
     r = requests.post(
         api_keys_base_url,
         headers=headers,
-        json={"name": "e2e-test-inference-key", "subscription": sim_sub},
+        json={"name": key_name, "subscription": sim_sub},
         timeout=30,
         verify=TLS_VERIFY,
     )
@@ -303,9 +414,9 @@ def shared_test_tenants(gateway_host: str, is_https: bool):
 
     require_aitenant_crd()
 
-    # Create two persistent tenants for the session
-    case_a = new_named_tenant_case("e2e-shared-a")
-    case_b = new_named_tenant_case("e2e-shared-b")
+    worker = _xdist_worker_suffix()
+    case_a = new_named_tenant_case(f"e2e-shared-a-{worker}")
+    case_b = new_named_tenant_case(f"e2e-shared-b-{worker}")
 
     try:
         # Bootstrap both tenants (creates gateway + AITenant CR)

@@ -24,6 +24,23 @@ const (
 	defaultConnMaxLifetimeSecs = 300
 )
 
+// concurrentMigration defines a migration that must run outside a transaction block.
+// This is because golang-migrate wraps each migration in a transaction, which prevents statements
+// like CREATE INDEX CONCURRENTLY. These run separately after the main migration runner.
+type concurrentMigration struct {
+	name string
+	sql  string
+}
+
+// Append new concurrent migrations to this list.
+var concurrentMigrations = []concurrentMigration{
+	{
+		name: "idx_api_keys_labels_gin",
+		sql:  "CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_api_keys_labels_gin ON api_keys USING GIN (labels jsonb_path_ops)",
+	},
+	// Future concurrent indexes go here.
+}
+
 // NewPostgresStoreFromURL creates a PostgreSQL store from a connection URL.
 // It automatically applies database schema migrations on startup using golang-migrate.
 // URL format: postgresql://user:password@host:port/database
@@ -52,6 +69,10 @@ func NewPostgresStoreFromURL(ctx context.Context, log *logger.Logger, databaseUR
 	if err := runMigrations(db, log); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("failed to apply schema migrations: %w", err)
+	}
+	if err := runConcurrentMigrations(ctx, db, log); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("failed to apply concurrent migrations: %w", err)
 	}
 
 	log.Info("Connected to PostgreSQL database (schema applied)", "tenant", tenantName)
@@ -102,4 +123,25 @@ func configureConnectionPool(db *sql.DB) {
 	db.SetMaxOpenConns(maxOpenConns)
 	db.SetMaxIdleConns(maxIdleConns)
 	db.SetConnMaxLifetime(time.Duration(connMaxLifetimeSecs) * time.Second)
+}
+
+// Return the names of the concurrent migrations. (A convenience getter that supports better schema-migration integration testing.)
+func ConcurrentMigrationNames() []string {
+	names := make([]string, len(concurrentMigrations))
+	for i, m := range concurrentMigrations {
+		names[i] = m.name
+	}
+	return names
+}
+
+// Apply schema migrations that cannot be run inside a transaction block and must be run concurrently.
+// If they can run inside a transaction block then the correct place is in the runMigrations function.
+func runConcurrentMigrations(ctx context.Context, db *sql.DB, log *logger.Logger) error {
+	for _, m := range concurrentMigrations {
+		log.Info("Applying concurrent migration", "name", m.name)
+		if _, err := db.ExecContext(ctx, m.sql); err != nil {
+			return fmt.Errorf("concurrent migration %q failed: %w", m.name, err)
+		}
+	}
+	return nil
 }

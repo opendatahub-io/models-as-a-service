@@ -45,7 +45,18 @@ var _ MetadataStore = (*MockStore)(nil)
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (m *MockStore) AddKey(
-	ctx context.Context, username, keyID, keyHash, name, description string, userGroups []string, subscription string, tenant string, expiresAt *time.Time, ephemeral bool,
+	ctx context.Context, 
+	username, 
+	keyID, 
+	keyHash, 
+	name, 
+	description string, 
+	userGroups []string, 
+	subscription string, 
+	tenant string, 
+	expiresAt *time.Time, 
+	ephemeral bool, 
+	labels map[string]string,
 ) error {
 	if keyID == "" {
 		return ErrEmptyJTI
@@ -65,6 +76,10 @@ func (m *MockStore) AddKey(
 		expiresAtTime = *expiresAt
 	}
 
+	if len(labels) == 0 {
+		labels = nil 
+	}
+
 	// userGroups is already []string - no parsing needed
 	m.keys[keyID] = &storedKey{
 		metadata: ApiKey{
@@ -77,6 +92,7 @@ func (m *MockStore) AddKey(
 			Status:       StatusActive,
 			CreationDate: time.Now().UTC().Format(time.RFC3339),
 			Ephemeral:    ephemeral,
+			Labels:       labels,
 		},
 		username:  username,
 		keyHash:   keyHash,
@@ -357,6 +373,16 @@ func (m *MockStore) Search(
 		allKeys = filtered
 	}
 
+	if len(filters.LabelsContain) > 0 {
+		filtered := allKeys[:0]
+		for _, k := range allKeys {
+			if labelsContain(k.Labels, filters.LabelsContain) {
+				filtered = append(filtered, k)
+			}
+		}
+		allKeys = filtered
+	}
+
 	// Sort keys
 	sort.Slice(allKeys, func(i, j int) bool {
 		return compareKeys(allKeys[i], allKeys[j], sortParams.By, sortParams.Order)
@@ -369,6 +395,22 @@ func (m *MockStore) Search(
 		Keys:    keys,
 		HasMore: hasMore,
 	}, nil
+}
+
+// Helper function to check if the have map contains all the keys and values in the want map.
+func labelsContain(have, want map[string]string) bool {
+	if len(want) == 0 {
+		return true
+	}
+	if have == nil {
+		return false
+	}
+	for k, v := range want {
+		if have[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (m *MockStore) Get(ctx context.Context, keyID string) (*ApiKey, error) {

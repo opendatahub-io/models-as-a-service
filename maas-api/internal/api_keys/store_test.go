@@ -65,7 +65,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	defer store.Close()
 
 	t.Run("AddKey", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, "sub-1", "", nil, false)
+		err := store.AddKey(ctx, "user1", "key-id-1", "hash123", "my-key", "test key", []string{"system:authenticated", "premium-user"}, "sub-1", "", nil, false, nil)
 		require.NoError(t, err)
 
 		// Verify key was added by fetching it
@@ -106,7 +106,7 @@ func TestAPIKeyOperations(t *testing.T) {
 	// matching PostgreSQL behavior: only keys with status='active' can be revoked.
 	t.Run("RevokeAlreadyRevokedKey", func(t *testing.T) {
 		// Create a fresh key, revoke it, then try revoking again
-		err := store.AddKey(ctx, "user3", "key-revoke-twice", "hash-revoke-twice", "revoke-twice", "", nil, "sub-1", "", nil, false)
+		err := store.AddKey(ctx, "user3", "key-revoke-twice", "hash-revoke-twice", "revoke-twice", "", nil, "sub-1", "", nil, false, nil)
 		require.NoError(t, err)
 
 		err = store.Revoke(ctx, "key-revoke-twice")
@@ -119,7 +119,7 @@ func TestAPIKeyOperations(t *testing.T) {
 
 	t.Run("UpdateLastUsed", func(t *testing.T) {
 		// Add another key for this test
-		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, "sub-2", "", nil, false)
+		err := store.AddKey(ctx, "user2", "key-id-2", "hash456", "key2", "", []string{"system:authenticated", "free-user"}, "sub-2", "", nil, false, nil)
 		require.NoError(t, err)
 
 		err = store.UpdateLastUsed(ctx, "key-id-2")
@@ -142,11 +142,11 @@ func TestBulkRevoke(t *testing.T) {
 	t.Run("BasicHappyPath", func(t *testing.T) {
 		for i := range 3 {
 			id := "alice-key-" + string(rune('a'+i))
-			require.NoError(t, store.AddKey(ctx, "alice", id, "ahash"+id, "key-"+id, "", nil, "sub-1", "", nil, false))
+			require.NoError(t, store.AddKey(ctx, "alice", id, "ahash"+id, "key-"+id, "", nil, "sub-1", "", nil, false, nil))
 		}
 		for i := range 2 {
 			id := "bob-key-" + string(rune('a'+i))
-			require.NoError(t, store.AddKey(ctx, "bob", id, "bhash"+id, "key-"+id, "", nil, "sub-1", "", nil, false))
+			require.NoError(t, store.AddKey(ctx, "bob", id, "bhash"+id, "key-"+id, "", nil, "sub-1", "", nil, false, nil))
 		}
 
 		count, err := store.BulkRevoke(ctx, "alice", "", "", false)
@@ -178,9 +178,9 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "carol", "c1", "ch1", "k1", "", nil, "sub-1", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "carol", "c2", "ch2", "k2", "", nil, "sub-1", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "carol", "c3", "ch3", "k3", "", nil, "sub-1", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "carol", "c1", "ch1", "k1", "", nil, "sub-1", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "carol", "c2", "ch2", "k2", "", nil, "sub-1", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "carol", "c3", "ch3", "k3", "", nil, "sub-1", "", nil, false, nil))
 
 		require.NoError(t, s.Revoke(ctx, "c3"))
 
@@ -193,7 +193,7 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "dan", "d1", "dh1", "k1", "", nil, "sub-1", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "dan", "d1", "dh1", "k1", "", nil, "sub-1", "", nil, false, nil))
 
 		count, err := s.BulkRevoke(ctx, "dan", "", "", false)
 		require.NoError(t, err)
@@ -208,9 +208,9 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "alice", "sa-1", "sah1", "k1", "", nil, "sub-alpha", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "bob", "sa-2", "sah2", "k2", "", nil, "sub-alpha", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "alice", "sb-1", "sbh1", "k3", "", nil, "sub-beta", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "alice", "sa-1", "sah1", "k1", "", nil, "sub-alpha", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "bob", "sa-2", "sah2", "k2", "", nil, "sub-alpha", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "alice", "sb-1", "sbh1", "k3", "", nil, "sub-beta", "", nil, false, nil))
 
 		count, err := s.BulkRevoke(ctx, "", "sub-alpha", "", false)
 		require.NoError(t, err)
@@ -224,9 +224,9 @@ func TestBulkRevoke(t *testing.T) {
 		s := createTestStore(t)
 		defer s.Close()
 
-		require.NoError(t, s.AddKey(ctx, "alice", "us-1", "ush1", "k1", "", nil, "sub-x", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "alice", "us-2", "ush2", "k2", "", nil, "sub-y", "", nil, false))
-		require.NoError(t, s.AddKey(ctx, "bob", "us-3", "ush3", "k3", "", nil, "sub-x", "", nil, false))
+		require.NoError(t, s.AddKey(ctx, "alice", "us-1", "ush1", "k1", "", nil, "sub-x", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "alice", "us-2", "ush2", "k2", "", nil, "sub-y", "", nil, false, nil))
+		require.NoError(t, s.AddKey(ctx, "bob", "us-3", "ush3", "k3", "", nil, "sub-x", "", nil, false, nil))
 
 		count, err := s.BulkRevoke(ctx, "alice", "sub-x", "", false)
 		require.NoError(t, err)
@@ -245,7 +245,7 @@ func TestAddKeyWithTenant(t *testing.T) {
 	defer store.Close()
 
 	t.Run("TenantRoundTripsViaGet", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "tenant-key-1", "thash1", "tenant-key", "", nil, "sub-1", "acme-corp", nil, false)
+		err := store.AddKey(ctx, "user1", "tenant-key-1", "thash1", "tenant-key", "", nil, "sub-1", "acme-corp", nil, false, nil)
 		require.NoError(t, err)
 
 		key, err := store.Get(ctx, "tenant-key-1")
@@ -254,7 +254,7 @@ func TestAddKeyWithTenant(t *testing.T) {
 	})
 
 	t.Run("EmptyTenantSentinel", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "tenant-key-2", "thash2", "no-tenant-key", "", nil, "sub-1", "", nil, false)
+		err := store.AddKey(ctx, "user1", "tenant-key-2", "thash2", "no-tenant-key", "", nil, "sub-1", "", nil, false, nil)
 		require.NoError(t, err)
 
 		key, err := store.Get(ctx, "tenant-key-2")
@@ -263,7 +263,7 @@ func TestAddKeyWithTenant(t *testing.T) {
 	})
 
 	t.Run("TenantRoundTripsViaGetByHash", func(t *testing.T) {
-		err := store.AddKey(ctx, "user1", "tenant-key-3", "thash3", "hash-tenant-key", "", nil, "sub-1", "tenant-xyz", nil, false)
+		err := store.AddKey(ctx, "user1", "tenant-key-3", "thash3", "hash-tenant-key", "", nil, "sub-1", "tenant-xyz", nil, false, nil)
 		require.NoError(t, err)
 
 		key, err := store.GetByHash(ctx, "thash3")
@@ -280,12 +280,12 @@ func TestSearchByTenant(t *testing.T) {
 	defer store.Close()
 
 	// Add 2 keys for tenant-a
-	require.NoError(t, store.AddKey(ctx, "user1", "sa-1", "shah1", "key-a1", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "user1", "sa-2", "shah2", "key-a2", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "user1", "sa-1", "shah1", "key-a1", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "user1", "sa-2", "shah2", "key-a2", "", nil, "sub-1", "tenant-a", nil, false, nil))
 	// Add 1 key for tenant-b
-	require.NoError(t, store.AddKey(ctx, "user1", "sb-1", "shbh1", "key-b1", "", nil, "sub-1", "tenant-b", nil, false))
+	require.NoError(t, store.AddKey(ctx, "user1", "sb-1", "shbh1", "key-b1", "", nil, "sub-1", "tenant-b", nil, false, nil))
 	// Add 1 key for tenant-c
-	require.NoError(t, store.AddKey(ctx, "user1", "sc-1", "shch1", "key-c1", "", nil, "sub-1", "tenant-c", nil, false))
+	require.NoError(t, store.AddKey(ctx, "user1", "sc-1", "shch1", "key-c1", "", nil, "sub-1", "tenant-c", nil, false, nil))
 
 	filters := api_keys.SearchFilters{}
 	sortP := api_keys.SortParams{By: api_keys.DefaultSortBy, Order: api_keys.DefaultSortOrder}
@@ -317,10 +317,12 @@ func TestBulkRevoke_TenantScoped(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "ta-1", "tah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "ta-2", "tah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "tb-1", "tbh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "tb-2", "tbh2", "key-tb2", "", nil, "sub-1", "tenant-b", nil, false))
+	// Add 2 keys for alice in tenant-a
+	require.NoError(t, store.AddKey(ctx, "alice", "ta-1", "tah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "ta-2", "tah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	// Add 2 keys for alice in tenant-b
+	require.NoError(t, store.AddKey(ctx, "alice", "tb-1", "tbh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "tb-2", "tbh2", "key-tb2", "", nil, "sub-1", "tenant-b", nil, false, nil))
 
 	count, err := store.BulkRevoke(ctx, "alice", "", "tenant-a", false)
 	require.NoError(t, err)
@@ -347,9 +349,9 @@ func TestBulkRevoke_ExcludesExpiredKeys(t *testing.T) {
 	pastExpiry := time.Now().Add(-time.Hour)
 	futureExpiry := time.Now().Add(24 * time.Hour)
 
-	require.NoError(t, store.AddKey(ctx, "alice", "active-1", "ah1", "key-a1", "", nil, "sub-1", "tenant-a", &futureExpiry, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "expired-1", "ah2", "key-a2", "", nil, "sub-1", "tenant-a", &pastExpiry, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "permanent-1", "ah3", "key-a3", "", nil, "sub-1", "tenant-a", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "active-1", "ah1", "key-a1", "", nil, "sub-1", "tenant-a", &futureExpiry, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "expired-1", "ah2", "key-a2", "", nil, "sub-1", "tenant-a", &pastExpiry, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "permanent-1", "ah3", "key-a3", "", nil, "sub-1", "tenant-a", nil, false, nil))
 
 	count, err := store.BulkRevoke(ctx, "alice", "", "tenant-a", true)
 	require.NoError(t, err)
@@ -379,9 +381,9 @@ func TestInvalidateTenant(t *testing.T) {
 	store := createTestStore(t)
 	defer store.Close()
 
-	require.NoError(t, store.AddKey(ctx, "alice", "tenant-a-1", "tenant-ah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "bob", "tenant-a-2", "tenant-ah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false))
-	require.NoError(t, store.AddKey(ctx, "alice", "tenant-b-1", "tenant-bh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false))
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-a-1", "tenant-ah1", "key-ta1", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "bob", "tenant-a-2", "tenant-ah2", "key-ta2", "", nil, "sub-1", "tenant-a", nil, false, nil))
+	require.NoError(t, store.AddKey(ctx, "alice", "tenant-b-1", "tenant-bh1", "key-tb1", "", nil, "sub-1", "tenant-b", nil, false, nil))
 
 	count, err := store.InvalidateTenant(ctx, "tenant-a")
 	require.NoError(t, err)

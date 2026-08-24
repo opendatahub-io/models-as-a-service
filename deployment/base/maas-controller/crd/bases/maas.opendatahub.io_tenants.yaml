@@ -106,6 +106,49 @@ spec:
                     pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                     type: string
                 type: object
+              payloadProcessing:
+                description: PayloadProcessing defines scaling configuration for payload-processing
+                  (IPP) pods.
+                properties:
+                  autoscaling:
+                    description: |-
+                      Autoscaling enables HPA-based horizontal pod autoscaling.
+                      When enabled, an HPA is created targeting the payload-processing Deployment.
+                    properties:
+                      maxReplicas:
+                        default: 10
+                        description: MaxReplicas is the upper limit for the HPA replica
+                          count.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      targetCPUUtilization:
+                        default: 70
+                        description: TargetCPUUtilization is the target average CPU
+                          utilization percentage.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      targetMemoryUtilization:
+                        default: 80
+                        description: TargetMemoryUtilization is the target average
+                          memory utilization percentage.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                    type: object
+                  replicas:
+                    description: |-
+                      Replicas overrides the payload-processing Deployment replica count.
+                      When Autoscaling is enabled, this value sets the HPA minReplicas floor.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                type: object
               telemetry:
                 description: Telemetry contains configuration for telemetry and metrics
                   collection.

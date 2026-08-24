@@ -48,6 +48,8 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
+pytestmark = pytest.mark.xdist_group("security")
+
 
 @pytest.fixture(scope="module", autouse=True)
 def _skip_when_tenant_discovery_enabled():

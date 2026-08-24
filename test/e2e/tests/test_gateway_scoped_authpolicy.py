@@ -9,6 +9,7 @@ Runs in default CI (no tenant namespace discovery required).
 
 import json
 import logging
+import os
 import uuid
 
 import pytest
@@ -32,6 +33,8 @@ from test_helper import (
 )
 
 log = logging.getLogger(__name__)
+
+pytestmark = pytest.mark.xdist_group("models")
 
 
 def _gateway_auth_rego() -> str:
@@ -113,7 +116,7 @@ class TestGatewayAuthPolicyLifecycle:
             _wait_reconcile()
 
     def test_only_one_gateway_authpolicy_named_maas_gateway_auth(self):
-        """6.2: Exactly one maas-gateway-auth exists in the gateway namespace."""
+        """6.2: Exactly one maas-gateway-auth exists targeting the default gateway."""
         ap = get_gateway_authpolicy()
         assert ap is not None
 
@@ -135,9 +138,18 @@ class TestGatewayAuthPolicyLifecycle:
             pytest.fail(result.stderr.strip() or result.stdout.strip())
 
         items = json.loads(result.stdout).get("items") or []
-        names = [item.get("metadata", {}).get("name") for item in items]
+        # Filter to policies targeting the default gateway — per-tenant gateways
+        # also get this label, which is correct behavior, not a bug.
+        default_gw = os.environ.get("GATEWAY_NAME", DEFAULT_GATEWAY_NAME)
+        default_gw_policies = [
+            item for item in items
+            if item.get("spec", {}).get("targetRef", {}).get("name") == default_gw
+        ]
+        names = [item.get("metadata", {}).get("name") for item in default_gw_policies]
         assert GATEWAY_AUTH_POLICY_NAME in names
-        assert len(items) == 1, f"expected one gateway auth policy, got {names!r}"
+        assert len(default_gw_policies) == 1, (
+            f"expected exactly one gateway auth policy targeting {default_gw}, got {names!r}"
+        )
 
 
 class TestGatewayAuthPolicyManagementEndpointAccess:
@@ -222,5 +234,3 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             "gateway-default-auth predicate must include header-based model identity check, "
             f"got: {predicate}"
         )
-
-

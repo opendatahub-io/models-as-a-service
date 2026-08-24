@@ -145,6 +145,8 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 }
 
 func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
+	log := log.FromContext(ctx)
+
 	// Look for DSCInitialization resources
 	dsciList := &unstructured.UnstructuredList{}
 	dsciList.SetGroupVersionKind(schema.GroupVersionKind{
@@ -158,7 +160,7 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 			return "DSCI monitoring not configured: DSCInitialization CRD not found. " +
 				"Showback/FinOps usage views will not work without monitoring stack enabled"
 		}
-		log.FromContext(ctx).Error(err, "unable to verify DSCI monitoring status")
+		log.Error(err, "unable to verify DSCI monitoring status")
 		return "unable to verify DSCI monitoring status due to a cluster API error. " +
 			"Ensure monitoring is enabled in DSCInitialization for showback functionality"
 	}
@@ -181,7 +183,7 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 	// Check MonitoringStackAvailable, MonitoringReady, and PersesAvailable conditions
 	conditionsSlice, found, err := unstructured.NestedSlice(dsci.Object, "status", "conditions")
 	if err != nil {
-		log.FromContext(ctx).Error(err, "unable to read DSCI conditions")
+		log.Error(err, "unable to read DSCI conditions")
 		return "unable to verify DSCI monitoring conditions due to a status read error. " +
 			"Ensure monitoring stack is deployed in DSCInitialization"
 	}

@@ -87,6 +87,9 @@ GATEWAY_ENFORCED_TIMEOUT = int(os.environ.get("E2E_GATEWAY_ENFORCED_TIMEOUT", "1
 # If the AuthPolicy CR is missing this long, fail fast (misconfigured name/namespace)
 # instead of burning the full GATEWAY_ENFORCED_TIMEOUT.
 GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSING_GRACE", "30"))
+# Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
+AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
+MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -964,7 +967,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
     )
 
 
-def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=60, require_model_statuses=False):
+def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=None, timeout=MAAS_SUBSCRIPTION_PHASE_TIMEOUT, require_model_statuses=False):
     """Wait for MaaSSubscription to reach a specific phase.
 
     Args:
@@ -1064,7 +1067,7 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
     )
 
 
-def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=60,
+def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=None, timeout=AUTHPOLICY_PHASE_TIMEOUT,
                                 require_auth_policies=False, require_enforced=True):
     """Wait for MaaSAuthPolicy to reach a specific phase.
 
@@ -1176,6 +1179,54 @@ def _wait_for_model_ready(model_ref, namespace=MODEL_NAMESPACE, timeout=60):
         f"MaaSModelRef {namespace}/{model_ref} did not reach Ready within {timeout}s "
         f"(current: phase={status.get('phase')}, endpoint={status.get('endpoint')}, "
         f"conditions={[c.get('type') + '=' + str(c.get('status')) for c in conditions]})"
+    )
+
+
+def _wait_for_httproute_accepted(name, namespace=MODEL_NAMESPACE, timeout=60):
+    """Wait for an HTTPRoute to be Accepted by at least one parent Gateway.
+
+    The HTTPRoute object existing in the API server only proves the
+    reconciler created it — the Gateway controller still needs to program it
+    into the data plane before real HTTP traffic will match it. Requests
+    sent before that happens race the gateway and get a plain 404 ("no
+    route"), which is easy to mistake for an auth failure since callers
+    usually assert on 401/403. Waiting on the gateway-level AuthPolicy
+    Enforced condition does NOT prove this route is ready — that policy is
+    a fixed-size singleton unrelated to any single HTTPRoute.
+
+    Args:
+        name: Name of the HTTPRoute
+        namespace: Namespace (default: MODEL_NAMESPACE)
+        timeout: Maximum wait time in seconds (default: 60)
+
+    Returns:
+        The HTTPRoute CR dict once Accepted
+
+    Raises:
+        TimeoutError: If no parent reports Accepted=True within timeout
+    """
+    deadline = time.time() + timeout
+    log.info(f"Waiting for HTTPRoute {namespace}/{name} to be Accepted (timeout: {timeout}s)...")
+
+    while time.time() < deadline:
+        cr = _get_cr("httproute", name, namespace)
+        if cr:
+            parents = (cr.get("status") or {}).get("parents") or []
+            for parent in parents:
+                if any(
+                    c.get("type") == "Accepted" and c.get("status") == "True"
+                    for c in parent.get("conditions") or []
+                ):
+                    log.info(f"HTTPRoute {namespace}/{name} is Accepted")
+                    return cr
+            log.debug(f"HTTPRoute {namespace}/{name}: no parent Accepted=True yet ({len(parents)} parent(s))")
+        time.sleep(2)
+
+    cr = _get_cr("httproute", name, namespace)
+    parents = (cr.get("status") or {}).get("parents") if cr else None
+    raise TimeoutError(
+        f"HTTPRoute {namespace}/{name} did not report Accepted=True within {timeout}s "
+        f"(parents={parents!r})"
     )
 
 

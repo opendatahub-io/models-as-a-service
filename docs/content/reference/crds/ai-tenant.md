@@ -48,7 +48,7 @@ The `AITenant` stays in `Terminating` phase while MaaS resource finalizers run. 
 - External OIDC context: `spec.oidc`
 - Tenant namespace metadata and tenant-admin Roles
 
-The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. For backward compatibility, old `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values may remain on existing legacy objects, but AITenant-managed reconciliation migrates or ignores them.
+The `MaasTenantConfig/default-tenant` object in each tenant namespace owns MaaS-specific user configuration, such as API key and telemetry settings. During an upgrade, AITenant-managed reconciliation migrates or ignores old `Tenant.spec.gatewayRef` and `Tenant.spec.externalOIDC` values, then safely removes the legacy object after migration is verified. See the [`MaasTenantConfig` migration notes](tenant.md#migration-notes).
 
 ---
 
