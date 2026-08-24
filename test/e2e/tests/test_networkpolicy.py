@@ -44,8 +44,12 @@ class TestPayloadProcessingNetworkPolicyExists:
         assert np is not None
         pod_selector = np["spec"]["podSelector"]
         match_exprs = pod_selector.get("matchExpressions") or []
+        # The controller patches the base manifest's podSelector from key=app to
+        # key=maas.opendatahub.io/tenant-instance at runtime for tenant isolation.
+        # Accept either key so the test works against both base and deployed state.
+        _SELECTOR_KEYS = ("app", "maas.opendatahub.io/tenant-instance")
         app_expr = next(
-            (e for e in match_exprs if e.get("key") == "app" and e.get("operator") == "In"),
+            (e for e in match_exprs if e.get("key") in _SELECTOR_KEYS and e.get("operator") == "In"),
             None,
         )
         if app_expr:
