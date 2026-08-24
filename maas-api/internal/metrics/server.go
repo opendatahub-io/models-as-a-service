@@ -117,7 +117,6 @@ func buildMetricsTLSConfig(certDir string, profileMinVersion uint16, profileCiph
 		minVersion = profileMinVersion
 	}
 
-	//nolint:gosec // G402: MinVersion comes from cluster TLS profile or TLS 1.2 default
 	tlsCfg := &tls.Config{
 		Certificates: []tls.Certificate{cert},
 		MinVersion:   minVersion,
