@@ -128,8 +128,6 @@ class TestEmbeddingGovernance:
                 model_refs=[EMBEDDING_MODEL_REF],
                 groups=["system:authenticated"],
             )
-            time.sleep(RECONCILE_WAIT)
-
             _create_test_subscription(
                 name=subscription_name,
                 model_refs=[EMBEDDING_MODEL_REF],
@@ -137,8 +135,8 @@ class TestEmbeddingGovernance:
                 token_limit=token_limit,
                 window=window,
             )
-            time.sleep(RECONCILE_WAIT)
-
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
             _wait_for_token_rate_limit_policy(
                 EMBEDDING_MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90
             )
