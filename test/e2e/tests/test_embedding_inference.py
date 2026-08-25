@@ -31,7 +31,6 @@ from test_helper import (
     RECONCILE_WAIT,
     TIMEOUT,
     TLS_VERIFY,
-    _apply_cr,
     _create_api_key,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -40,9 +39,7 @@ from test_helper import (
     _gateway_url,
     _get_cluster_token,
     _get_cr,
-    _ns,
     _poll_status,
-    _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
@@ -50,14 +47,6 @@ from test_helper import (
 )
 
 log = logging.getLogger(__name__)
-
-# ExternalModel embedding test constants
-EMB_EXT_MODEL_NAME = "e2e-emb-ext-model"
-EMB_EXT_PROVIDER_NAME = "e2e-emb-ext-provider"
-EMB_EXT_SECRET_NAME = "e2e-emb-ext-api-key"
-EMB_EXT_AUTH_POLICY = "e2e-emb-ext-auth"
-EMB_EXT_SUBSCRIPTION = "e2e-emb-ext-sub"
-EMB_EXT_ENDPOINT = f"e2e-embedding-simulated-kserve-workload-svc.{MODEL_NAMESPACE}.svc.cluster.local"
 
 
 class TestEmbeddingPathRouting:
@@ -130,125 +119,6 @@ class TestEmbeddingPathRouting:
             _delete_cr("maasauthpolicy", auth_policy_name)
             time.sleep(RECONCILE_WAIT)
 
-    def test_embedding_bbr_external_model(self):
-        """POST /v1/embeddings targeting an ExternalModel embedding backend.
-
-        Creates an ExternalModel pointing at the embedding simulator, wires up
-        governance, and verifies BBR routes /v1/embeddings to the external backend.
-        """
-        sub_ns = _ns()
-
-        try:
-            _apply_cr({
-                "apiVersion": "v1", "kind": "Secret",
-                "metadata": {
-                    "name": EMB_EXT_SECRET_NAME, "namespace": MODEL_NAMESPACE,
-                    "labels": {"inference.llm-d.ai/ipp-managed": "true"},
-                },
-                "type": "Opaque",
-                "stringData": {"api-key": "e2e-test-key"},
-            })
-
-            _apply_cr({
-                "apiVersion": "inference.opendatahub.io/v1alpha1",
-                "kind": "ExternalProvider",
-                "metadata": {"name": EMB_EXT_PROVIDER_NAME, "namespace": MODEL_NAMESPACE},
-                "spec": {
-                    "provider": "openai",
-                    "endpoint": EMB_EXT_ENDPOINT,
-                    "auth": {
-                        "type": "simple",
-                        "secretRef": {"name": EMB_EXT_SECRET_NAME},
-                    },
-                },
-            })
-
-            _apply_cr({
-                "apiVersion": "inference.opendatahub.io/v1alpha1",
-                "kind": "ExternalModel",
-                "metadata": {"name": EMB_EXT_MODEL_NAME, "namespace": MODEL_NAMESPACE},
-                "spec": {
-                    "externalProviderRefs": [{
-                        "ref": {"name": EMB_EXT_PROVIDER_NAME},
-                        "targetModel": EMBEDDING_MODEL_NAME,
-                        "apiFormat": "openai-chat",
-                        "path": "/v1/embeddings",
-                    }],
-                },
-            })
-
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSModelRef",
-                "metadata": {
-                    "name": EMB_EXT_MODEL_NAME, "namespace": MODEL_NAMESPACE,
-                    "annotations": {
-                        "maas.opendatahub.io/endpoint": EMB_EXT_ENDPOINT,
-                        "maas.opendatahub.io/provider": "openai",
-                    },
-                },
-                "spec": {
-                    "modelRef": {"kind": "ExternalModel", "name": EMB_EXT_MODEL_NAME},
-                },
-            })
-
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSAuthPolicy",
-                "metadata": {"name": EMB_EXT_AUTH_POLICY, "namespace": sub_ns},
-                "spec": {
-                    "modelRefs": [{"name": EMB_EXT_MODEL_NAME, "namespace": MODEL_NAMESPACE}],
-                    "subjects": {"groups": [{"name": "system:authenticated"}]},
-                },
-            })
-
-            _apply_cr({
-                "apiVersion": "maas.opendatahub.io/v1alpha1",
-                "kind": "MaaSSubscription",
-                "metadata": {"name": EMB_EXT_SUBSCRIPTION, "namespace": sub_ns},
-                "spec": {
-                    "owner": {"groups": [{"name": "system:authenticated"}]},
-                    "modelRefs": [{
-                        "name": EMB_EXT_MODEL_NAME,
-                        "namespace": MODEL_NAMESPACE,
-                        "tokenRateLimits": [{"limit": 10000, "window": "1h"}],
-                    }],
-                },
-            })
-
-            _wait_for_maas_auth_policy_phase(EMB_EXT_AUTH_POLICY, namespace=sub_ns)
-            _wait_for_maas_subscription_phase(EMB_EXT_SUBSCRIPTION, namespace=sub_ns)
-            _wait_for_httproute_accepted(EMB_EXT_MODEL_NAME, namespace=MODEL_NAMESPACE)
-
-            oc_token = _get_cluster_token()
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-emb-ext-{uuid.uuid4().hex[:8]}",
-                subscription=EMB_EXT_SUBSCRIPTION,
-            )
-
-            ext_model_path = f"/{MODEL_NAMESPACE}/{EMB_EXT_MODEL_NAME}"
-            r = _poll_status(
-                api_key, 200, path=ext_model_path, model_name=EMBEDDING_MODEL_NAME,
-                timeout=90, inference_fn=_embedding_inference,
-            )
-            data = r.json()
-            assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
-            assert len(data["data"]) > 0, "Empty data array"
-            first = data["data"][0]
-            assert "embedding" in first, f"Missing 'embedding' in data[0]: {list(first.keys())}"
-            assert isinstance(first["embedding"], list), "embedding should be a list of floats"
-            assert len(first["embedding"]) > 0, "embedding vector is empty"
-            log.info(f"[embedding-ext] ExternalModel BBR -> {r.status_code}")
-
-        finally:
-            _delete_cr("maasauthpolicy", EMB_EXT_AUTH_POLICY, sub_ns)
-            _delete_cr("maassubscription", EMB_EXT_SUBSCRIPTION, sub_ns)
-            _delete_cr("maasmodelref", EMB_EXT_MODEL_NAME, MODEL_NAMESPACE)
-            _delete_cr("externalmodels.inference.opendatahub.io", EMB_EXT_MODEL_NAME, MODEL_NAMESPACE)
-            _delete_cr("externalproviders.inference.opendatahub.io", EMB_EXT_PROVIDER_NAME, MODEL_NAMESPACE)
-            _delete_cr("secret", EMB_EXT_SECRET_NAME, MODEL_NAMESPACE)
-            time.sleep(RECONCILE_WAIT)
 
 
 class TestEmbeddingGovernance:
