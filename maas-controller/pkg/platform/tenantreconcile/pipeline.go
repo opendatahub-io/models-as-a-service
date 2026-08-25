@@ -54,6 +54,7 @@ func RunPlatform(
 	appNs string,
 	controllerNs string,
 	clusterAudience string,
+	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
@@ -76,9 +77,19 @@ func RunPlatform(
 		return nil, fmt.Errorf("gateway lookup: %w", err)
 	}
 
-	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, log)
+	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, monitoringNamespace, log)
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
+	}
+
+	wasmPresent, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+	if err != nil {
+		return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
+	}
+	params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+	if params.PayloadProcessingRouterExtProcFallback {
+		log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
+			"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
 	}
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
@@ -140,6 +151,7 @@ func Run(
 	manifestPath string,
 	controllerNs string,
 	clusterAudience string,
+	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
@@ -165,7 +177,7 @@ func Run(
 		return nil, err
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, mcfg)
+	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
 }
 
 const maasParametersConfigMapName = "maas-parameters"

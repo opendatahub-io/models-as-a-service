@@ -137,6 +137,66 @@ spec:
                 cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
               timeout: 300s
             message_timeout: 300s
+    # Fallback when Kuadrant WASM is absent (dev repair, failed rollout, or future auth
+    # architecture): anchor ext_proc on the stable router filter so inference traffic
+    # still reaches payload-processing. Order: ipp-pre → ipp → router.
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.ipp-pre
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: true
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SKIP"
+              request_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "NONE"
+              request_trailer_mode: "SEND"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9004||payload-pre-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc.ipp
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            failure_mode_allow: false
+            allow_mode_override: true
+            processing_mode:
+              request_header_mode: "SEND"
+              response_header_mode: "SEND"
+              request_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "FULL_DUPLEX_STREAMED"
+              request_trailer_mode: "SEND"
+              response_trailer_mode: "SEND"
+            grpc_service:
+              envoy_grpc:
+                cluster_name: outbound|9004||payload-processing.openshift-ingress.svc.cluster.local
+              timeout: 300s
+            message_timeout: 300s
     # Disable ext_proc on all non-inference maas-api routes.
     # Route name follows Istio's Gateway API naming: <namespace>.<httproute-name>.<rule-index>
     # Rule indices correspond to httproute.yaml rules:

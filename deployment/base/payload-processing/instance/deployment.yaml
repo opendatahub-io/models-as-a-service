@@ -31,8 +31,23 @@ spec:
           args:
             - --config-file
             - "/config/custom-ipp-config.yaml"
-            - --v=3
-            - --tracing=false
+            - --v=2
+            - --tracing=true
+          env:
+            - name: OTEL_TRACES_EXPORTER
+              value: otlp
+            - name: OTEL_EXPORTER_OTLP_TRACES_ENDPOINT
+              value: http://data-science-collector-collector.opendatahub.svc:4317
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://data-science-collector-collector.opendatahub.svc:4317
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "true"
+            - name: OTEL_TRACES_SAMPLER
+              value: parentbased_traceidratio
+            - name: OTEL_SERVICE_NAME
+              value: payload-processing
+            - name: OTEL_TRACES_SAMPLER_ARG
+              value: "1.0"
           ports:
             - containerPort: 9004
               name: grpc

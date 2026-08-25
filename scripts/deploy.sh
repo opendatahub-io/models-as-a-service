@@ -697,8 +697,25 @@ configMapGenerator:
       - payload-processing-image=${cm_payload_processing_image}
       - maas-api-key-cleanup-image=${cm_cleanup_image}
       - monitoring-namespace=${cm_monitoring_namespace}
+      - namespace=${NAMESPACE}
 generatorOptions:
   disableNameSuffixHash: true
+# Re-run the serverName replacement at the parent level so it picks up the
+# merged namespace value (child replacements run before parent merge).
+replacements:
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-controller-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 1
 EOF
     (
       cd "${controller_overlay_dir}" && \
