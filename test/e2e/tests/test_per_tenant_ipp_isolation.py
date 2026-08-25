@@ -56,7 +56,6 @@ from test_helper import (
     _get_cluster_token,
     _maas_api_url,
     _wait_for_gateway_auth_enforced,
-    _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
@@ -323,7 +322,6 @@ class TestPerTenantIPPRouting:
             f"{model_name}-sub",
             gateway_name=case_a["gateway_name"],
         )
-        _wait_reconcile()
         return case_a
 
     def test_default_gateway_hits_default_ipp_only(self, ipp_tenant_cases):

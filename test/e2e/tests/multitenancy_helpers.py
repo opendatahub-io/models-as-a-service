@@ -29,7 +29,6 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
-    _wait_reconcile,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
