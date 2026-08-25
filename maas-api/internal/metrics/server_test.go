@@ -154,7 +154,42 @@ func TestNewMetricsServer_SecureLoadsTLS(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.NotNil(t, srv.TLSConfig)
+	require.Nil(t, srv.TLSConfig.Certificates)
+	require.NotNil(t, srv.TLSConfig.GetCertificate)
 	require.Equal(t, uint16(tls.VersionTLS12), srv.TLSConfig.MinVersion)
+
+	cert, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotNil(t, cert)
+	require.NotEmpty(t, cert.Certificate)
+}
+
+func TestNewMetricsServer_SecureReloadsTLSAfterRotation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestCertPair(t, dir)
+
+	reg := prometheus.NewRegistry()
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:       ":0",
+		Reg:        reg,
+		Secure:     true,
+		CertDir:    dir,
+		RESTConfig: &rest.Config{Host: "https://127.0.0.1:1"},
+		HTTPClient: &http.Client{Timeout: 50 * time.Millisecond},
+	})
+	require.NoError(t, err)
+
+	certBefore, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, certBefore.Certificate[0])
+
+	writeTestCertPair(t, dir)
+
+	certAfter, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, certAfter.Certificate[0])
+	require.NotEqual(t, certBefore.Certificate[0], certAfter.Certificate[0])
 }
 
 func writeTestCertPair(t *testing.T, dir string) {

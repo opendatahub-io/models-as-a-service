@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -104,12 +105,30 @@ func NewMetricsServer(opts ServerOptions) (*http.Server, error) {
 	return srv, nil
 }
 
-func buildMetricsTLSConfig(certDir string, profileMinVersion uint16, profileCipherSuites []uint16) (*tls.Config, error) {
-	certFile := filepath.Join(certDir, "tls.crt")
-	keyFile := filepath.Join(certDir, "tls.key")
-	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+type metricsCertLoader struct {
+	mu       sync.Mutex
+	certFile string
+	keyFile  string
+}
+
+func (l *metricsCertLoader) getCertificate(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	cert, err := tls.LoadX509KeyPair(l.certFile, l.keyFile)
 	if err != nil {
-		return nil, fmt.Errorf("loading metrics TLS certificate from %s: %w", certDir, err)
+		return nil, fmt.Errorf("loading metrics TLS certificate from %s: %w", filepath.Dir(l.certFile), err)
+	}
+	return &cert, nil
+}
+
+func buildMetricsTLSConfig(certDir string, profileMinVersion uint16, profileCipherSuites []uint16) (*tls.Config, error) {
+	loader := &metricsCertLoader{
+		certFile: filepath.Join(certDir, "tls.crt"),
+		keyFile:  filepath.Join(certDir, "tls.key"),
+	}
+	if _, err := loader.getCertificate(nil); err != nil {
+		return nil, err
 	}
 
 	minVersion := uint16(tls.VersionTLS12)
@@ -118,9 +137,9 @@ func buildMetricsTLSConfig(certDir string, profileMinVersion uint16, profileCiph
 	}
 
 	tlsCfg := &tls.Config{
-		Certificates: []tls.Certificate{cert},
-		MinVersion:   minVersion,
-		NextProtos:   []string{"h2", "http/1.1"},
+		GetCertificate: loader.getCertificate,
+		MinVersion:     minVersion,
+		NextProtos:     []string{"h2", "http/1.1"},
 	}
 	if len(profileCipherSuites) > 0 {
 		tlsCfg.CipherSuites = profileCipherSuites
