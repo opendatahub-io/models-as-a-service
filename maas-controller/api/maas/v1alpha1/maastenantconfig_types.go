@@ -54,6 +54,10 @@ type MaasTenantConfigSpec struct {
 	// Telemetry contains configuration for telemetry and metrics collection.
 	// +kubebuilder:validation:Optional
 	Telemetry *TenantTelemetryConfig `json:"telemetry,omitempty"`
+
+	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
 }
 
 // MaasTenantConfigStatus defines the observed state of MaasTenantConfig.

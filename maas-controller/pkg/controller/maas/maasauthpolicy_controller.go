@@ -806,26 +806,11 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 
 	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
-	// tenantGatewayIsolationRule is a stub that always allows. It will be replaced with a real
-	// maas-api call to verify the API key's tenant matches the gateway hostname when multi-tenant
-	// hostname routing is productised (prevents a Coke key from working on a Pepsi gateway).
-	tenantGatewayIsolationRule := map[string]any{
-		"priority": int64(0),
-		"metrics":  false,
-		"opa": map[string]any{
-			"rego": `# Tenant hostname isolation stub.
-# Replace with a real maas-api call to validate that the API key's tenant
-# matches the gateway hostname (prevents Coke key on Pepsi gateway).
-allow { true }`,
-		},
-	}
-
 	requireGroupMembershipRego := `allow {
   object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
 }`
 
 	authorizationRules := map[string]any{
-		"tenant-gateway-isolation": tenantGatewayIsolationRule,
 		// Reject client-supplied identity headers; Authorino injects these after auth.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,

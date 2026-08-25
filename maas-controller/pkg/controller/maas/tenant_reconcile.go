@@ -48,7 +48,8 @@ const (
 	managementStateRemoved    = "Removed"
 	managementStateUnmanaged  = "Unmanaged"
 
-	tenantFinalizer = "maas.opendatahub.io/tenant-cleanup"
+	tenantFinalizer       = "maas.opendatahub.io/tenant-cleanup"
+	legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 )
 
 // tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
@@ -323,7 +324,7 @@ func (r *TenantReconciler) reconcilePlatform(
 	mcfg *maasv1alpha1.Config,
 ) (*tenantreconcile.RunResult, *ctrl.Result, error) {
 	appNs := r.appNamespaceForTenant()
-	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, mcfg)
+	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
 		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())

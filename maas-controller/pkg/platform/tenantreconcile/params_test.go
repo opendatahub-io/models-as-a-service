@@ -34,7 +34,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "openshift-ingress",
 			Name:      "maas-default-gateway",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
@@ -42,6 +42,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
 		assert.Equal(t, "https://kubernetes.default.svc", got.ClusterAudience)
+		assert.Equal(t, "opendatahub", got.MonitoringNamespace)
 		assert.Equal(t, DefaultMaaSAPIImage, got.MaaSAPIImage)
 		assert.Equal(t, DefaultPayloadProcessingImage, got.PayloadProcessingImage)
 		assert.Equal(t, DefaultMaaSAPIKeyCleanupImage, got.MaaSAPIKeyCleanupImage)
@@ -70,7 +71,7 @@ func TestBuildPlatformParams(t *testing.T) {
 			Namespace: "gateway-ns",
 			Name:      "gateway-name",
 		}}
-		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "cluster-audience", "opendatahub", logr.Discard())
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
@@ -99,7 +100,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 		tenant.SetNamespace("models-as-a-service")
 		tenant.SetName("default-tenant")
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		assert.Nil(t, got.MaaSAPIReplicas)
 		assert.Nil(t, got.PayloadProcessingReplicas)
@@ -115,7 +116,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 			AnnotationPayloadProcessingReplicas: "2",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		require.NotNil(t, got.MaaSAPIReplicas)
 		assert.Equal(t, int32(3), *got.MaaSAPIReplicas)
@@ -132,7 +133,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 			AnnotationMaaSAPIReplicas: "not-a-number",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		assert.Nil(t, got.MaaSAPIReplicas)
 		require.Len(t, got.Warnings, 1)
@@ -148,7 +149,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 			AnnotationPayloadProcessingReplicas: "0",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		assert.Nil(t, got.PayloadProcessingReplicas)
 		require.Len(t, got.Warnings, 1)
@@ -163,7 +164,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 			AnnotationMaaSAPIReplicas: "-1",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		assert.Nil(t, got.MaaSAPIReplicas)
 		require.Len(t, got.Warnings, 1)
@@ -178,7 +179,7 @@ func TestBuildPlatformParams_ReplicaAnnotations(t *testing.T) {
 			AnnotationMaaSAPIReplicas: "101",
 		})
 
-		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", logr.Discard())
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
 		require.NoError(t, err)
 		assert.Nil(t, got.MaaSAPIReplicas)
 		require.Len(t, got.Warnings, 1)
@@ -224,16 +225,18 @@ func int32Ptr(i int32) *int32 { return &i }
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
-		AppNamespace:            "tenant-ns",
-		ControllerNamespace:     "controller-ns",
-		GatewayNamespace:        "gateway-ns",
-		GatewayName:             "custom-gateway",
-		ClusterAudience:         "openshift-custom",
-		SubscriptionNamespace:   "tenant-ns",
-		MaaSAPIImage:            "quay.io/example/maas-api:test",
-		PayloadProcessingImage:  "quay.io/example/payload:test",
-		MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",
-		APIKeyMaxExpirationDays: "45",
+		AppNamespace:                           "tenant-ns",
+		ControllerNamespace:                    "controller-ns",
+		GatewayNamespace:                       "gateway-ns",
+		GatewayName:                            "custom-gateway",
+		ClusterAudience:                        "openshift-custom",
+		MonitoringNamespace:                    "redhat-ods-monitoring",
+		PayloadProcessingRouterExtProcFallback: false,
+		SubscriptionNamespace:                  "tenant-ns",
+		MaaSAPIImage:                           "quay.io/example/maas-api:test",
+		PayloadProcessingImage:                 "quay.io/example/payload:test",
+		MaaSAPIKeyCleanupImage:                 "quay.io/example/cleanup:test",
+		APIKeyMaxExpirationDays:                "45",
 	}
 
 	err := applyPlatformParams(logr.Discard(), resources, params)
@@ -260,6 +263,13 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.Equal(t, params.SubscriptionNamespace, requireEnvVarValue(t, payloadDeployment, "payload-processing", "TENANT_NAMESPACE"))
 	assertDeploymentSelectorLabelAbsent(t, payloadDeployment, LabelTenantInstance)
 	assert.Equal(t, PayloadProcessingDeploymentName(tenantID), requirePodTemplateLabel(t, payloadDeployment, LabelTenantInstance))
+	assertContainerArg(t, payloadDeployment, "payload-processing", "--tracing=true")
+	assert.Equal(t, "otlp", requireEnvVarValue(t, payloadDeployment, "payload-processing", "OTEL_TRACES_EXPORTER"))
+	wantOTLPEndpoint := "http://data-science-collector-collector.redhat-ods-monitoring.svc:4317"
+	assert.Equal(t, wantOTLPEndpoint, requireEnvVarValue(t, payloadDeployment, "payload-processing", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+	assert.Equal(t, wantOTLPEndpoint, requireEnvVarValue(t, payloadDeployment, "payload-processing", "OTEL_EXPORTER_OTLP_ENDPOINT"))
+	assert.Equal(t, DefaultOTELTracesSampler, requireEnvVarValue(t, payloadDeployment, "payload-processing", "OTEL_TRACES_SAMPLER"))
+	assert.Equal(t, DefaultOTELTracesSamplerArg, requireEnvVarValue(t, payloadDeployment, "payload-processing", "OTEL_TRACES_SAMPLER_ARG"))
 	// Default tenant (empty TenantIdentifier) must NOT have DISABLE_EXTERNAL_MODEL_CONTROLLER
 	assertEnvVarAbsent(t, payloadDeployment, "payload-processing", "DISABLE_EXTERNAL_MODEL_CONTROLLER")
 
@@ -325,9 +335,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
-	// Verify dual-stage filter chain with dual anchors:
-	//   [0..1] WasmPlugin (ODH/community Kuadrant), [2..3] wasm filter (RHCL 1.4),
-	//   [4..7] per-route disable MERGE on maas-api-route rules 0–3.
+	// Verify dual-stage filter chain with dual WASM anchors (router fallback omitted when Kuadrant WASM present):
+	//   [0..3] WasmPlugin + RHCL wasm, [4..7] per-route disable MERGE on maas-api-route rules 0–3.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
@@ -336,22 +345,22 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
 	wantAfterCluster := grpcClusterName(PayloadProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
-	wantOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
-	wantAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
-	wantClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
+	wantWasmOps := []string{"INSERT_BEFORE", "INSERT_AFTER", "INSERT_BEFORE", "INSERT_AFTER"}
+	wantWasmAnchors := []string{wantWasmPluginAnchor, wantWasmPluginAnchor, rhclWasmFilterName, rhclWasmFilterName}
+	wantWasmClusters := []string{wantBeforeCluster, wantAfterCluster, wantBeforeCluster, wantAfterCluster}
 
 	for i, raw := range configPatches[:4] {
 		cp, ok := raw.(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 
 		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
-		assert.Equal(t, wantOps[i], op, "configPatches[%d] operation", i)
+		assert.Equal(t, wantWasmOps[i], op, "configPatches[%d] operation", i)
 
 		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
-		assert.Equal(t, wantAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
+		assert.Equal(t, wantWasmAnchors[i], anchor, "configPatches[%d] subFilter.name", i)
 
 		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
-		assert.Equal(t, wantClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
+		assert.Equal(t, wantWasmClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
 	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
@@ -406,6 +415,41 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	matchExpressions, ok := podSelector["matchExpressions"].([]any)
 	require.True(t, ok)
 	require.NotEmpty(t, matchExpressions)
+
+	egress, found, err := unstructured.NestedSlice(payloadNetworkPolicy.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	var otlpRule map[string]any
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		require.True(t, ok)
+		ports, _ := rule["ports"].([]any)
+		for _, portRaw := range ports {
+			port, ok := portRaw.(map[string]any)
+			require.True(t, ok)
+			if p, ok := nestedPortNumber(port["port"]); ok && p == int64(DefaultOTLPCollectorPort) {
+				otlpRule = rule
+				break
+			}
+		}
+	}
+	require.NotNil(t, otlpRule, "expected OTLP egress rule on port %d", DefaultOTLPCollectorPort)
+	otlpTo, ok := otlpRule["to"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, otlpTo)
+	otlpPeer, ok := otlpTo[0].(map[string]any)
+	require.True(t, ok)
+	otlpNSSelector, ok := otlpPeer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	otlpMatchLabels, ok := otlpNSSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, params.MonitoringNamespace, otlpMatchLabels["kubernetes.io/metadata.name"])
+	otlpPodSelector, ok := otlpPeer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	otlpPodMatchLabels, ok := otlpPodSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, otlpPodMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, otlpPodMatchLabels[DefaultOTLPCollectorComponentLabelKey])
 
 	deploymentNSPolicy := requireResource(t, resources, GVKNetworkPolicy, baseMaaSAPIDeploymentNSNetworkPolicyName)
 	ingress, found, err := unstructured.NestedSlice(deploymentNSPolicy.Object, "spec", "ingress")
@@ -602,6 +646,33 @@ func requireEnvVarValue(t *testing.T, r *unstructured.Unstructured, containerNam
 	return ""
 }
 
+func assertContainerArg(t *testing.T, r *unstructured.Unstructured, containerName, wantArg string) {
+	t.Helper()
+
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	require.NoError(t, err)
+	require.True(t, found)
+
+	for _, c := range containers {
+		containerMap, ok := c.(map[string]any)
+		require.True(t, ok)
+		if containerMap["name"] != containerName {
+			continue
+		}
+
+		argsSlice, _ := containerMap["args"].([]any)
+		for _, a := range argsSlice {
+			arg, ok := a.(string)
+			require.True(t, ok)
+			if arg == wantArg {
+				return
+			}
+		}
+	}
+
+	t.Fatalf("arg %q not found in container %q", wantArg, containerName)
+}
+
 func assertEnvVarAbsent(t *testing.T, r *unstructured.Unstructured, containerName, envName string) {
 	t.Helper()
 
@@ -756,4 +827,229 @@ func TestPatchMaaSAPIServingCert_MultiTenant(t *testing.T) {
 		"maas-api-redteam.redhat-ai-gateway-infra.svc",
 		"maas-api-redteam.redhat-ai-gateway-infra.svc.cluster.local",
 	}, dnsNames)
+}
+
+func TestBuildPlatformParams_PayloadProcessingSpec(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "maas-default-gateway",
+	}}
+
+	t.Run("no payloadProcessing spec leaves defaults", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(80), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("autoscaling enabled with defaults", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(80), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("autoscaling with custom values", func(t *testing.T) {
+		maxReplicas := int32(20)
+		targetCPU := int32(60)
+		targetMemory := int32(90)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+						MaxReplicas:             &maxReplicas,
+						TargetCPUUtilization:    &targetCPU,
+						TargetMemoryUtilization: &targetMemory,
+					},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		assert.Equal(t, int32(20), got.PayloadProcessingMaxReplicas)
+		assert.Equal(t, int32(60), got.PayloadProcessingTargetCPU)
+		assert.Equal(t, int32(90), got.PayloadProcessingTargetMemory)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("replicas without autoscaling sets spec.replicas only", func(t *testing.T) {
+		replicas := int32(3)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas: &replicas,
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadProcessingAutoscaling)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(3), *got.PayloadProcessingReplicas)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("replicas with autoscaling becomes minReplicas", func(t *testing.T) {
+		replicas := int32(3)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas:    &replicas,
+					Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(3), *got.PayloadProcessingReplicas)
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("minReplicas exceeding maxReplicas clamps max and warns", func(t *testing.T) {
+		replicas := int32(20)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas:    &replicas,
+					Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadProcessingAutoscaling)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(20), *got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(20), got.PayloadProcessingMaxReplicas, "maxReplicas should be clamped to match minReplicas")
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "exceeds spec.payloadProcessing.autoscaling.maxReplicas")
+	})
+
+	t.Run("spec replicas override annotation replicas", func(t *testing.T) {
+		specReplicas := int32(5)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas: &specReplicas,
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadProcessingReplicas: "2",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		require.NotNil(t, got.PayloadProcessingReplicas)
+		assert.Equal(t, int32(5), *got.PayloadProcessingReplicas, "spec replicas should override annotation replicas")
+	})
+}
+
+func TestPatchPayloadProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T) {
+	replicas := int32(5)
+	deployment := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "payload-processing",
+			"namespace": "openshift-ingress",
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"selector": map[string]any{
+				"matchLabels": map[string]any{"app": "payload-processing"},
+			},
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": "payload-processing"},
+				},
+				"spec": map[string]any{
+					"serviceAccountName": "payload-processing",
+					"containers": []any{
+						map[string]any{
+							"name":  "payload-processing",
+							"image": "test-image",
+						},
+					},
+					"volumes": []any{
+						map[string]any{
+							"name": "plugins-config-volume",
+							"configMap": map[string]any{
+								"name": "payload-processing-plugins",
+							},
+						},
+					},
+				},
+			},
+		},
+	}}
+
+	t.Run("without autoscaling replicas are set on deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:          "openshift-ingress",
+			PayloadProcessingReplicas: &replicas,
+			PayloadProcessingImage:    "test-image",
+		}
+		err := patchPayloadProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		r, _, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.Equal(t, int64(5), r)
+	})
+
+	t.Run("with autoscaling replicas are removed from deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:             "openshift-ingress",
+			PayloadProcessingReplicas:    &replicas,
+			PayloadProcessingAutoscaling: true,
+			PayloadProcessingImage:       "test-image",
+		}
+		err := patchPayloadProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		// spec.replicas should be absent so the HPA has sole ownership
+		_, found, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.False(t, found, "spec.replicas should be removed when autoscaling is enabled")
+	})
 }
