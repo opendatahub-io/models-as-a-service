@@ -69,15 +69,55 @@ class TestEmbeddingPathRouting:
         usage = data.get("usage", {})
         assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
 
-    def test_embedding_bbr_llmisvc_200(self, gateway_url: str, api_key_headers: dict):
+    def test_embedding_bbr_llmisvc_200(self):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
-        url = f"{gateway_url}/v1/embeddings"
-        body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
-        r = requests.post(url, headers=api_key_headers, json=body, timeout=30, verify=TLS_VERIFY)
-        log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
-        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
-        data = r.json()
-        assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
+        model = _get_cr("maasmodelref", EMBEDDING_MODEL_REF, namespace=MODEL_NAMESPACE)
+        if not model:
+            pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
+
+        auth_policy_name = "e2e-embedding-bbr-auth"
+        subscription_name = "e2e-embedding-bbr-sub"
+
+        try:
+            _create_test_auth_policy(
+                name=auth_policy_name,
+                model_refs=[EMBEDDING_MODEL_REF],
+                groups=["system:authenticated"],
+            )
+            _create_test_subscription(
+                name=subscription_name,
+                model_refs=[EMBEDDING_MODEL_REF],
+                groups=["system:authenticated"],
+                token_limit=1000,
+                window="1m",
+            )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
+
+            oc_token = _get_cluster_token()
+            api_key = _create_api_key(
+                oc_token,
+                name=f"e2e-emb-bbr-{uuid.uuid4().hex[:8]}",
+                subscription=subscription_name,
+            )
+
+            url = f"{_gateway_url()}/v1/embeddings"
+            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+            body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
+            r = _poll_status(
+                api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME,
+                timeout=90, inference_fn=_embedding_inference,
+            )
+            r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+            log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
+            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
+            data = r.json()
+            assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
+
+        finally:
+            _delete_cr("maassubscription", subscription_name)
+            _delete_cr("maasauthpolicy", auth_policy_name)
+            time.sleep(RECONCILE_WAIT)
 
     @pytest.mark.skip(reason="Depends on ExternalModel BBR gateway story")
     def test_embedding_bbr_external_model(self):
