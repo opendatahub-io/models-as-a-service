@@ -63,7 +63,7 @@ from test_helper import (
     _scale_controller_up,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_subscription_phase,
-    _wait_reconcile,
+    _wait_for_cr_absent,
 )
 
 log = logging.getLogger(__name__)
@@ -1417,7 +1417,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     def test_create_key_for_degraded_subscription(self):
         """API key creation succeeds for Degraded subscription."""
@@ -1438,7 +1438,7 @@ class TestAPIKeySubscriptionPhases:
                 [MODEL_REF, missing_model],
                 users=[sa_user]
             )
-            _wait_reconcile(seconds=10)
+            _wait_for_maas_subscription_phase(subscription_name, expected_phase="Degraded", namespace=ns)
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase")
@@ -1458,7 +1458,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     def test_create_key_for_failed_subscription(self):
         """API key creation is rejected for Failed subscription to prevent key spam."""
@@ -1498,7 +1498,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     @pytest.mark.serial
     def test_create_key_for_pending_subscription(self):
@@ -1565,7 +1565,7 @@ class TestAPIKeySubscriptionPhases:
                 _scale_controller_up()
             except Exception:
                 log.exception("Best-effort controller scale-up failed")
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     @pytest.mark.serial
     def test_reject_key_for_unreconciled_subscription(self):
@@ -1687,7 +1687,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
             # Only raise webhook restore error after cleanup is complete
             if webhook_restore_error:

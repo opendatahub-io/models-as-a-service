@@ -19,7 +19,7 @@ Environment variables (all optional unless noted):
   - GATEWAY_NAMESPACE: Gateway namespace (default: openshift-ingress)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
-  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
+  - E2E_RECONCILE_WAIT: Baseline for poll timeouts in seconds (default: 8)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
   - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
   - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
@@ -801,10 +801,6 @@ def _check_ipp_pods_deployed(tenant_name: Optional[str] = None):
 # Wait / Polling Helpers
 # ---------------------------------------------------------------------------
 
-def _wait_reconcile(seconds=None):
-    time.sleep(seconds or RECONCILE_WAIT)
-
-
 def _authpolicy_conditions(cr, *types):
     """Return {type: (status, reason, message)} for requested condition types (single pass)."""
     wanted = set(types)
@@ -1227,6 +1223,19 @@ def _wait_for_httproute_accepted(name, namespace=MODEL_NAMESPACE, timeout=60):
     raise TimeoutError(
         f"HTTPRoute {namespace}/{name} did not report Accepted=True within {timeout}s "
         f"(parents={parents!r})"
+    )
+
+
+def _wait_for_cr_absent(kind, name, namespace=None, timeout=30, poll_interval=2):
+    """Wait until a CR is deleted (no longer found by the API server)."""
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _get_cr(kind, name, namespace) is None:
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(
+        f"{kind}/{name} in {namespace} still exists after {timeout}s"
     )
 
 
