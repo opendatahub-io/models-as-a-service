@@ -26,7 +26,7 @@ from test_helper import (
     EMBEDDING_MODEL_NAME,
     EMBEDDING_MODEL_PATH,
     EMBEDDING_MODEL_REF,
-    MODEL_CANONICAL_ID,
+    EMBEDDING_EMBEDDING_MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
     TLS_VERIFY,
     _create_api_key,
@@ -71,9 +71,9 @@ class TestEmbeddingPathRouting:
     def test_embedding_bbr_llmisvc_200(self, gateway_url: str, api_key_headers: dict):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
         url = f"{gateway_url}/v1/embeddings"
-        body = {"model": MODEL_CANONICAL_ID, "input": "The quick brown fox"}
+        body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
         r = requests.post(url, headers=api_key_headers, json=body, timeout=30, verify=TLS_VERIFY)
-        log.info(f"[embedding-bbr] POST /v1/embeddings (model={MODEL_CANONICAL_ID}) -> {r.status_code}")
+        log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
         data = r.json()
         assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
