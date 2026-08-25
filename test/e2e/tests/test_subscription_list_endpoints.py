@@ -43,7 +43,8 @@ from test_helper import (
     _maas_api_url,
     _ns,
     _sa_to_user,
-    _wait_reconcile,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_maas_subscription_phase,
 )
 
 log = logging.getLogger(__name__)
@@ -101,8 +102,6 @@ class TestListSubscriptions:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            _wait_reconcile()
-
             url = f"{_maas_api_url()}/v1/subscriptions"
             r = requests.get(
                 url,
@@ -158,7 +157,8 @@ class TestListSubscriptions:
             )
 
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
             r = requests.get(
@@ -241,7 +241,8 @@ class TestListSubscriptions:
             )
 
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
             r = requests.get(
@@ -308,7 +309,9 @@ class TestListSubscriptionsForModel:
             _create_test_subscription(sub_without_model, DISTINCT_MODEL_2_REF, users=[sa_user])
 
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_maas_subscription_phase(sub_with_model, namespace=maas_ns)
+            _wait_for_maas_subscription_phase(sub_without_model, namespace=maas_ns)
 
             # Query for subscriptions that include DISTINCT_MODEL_REF
             url = f"{_maas_api_url()}/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
@@ -353,8 +356,6 @@ class TestListSubscriptionsForModel:
         try:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-
-            _wait_reconcile()
 
             url = f"{_maas_api_url()}/v1/model/nonexistent-model-xyz/subscriptions"
             r = requests.get(
@@ -412,7 +413,8 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_reconcile()
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_subscription_phase(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
@@ -475,7 +477,8 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_reconcile()
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_subscription_phase(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
