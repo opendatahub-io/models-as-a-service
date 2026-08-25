@@ -1,0 +1,20 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSSubscription
+metadata:
+  name: embedding-subscription
+  namespace: models-as-a-service
+  annotations:
+    openshift.io/display-name: "Embedding Subscription"
+    openshift.io/description: "Embedding subscription with 1000 tokens/min rate limit"
+spec:
+  owner:
+    groups:
+      - name: system:authenticated
+    users: []
+  modelRefs:
+    - name: embedding-simulated
+      namespace: llm
+      tokenRateLimits:
+        - limit: 1000
+          window: 1m
+  priority: 10
