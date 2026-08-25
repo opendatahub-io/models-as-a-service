@@ -341,3 +341,249 @@ func TestPatchMaaSAPIDeploymentTENANT_NAME(t *testing.T) {
 		})
 	}
 }
+
+func TestPatchPayloadProcessingTracing(t *testing.T) {
+	deployment := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name": "payload-processing",
+								"args": []any{"--tracing=false"},
+								"env": []any{
+									map[string]any{
+										"name":  "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+										"value": "http://data-science-collector-collector.opendatahub.svc:4317",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	params := PlatformParams{MonitoringNamespace: "redhat-ods-monitoring"}
+	err := patchPayloadProcessingTracing(logr.Discard(), deployment, params)
+	require.NoError(t, err)
+
+	assertContainerArg(t, deployment, "payload-processing", "--tracing=true")
+	wantEndpoint := "http://data-science-collector-collector.redhat-ods-monitoring.svc:4317"
+	assert.Equal(t, wantEndpoint, requireEnvVarValue(t, deployment, "payload-processing", "OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"))
+	assert.Equal(t, wantEndpoint, requireEnvVarValue(t, deployment, "payload-processing", "OTEL_EXPORTER_OTLP_ENDPOINT"))
+}
+
+func TestPatchPayloadProcessingTracingMonitoringDisabled(t *testing.T) {
+	deployment := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "apps/v1",
+			"kind":       "Deployment",
+			"spec": map[string]any{
+				"template": map[string]any{
+					"spec": map[string]any{
+						"containers": []any{
+							map[string]any{
+								"name": "payload-processing",
+								"args": []any{"--tracing=true"},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchPayloadProcessingTracing(logr.Discard(), deployment, PlatformParams{})
+	require.NoError(t, err)
+	assertContainerArg(t, deployment, "payload-processing", "--tracing=false")
+}
+
+func TestPatchNetworkPolicyOTLPEgress(t *testing.T) {
+	np := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"spec": map[string]any{
+				"egress": []any{
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(4317), "protocol": "TCP"},
+						},
+						"to": []any{
+							map[string]any{
+								"namespaceSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"kubernetes.io/metadata.name": "opendatahub",
+									},
+								},
+								"podSelector": map[string]any{
+									"matchLabels": map[string]any{
+										DefaultOTLPCollectorPodLabelKey:       DefaultOTLPCollectorService,
+										DefaultOTLPCollectorComponentLabelKey: DefaultOTLPCollectorComponentLabelValue,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchNetworkPolicyOTLPEgress(np, "redhat-ods-monitoring")
+	require.NoError(t, err)
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[0].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	peer, ok := to[0].(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "redhat-ods-monitoring", matchLabels["kubernetes.io/metadata.name"])
+
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, podMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, podMatchLabels[DefaultOTLPCollectorComponentLabelKey])
+}
+
+func TestPatchNetworkPolicyOTLPEgressRewritesKustomizePollutedPodSelector(t *testing.T) {
+	np := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"spec": map[string]any{
+				"egress": []any{
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(4317), "protocol": "TCP"},
+						},
+						"to": []any{
+							map[string]any{
+								"namespaceSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"kubernetes.io/metadata.name": "opendatahub",
+									},
+								},
+								"podSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"app.kubernetes.io/name":      "payload-processing",
+										"app.kubernetes.io/component": "payload-processing",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchNetworkPolicyOTLPEgress(np, "redhat-ods-monitoring")
+	require.NoError(t, err)
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[0].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	peer, ok := to[0].(map[string]any)
+	require.True(t, ok)
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podMatchLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, DefaultOTLPCollectorService, podMatchLabels[DefaultOTLPCollectorPodLabelKey])
+	assert.Equal(t, DefaultOTLPCollectorComponentLabelValue, podMatchLabels[DefaultOTLPCollectorComponentLabelKey])
+}
+
+func TestPatchNetworkPolicyOTLPEgressMissingRule(t *testing.T) {
+	np := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"spec": map[string]any{
+				"egress": []any{
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(443), "protocol": "TCP"},
+						},
+					},
+				},
+			},
+		},
+	}
+
+	err := patchNetworkPolicyOTLPEgress(np, "redhat-ods-monitoring")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing OTLP egress rule")
+}
+
+func TestPatchPayloadProcessingEnvoyFilterOmitsRouterFallback(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+	ef := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(""))
+	params := PlatformParams{
+		GatewayNamespace:                       "gateway-ns",
+		GatewayName:                            "custom-gateway",
+		AppNamespace:                           "tenant-ns",
+		PayloadProcessingRouterExtProcFallback: false,
+	}
+
+	err := patchPayloadProcessingEnvoyFilter(logr.Discard(), ef, params)
+	require.NoError(t, err)
+
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 8)
+
+	for i := 4; i < 8; i++ {
+		cp, ok := configPatches[i].(map[string]any)
+		require.True(t, ok)
+		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
+		assert.Equal(t, "MERGE", op)
+	}
+}
+
+func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
+	resources := renderOverlayResources(t, "tenant-ns")
+	ef := requireResource(t, resources, GVKEnvoyFilter, PayloadProcessingEnvoyFilterName(""))
+	params := PlatformParams{
+		GatewayNamespace:                       "gateway-ns",
+		GatewayName:                            "custom-gateway",
+		AppNamespace:                           "tenant-ns",
+		PayloadProcessingRouterExtProcFallback: true,
+	}
+
+	err := patchPayloadProcessingEnvoyFilter(logr.Discard(), ef, params)
+	require.NoError(t, err)
+
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, configPatches, 6)
+
+	cp, ok := configPatches[0].(map[string]any)
+	require.True(t, ok)
+	anchor, found, err := unstructured.NestedString(cp,
+		"match", "listener", "filterChain", "filter", "subFilter", "name")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Equal(t, routerFilterName, anchor)
+}

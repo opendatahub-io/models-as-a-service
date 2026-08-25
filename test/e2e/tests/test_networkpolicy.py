@@ -8,6 +8,7 @@ through maas-default-gateway.
 """
 
 import json
+import os
 
 import pytest
 import requests
@@ -31,6 +32,24 @@ RHCL_AUTHORINO_NAMESPACE = "rh-connectivity-link"
 EXPECTED_MANAGED_LABEL = "gateway.istio.io/managed"
 EXPECTED_MANAGED_VALUE = "istio.io-gateway-controller"
 EXT_PROC_PORT = 9004
+OTLP_EGRESS_PORT = 4317
+OTLP_COLLECTOR_POD_LABEL_KEY = "app.kubernetes.io/name"
+OTLP_COLLECTOR_POD_LABEL_VALUE = "data-science-collector-collector"
+OTLP_COLLECTOR_COMPONENT_LABEL_KEY = "app.kubernetes.io/component"
+OTLP_COLLECTOR_COMPONENT_LABEL_VALUE = "opentelemetry-collector"
+
+
+def _expected_monitoring_namespace() -> str:
+    if override := os.environ.get("MONITORING_NAMESPACE"):
+        return override
+    from test_helper import DEPLOYMENT_NAMESPACE
+
+    cm = get_json_or_none("configmap", "maas-parameters", DEPLOYMENT_NAMESPACE)
+    if cm:
+        ns = (cm.get("data") or {}).get("monitoring-namespace")
+        if ns:
+            return ns
+    return "opendatahub"
 
 
 class TestPayloadProcessingNetworkPolicyExists:
@@ -87,6 +106,45 @@ class TestPayloadProcessingNetworkPolicyExists:
         assert match_labels.get(EXPECTED_MANAGED_LABEL) == EXPECTED_MANAGED_VALUE, (
             f"ext_proc ingress must use {EXPECTED_MANAGED_LABEL}: {EXPECTED_MANAGED_VALUE} "
             f"to cover all Istio-managed gateways, got matchLabels: {match_labels!r}"
+        )
+
+    def test_egress_allows_otlp_to_monitoring_namespace(self):
+        """payload-processing must egress OTLP traces to the platform collector."""
+        np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
+        assert np is not None
+
+        otlp_rule = None
+        for rule in np["spec"].get("egress") or []:
+            ports = rule.get("ports") or []
+            if any(p.get("port") == OTLP_EGRESS_PORT for p in ports):
+                otlp_rule = rule
+                break
+
+        assert otlp_rule is not None, (
+            f"NetworkPolicy must allow egress TCP {OTLP_EGRESS_PORT} for OTLP trace export"
+        )
+
+        peers = otlp_rule.get("to") or []
+        assert peers, "OTLP egress rule must restrict destination namespace"
+        ns_selector = peers[0].get("namespaceSelector") or {}
+        match_labels = ns_selector.get("matchLabels") or {}
+        expected_ns = _expected_monitoring_namespace()
+        assert match_labels.get("kubernetes.io/metadata.name") == expected_ns, (
+            f"OTLP egress must target monitoring namespace {expected_ns!r}, "
+            f"got {match_labels!r}"
+        )
+
+        pod_selector = peers[0].get("podSelector") or {}
+        pod_match_labels = pod_selector.get("matchLabels") or {}
+        assert pod_match_labels.get(OTLP_COLLECTOR_POD_LABEL_KEY) == OTLP_COLLECTOR_POD_LABEL_VALUE, (
+            f"OTLP egress must restrict destination to collector pods "
+            f"({OTLP_COLLECTOR_POD_LABEL_KEY}={OTLP_COLLECTOR_POD_LABEL_VALUE!r}), "
+            f"got pod matchLabels: {pod_match_labels!r}"
+        )
+        assert pod_match_labels.get(OTLP_COLLECTOR_COMPONENT_LABEL_KEY) == OTLP_COLLECTOR_COMPONENT_LABEL_VALUE, (
+            f"OTLP egress must restrict destination to OpenTelemetry collector component "
+            f"({OTLP_COLLECTOR_COMPONENT_LABEL_KEY}={OTLP_COLLECTOR_COMPONENT_LABEL_VALUE!r}), "
+            f"got pod matchLabels: {pod_match_labels!r}"
         )
 
     def test_ingress_does_not_hardcode_single_gateway(self):

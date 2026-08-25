@@ -63,9 +63,9 @@ replacements:
           delimiter: "."
           index: 0
   - source:
-      kind: Service
-      name: maas-controller-metrics
-      fieldPath: metadata.namespace
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
     targets:
       - select:
           kind: ServiceMonitor
