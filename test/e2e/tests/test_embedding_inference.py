@@ -28,6 +28,8 @@ from test_helper import (
     EMBEDDING_MODEL_REF,
     EMBEDDING_MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
+    RECONCILE_WAIT,
+    TIMEOUT,
     TLS_VERIFY,
     _create_api_key,
     _create_test_auth_policy,
@@ -41,7 +43,6 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
-    _wait_reconcile,
     embeddings,
 )
 
@@ -99,12 +100,13 @@ class TestEmbeddingGovernance:
             pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
 
         oc_token = _get_cluster_token()
-        api_key = _create_api_key(
-            oc_token,
-            name=f"e2e-emb-deny-{uuid.uuid4().hex[:8]}",
+        url = f"{_gateway_url()}{EMBEDDING_MODEL_PATH}/v1/embeddings"
+        headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+        r = requests.post(
+            url, headers=headers,
+            json={"model": EMBEDDING_MODEL_NAME, "input": "Hello world"},
+            timeout=TIMEOUT, verify=TLS_VERIFY,
         )
-
-        r = _embedding_inference(api_key, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME)
         log.info(f"[embedding-deny] No auth/subscription -> {r.status_code}")
         assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text[:500]}"
 
@@ -126,7 +128,7 @@ class TestEmbeddingGovernance:
                 model_refs=[EMBEDDING_MODEL_REF],
                 groups=["system:authenticated"],
             )
-            _wait_reconcile()
+            time.sleep(RECONCILE_WAIT)
 
             _create_test_subscription(
                 name=subscription_name,
@@ -135,7 +137,7 @@ class TestEmbeddingGovernance:
                 token_limit=token_limit,
                 window=window,
             )
-            _wait_reconcile()
+            time.sleep(RECONCILE_WAIT)
 
             _wait_for_token_rate_limit_policy(
                 EMBEDDING_MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90
@@ -183,7 +185,7 @@ class TestEmbeddingGovernance:
         finally:
             _delete_cr("maassubscription", subscription_name)
             _delete_cr("maasauthpolicy", auth_policy_name)
-            _wait_reconcile()
+            time.sleep(RECONCILE_WAIT)
 
     def test_embedding_with_governance_200(self):
         """Embedding model with auth + subscription returns valid 200 response."""
@@ -236,4 +238,4 @@ class TestEmbeddingGovernance:
         finally:
             _delete_cr("maassubscription", subscription_name)
             _delete_cr("maasauthpolicy", auth_policy_name)
-            _wait_reconcile()
+            time.sleep(RECONCILE_WAIT)
