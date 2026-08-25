@@ -1,13 +1,10 @@
 package tenantreconcile
 
 import (
-	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"sigs.k8s.io/kustomize/api/resource"
-	kyaml "sigs.k8s.io/kustomize/kyaml/yaml"
 )
 
 func TestManifestPathForPlatform(t *testing.T) {
@@ -30,69 +27,18 @@ func TestManifestPathForPlatform(t *testing.T) {
 	})
 }
 
-func TestRemapServiceMonitorServerName(t *testing.T) {
-	const appNamespace = "odh-ai-gateway-infra"
-
-	tests := []struct {
-		name       string
-		serverName string
-		want       string
-	}{
-		{
-			name:       "rewrites when second DNS label is overlay default namespace",
-			serverName: "maas-api-metrics.opendatahub.svc",
-			want:       "maas-api-metrics." + appNamespace + ".svc",
-		},
-		{
-			name:       "rewrites cluster.local form",
-			serverName: "maas-api-metrics.opendatahub.svc.cluster.local",
-			want:       "maas-api-metrics." + appNamespace + ".svc.cluster.local",
-		},
-		{
-			name:       "leaves hosts where opendatahub is not the namespace label",
-			serverName: "prometheus.monitoring.opendatahub.svc",
-			want:       "prometheus.monitoring.opendatahub.svc",
-		},
-		{
-			name:       "leaves already-remapped namespace",
-			serverName: "maas-api-metrics." + appNamespace + ".svc",
-			want:       "maas-api-metrics." + appNamespace + ".svc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			res := serviceMonitorWithServerName(t, tt.serverName)
-			require.NoError(t, remapServiceMonitorServerName(res, appNamespace))
-
-			m, err := res.Map()
-			require.NoError(t, err)
-			spec, ok := m["spec"].(map[string]any)
-			require.True(t, ok)
-			endpoints, ok := spec["endpoints"].([]any)
-			require.True(t, ok)
-			require.NotEmpty(t, endpoints)
-			ep, ok := endpoints[0].(map[string]any)
-			require.True(t, ok)
-			tlsCfg, ok := ep["tlsConfig"].(map[string]any)
-			require.True(t, ok)
-			assert.Equal(t, tt.want, tlsCfg["serverName"])
-		})
-	}
+func TestWithBuildNamespace(t *testing.T) {
+	t.Run("creates temp wrapper with overlay symlink", func(t *testing.T) {
+		path, cleanup, err := withBuildNamespace("/tmp/overlay", "odh-ai-gateway-infra")
+		require.NoError(t, err)
+		defer cleanup()
+		assert.NotEqual(t, "/tmp/overlay", path)
+		assert.FileExists(t, path+"/kustomization.yaml")
+	})
 }
 
-func serviceMonitorWithServerName(t *testing.T, serverName string) *resource.Resource {
-	t.Helper()
-	raw := fmt.Sprintf(`apiVersion: monitoring.coreos.com/v1
-kind: ServiceMonitor
-metadata:
-  name: test-sm
-spec:
-  endpoints:
-  - tlsConfig:
-      serverName: %s
-`, serverName)
-	node, err := kyaml.Parse(raw)
-	require.NoError(t, err)
-	return &resource.Resource{RNode: *node}
+func TestSupportsMetricsParamsPatch(t *testing.T) {
+	assert.True(t, supportsMetricsParamsPatch("/repo/maas-api/deploy/overlays/odh"))
+	assert.False(t, supportsMetricsParamsPatch("/repo/maas-api/deploy/overlays/xks"))
+	assert.False(t, supportsMetricsParamsPatch("/repo/deployment/base/observability"))
 }

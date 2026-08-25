@@ -23,16 +23,26 @@ const overlayDefaultNamespace = "opendatahub"
 // RenderKustomize runs kustomize build for the ODH maas-api overlay and
 // applies ODH-equivalent namespace remapping and component labels.
 func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructured, error) {
-	kustomizationPath := manifestDir
-	if !fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
-		kustomizationPath = filepath.Join(manifestDir, "default")
+	kustomizationPath, err := resolveKustomizationPath(manifestDir)
+	if err != nil {
+		return nil, err
 	}
+
+	buildPath := kustomizationPath
+	cleanup := func() {}
+	if supportsMetricsParamsPatch(kustomizationPath) && appNamespace != "" && appNamespace != overlayDefaultNamespace {
+		buildPath, cleanup, err = withBuildNamespace(kustomizationPath, appNamespace)
+		if err != nil {
+			return nil, err
+		}
+	}
+	defer cleanup()
 
 	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
 	fs := filesys.MakeFsOnDisk()
-	resMap, err := k.Run(fs, kustomizationPath)
+	resMap, err := k.Run(fs, buildPath)
 	if err != nil {
-		return nil, fmt.Errorf("kustomize build %q: %w", kustomizationPath, err)
+		return nil, fmt.Errorf("kustomize build %q: %w", buildPath, err)
 	}
 
 	if err := postBuildTransform(resMap, appNamespace); err != nil {
@@ -50,6 +60,76 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 		out = append(out, unstructured.Unstructured{Object: m})
 	}
 	return out, nil
+}
+
+func resolveKustomizationPath(manifestDir string) (string, error) {
+	if fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
+		return manifestDir, nil
+	}
+	fallback := filepath.Join(manifestDir, "default")
+	if fileExists(filepath.Join(fallback, "kustomization.yaml")) {
+		return fallback, nil
+	}
+	return "", fmt.Errorf("kustomization.yaml not found under %q", manifestDir)
+}
+
+// supportsMetricsParamsPatch reports whether the overlay includes maas-api secure
+// metrics and the maas-parameters ConfigMap used for ServiceMonitor serverName.
+func supportsMetricsParamsPatch(kustomizationPath string) bool {
+	return strings.HasSuffix(filepath.ToSlash(kustomizationPath), "maas-api/deploy/overlays/odh")
+}
+
+// withBuildNamespace returns a kustomize root that patches maas-parameters.data.namespace
+// and ServiceMonitor tlsConfig.serverName before build when appNamespace differs from
+// the overlay default. This mirrors the AGO path (#1401).
+func withBuildNamespace(kustomizationPath, appNamespace string) (string, func(), error) {
+	noop := func() {}
+
+	tmpDir, err := os.MkdirTemp("", "maas-kustomize-*")
+	if err != nil {
+		return "", noop, fmt.Errorf("create temp kustomize dir: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(tmpDir) }
+
+	absPath, err := filepath.Abs(kustomizationPath)
+	if err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("resolve kustomization path: %w", err)
+	}
+
+	overlayLink := filepath.Join(tmpDir, "overlay")
+	if err := os.Symlink(absPath, overlayLink); err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("symlink overlay: %w", err)
+	}
+
+	kust := fmt.Sprintf(`apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - overlay
+patches:
+  - target:
+      kind: ConfigMap
+      name: maas-parameters
+    patch: |
+      - op: replace
+        path: /data/namespace
+        value: %q
+  - target:
+      kind: ServiceMonitor
+      name: maas-api-metrics
+    patch: |
+      - op: replace
+        path: /spec/endpoints/0/tlsConfig/serverName
+        value: "maas-api-metrics.%s.svc"
+`, appNamespace, appNamespace)
+
+	if err := os.WriteFile(filepath.Join(tmpDir, "kustomization.yaml"), []byte(kust), 0o600); err != nil {
+		cleanup()
+		return "", noop, fmt.Errorf("write temp kustomization: %w", err)
+	}
+
+	return tmpDir, cleanup, nil
 }
 
 // postBuildTransform remaps the overlay's hardcoded default namespace to the
@@ -79,12 +159,6 @@ func postBuildTransform(resMap resmap.ResMap, appNamespace string) error {
 
 			if err := remapSubjectNamespaces(res, appNamespace); err != nil {
 				return fmt.Errorf("remap subjects on %s %s: %w", res.GetKind(), res.GetName(), err)
-			}
-
-			// Kustomize replacements bake tlsConfig.serverName with the overlay
-			// namespace (opendatahub). Rewrite when INFRA_NAMESPACE differs.
-			if err := remapServiceMonitorServerName(res, appNamespace); err != nil {
-				return fmt.Errorf("remap ServiceMonitor serverName on %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
 		}
 
@@ -139,69 +213,6 @@ func remapSubjectNamespaces(res *resource.Resource, appNamespace string) error {
 
 	// Write modified map back to the RNode via YAML round-trip.
 	m["subjects"] = subjects
-	b, err := yaml.Marshal(m)
-	if err != nil {
-		return fmt.Errorf("marshal: %w", err)
-	}
-	node, err := kyaml.Parse(string(b))
-	if err != nil {
-		return fmt.Errorf("parse: %w", err)
-	}
-	res.ResetRNode((&resource.Resource{RNode: *node}))
-	return nil
-}
-
-// remapServiceMonitorServerName rewrites endpoints[].tlsConfig.serverName when
-// the second DNS label is the overlay default namespace (opendatahub), replacing
-// it with appNamespace (e.g. odh-ai-gateway-infra).
-func remapServiceMonitorServerName(res *resource.Resource, appNamespace string) error {
-	if res.GetKind() != "ServiceMonitor" || appNamespace == "" || appNamespace == overlayDefaultNamespace {
-		return nil
-	}
-
-	m, err := res.Map()
-	if err != nil {
-		return fmt.Errorf("map: %w", err)
-	}
-	spec, ok := m["spec"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	endpoints, ok := spec["endpoints"].([]any)
-	if !ok {
-		return nil
-	}
-
-	changed := false
-	for _, ep := range endpoints {
-		epMap, ok := ep.(map[string]any)
-		if !ok {
-			continue
-		}
-		tlsCfg, ok := epMap["tlsConfig"].(map[string]any)
-		if !ok {
-			continue
-		}
-		serverName, ok := tlsCfg["serverName"].(string)
-		if !ok || serverName == "" {
-			continue
-		}
-		// Require overlayDefaultNamespace as the DNS namespace label (2nd segment),
-		// not merely a later substring (e.g. prometheus.monitoring.opendatahub.svc).
-		parts := strings.SplitN(serverName, ".", 3)
-		if len(parts) < 3 || parts[1] != overlayDefaultNamespace {
-			continue
-		}
-		rewritten := replaceHostNamespace(serverName, appNamespace)
-		if rewritten != serverName {
-			tlsCfg["serverName"] = rewritten
-			changed = true
-		}
-	}
-	if !changed {
-		return nil
-	}
-
 	b, err := yaml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)
