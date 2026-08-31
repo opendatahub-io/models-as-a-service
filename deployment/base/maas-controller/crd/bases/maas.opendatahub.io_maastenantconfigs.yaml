@@ -108,6 +108,34 @@ spec:
                     maximum: 100
                     minimum: 1
                     type: integer
+                  resources:
+                    description: |-
+                      Resources overrides the resource requests and limits for the payload-processing container.
+                      When set, replaces the entire resource block (full replacement, not merge).
+                      When autoscaling is enabled, both requests.cpu and requests.memory must be specified.
+                      Resource claims are not supported.
+                    properties:
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Limits defines the maximum amount of compute
+                          resources allowed.
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Requests defines the minimum amount of compute
+                          resources required.
+                        type: object
+                    type: object
                 type: object
               telemetry:
                 description: Telemetry contains configuration for telemetry and metrics

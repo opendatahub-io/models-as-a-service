@@ -35,18 +35,19 @@ See [AITenant CRD](ai-tenant.md) for creating additional tenants.
 |-------|------|----------|-------------|
 | apiKeys | TenantAPIKeysConfig | No | Configuration for API key management |
 | telemetry | TenantTelemetryConfig | No | Telemetry and metrics collection configuration |
-| payloadProcessing | PayloadProcessingConfig | No | Replica count and autoscaling configuration for the payload-processing Deployment |
+| payloadProcessing | PayloadProcessingConfig | No | Replica count, autoscaling, and resource configuration for the payload-processing Deployment |
 
 ---
 
 ## PayloadProcessingConfig
 
-`spec.payloadProcessing` controls replica count and optional HPA-based autoscaling for the tenant's payload-processing Deployment.
+`spec.payloadProcessing` controls replica count, autoscaling, and resource limits for the tenant's payload-processing Deployment.
 
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | replicas | int32 | No | 1 | Sets the Deployment `spec.replicas`. When `autoscaling` is also configured, this value becomes the HPA `minReplicas` floor instead. Valid range: 1–100. |
 | autoscaling | PayloadProcessingAutoscaling | No | - | Presence of this section enables HPA-based autoscaling for payload-processing pods. |
+| resources | [ResourceRequirements](https://kubernetes.io/docs/reference/kubernetes-api/core/pod-v1/#resources) | No | requests: 128Mi/100m, limits: 512Mi/1 | Overrides the resource requests and limits for the payload-processing container. When set, replaces the entire resource block (full replacement, not merge). Resource claims are not supported. |
 
 ### PayloadProcessingAutoscaling
 
@@ -63,6 +64,25 @@ When autoscaling is enabled:
 - Scale-up reacts immediately (0s stabilization) with up to 100%/15s or 4 pods/15s (whichever is higher).
 
 Remove the `autoscaling` section to disable autoscaling. The HPA will be removed and the Deployment will revert to static replica management via `spec.payloadProcessing.replicas`.
+
+### Resource Overrides
+
+Use `resources` to override the default container resource requests and limits for the payload-processing container. When set, the entire resource block is replaced (not merged with defaults). When not set, the base manifest defaults are used. Only `requests` and `limits` are accepted; resource claims are not supported.
+
+If autoscaling is enabled, `resources.requests.cpu` and `resources.requests.memory` must both be specified when overriding resources. Incomplete overrides are rejected and the manifest defaults are preserved. Because `resources` replaces the entire block, a limits-only override removes existing requests. That can cause `FailedGetResourceMetric` for the affected HPA metric; another valid metric may still drive scaling.
+
+```yaml
+spec:
+  payloadProcessing:
+    replicas: 2
+    resources:
+      requests:
+        memory: "256Mi"
+        cpu: "200m"
+      limits:
+        memory: "2Gi"
+        cpu: "2"
+```
 
 ---
 

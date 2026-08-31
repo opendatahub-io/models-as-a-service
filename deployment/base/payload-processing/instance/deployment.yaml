@@ -57,11 +57,11 @@ spec:
               protocol: TCP
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
+              memory: "128Mi"
+              cpu: "100m"
             limits:
-              memory: "256Mi"
-              cpu: "500m"
+              memory: "512Mi"
+              cpu: "1"
           livenessProbe:
             tcpSocket:
               port: grpc

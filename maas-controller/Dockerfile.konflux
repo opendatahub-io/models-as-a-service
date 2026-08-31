@@ -1,7 +1,7 @@
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
 
-FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset@sha256:46376c6723c3a4961a165c2768461e7fac48a79932cdde0a6e6a57724ef61ba0 AS builder
+FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset@sha256:1a755651ffe1a438f137418d183f18ebad527ec929206c17804f93490a97869e AS builder
 ARG CGO_ENABLED=1
 ARG GOEXPERIMENT=strictfipsruntime
 ARG TARGETOS
