@@ -32,6 +32,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -66,6 +67,19 @@ func newTestExternalModel(name, ns, endpoint string, annotations map[string]stri
 	em.APIVersion = maasv1alpha1.GroupVersion.String()
 	em.Kind = "ExternalModel"
 	return em
+}
+
+func newDefaultTestReconciler(c client.Client) *Reconciler {
+	return &Reconciler{
+		Client:                          c,
+		Scheme:                          testScheme,
+		Log:                             ctrl.Log,
+		GatewayName:                     "maas-default-gateway",
+		GatewayNamespace:                "openshift-ingress",
+		DefaultTenantNamespace:          "models-as-a-service",
+		AITenantNamespace:               tenantreconcile.DefaultAITenantNamespace,
+		TenantNamespaceDiscoveryEnabled: false,
+	}
 }
 
 // TestManagedAnnotation_Service verifies that an existing Service with
@@ -117,7 +131,7 @@ func TestManagedAnnotation_Service(t *testing.T) {
 
 			em := newTestExternalModel(name, ns, endpoint, nil)
 			c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(em, existingSvc).Build()
-			r := &Reconciler{Client: c, Scheme: testScheme, Log: ctrl.Log}
+			r := newDefaultTestReconciler(c)
 
 			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}})
 			require.NoError(t, err)
@@ -173,7 +187,7 @@ func TestManagedAnnotation_ServiceEntry(t *testing.T) {
 
 			em := newTestExternalModel(name, ns, endpoint, nil)
 			c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(em, existingSE).Build()
-			r := &Reconciler{Client: c, Scheme: testScheme, Log: ctrl.Log}
+			r := newDefaultTestReconciler(c)
 
 			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}})
 			require.NoError(t, err)
@@ -241,7 +255,9 @@ func TestManagedAnnotation_HTTPRoute(t *testing.T) {
 
 			em := newTestExternalModel(name, ns, endpoint, nil)
 			c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(em, existingHR).Build()
-			r := &Reconciler{Client: c, Scheme: testScheme, Log: ctrl.Log, GatewayName: "maas-default-gateway", GatewayNamespace: "openshift-ingress"}
+			r := newDefaultTestReconciler(c)
+			r.GatewayName = "maas-default-gateway"
+			r.GatewayNamespace = "openshift-ingress"
 
 			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}})
 			require.NoError(t, err)
@@ -260,6 +276,54 @@ func TestManagedAnnotation_HTTPRoute(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestReconcile_UsesTenantGateway(t *testing.T) {
+	const (
+		name     = "gpt-4o"
+		tenantNS = "ai-tenant-redteam"
+		endpoint = "api.openai.com"
+	)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "redteam", Namespace: "ai-tenants"},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{Name: "redteam-gateway", Namespace: "openshift-ingress"},
+		},
+	}
+	tenantNamespace := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        "redteam",
+			},
+		},
+	}
+
+	em := newTestExternalModel(name, tenantNS, endpoint, nil)
+	c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(em, aitenant, tenantNamespace).Build()
+	r := &Reconciler{
+		Client:                          c,
+		Scheme:                          testScheme,
+		Log:                             ctrl.Log,
+		GatewayName:                     "maas-default-gateway",
+		GatewayNamespace:                "openshift-ingress",
+		DefaultTenantNamespace:          "models-as-a-service",
+		AITenantNamespace:               "ai-tenants",
+		TenantNamespaceDiscoveryEnabled: true,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: tenantNS}})
+	require.NoError(t, err)
+
+	resourceName := modelnaming.ExternalModelResourceName(name)
+	got := &gatewayapiv1.HTTPRoute{}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: tenantNS}, got))
+	require.Len(t, got.Spec.ParentRefs, 1)
+	assert.Equal(t, gatewayapiv1.ObjectName("redteam-gateway"), got.Spec.ParentRefs[0].Name)
+	require.NotNil(t, got.Spec.ParentRefs[0].Namespace)
+	assert.Equal(t, gatewayapiv1.Namespace("openshift-ingress"), *got.Spec.ParentRefs[0].Namespace)
 }
 
 // TestManagedAnnotation_DestinationRule_DeletePath verifies that an existing DestinationRule with
@@ -307,7 +371,7 @@ func TestManagedAnnotation_DestinationRule_DeletePath(t *testing.T) {
 			// ExternalModel has tls=false annotation so the reconciler calls deleteIfExists on the DR.
 			em := newTestExternalModel(name, ns, endpoint, map[string]string{annotationTLS: "false"})
 			c := fake.NewClientBuilder().WithScheme(testScheme).WithObjects(em, existingDR).Build()
-			r := &Reconciler{Client: c, Scheme: testScheme, Log: ctrl.Log}
+			r := newDefaultTestReconciler(c)
 
 			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}})
 			require.NoError(t, err)

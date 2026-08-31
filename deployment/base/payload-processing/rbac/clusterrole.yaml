@@ -13,7 +13,11 @@ rules:
     verbs: ["get", "list", "watch"]
   # legacy-migration + model-provider-resolver: watches legacy maas ExternalModels
   - apiGroups: ["maas.opendatahub.io"]
-    resources: ["externalmodels"]
+    resources: ["externalmodels", "aitenants"]
+    verbs: ["get", "list", "watch"]
+  # tenant-aware ExternalModel HTTPRoute parentRef resolution
+  - apiGroups: [""]
+    resources: ["namespaces"]
     verbs: ["get", "list", "watch"]
   # legacy-migration: ownerReferences on migrated inference CRs require finalizer permission
   - apiGroups: ["maas.opendatahub.io"]
