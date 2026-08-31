@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -32,6 +33,12 @@ const (
 	// annotationTLS controls TLS origination (default "true").
 	annotationTLS = "maas.opendatahub.io/tls"
 )
+
+var inferenceExternalModelGVK = schema.GroupVersionKind{
+	Group:   "inference.opendatahub.io",
+	Version: "v1alpha1",
+	Kind:    "ExternalModel",
+}
 
 // Reconciler watches ExternalModel CRs and creates the Istio resources
 // needed to route to the external provider.
@@ -118,6 +125,16 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	// Nothing to do on deletion — OwnerReferences handle cleanup
 	if !extModel.GetDeletionTimestamp().IsZero() {
 		return ctrl.Result{}, nil
+	}
+
+	// If an inference.opendatahub.io ExternalModel exists for this model,
+	// the IPP controller owns networking. Tear down legacy maas-* children.
+	if superseded, err := r.isSupersededByInference(ctx, req.NamespacedName); err != nil {
+		return ctrl.Result{}, err
+	} else if superseded {
+		log.FromContext(ctx).Info("inference ExternalModel exists, tearing down legacy networking",
+			"name", req.Name, "namespace", req.Namespace)
+		return r.teardownLegacyChildren(ctx, extModel)
 	}
 
 	tls, port, err := getTLSInfo(extModel)
@@ -311,6 +328,61 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	existing.OwnerReferences = desired.OwnerReferences
 	log.Info("Updating HTTPRoute", "name", desired.Name)
 	return r.Update(ctx, existing)
+}
+
+// isSupersededByInference checks whether an inference.opendatahub.io ExternalModel
+// exists with the same name and namespace. When the inference CRD is not installed
+// (IsNoMatchError), the legacy reconciler proceeds normally.
+func (r *Reconciler) isSupersededByInference(ctx context.Context, key types.NamespacedName) (bool, error) {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(inferenceExternalModelGVK)
+	if err := r.Get(ctx, key, obj); err != nil {
+		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("failed to check inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return true, nil
+}
+
+// teardownLegacyChildren deletes the maas-* networking resources (Service,
+// ServiceEntry, DestinationRule, HTTPRoute) that were created by this reconciler
+// for the given ExternalModel, then returns a no-requeue result.
+func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv1alpha1.ExternalModel) (ctrl.Result, error) {
+	logger := log.FromContext(ctx)
+	resourceName := modelnaming.ExternalModelResourceName(extModel.Name)
+	ns := extModel.Namespace
+
+	if err := r.deleteIfExists(ctx, logger, "HTTPRoute", resourceName, ns, schema.GroupVersionKind{
+		Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute",
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to delete legacy HTTPRoute: %w", err)
+	}
+	if err := r.deleteIfExists(ctx, logger, "DestinationRule", resourceName, ns, schema.GroupVersionKind{
+		Group: "networking.istio.io", Version: "v1", Kind: "DestinationRule",
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to delete legacy DestinationRule: %w", err)
+	}
+	if err := r.deleteIfExists(ctx, logger, "ServiceEntry", resourceName, ns, schema.GroupVersionKind{
+		Group: "networking.istio.io", Version: "v1", Kind: "ServiceEntry",
+	}); err != nil {
+		return ctrl.Result{}, fmt.Errorf("failed to delete legacy ServiceEntry: %w", err)
+	}
+
+	svc := &corev1.Service{}
+	svcKey := types.NamespacedName{Name: resourceName, Namespace: ns}
+	if err := r.Get(ctx, svcKey, svc); err == nil {
+		if isManaged(svc) {
+			logger.Info("Deleting legacy Service", "name", resourceName)
+			if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {
+				return ctrl.Result{}, fmt.Errorf("failed to delete legacy Service: %w", err)
+			}
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return ctrl.Result{}, fmt.Errorf("failed to get legacy Service: %w", err)
+	}
+
+	return ctrl.Result{}, nil
 }
 
 // SetupWithManager registers the reconciler to watch ExternalModel CRs.
