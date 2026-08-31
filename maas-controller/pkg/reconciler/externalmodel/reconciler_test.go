@@ -328,8 +328,10 @@ func TestManagedAnnotation_DestinationRule_DeletePath(t *testing.T) {
 }
 
 // newInferenceExternalModel creates a minimal inference.opendatahub.io ExternalModel
-// as an unstructured object for testing the supersede check.
-func newInferenceExternalModel(name, ns string) *unstructured.Unstructured {
+// as an unstructured object for testing the supersede check. When routeName is
+// non-empty it is set on status.httpRouteName, marking the inference route as
+// programmed (Ready) — the signal that gates legacy teardown.
+func newInferenceExternalModel(name, ns, routeName string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "inference.opendatahub.io/v1alpha1",
 		"kind":       "ExternalModel",
@@ -338,6 +340,9 @@ func newInferenceExternalModel(name, ns string) *unstructured.Unstructured {
 			"namespace": ns,
 		},
 	}}
+	if routeName != "" {
+		obj.Object["status"] = map[string]any{"httpRouteName": routeName}
+	}
 	return obj
 }
 
@@ -363,7 +368,7 @@ func TestReconcile_SupersededByInference(t *testing.T) {
 	}
 
 	em := newTestExternalModel(name, ns, endpoint, nil)
-	inferenceEM := newInferenceExternalModel(name, ns)
+	inferenceEM := newInferenceExternalModel(name, ns, resourceName)
 
 	c := fake.NewClientBuilder().WithScheme(testScheme).
 		WithObjects(em, legacySvc, legacyHR).
@@ -419,6 +424,43 @@ func TestReconcile_NoInferenceModel_ProceedsNormally(t *testing.T) {
 	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, gotHR))
 }
 
+// TestReconcile_InferenceNotReady_ProceedsNormally verifies that when an
+// inference.opendatahub.io ExternalModel exists but has not yet published its
+// HTTPRoute (status.httpRouteName unset), the legacy reconciler does NOT tear down
+// its children — avoiding a routing gap before the replacement route is programmed.
+func TestReconcile_InferenceNotReady_ProceedsNormally(t *testing.T) {
+	const (
+		name     = "gpt-4o"
+		ns       = "llm"
+		endpoint = "api.openai.com"
+	)
+	resourceName := modelnaming.ExternalModelResourceName(name)
+
+	em := newTestExternalModel(name, ns, endpoint, nil)
+	// Inference CR exists but is not Ready yet (no status.httpRouteName).
+	inferenceEM := newInferenceExternalModel(name, ns, "")
+
+	c := fake.NewClientBuilder().WithScheme(testScheme).
+		WithObjects(em).
+		WithObjects(inferenceEM).
+		Build()
+	r := &Reconciler{Client: c, Scheme: testScheme, Log: ctrl.Log, GatewayName: "maas-gw", GatewayNamespace: "ingress"}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: name, Namespace: ns},
+	})
+	require.NoError(t, err)
+
+	// Legacy children should still be created, since the inference route is not live.
+	gotSvc := &corev1.Service{}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, gotSvc),
+		"expected legacy Service to be created while inference route is not Ready")
+
+	gotHR := &gatewayapiv1.HTTPRoute{}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, gotHR),
+		"expected legacy HTTPRoute to be created while inference route is not Ready")
+}
+
 // TestReconcile_SupersededDoesNotTeardownOptedOut verifies that teardown
 // respects the opendatahub.io/managed=false annotation on legacy children.
 func TestReconcile_SupersededDoesNotTeardownOptedOut(t *testing.T) {
@@ -439,7 +481,7 @@ func TestReconcile_SupersededDoesNotTeardownOptedOut(t *testing.T) {
 	}
 
 	em := newTestExternalModel(name, ns, endpoint, nil)
-	inferenceEM := newInferenceExternalModel(name, ns)
+	inferenceEM := newInferenceExternalModel(name, ns, resourceName)
 
 	c := fake.NewClientBuilder().WithScheme(testScheme).
 		WithObjects(em, legacySvc).

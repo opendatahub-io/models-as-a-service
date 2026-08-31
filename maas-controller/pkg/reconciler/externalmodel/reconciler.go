@@ -18,7 +18,9 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -330,9 +332,18 @@ func (r *Reconciler) applyHTTPRoute(ctx context.Context, log logr.Logger, desire
 	return r.Update(ctx, existing)
 }
 
-// isSupersededByInference checks whether an inference.opendatahub.io ExternalModel
-// exists with the same name and namespace. When the inference CRD is not installed
-// (IsNoMatchError), the legacy reconciler proceeds normally.
+// isSupersededByInference reports whether an inference.opendatahub.io ExternalModel
+// exists for the same name/namespace AND has published its HTTPRoute
+// (status.httpRouteName is set), meaning the IPP controller now owns networking.
+//
+// Teardown is gated on that readiness signal, not on mere existence: if we removed
+// the legacy maas-* route the moment the inference CR appeared — before its route is
+// programmed — there would be a window with no route for the model, causing a
+// routing/auth gap during the migration cutover. The MaaSModelRef handler waits for
+// the same signal (see providers_external.go), so this keeps the two in lockstep.
+//
+// When the inference CRD is not installed (IsNoMatchError), the legacy reconciler
+// proceeds normally, so pure 3.4 clusters are unaffected.
 func (r *Reconciler) isSupersededByInference(ctx context.Context, key types.NamespacedName) (bool, error) {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(inferenceExternalModelGVK)
@@ -342,7 +353,11 @@ func (r *Reconciler) isSupersededByInference(ctx context.Context, key types.Name
 		}
 		return false, fmt.Errorf("failed to check inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
 	}
-	return true, nil
+	routeName, _, err := unstructured.NestedString(obj.Object, "status", "httpRouteName")
+	if err != nil {
+		return false, fmt.Errorf("failed to read status.httpRouteName on inference ExternalModel %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return routeName != "", nil
 }
 
 // teardownLegacyChildren deletes the maas-* networking resources (Service,
@@ -386,9 +401,42 @@ func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv
 }
 
 // SetupWithManager registers the reconciler to watch ExternalModel CRs.
+//
+// It additionally watches inference.opendatahub.io ExternalModels so that when the
+// legacy-migration controller creates the canonical CR, the matching legacy
+// ExternalModel is re-reconciled promptly and its maas-* networking is torn down —
+// rather than waiting for the periodic resync (which can be hours). Each inference
+// event is mapped to the same name/namespace; Reconcile then no-ops if no legacy
+// ExternalModel exists there, so native inference-only models are never affected.
+//
+// The watch is only wired when the inference CRD is installed. On pure 3.4 clusters
+// the CRD is absent and establishing an informer for it would fail cache sync, so we
+// skip it; there is no inference CR to react to on those clusters anyway.
 func (r *Reconciler) SetupWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewControllerManagedBy(mgr).
+	b := ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.ExternalModel{}).
-		Named("external-model-reconciler").
-		Complete(r)
+		Named("external-model-reconciler")
+
+	if _, err := mgr.GetRESTMapper().RESTMapping(
+		inferenceExternalModelGVK.GroupKind(), inferenceExternalModelGVK.Version,
+	); err == nil {
+		inferenceEM := &unstructured.Unstructured{}
+		inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
+		b = b.Watches(inferenceEM, handler.EnqueueRequestsFromMapFunc(
+			func(_ context.Context, obj client.Object) []reconcile.Request {
+				return []reconcile.Request{{
+					NamespacedName: types.NamespacedName{
+						Name:      obj.GetName(),
+						Namespace: obj.GetNamespace(),
+					},
+				}}
+			},
+		))
+	} else {
+		mgr.GetLogger().Info("inference.opendatahub.io ExternalModel CRD not installed; "+
+			"skipping supersede watch (legacy ExternalModel reconciler runs unchanged)",
+			"gvk", inferenceExternalModelGVK.String())
+	}
+
+	return b.Complete(r)
 }
