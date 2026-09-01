@@ -40,6 +40,7 @@ from test_helper import (
     _create_test_subscription,
     _delete_cr,
     _delete_sa,
+    _get_auth_policies_authorizing_identity_for_model,
     _maas_api_url,
     _ns,
     _sa_to_user,
@@ -482,7 +483,24 @@ class TestSubscriptionModelAccessFiltering:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
-            # Subscription with MODEL_REF and DISTINCT_MODEL_REF
+            # Verify the assumption that the user has no pre-existing access to DISTINCT_MODEL_REF model
+            sa_groups = [
+                "system:serviceaccounts",
+                f"system:serviceaccounts:{sa_ns}",
+                "system:authenticated",
+            ]
+            authorizing_policies = _get_auth_policies_authorizing_identity_for_model(
+                DISTINCT_MODEL_REF,
+                sa_user,
+                sa_groups,
+                namespace=maas_ns,
+            )
+            assert not authorizing_policies, (
+                f"Policies {authorizing_policies} authorize '{sa_user}' for "
+                f"model '{DISTINCT_MODEL_REF}'."
+            )
+
+            # Subscription with DISTINCT_MODEL_REF with no associated auth policy for the user
             _create_test_subscription(
                 subscription_name,
                 [DISTINCT_MODEL_REF],

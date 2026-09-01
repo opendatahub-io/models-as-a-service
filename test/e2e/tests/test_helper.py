@@ -560,6 +560,62 @@ def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None
     return matching
 
 
+def _get_auth_policies_authorizing_identity_for_model(
+    model_ref,
+    username,
+    groups,
+    namespace=None,
+    model_namespace=None,
+):
+    """Get policy names that authorize an identity for a model.
+
+    A policy authorizes the identity when it references the specified model
+    name and namespace, and it matches the username or one of the groups.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        username: Kubernetes username to match
+        groups: Kubernetes groups to match
+        namespace: Namespace to search for policies (defaults to _ns())
+        model_namespace: Expected modelRef namespace (defaults to MODEL_NAMESPACE)
+
+    Returns:
+        List of matching MaaSAuthPolicy names
+    """
+    namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
+    username = username.strip()
+    groups = {group.strip() for group in groups}
+
+    matching_policies = []
+    for policy in _list_crs("maasauthpolicy", namespace):
+        spec = policy.get("spec", {})
+        policy_models = spec.get("modelRefs", [])
+        references_model = any(
+            isinstance(ref, dict)
+            and ref.get("name") == model_ref
+            and ref.get("namespace") == model_namespace
+            for ref in policy_models
+        )
+        if not references_model:
+            continue
+
+        subjects = spec.get("subjects", {})
+        users = subjects.get("users", [])
+        policy_groups = subjects.get("groups", [])
+        matches_user = username and any(
+            isinstance(user, str) and user.strip() == username for user in users
+        )
+        matches_group = any(
+            isinstance(group, dict) and group.get("name", "").strip() in groups
+            for group in policy_groups
+        )
+        if matches_user or matches_group:
+            matching_policies.append(policy["metadata"]["name"])
+
+    return matching_policies
+
+
 def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None):
     """Get all MaaSSubscriptions that reference a model.
 
