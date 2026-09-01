@@ -263,13 +263,20 @@ for RHOAI or `opendatahub` for ODH):
 ```bash
 kubectl patch odhdashboardconfig odh-dashboard-config \
   -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"observabilityDashboard":true}}}'
+  -p '{"spec":{"dashboardConfig":{"modelAsService":true,"vLLMDeploymentOnMaaS":true,"genAiStudio":true,"observabilityDashboard":true}}}'
 ```
 
 | Flag | Effect | Prerequisites |
 |------|--------|---------------|
+| `modelAsService: true` | Enables the **Models as a Service** UI in the Dashboard | `aigateway.modelsAsAService` set to `Managed` in DSC |
+| `vLLMDeploymentOnMaaS: true` | Enables vLLM model deployment via the MaaS Dashboard UI | `modelAsService` enabled |
 | `genAiStudio: true` | Shows the **GenAI Studio** tab in the Dashboard | `llamastackoperator` set to `Managed` in DSC |
 | `observabilityDashboard: true` | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+
+!!! warning "Deprecated field"
+    The field `maasAuthPolicies` was previously documented but has been **deprecated and removed**
+    from the `OdhDashboardConfig` CRD validation. Setting it will cause an error. Use
+    `modelAsService: true` instead.
 
 !!! note "Namespace"
     For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
