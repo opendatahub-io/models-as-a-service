@@ -3588,17 +3588,50 @@
 <p>Verify your cluster's token lifetime and automate rotation accordingly (e.g., CronJob or external secrets operator) to avoid outages.</p>
 </div>
 <h3 id="monitor-servicemonitor-health">Monitor ServiceMonitor Health</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Check ServiceMonitor status</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor<span class="w"> </span>-A
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="c1"># View targets in Prometheus UI: Status → Targets</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># Look for maas-*, kserve-*, authorino-*, limitador-* targets (should be UP)</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="c1"># Query Prometheus directly</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a>curl<span class="w"> </span>-sk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/targets&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.activeTargets[] | select(.labels.job | contains(&quot;maas&quot;))&#39;</span>
+<p>The ODH/RHOAI monitoring stack scrapes <code>ServiceMonitor</code> / <code>PodMonitor</code> targets with the
+OpenTelemetry Collector (Target Allocator discovers jobs; the collector scrapes; metrics
+are remote-written to Prometheus). Thanos Query serves PromQL only — it has no scrape
+pool, so <code>/api/v1/targets</code> on <code>data-science-thanos-querier-route</code> is empty or unimplemented.
+Prometheus <strong>Status → Targets</strong> does not list these jobs either.</p>
+<p>The collector's prometheus receiver sets <code>job</code> to its own scrape job
+(<code>data-science-collector-prometheus</code>). The original ServiceMonitor/PodMonitor job is
+preserved as <code>exported_job</code> (for example <code>limitador-limitador</code> or
+<code>redhat-ods-applications/maas-controller-metrics</code>). Filter scrape health on
+<code>exported_job</code>, not <code>job</code>.</p>
+<p>Do not use the <strong>usage-logs</strong> collector (<code>usage-logs-collector</code>) here. That collector
+ingests gateway access logs into Loki. Metrics scraping uses the <strong>monitoring-stack</strong>
+OpenTelemetryCollector in the DSCI monitoring namespace.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace`</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># (e.g. opendatahub or redhat-ods-monitoring).</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g. apps.mycluster.example.com).</span>
+<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
+<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># 1. Confirm monitors exist (MaaS labels ServiceMonitors with monitoring.opendatahub.io/scrape=true)</span>
+<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor,podmonitor<span class="w"> </span>-A<span class="w"> </span>-l<span class="w"> </span>monitoring.opendatahub.io/scrape<span class="o">=</span><span class="s1">&#39;true&#39;</span>
+<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
+<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># 2. Discovery: Target Allocator job list (what should be scraped)</span>
+<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># The monitoring OpenTelemetryCollector is named data-science-collector, so its</span>
+<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Target Allocator Service is data-science-collector-targetallocator.</span>
+<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>port-forward<span class="w"> </span>svc/data-science-collector-targetallocator<span class="w"> </span><span class="m">8080</span>:80
+<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># In another terminal:</span>
+<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8080/jobs<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="c1"># Job IDs look like serviceMonitor/&lt;namespace&gt;/&lt;name&gt;/0 — inspect endpoints:</span>
+<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="c1"># curl -s localhost:8080/jobs/serviceMonitor%2F&lt;namespace&gt;%2F&lt;name&gt;%2F0/targets | jq</span>
+<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="c1"># Look for maas, limitador, authorino, kserve jobs. Missing jobs mean the monitor</span>
+<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="c1"># was not discovered (selector, namespace label, or NetworkPolicy).</span>
+<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>
+<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="c1"># 3. Scrape health: `up` is emitted by the prometheus receiver and stored in Thanos.</span>
+<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="c1"># Match exported_job (original target). job is always data-science-collector-prometheus.</span>
+<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=up{exported_job=~&quot;.*(maas|limitador|authorino|kserve).*&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {exported_job: .metric.exported_job, instance: .metric.instance, up: .value[1]}&#39;</span>
+<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="c1"># up==1 is the analogue of a Prometheus target UP. No series usually means the</span>
+<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="c1"># Target Allocator never allocated the job, not that Thanos lost the target.</span>
+<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>
+<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="c1"># 4. If up is 0 or missing, check the monitoring-stack collector logs (exclude usage-logs-collector)</span>
+<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;app.kubernetes.io/component=opentelemetry-collector,app.kubernetes.io/name!=usage-logs-collector&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="w">  </span>--tail<span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-iE<span class="w"> </span><span class="s1">&#39;scrape|error|limitador|authorino|maas&#39;</span>
 </code></pre></div>
 <h3 id="cleanup">Cleanup</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Remove dashboards</span>
@@ -3615,18 +3648,25 @@
 <div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 1. Verify service exposes metrics</span>
 <a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>&lt;pod&gt;<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>localhost:&lt;port&gt;/metrics
 <a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 2. Verify ServiceMonitor exists</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a><span class="c1"># 3. Verify User Workload Monitoring enabled</span>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>openshift-user-workload-monitoring
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a><span class="c1"># 4. Check Prometheus targets (UI → Status → Targets)</span>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a><span class="c1"># 5. Query Prometheus directly</span>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a>curl<span class="w"> </span>-sk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/query?query=&lt;metric_name&gt;&quot;</span>
+<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 2. Verify ServiceMonitor exists and labeled with: &quot;monitoring.opendatahub.io/scrape: &#39;true&#39;&quot;</span>
+<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;monitoring.opendatahub.io/scrape=true&#39;</span>
+<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
+<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># 3. Verify ODH monitoring stack enabled</span>
+<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w">  </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;Degraded&quot; or .type==&quot;MaaSPrerequisitesAvailable&quot;) | {type, status, message}&#39;</span>
+<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
+<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;MonitoringReady&quot; or .type==&quot;MonitoringStackAvailable&quot;) | {type, status}&#39;</span>
+<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
+<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># 4. Confirm the Target Allocator discovered the monitor and `up` is 1</span>
+<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># (see Monitor ServiceMonitor Health above). Do not use Thanos /api/v1/targets.</span>
+<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="c1"># 5. Query stored samples via Thanos (PromQL only — this is not a scrape-target API)</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
+<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
+<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="c1"># For example: https://data-science-thanos-querier-route-redhat-ods-monitoring.apps.mycluster.example.com/api/v1/query?query=authorized_hits_total</span>
+<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=&lt;metric_name&gt;&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span>
 </code></pre></div>
 <h3 id="troubleshooting-dashboard-issues">Troubleshooting Dashboard Issues</h3>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 1. Verify Grafana → Prometheus connection</span>
@@ -3643,20 +3683,24 @@
 <h3 id="capacity-planning">Capacity Planning</h3>
 <p><strong>Prometheus storage:</strong></p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Check storage size</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>openshift-user-workload-monitoring<span class="w"> </span>prometheus-user-workload-0<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>prometheus-data-science-monitoringstack-0<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>df<span class="w"> </span>-h<span class="w"> </span>/prometheus
 <a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
 <a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># View retention</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>prometheus<span class="w"> </span>-n<span class="w"> </span>openshift-user-workload-monitoring<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>monitoringstack<span class="w"> </span>data-science-monitoringstack<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>grep<span class="w"> </span>-A<span class="w"> </span><span class="m">5</span><span class="w"> </span>retention
 </code></pre></div>
 <p><strong>Metric cardinality:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Check high-cardinality metrics</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>curl<span class="w"> </span>-sk<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="w">  </span><span class="s2">&quot;https://thanos-querier-openshift-monitoring.&lt;cluster&gt;/api/v1/status/tsdb&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.seriesCountByMetricName[] | select(.value &gt; 1000)&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Thanos Query has no local TSDB, so /api/v1/status/tsdb is not available.</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Count active series per MaaS metric via PromQL instead.</span>
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=count by (__name__) ({__name__=~&quot;authorized_hits_total|authorized_calls_total|limited_calls_total&quot;})&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {metric: .metric.__name__, series: .value[1]}&#39;</span>
 </code></pre></div>
-<p>Watch: <code>authorized_hits{user}</code>, <code>authorized_calls{user}</code>, <code>istio_request_duration_milliseconds_bucket{subscription}</code>.</p>
+<p>Watch: <code>authorized_hits_total{user!=""}</code>, <code>authorized_calls_total{user!=""}</code>, <code>istio_request_duration_milliseconds_bucket{subscription!=""}</code>.</p>
 <h3 id="regular-maintenance-tasks">Regular Maintenance Tasks</h3>
 <table>
 <thead>
@@ -3680,7 +3724,7 @@
 <tr>
 <td><strong>ServiceMonitor Health</strong></td>
 <td>Daily</td>
-<td>Check Prometheus targets</td>
+<td>Check Target Allocator jobs and <code>up</code> series (not Thanos <code>/api/v1/targets</code>)</td>
 </tr>
 <tr>
 <td><strong>Cardinality Review</strong></td>
@@ -3711,24 +3755,24 @@
 </thead>
 <tbody>
 <tr>
-<td><strong><code>model</code> label on <code>authorized_calls</code> / <code>limited_calls</code></strong></td>
+<td><strong><code>model</code> label on <code>authorized_calls_total</code> / <code>limited_calls_total</code></strong></td>
 <td>Kuadrant wasm-shim doesn't pass <code>responseBodyJSON</code> context</td>
-<td>Use <code>authorized_hits</code> for per-model breakdown</td>
+<td>Use <code>authorized_hits_total</code> for per-model breakdown</td>
 </tr>
 <tr>
 <td><strong>Input/output token split</strong></td>
 <td>TokenRateLimitPolicy sends single <code>hits_addend</code></td>
-<td>Total tokens via <code>authorized_hits</code>; response body has <code>usage.prompt_tokens</code> and <code>usage.completion_tokens</code> but wasm-shim doesn't split</td>
+<td>Total tokens via <code>authorized_hits_total</code>; response body has <code>usage.prompt_tokens</code> and <code>usage.completion_tokens</code> but wasm-shim doesn't split</td>
 </tr>
 <tr>
 <td><strong>Input/output per user</strong></td>
 <td>vLLM doesn't label with <code>user</code></td>
-<td>Total tokens per user via <code>authorized_hits{user}</code>; vLLM prompt/gen metrics are per-model only</td>
+<td>Total tokens per user via <code>authorized_hits_total{user}</code>; vLLM prompt/gen metrics are per-model only</td>
 </tr>
 <tr>
 <td><strong>Rate-limited in Istio metrics</strong></td>
 <td>WASM plugin <code>sendLocalReply()</code> short-circuits filter chain</td>
-<td>Use <code>limited_calls</code> from Limitador (has correct labels)</td>
+<td>Use <code>limited_calls_total</code> from Limitador (has correct labels)</td>
 </tr>
 <tr>
 <td><strong>Policy health metrics</strong></td>
@@ -3741,15 +3785,15 @@
 <td>No workaround; requires adding Prometheus instrumentation</td>
 </tr>
 <tr>
-<td><strong>PromQL warnings</strong></td>
-<td>Counter names don't end in <code>_total</code></td>
-<td>Cosmetic only; all queries work correctly</td>
+<td><strong>PromQL <code>_total</code> suffix</strong></td>
+<td>OTel prometheus receiver stores Limitador counters as <code>authorized_hits_total</code> (and the same for <code>authorized_calls</code> / <code>limited_calls</code>)</td>
+<td>Query the <code>_total</code> names; Grafana panels that omit <code>_total</code> return no data</td>
 </tr>
 </tbody>
 </table>
 <div class="admonition note">
 <p class="admonition-title">Total vs Split</p>
-<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits{user}</code>. Input/output split at gateway requires wasm-shim to send two counter updates.</p>
+<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits_total{user}</code>. Input/output split at gateway requires wasm-shim to send two counter updates.</p>
 </div>
 <h3 id="available-metrics">Available Metrics</h3>
 <table>
@@ -3768,37 +3812,37 @@
 </tr>
 <tr>
 <td><strong>Tokens per user</strong></td>
-<td><code>authorized_hits</code></td>
+<td><code>authorized_hits_total</code></td>
 <td><code>user</code></td>
 </tr>
 <tr>
 <td><strong>Tokens per subscription</strong></td>
-<td><code>authorized_hits</code></td>
+<td><code>authorized_hits_total</code></td>
 <td><code>subscription</code></td>
 </tr>
 <tr>
 <td><strong>Tokens per model</strong></td>
-<td><code>authorized_hits</code></td>
+<td><code>authorized_hits_total</code></td>
 <td><code>model</code></td>
 </tr>
 <tr>
 <td><strong>Requests per user</strong></td>
-<td><code>authorized_calls</code></td>
+<td><code>authorized_calls_total</code></td>
 <td><code>user</code></td>
 </tr>
 <tr>
 <td><strong>Requests per subscription</strong></td>
-<td><code>authorized_calls</code></td>
+<td><code>authorized_calls_total</code></td>
 <td><code>subscription</code></td>
 </tr>
 <tr>
 <td><strong>Rate limited per user</strong></td>
-<td><code>limited_calls</code></td>
+<td><code>limited_calls_total</code></td>
 <td><code>user</code></td>
 </tr>
 <tr>
 <td><strong>Rate limited per subscription</strong></td>
-<td><code>limited_calls</code></td>
+<td><code>limited_calls_total</code></td>
 <td><code>subscription</code></td>
 </tr>
 </tbody>
@@ -3832,7 +3876,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="May 21, 2026 16:49:56 UTC">May 21, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 19:44:19 UTC">September 1, 2026</span>
   </span>
 
     

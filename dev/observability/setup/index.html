@@ -2324,10 +2324,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#odh-observability-dashboard-tabs-optional" class="md-nav__link">
+  <a href="#perses" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ODH Observability Dashboard tabs (Optional)
+        Perses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loki-for-access-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loki for Access Logs
       
     </span>
   </a>
@@ -2367,7 +2378,7 @@
   <a href="#logs-based-usage-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Logs based usage dashboards
+        Logs-based usage dashboards
       
     </span>
   </a>
@@ -3272,10 +3283,21 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#odh-observability-dashboard-tabs-optional" class="md-nav__link">
+  <a href="#perses" class="md-nav__link">
     <span class="md-ellipsis">
       
-        ODH Observability Dashboard tabs (Optional)
+        Perses
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#loki-for-access-logs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Loki for Access Logs
       
     </span>
   </a>
@@ -3315,7 +3337,7 @@
   <a href="#logs-based-usage-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Logs based usage dashboards
+        Logs-based usage dashboards
       
     </span>
   </a>
@@ -3366,36 +3388,39 @@
 <h1 id="setup">Setup</h1>
 <h2 id="prerequisites">Prerequisites</h2>
 <h3 id="odh-monitoring-stack">ODH Monitoring Stack</h3>
-<p>For metrics to be collected and stored in the ODH monitoring stack, configure DSCI <code>monitoring.metrics</code> - see <a href="../../install/platform-setup/#install-platform-operator">Platform Setup</a>.</p>
-<p>Verify the status of both <code>MonitoringStackAvailable</code> and <code>MonitoringReady</code> conditions is <code>True</code>:</p>
+<p>Verify the ODH monitoring stack is available by checking the status of both <code>MonitoringStackAvailable</code> and <code>MonitoringReady</code> conditions is <code>True</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;MonitoringReady&quot; or .type==&quot;MonitoringStackAvailable&quot;) | {type, status}&#39;</span>
 </code></pre></div>
-<h3 id="odh-observability-dashboard-tabs-optional">ODH Observability Dashboard tabs (Optional)</h3>
-<p>For usage dashboard(s) to appear in the ODH observability dashboard, Perses needs to be deployed.</p>
-<p>Verify the static of <code>PersesAvailable</code> condition is <code>True</code>:</p>
+<p>See <a href="../../install/prerequisites/#optional-observability-prerequisites">Observability Prerequisites</a></p>
+<h3 id="perses">Perses</h3>
+<p>For MaaS dashboards to appear in the ODH console, verify that the status of the <code>PersesAvailable</code> condition is <code>True</code>:</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;PersesAvailable&quot;) | {type, status}&#39;</span>
 </code></pre></div>
-<p>See <a href="https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai">Managing observability (RHOAI 3.4)</a>.</p>
+<h3 id="loki-for-access-logs">Loki for Access Logs</h3>
+<p>If you plan to store access logs for logs-based showback or for auditing, ensure LokiStack named <code>usage</code> is ready in monitoring namespace configured in DSCI <code>spec.monitoring.namespace</code> by verifying that the status of its <code>Ready</code> condition is <code>True</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>lokistack<span class="w"> </span>usage<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;Ready&quot;) | {type, status}&#39;</span>
+</code></pre></div>
+<p>See <a href="../../install/prerequisites/#loki-for-access-logs">Installing Loki for Access logs</a></p>
 <h2 id="installation">Installation</h2>
 <h3 id="option-1-operator-managed-recommended">Option 1: Operator-Managed (Recommended)</h3>
 <p>Enable via MaasTenantConfig CR:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaasTenantConfig</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-tenant</span>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a><span class="w">  </span><span class="nt">telemetry</span><span class="p">:</span>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="w">      </span><span class="nt">captureOrganization</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">      </span><span class="c1"># GDPR</span>
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">     </span><span class="c1"># High cardinality</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a><span class="w">      </span><span class="nt">captureModelUsage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MaasTenantConfig</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">default-tenant</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">models-as-a-service</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span><span class="nt">telemetry</span><span class="p">:</span>
+<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a><span class="w">    </span><span class="nt">enabled</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a><span class="w">    </span><span class="nt">metrics</span><span class="p">:</span>
+<a id="__codelineno-3-10" name="__codelineno-3-10" href="#__codelineno-3-10"></a><span class="w">      </span><span class="nt">captureOrganization</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-3-11" name="__codelineno-3-11" href="#__codelineno-3-11"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">      </span><span class="c1"># GDPR</span>
+<a id="__codelineno-3-12" name="__codelineno-3-12" href="#__codelineno-3-12"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span><span class="w">     </span><span class="c1"># High cardinality</span>
+<a id="__codelineno-3-13" name="__codelineno-3-13" href="#__codelineno-3-13"></a><span class="w">      </span><span class="nt">captureModelUsage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
 </code></pre></div>
 <p>Or patch:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;telemetry&quot;:{&quot;enabled&quot;:true}}}&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;telemetry&quot;:{&quot;enabled&quot;:true}}}&#39;</span>
 </code></pre></div>
 <p>This creates:</p>
 <ul>
@@ -3403,7 +3428,7 @@
 <li><strong>Istio Telemetry</strong> (<code>latency-per-subscription</code>) - Adds <code>subscription</code> label to gateway latency</li>
 </ul>
 <p><strong>Verify:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
 </code></pre></div>
 <div class="admonition note">
 <p class="admonition-title">Prerequisites</p>
@@ -3414,10 +3439,15 @@
 <p>Istio Telemetry reads <code>X-MaaS-Subscription</code> header injected by AuthPolicy. Without header injection, <code>subscription</code> label will be empty.</p>
 </div>
 <p>Additionally, a Perses dashboard for metrics-based usage will be added to the ODH observability dashboard, and it would show data when <code>captureUser</code> and <code>captureModelUsage</code> are turned on.</p>
-<h4 id="logs-based-usage-dashboards">Logs based usage dashboards</h4>
-<p>We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics based dashboard.</p>
-<p>In order to enable this feature, you need to turn on <code>usageLogging</code> in the <code>Config</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageLogging&quot;:true}}&#39;</span>
+<h4 id="logs-based-usage-dashboards">Logs-based usage dashboards</h4>
+<p>We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.</p>
+<div class="admonition warning">
+<p class="admonition-title">Privacy</p>
+<p><code>usageLogging</code> records request identity attributes in access logs.
+Review GDPR/privacy requirements, retention, and dashboard access before enabling it.</p>
+</div>
+<p>To enable this feature, you need to turn on <code>usageLogging</code> in the <code>Config</code>:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageLogging&quot;:true}}&#39;</span>
 </code></pre></div>
 <p>This creates:</p>
 <ul>
@@ -3427,40 +3457,6 @@
 <li><strong>Perses Dashboard</strong> (<code>dashboard-4-maas-usage-logs-admin</code>) - usage dashboard for administrators (shows information on all users)</li>
 <li><strong>Perses Dashboard</strong> (<code>dashboard-5-maas-usage-logs</code>) - user-scoped usage dashboard</li>
 </ul>
-<div class="admonition note">
-<p class="admonition-title">Prerequisites</p>
-<p>Requires Loki (Operator) and to configure LokiStack named <code>usage</code>, for example:</p>
-</div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">loki.grafana.com/v1</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">LokiStack</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">usage</span>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">redhat-ods-monitoring</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span><span class="nt">limits</span><span class="p">:</span>
-<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="w">    </span><span class="nt">global</span><span class="p">:</span>
-<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a><span class="w">      </span><span class="nt">otlp</span><span class="p">:</span>
-<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a><span class="w">        </span><span class="nt">streamLabels</span><span class="p">:</span>
-<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="w">          </span><span class="nt">resourceAttributes</span><span class="p">:</span>
-<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">service.name</span>
-<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">subscription</span>
-<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">model</span>
-<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">response_type</span>
-<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">            </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">kubernetes_namespace_name</span>
-<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span><span class="nt">managementState</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Managed</span>
-<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a><span class="w">  </span><span class="nt">size</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1x.demo</span>
-<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="w">  </span><span class="nt">storage</span><span class="p">:</span>
-<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="w">    </span><span class="nt">schemas</span><span class="p">:</span>
-<a id="__codelineno-6-21" name="__codelineno-6-21" href="#__codelineno-6-21"></a><span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">effectiveDate</span><span class="p">:</span><span class="w"> </span><span class="s">&#39;2024-10-01&#39;</span>
-<a id="__codelineno-6-22" name="__codelineno-6-22" href="#__codelineno-6-22"></a><span class="w">        </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v13</span>
-<a id="__codelineno-6-23" name="__codelineno-6-23" href="#__codelineno-6-23"></a><span class="w">    </span><span class="nt">secret</span><span class="p">:</span>
-<a id="__codelineno-6-24" name="__codelineno-6-24" href="#__codelineno-6-24"></a><span class="w">      </span><span class="nt">credentialMode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">static</span>
-<a id="__codelineno-6-25" name="__codelineno-6-25" href="#__codelineno-6-25"></a><span class="w">      </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">minio-secret</span>
-<a id="__codelineno-6-26" name="__codelineno-6-26" href="#__codelineno-6-26"></a><span class="w">      </span><span class="nt">type</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">s3</span>
-<a id="__codelineno-6-27" name="__codelineno-6-27" href="#__codelineno-6-27"></a><span class="w">  </span><span class="nt">storageClassName</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">gp3-csi</span>
-<a id="__codelineno-6-28" name="__codelineno-6-28" href="#__codelineno-6-28"></a><span class="w">  </span><span class="nt">tenants</span><span class="p">:</span>
-<a id="__codelineno-6-29" name="__codelineno-6-29" href="#__codelineno-6-29"></a><span class="w">    </span><span class="nt">mode</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">openshift-logging</span>
-</code></pre></div>
 <h3 id="option-2-kustomize-development">Option 2: Kustomize (Development)</h3>
 <div class="admonition warning">
 <p class="admonition-title">Development Only</p>
@@ -3564,7 +3560,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="August 5, 2026 15:16:58 UTC">August 5, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 19:44:19 UTC">September 1, 2026</span>
   </span>
 
     
