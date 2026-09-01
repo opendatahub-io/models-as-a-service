@@ -969,6 +969,7 @@ func main() {
 	var aitenantNamespace string
 	var metadataCacheTTL int64
 	var authzCacheTTL int64
+	var gatewayIdentityToken string
 	var subscriptionNamespaceMaintainInterval time.Duration
 	var enableTenantNamespaceDiscovery bool
 	var maxConcurrentReconciles int
@@ -995,6 +996,8 @@ func main() {
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", tenantreconcile.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
 	flag.Int64Var(&metadataCacheTTL, "metadata-cache-ttl", 60, "TTL in seconds for Authorino metadata HTTP caching (apiKeyValidation, subscription-info).")
 	flag.Int64Var(&authzCacheTTL, "authz-cache-ttl", 60, "TTL in seconds for Authorino OPA authorization caching (auth-valid, subscription-valid, require-group-membership).")
+	flag.StringVar(&gatewayIdentityToken, "gateway-identity-token", os.Getenv("GATEWAY_IDENTITY_TOKEN"),
+		"Shared secret injected as X-MaaS-Gateway-Auth by the gateway AuthPolicy (also GATEWAY_IDENTITY_TOKEN env).")
 	flag.DurationVar(&subscriptionNamespaceMaintainInterval, "subscription-namespace-maintain-interval", 30*time.Second,
 		"How often to re-check controller-managed namespaces while the manager is running (recreate if deleted). "+
 			"Larger values reduce apiserver load; smaller values detect external deletions sooner.")
@@ -1187,6 +1190,7 @@ func main() {
 		ClusterAudience:                 clusterAudience,
 		MetadataCacheTTL:                metadataCacheTTL,
 		AuthzCacheTTL:                   authzCacheTTL,
+		GatewayIdentityToken:            gatewayIdentityToken,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MaxConcurrentReconciles:         maxConcurrentReconciles,
 	}).SetupWithManager(mgr); err != nil {

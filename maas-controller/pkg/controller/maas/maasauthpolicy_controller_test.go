@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1686,6 +1687,37 @@ func gatewayAuthPolicySpecTestObject(t *testing.T, oidc *oidcConfig) *unstructur
 	}
 	spec := r.buildGatewayAuthPolicySpec(oidc, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
 	return &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+}
+
+func TestBuildGatewayAuthPolicySpec_InjectsGatewayIdentityHeader(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:       "maas-system",
+		GatewayName:          "maas-default-gateway",
+		GatewayNamespace:     "gateway-ns",
+		ClusterAudience:      "https://kubernetes.default.svc",
+		MetadataCacheTTL:     60,
+		AuthzCacheTTL:        60,
+		GatewayIdentityToken: "test-gateway-identity-token",
+	}
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	obj := &unstructured.Unstructured{Object: map[string]any{"spec": spec}}
+
+	headers := nestedMapRequired(t, obj, "spec", "defaults", "rules", "response", "success", "headers")
+	gatewayAuth, ok := headers["X-MaaS-Gateway-Auth"].(map[string]any)
+	if !ok {
+		t.Fatal("X-MaaS-Gateway-Auth header missing from gateway AuthPolicy response")
+	}
+	plain, ok := gatewayAuth["plain"].(map[string]any)
+	if !ok {
+		t.Fatalf("X-MaaS-Gateway-Auth.plain missing: %#v", gatewayAuth)
+	}
+	// Authorino requires CEL expression for static secrets (plain.value is corrupted at inject time).
+	if got, _ := plain["expression"].(string); got != strconv.Quote("test-gateway-identity-token") {
+		t.Fatalf("X-MaaS-Gateway-Auth plain expression = %q, want quoted test token", got)
+	}
+	if _, hasValue := plain["value"]; hasValue {
+		t.Fatal("X-MaaS-Gateway-Auth must use plain.expression, not plain.value")
+	}
 }
 
 func nestedMapRequired(t *testing.T, obj *unstructured.Unstructured, fields ...string) map[string]any {

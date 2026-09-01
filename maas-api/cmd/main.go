@@ -274,7 +274,13 @@ func registerHandlers(
 	// Optional-auth middleware lets handlers return graceful responses (e.g.
 	// empty lists) when no LLMInferenceService is deployed and Authorino has
 	// no auth policy to inject identity headers.
-	optionalAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfoOptional(), middleware.TenantLogger(log, tenantLogCfg)}
+	// RequireGatewayIdentityIfClaims blocks forged X-MaaS identity headers on
+	// direct pod access while still allowing unauthenticated empty responses.
+	optionalAuthMiddleware := []gin.HandlerFunc{
+		token.RequireGatewayIdentityIfClaims(log, cfg.GatewayIdentityToken),
+		tokenHandler.ExtractUserInfoOptional(),
+		middleware.TenantLogger(log, tenantLogCfg),
+	}
 	v1Routes.GET("/models", append(optionalAuthMiddleware, modelsHandler.ListLLMs)...)
 
 	// Subscription listing routes use optional auth so they can return an empty
@@ -286,7 +292,12 @@ func registerHandlers(
 	// Only the search/listing endpoint uses optional auth so it can return
 	// an empty result when no LLMInferenceService is deployed (same rationale
 	// as /v1/models and /v1/subscriptions).
-	strictAuthMiddleware := []gin.HandlerFunc{tokenHandler.ExtractUserInfo(), middleware.TenantLogger(log, tenantLogCfg)}
+	// RequireGatewayIdentity blocks direct-pod spoofing of X-MaaS identity headers.
+	strictAuthMiddleware := []gin.HandlerFunc{
+		token.RequireGatewayIdentity(log, cfg.GatewayIdentityToken),
+		tokenHandler.ExtractUserInfo(),
+		middleware.TenantLogger(log, tenantLogCfg),
+	}
 	apiKeyRoutes := v1Routes.Group("/api-keys", strictAuthMiddleware...)
 	apiKeyRoutes.GET("/config", apiKeyHandler.GetAPIKeyConfig)         // Get API key limits
 	apiKeyRoutes.POST("", apiKeyHandler.CreateAPIKey)                  // Create hash-based key
