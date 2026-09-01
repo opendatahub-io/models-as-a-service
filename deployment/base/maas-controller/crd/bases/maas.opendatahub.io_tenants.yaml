@@ -106,6 +106,46 @@ spec:
                     pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?)?$
                     type: string
                 type: object
+              maasApi:
+                description: MaasAPI defines scaling and resource configuration for
+                  maas-api pods.
+                properties:
+                  replicas:
+                    description: |-
+                      Replicas overrides the maas-api Deployment replica count.
+                      Spec-based replicas take precedence over the maas.opendatahub.io/maas-api-replicas annotation.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: |-
+                      Resources overrides the resource requests and limits for the maas-api container.
+                      When set, replaces the entire resource block (full replacement, not merge).
+                      Resource claims are not supported.
+                    properties:
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Limits defines the maximum amount of compute
+                          resources allowed.
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Requests defines the minimum amount of compute
+                          resources required.
+                        type: object
+                    type: object
+                type: object
               payloadProcessing:
                 description: PayloadProcessing defines scaling configuration for payload-processing
                   (IPP) pods.
