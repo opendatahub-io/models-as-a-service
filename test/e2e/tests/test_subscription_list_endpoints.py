@@ -205,6 +205,7 @@ class TestListSubscriptions:
         model_ref_name = "e2e-enrichment-model-ref"
         model_ns = MODEL_NAMESPACE
         subscription_name = "e2e-enrichment-sub"
+        auth_policy_name = "e2e-enrichment-auth"
         expected_display_name = "E2E Enrichment Test Model"
         expected_description = "Model created by e2e test to verify display_name/description enrichment"
 
@@ -240,9 +241,16 @@ class TestListSubscriptions:
                 users=[sa_user],
             )
 
+            _create_test_auth_policy(
+                auth_policy_name,
+                model_ref_name,
+                users=[sa_user],
+            )
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
             _wait_for_maas_subscription_phase(subscription_name, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
             r = requests.get(
@@ -284,6 +292,7 @@ class TestListSubscriptions:
             )
 
         finally:
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_cr("maasmodelref", model_ref_name, namespace=model_ns)
             _delete_sa(sa_name, namespace=sa_ns)
@@ -297,8 +306,12 @@ class TestListSubscriptionsForModel:
         sa_name = "e2e-subs-model-sa"
         sa_ns = "default"
         maas_ns = _ns()
-        sub_with_model = "e2e-subs-model-match"
-        sub_without_model = "e2e-subs-model-nomatch"
+        sub_with_model = "e2e-model-match-sub"
+        sub_without_model = "e2e-model-nomatch-sub"
+
+        ap_with_model = "e2e-model-match-auth"
+        ap_without_model = "e2e-model-nomatch-auth"
+
 
         try:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
@@ -308,10 +321,16 @@ class TestListSubscriptionsForModel:
             _create_test_subscription(sub_with_model, DISTINCT_MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_without_model, DISTINCT_MODEL_2_REF, users=[sa_user])
 
+            _create_test_auth_policy(ap_with_model, DISTINCT_MODEL_REF, users=[sa_user])
+            _create_test_auth_policy(ap_without_model, DISTINCT_MODEL_2_REF, users=[sa_user])
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
             _wait_for_maas_subscription_phase(sub_with_model, namespace=maas_ns)
             _wait_for_maas_subscription_phase(sub_without_model, namespace=maas_ns)
+            
+            _wait_for_maas_auth_policy_phase(ap_with_model, require_enforced=False, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(ap_without_model, require_enforced=False, namespace=maas_ns)
 
             # Query for subscriptions that include DISTINCT_MODEL_REF
             url = f"{_maas_api_url()}/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
@@ -344,6 +363,8 @@ class TestListSubscriptionsForModel:
             log.info(f"GET /v1/model/{DISTINCT_MODEL_REF}/subscriptions -> {len(data)} subscription(s): {sub_ids}")
 
         finally:
+            _delete_cr("maasauthpolicy", ap_with_model, namespace=maas_ns)
+            _delete_cr("maasauthpolicy", ap_without_model, namespace=maas_ns)
             _delete_cr("maassubscription", sub_with_model, namespace=maas_ns)
             _delete_cr("maassubscription", sub_without_model, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
