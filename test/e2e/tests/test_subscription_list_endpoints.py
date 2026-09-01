@@ -485,7 +485,7 @@ class TestSubscriptionModelAccessFiltering:
             # Subscription with MODEL_REF and DISTINCT_MODEL_REF
             _create_test_subscription(
                 subscription_name,
-                [MODEL_REF, DISTINCT_MODEL_REF],
+                [DISTINCT_MODEL_REF],
                 users=[sa_user],
                 namespace=maas_ns,
             )
