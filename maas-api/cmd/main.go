@@ -259,8 +259,8 @@ func registerHandlers(
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.TenantName)
-	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister)
-	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector)
+	modelsHandler := handlers.NewModelsHandler(log, modelManager, subscriptionSelector, cluster.MaaSModelRefLister, metricsRecorder)
+	subscriptionHandler := subscription.NewHandler(log, subscriptionSelector, metricsRecorder)
 
 	apiKeyService := api_keys.NewServiceWithLogger(store, cfg, subscriptionSelector, log)
 	apiKeyService.StartDebounceCleanup(ctx)

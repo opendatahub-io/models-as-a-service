@@ -126,6 +126,7 @@ type metricsCall struct {
 type spyMetricsRecorder struct {
 	keyValidations []metricsCall
 	tokenMints     []metricsCall
+	rejections     []string
 }
 
 func (s *spyMetricsRecorder) RecordKeyValidation(tenant, result string) {
@@ -134,6 +135,10 @@ func (s *spyMetricsRecorder) RecordKeyValidation(tenant, result string) {
 
 func (s *spyMetricsRecorder) RecordTokenMint(tenant, result string) {
 	s.tokenMints = append(s.tokenMints, metricsCall{tenant, result})
+}
+
+func (s *spyMetricsRecorder) RecordRejection(reason string) {
+	s.rejections = append(s.rejections, reason)
 }
 
 // TestCreateAPIKey_TokenMintMetrics verifies that the token mint counter records
@@ -206,6 +211,27 @@ func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	require.Len(t, spy.keyValidations, 1)
 	assert.Equal(t, "redteam", spy.keyValidations[0].tenant)
 	assert.Equal(t, "valid", spy.keyValidations[0].result)
+}
+
+func TestValidateAPIKey_RecordsUnauthorizedRejection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	spy := &spyMetricsRecorder{}
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), spy)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/validate", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(`{"key": "invalid-key"}`))
+
+	handler.ValidateAPIKeyHandler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, spy.rejections, 1)
+	assert.Equal(t, "unauthorized", spy.rejections[0])
 }
 
 func TestIsAuthorizedForKey(t *testing.T) {

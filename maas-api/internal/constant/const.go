@@ -37,4 +37,10 @@ const (
 	MaxLabelsEntries    = 50
 	MaxLabelKeyLength   = 128
 	MaxLabelValueLength = 1024
+
+	// Rejection reason constants for metrics.
+	RejectionRateLimited   = "rate-limited"
+	RejectionUnauthorized  = "unauthorized"
+	RejectionNoCapacity    = "no-capacity"
+	RejectionQuotaExceeded = "quota-exceeded"
 )

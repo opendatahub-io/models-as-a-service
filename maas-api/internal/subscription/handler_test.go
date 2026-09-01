@@ -76,13 +76,25 @@ func createTestSubscription(name string, groups []string, priority int32, orgID,
 	}
 }
 
+type mockMetricsRecorder struct {
+	rejections []string
+}
+
+func (m *mockMetricsRecorder) RecordRejection(reason string) {
+	m.rejections = append(m.rejections, reason)
+}
+
 func setupTestRouter(lister subscription.Lister) *gin.Engine {
+	return setupTestRouterWithMetrics(lister, nil)
+}
+
+func setupTestRouterWithMetrics(lister subscription.Lister, metrics subscription.MetricsRecorder) *gin.Engine {
 	gin.SetMode(gin.TestMode)
 	router := gin.New()
 
 	log := logger.New(false)
 	selector := subscription.NewSelector(log, lister, nil, nil)
-	handler := subscription.NewHandler(log, selector)
+	handler := subscription.NewHandler(log, selector, metrics)
 
 	router.POST("/subscriptions/select", handler.SelectSubscription)
 	return router
@@ -1011,7 +1023,7 @@ func setupListTestRouterWithModels(lister subscription.Lister, modelLister model
 
 	log := logger.New(false)
 	selector := subscription.NewSelector(log, lister, modelLister, nil)
-	handler := subscription.NewHandler(log, selector)
+	handler := subscription.NewHandler(log, selector, nil)
 
 	setUser := func(c *gin.Context) {
 		c.Set("user", &token.UserContext{
@@ -1257,7 +1269,7 @@ func TestListSubscriptions_NoAuthContext(t *testing.T) {
 		createTestSubscription("premium-sub", []string{"premium-users"}, 10, "org-1", "cc-1"),
 	}}
 	selector := subscription.NewSelector(log, lister, nil, nil)
-	handler := subscription.NewHandler(log, selector)
+	handler := subscription.NewHandler(log, selector, nil)
 
 	tokenHandler := token.NewHandler(log, "test-tenant")
 
@@ -1494,5 +1506,154 @@ func TestListSubscriptionsForModel_NoAccess(t *testing.T) {
 
 	if len(result) != 0 {
 		t.Errorf("expected empty array when user has no access, got %d items", len(result))
+	}
+}
+
+func TestHandler_SelectSubscription_RecordsUnauthorizedRejection(t *testing.T) {
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscription("premium-sub", []string{"premium-users"}, 10, "org-1", "cc-1"),
+	}
+
+	metrics := &mockMetricsRecorder{}
+	lister := &mockLister{subscriptions: subscriptions}
+	router := setupTestRouterWithMetrics(lister, metrics)
+
+	reqBody := `{
+		"username": "alice",
+		"groups": ["basic-users"],
+		"requestedSubscription": "premium-sub"
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if len(metrics.rejections) != 1 {
+		t.Fatalf("expected 1 rejection recorded, got %d", len(metrics.rejections))
+	}
+	if metrics.rejections[0] != "unauthorized" {
+		t.Errorf("expected rejection reason 'unauthorized', got %s", metrics.rejections[0])
+	}
+}
+
+func TestHandler_SelectSubscription_RecordsNoCapacityRejection(t *testing.T) {
+	// Empty subscription list
+	metrics := &mockMetricsRecorder{}
+	lister := &mockLister{subscriptions: []*unstructured.Unstructured{}}
+	router := setupTestRouterWithMetrics(lister, metrics)
+
+	reqBody := `{
+		"username": "alice",
+		"groups": ["basic-users"]
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if len(metrics.rejections) != 1 {
+		t.Fatalf("expected 1 rejection recorded, got %d", len(metrics.rejections))
+	}
+	if metrics.rejections[0] != "no-capacity" {
+		t.Errorf("expected rejection reason 'no-capacity', got %s", metrics.rejections[0])
+	}
+}
+
+func TestHandler_SelectSubscription_RecordsNoCapacityForModelNotInSubscription(t *testing.T) {
+	subscriptions := []*unstructured.Unstructured{
+		createTestSubscription("basic-sub", []string{"basic-users"}, 10, "org-1", "cc-1"),
+	}
+
+	metrics := &mockMetricsRecorder{}
+	lister := &mockLister{subscriptions: subscriptions}
+	router := setupTestRouterWithMetrics(lister, metrics)
+
+	reqBody := `{
+		"username": "alice",
+		"groups": ["basic-users"],
+		"requestedModel": "test-ns/nonexistent-model"
+	}`
+
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	router.ServeHTTP(w, req)
+
+	if len(metrics.rejections) != 1 {
+		t.Fatalf("expected 1 rejection recorded, got %d", len(metrics.rejections))
+	}
+	if metrics.rejections[0] != "no-capacity" {
+		t.Errorf("expected rejection reason 'no-capacity', got %s", metrics.rejections[0])
+	}
+}
+
+func TestHandler_SelectSubscription_RecordsQuotaExceededForFailedPhase(t *testing.T) {
+	metrics := &mockMetricsRecorder{}
+	lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionWithHealth("failed-sub", []string{"basic-users"}, nil, 10, defaultTestTokenRateLimit, phaseFailed, false, false),
+	}}
+	router := setupTestRouterWithMetrics(lister, metrics)
+
+	reqBody := `{
+		"username": "alice",
+		"groups": ["basic-users"],
+		"requestedModel": "test-model"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if len(metrics.rejections) != 1 {
+		t.Fatalf("expected 1 rejection recorded, got %d", len(metrics.rejections))
+	}
+	if metrics.rejections[0] != "quota-exceeded" {
+		t.Errorf("expected rejection reason 'quota-exceeded', got %s", metrics.rejections[0])
+	}
+}
+
+func TestHandler_SelectSubscription_RecordsRateLimitedForTRLPNotReady(t *testing.T) {
+	metrics := &mockMetricsRecorder{}
+	lister := &fakeLister{subscriptions: []*unstructured.Unstructured{
+		createSubscriptionWithTRLPStatus("degraded-sub", []string{"basic-users"}, phaseDegraded, []map[string]any{
+			{
+				"name":      "model-a",
+				"namespace": "ns",
+				"ready":     true,
+				"reason":    "Valid",
+			},
+		}, []map[string]any{
+			{
+				"model":     "model-a",
+				"name":      "maas-trlp-model-a",
+				"namespace": "ns",
+				"ready":     false,
+				"reason":    "NotAccepted",
+				"message":   "status not available",
+			},
+		}),
+	}}
+	router := setupTestRouterWithMetrics(lister, metrics)
+
+	reqBody := `{
+		"username": "alice",
+		"groups": ["basic-users"],
+		"requestedModel": "ns/model-a"
+	}`
+	req := httptest.NewRequest(http.MethodPost, "/subscriptions/select", bytes.NewBufferString(reqBody))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+
+	if len(metrics.rejections) != 1 {
+		t.Fatalf("expected 1 rejection recorded, got %d", len(metrics.rejections))
+	}
+	if metrics.rejections[0] != "rate-limited" {
+		t.Errorf("expected rejection reason 'rate-limited', got %s", metrics.rejections[0])
 	}
 }
