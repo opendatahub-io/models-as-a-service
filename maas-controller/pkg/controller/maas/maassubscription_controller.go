@@ -50,6 +50,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -342,7 +343,7 @@ func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses 
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSSubscription", req.NamespacedName)
+	log := oteljson.FromContext(ctx).WithValues("MaaSSubscription", req.NamespacedName)
 
 	subscription := &maasv1alpha1.MaaSSubscription{}
 	if err := r.Get(ctx, req.NamespacedName, subscription); err != nil {
@@ -934,7 +935,7 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 
 	statusTarget.Status = subscription.Status
 	if err := r.Status().Update(ctx, statusTarget); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
+		log := oteljson.FromContext(ctx)
 		log.Error(err, "failed to update MaaSSubscription status", "name", subscription.Name)
 	}
 }
@@ -942,7 +943,7 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 // scanForDuplicatePriority lists live MaaSSubscriptions and sets SpecPriorityDuplicate
 // on each. Triggered on create, delete, or when spec.priority changes (see SetupWithManager).
 func (r *MaaSSubscriptionReconciler) scanForDuplicatePriority(ctx context.Context) {
-	log := logr.FromContextOrDiscard(ctx).WithName("MaaSSubscriptionDuplicatePriority")
+	log := oteljson.FromContext(ctx).WithName("MaaSSubscriptionDuplicatePriority")
 	var list maasv1alpha1.MaaSSubscriptionList
 	if err := r.List(ctx, &list); err != nil {
 		log.Error(err, "failed to list MaaSSubscriptions for duplicate priority scan")

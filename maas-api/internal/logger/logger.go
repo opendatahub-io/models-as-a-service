@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"context"
 	"os"
 
 	"go.uber.org/zap"
@@ -31,36 +32,32 @@ func Development() *Logger {
 // It supports different log levels (DEBUG, INFO, WARN, ERROR) and structured output.
 // Prefer using Production() or Development() for better readability.
 func New(debug bool) *Logger {
-	var config zap.Config
+	var baseLogger *zap.Logger
 	if debug {
-		config = zap.NewDevelopmentConfig()
+		config := zap.NewDevelopmentConfig()
 		config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
 		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		config.OutputPaths = []string{"stdout"}
+		config.ErrorOutputPaths = []string{"stderr"}
+		var err error
+		baseLogger, err = config.Build(
+			zap.AddCaller(),
+			zap.AddCallerSkip(1),
+			zap.AddStacktrace(zapcore.ErrorLevel),
+		)
+		if err != nil {
+			baseLogger = zap.NewExample()
+		}
 	} else {
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-		config.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
-	}
-
-	// KServe-style configuration
-	config.EncoderConfig.TimeKey = "timestamp"
-	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	config.EncoderConfig.MessageKey = "message"
-	config.EncoderConfig.LevelKey = "level"
-	config.EncoderConfig.CallerKey = "caller"
-	config.EncoderConfig.StacktraceKey = "stacktrace"
-	config.OutputPaths = []string{"stdout"}
-	config.ErrorOutputPaths = []string{"stderr"}
-
-	// Build logger
-	baseLogger, err := config.Build(
-		zap.AddCaller(),
-		zap.AddCallerSkip(1), // Skip this package in call stack
-		zap.AddStacktrace(zapcore.ErrorLevel),
-	)
-	if err != nil {
-		// Fallback to a basic logger if configuration fails
-		baseLogger = zap.NewExample()
+		enc := zapcore.NewJSONEncoder(EncoderConfig())
+		core := WrapCore(zapcore.NewCore(enc, zapcore.AddSync(os.Stdout), zapcore.InfoLevel))
+		baseLogger = zap.New(core,
+			zap.AddCaller(),
+			zap.AddCallerSkip(1),
+			zap.AddStacktrace(zapcore.ErrorLevel),
+			zap.Fields(zap.String("service.name", ServiceName(defaultServiceName))),
+			zap.ErrorOutput(zapcore.AddSync(os.Stderr)),
+		)
 	}
 
 	level := zapcore.InfoLevel
@@ -100,6 +97,15 @@ func (l *Logger) WithError(err error) *Logger {
 		SugaredLogger: l.With("error", err.Error()),
 		level:         l.level,
 	}
+}
+
+// WithContext returns a logger with trace_id and span_id when a span is active on ctx.
+func (l *Logger) WithContext(ctx context.Context) *Logger {
+	fields := TraceFields(ctx)
+	if len(fields) == 0 {
+		return l
+	}
+	return l.WithFields(fields...)
 }
 
 // WithRequestID returns a logger with a request_id field attached.

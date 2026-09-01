@@ -52,6 +52,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -470,7 +471,7 @@ func subscriptionGatewayCacheKeySelector() string {
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
+	log := oteljson.FromContext(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
 	if err := r.Get(ctx, req.NamespacedName, policy); err != nil {
@@ -663,7 +664,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 // findMissingModelRefs returns a list of model refs that don't exist or couldn't be fetched.
 // Treats both NotFound and transient errors as "missing" to fail-safe (avoid falsely reporting Active).
 func (r *MaaSAuthPolicyReconciler) findMissingModelRefs(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy) []maasv1alpha1.ModelRef {
-	log := logr.FromContextOrDiscard(ctx)
+	log := oteljson.FromContext(ctx)
 	var missing []maasv1alpha1.ModelRef
 	for _, ref := range policy.Spec.ModelRefs {
 		model := &maasv1alpha1.MaaSModelRef{}
@@ -1879,7 +1880,7 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	}
 
 	if err := r.Status().Update(ctx, policy); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
+		log := oteljson.FromContext(ctx)
 		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
 	}
 }
