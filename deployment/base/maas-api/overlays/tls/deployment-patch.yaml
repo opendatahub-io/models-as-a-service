@@ -21,6 +21,9 @@ spec:
         - containerPort: 8443
           name: https
           protocol: TCP
+        - containerPort: 9090
+          name: metrics
+          protocol: TCP
         volumeMounts:
         - name: maas-api-tls
           mountPath: /etc/maas-api/tls
