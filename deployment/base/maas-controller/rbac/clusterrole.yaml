@@ -100,6 +100,17 @@ rules:
   verbs:
   - create
 - apiGroups:
+  - authorino.kuadrant.io
+  resources:
+  - authconfigs
+  verbs:
+  - create
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - authorization.k8s.io
   resources:
   - subjectaccessreviews
@@ -249,6 +260,16 @@ rules:
   - get
   - list
   - patch
+  - watch
+- apiGroups:
+  - limitador.kuadrant.io
+  resources:
+  - limitadors
+  verbs:
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - loki.grafana.com
