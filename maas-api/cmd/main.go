@@ -130,15 +130,28 @@ func serve() error {
 	}
 	router.Use(metrics.NewMiddleware(metricsRecorder, cfg.TenantName))
 
-	// Start metrics server
-	metricsSrv, err := metrics.NewMetricsServer(cfg.MetricsAddress(), metricsRegistry)
+	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
+	if tlsErr != nil {
+		return fmt.Errorf("failed to set up TLS profile: %w", tlsErr)
+	}
+
+	// Start metrics server (HTTPS + authn/authz when METRICS_SECURE=true)
+	metricsSrv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:                cfg.MetricsAddress(),
+		Reg:                 metricsRegistry,
+		Secure:              cfg.MetricsSecure,
+		CertDir:             cfg.MetricsCertDir,
+		RESTConfig:          cluster.RESTConfig(),
+		ProfileMinVersion:   profileMinVersion,
+		ProfileCipherSuites: profileCipherSuites,
+	})
 	if err != nil {
 		return fmt.Errorf("failed to create metrics server: %w", err)
 	}
 	metricsErr := make(chan error, 1)
 	go func() {
-		log.Info("Metrics server starting", "address", cfg.MetricsAddress())
-		metricsErr <- metricsSrv.ListenAndServe()
+		log.Info("Metrics server starting", "address", cfg.MetricsAddress(), "secure", cfg.MetricsSecure)
+		metricsErr <- metrics.ListenAndServe(metricsSrv)
 	}()
 
 	if cfg.DebugMode {
@@ -160,11 +173,6 @@ func serve() error {
 
 	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
-	}
-
-	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
-	if tlsErr != nil {
-		return fmt.Errorf("failed to set up TLS profile: %w", tlsErr)
 	}
 
 	srv, err := newServer(cfg, router, profileMinVersion, profileCipherSuites)
@@ -355,7 +363,7 @@ func debugCORSConfig() cors.Config {
 // startup.
 func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16, error) {
 	restConfig := cluster.RESTConfig()
-	if !cfg.Secure || restConfig == nil {
+	if (!cfg.Secure && !cfg.MetricsSecure) || restConfig == nil {
 		return 0, nil, nil
 	}
 

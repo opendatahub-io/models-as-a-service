@@ -219,7 +219,7 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 | **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user}`; vLLM prompt/gen metrics are per-model only |
 | **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls_total` from Limitador (has correct labels) |
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
-| **maas-api metrics** | No `/metrics` endpoint | No workaround; requires adding Prometheus instrumentation |
+| **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
 | **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
 
 !!! note "Total vs Split"
