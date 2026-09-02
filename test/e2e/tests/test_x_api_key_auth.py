@@ -57,6 +57,7 @@ IPP_EXTERNAL_MODEL_CR = {
             "ref": {"name": "dummy-anthropic"},
             "targetModel": "claude-sonnet-4-20250514",
             "apiFormat": "messages",
+            "path": "/v1/messages",
         }],
     },
 }
