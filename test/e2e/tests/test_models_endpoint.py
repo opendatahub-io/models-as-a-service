@@ -31,7 +31,6 @@ from test_helper import (
     DISTINCT_MODEL_ID,
     DISTINCT_MODEL_REF,
     GATEWAY_NAMESPACE,
-    MODEL_CANONICAL_ID,
     MODEL_NAME,
     MODEL_NAMESPACE,
     MODEL_REF,
@@ -780,17 +779,18 @@ class TestModelsEndpoint:
     @pytest.mark.serial
     def test_different_modelrefs_same_model_id(self):
         """
-        Test 7: Different modelRefs serving same model ID return separate entries.
+        Test 7: Different MaaSModelRefs pointing to backends that serve the same
+        model name return separate entries with distinct model IDs.
 
         Creates two ephemeral LLMInferenceServices / MaaSModelRefs that both serve
-        the same unique ID (test/e2e-same-model-id). Fixture models intentionally
-        use distinct served IDs, so this case is covered with short-lived CRs.
+        the same backend model name (test/e2e-same-model-id). Each MaaSModelRef
+        has a different spec.modelRef.name (= LLMIS name), so /v1/models returns
+        2 entries with distinct model IDs (one per MaaSModelRef).
 
-        Under BBR, both modelRefs share the gateway base URL. Deduplication keys on
-        (model ID, URL, owned_by), so distinct MaaSModelRefs still appear as 2
-        entries distinguished by owned_by (namespace/name), not by URL.
+        Under BBR, both modelRefs share the gateway base URL. The entries are
+        distinguished by model ID (spec.modelRef.name) and owned_by.
         """
-        log.info("Test 7: Different modelRefs same ID remain separate via owned_by (BBR)")
+        log.info("Test 7: Different modelRefs return separate entries with distinct IDs")
 
         sa_name = "e2e-models-diff-refs-sa"
         sa_ns = "default"
@@ -799,9 +799,9 @@ class TestModelsEndpoint:
         auth_policy_name = "e2e-diff-refs-auth"
         suffix = uuid.uuid4().hex[:8]
         shared_served_id = "test/e2e-same-model-id"
-        expected_canonical_id = f"publishers/{MODEL_NAMESPACE}/models/{shared_served_id}"
         model_ref_a = f"e2e-same-id-a-{suffix}"
         model_ref_b = f"e2e-same-id-b-{suffix}"
+        expected_model_ids = {model_ref_a, model_ref_b}
         expected_owned_by = {
             f"{MODEL_NAMESPACE}/{model_ref_a}",
             f"{MODEL_NAMESPACE}/{model_ref_b}",
@@ -914,11 +914,7 @@ class TestModelsEndpoint:
                     models = r.json().get("data") or []
                     assert isinstance(models, list), "Models should be a list"
                     model_ids = [m["id"] for m in models]
-                    owned_bys = {
-                        m.get("owned_by")
-                        for m in models
-                        if m.get("id") == expected_canonical_id and m.get("owned_by")
-                    }
+                    owned_bys = {m.get("owned_by") for m in models if m.get("owned_by")}
                     if len(models) == 2 and owned_bys == expected_owned_by:
                         break
                     log.info(
@@ -941,14 +937,11 @@ class TestModelsEndpoint:
             log.info(f"   Unique IDs: {unique_ids}")
             log.info(f"   Subscription had: 2 different modelRefs both serving '{shared_served_id}'")
 
-            assert len(unique_ids) == 1, \
-                f"Expected only 1 unique model ID (both modelRefs serve {expected_canonical_id}), got {len(unique_ids)}: {unique_ids}"
-
-            assert expected_canonical_id in unique_ids, \
-                f"Expected to find '{expected_canonical_id}', but got {unique_ids}"
+            assert unique_ids == expected_model_ids, \
+                f"Expected model IDs {expected_model_ids}, got {unique_ids}"
 
             assert len(models) == 2, \
-                f"Expected 2 entries (different owned_by), got {len(models)}: {json.dumps(models, indent=2)}"
+                f"Expected 2 entries (different modelRefs), got {len(models)}: {json.dumps(models, indent=2)}"
 
             urls = [m["url"] for m in models if "url" in m]
             assert len(urls) == 2, f"Expected 2 URLs, got {len(urls)}"
@@ -967,7 +960,7 @@ class TestModelsEndpoint:
                 assert model["subscriptions"][0]["name"] == subscription_name, \
                     f"Expected subscription '{subscription_name}', got '{model['subscriptions'][0]['name']}'"
 
-            log.info("✅ API correctly returned 2 entries (shared BBR URL, distinct owned_by) for same model ID")
+            log.info("✅ API correctly returned 2 entries (shared BBR URL, distinct model IDs and owned_by)")
 
         finally:
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
