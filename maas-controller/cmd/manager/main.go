@@ -977,6 +977,54 @@ type gatewayEnforcementOptions struct {
 	maasAPIURL          string
 }
 
+// subscriptionReconcilerOptions carries the config for the Kuadrant-policy reconcilers.
+type subscriptionReconcilerOptions struct {
+	infraNamespace, subscriptionNamespace string
+	gatewayName, gatewayNamespace         string
+	clusterAudience                       string
+	metadataCacheTTL, authzCacheTTL       int64
+	tenantNamespaceDiscovery              bool
+	maxConcurrentReconciles               int
+}
+
+// setupSubscriptionReconcilers registers the MaaSAuthPolicy and MaaSSubscription
+// reconcilers, which compile subscriptions into Kuadrant policies. Native
+// enforcement replaces that path and owns the subscription status, so skip them
+// when it is on. Logs and exits on failure, matching the other setups.
+func setupSubscriptionReconcilers(mgr ctrl.Manager, nativeEnforcement bool, o subscriptionReconcilerOptions) {
+	if nativeEnforcement {
+		return
+	}
+	if err := (&maas.MaaSAuthPolicyReconciler{
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		InfraNamespace:                  o.infraNamespace,
+		TenantNamespace:                 o.subscriptionNamespace,
+		GatewayName:                     o.gatewayName,
+		GatewayNamespace:                o.gatewayNamespace,
+		ClusterAudience:                 o.clusterAudience,
+		MetadataCacheTTL:                o.metadataCacheTTL,
+		AuthzCacheTTL:                   o.authzCacheTTL,
+		TenantNamespaceDiscoveryEnabled: o.tenantNamespaceDiscovery,
+		MaxConcurrentReconciles:         o.maxConcurrentReconciles,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
+		os.Exit(1)
+	}
+	if err := (&maas.MaaSSubscriptionReconciler{
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		DefaultTenantNamespace:          o.subscriptionNamespace,
+		TenantNamespaceDiscoveryEnabled: o.tenantNamespaceDiscovery,
+		GatewayName:                     o.gatewayName,
+		GatewayNamespace:                o.gatewayNamespace,
+		MaxConcurrentReconciles:         o.maxConcurrentReconciles,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
+		os.Exit(1)
+	}
+}
+
 // setupNativeEnforcement registers the GatewayEnforcement reconciler when enabled.
 // It logs and exits on failure, matching the other controller setups in main.
 func setupNativeEnforcement(mgr ctrl.Manager, enabled bool, o gatewayEnforcementOptions) {
@@ -1253,37 +1301,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
 	}
-	// Native enforcement replaces the Kuadrant-policy reconcilers, so skip them when it is on.
-	if !enableNativeEnforcement {
-		if err := (&maas.MaaSAuthPolicyReconciler{
-			Client:                          mgr.GetClient(),
-			Scheme:                          mgr.GetScheme(),
-			InfraNamespace:                  infraNamespace,
-			TenantNamespace:                 maasSubscriptionNamespace,
-			GatewayName:                     gatewayName,
-			GatewayNamespace:                gatewayNamespace,
-			ClusterAudience:                 clusterAudience,
-			MetadataCacheTTL:                metadataCacheTTL,
-			AuthzCacheTTL:                   authzCacheTTL,
-			TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-			MaxConcurrentReconciles:         maxConcurrentReconciles,
-		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
-			os.Exit(1)
-		}
-		if err := (&maas.MaaSSubscriptionReconciler{
-			Client:                          mgr.GetClient(),
-			Scheme:                          mgr.GetScheme(),
-			DefaultTenantNamespace:          maasSubscriptionNamespace,
-			TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-			GatewayName:                     gatewayName,
-			GatewayNamespace:                gatewayNamespace,
-			MaxConcurrentReconciles:         maxConcurrentReconciles,
-		}).SetupWithManager(mgr); err != nil {
-			setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
-			os.Exit(1)
-		}
-	}
+	// Native enforcement replaces the Kuadrant-policy reconcilers.
+	setupSubscriptionReconcilers(mgr, enableNativeEnforcement, subscriptionReconcilerOptions{
+		infraNamespace:           infraNamespace,
+		subscriptionNamespace:    maasSubscriptionNamespace,
+		gatewayName:              gatewayName,
+		gatewayNamespace:         gatewayNamespace,
+		clusterAudience:          clusterAudience,
+		metadataCacheTTL:         metadataCacheTTL,
+		authzCacheTTL:            authzCacheTTL,
+		tenantNamespaceDiscovery: enableTenantNamespaceDiscovery,
+		maxConcurrentReconciles:  maxConcurrentReconciles,
+	})
 	aitenantDeletionTimeout := parseAITenantDeletionTimeout()
 	if err := (&maas.AITenantReconciler{
 		Client:            mgr.GetClient(),
