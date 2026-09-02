@@ -1295,8 +1295,8 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 func TestSyncModuleStatus(t *testing.T) {
 	s := lifecycleTestScheme(t)
 	const (
-		depNS         = "opendatahub"
-		aitenantNS    = tenantreconcile.DefaultAITenantNamespace
+		depNS          = "opendatahub"
+		aitenantNS     = tenantreconcile.DefaultAITenantNamespace
 		subscriptionNS = "models-as-a-service"
 	)
 
