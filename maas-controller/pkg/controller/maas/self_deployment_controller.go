@@ -938,8 +938,10 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		// WatchesMetadata avoids caching full CRD objects (50-200 KB each due to OpenAPI schemas);
+		// only metadata (name, labels) is needed for the predicate check.
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,
@@ -988,6 +990,16 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			})),
 		).
 		Complete(r)
+}
+
+// crdPartialMetadata returns a PartialObjectMetadata typed for CustomResourceDefinition,
+// used with WatchesMetadata to avoid caching full CRD objects (which include large OpenAPI
+// schemas — 50-200 KB each).  Predicates only inspect metadata (name, labels), so only
+// metadata needs to be cached.
+func crdPartialMetadata() *metav1.PartialObjectMetadata {
+	m := &metav1.PartialObjectMetadata{}
+	m.SetGroupVersionKind(extv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	return m
 }
 
 // crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups

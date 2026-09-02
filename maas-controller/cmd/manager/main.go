@@ -33,11 +33,14 @@ import (
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -1096,6 +1099,41 @@ func main() {
 	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
 	// maas-db-config lives in the infrastructure namespace (where maas-api runs).
 	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
+
+	// Scope standard K8s type informers to the namespaces the controller actually
+	// uses.  Without scoping, controller-runtime caches every instance of the type
+	// cluster-wide, which causes OOM on production clusters with thousands of
+	// Deployments, ConfigMaps, etc.  (Predicates only filter reconciliation events;
+	// they do not reduce what the informer loads into memory.)
+
+	// Deployment: LifecycleReconciler watches its own Deployment (controllerNamespace);
+	// TenantReconciler reads the maas-api Deployment (infraNamespace).
+	deploymentNsCfg := map[string]cache.Config{controllerNamespace: {}}
+	if infraNamespace != controllerNamespace {
+		deploymentNsCfg[infraNamespace] = cache.Config{}
+	}
+
+	// ConfigMap: LifecycleReconciler watches managed ConfigMaps in monitoringNamespace;
+	// TenantReconciler reads maas-parameters ConfigMap in infraNamespace;
+	// AITenantReconciler manages gateway-claim ConfigMaps in aitenantNamespace.
+	configMapNsCfg := map[string]cache.Config{infraNamespace: {}}
+	if aitenantNamespace != infraNamespace {
+		configMapNsCfg[aitenantNamespace] = cache.Config{}
+	}
+	if monitoringNamespace != "" && monitoringNamespace != infraNamespace && monitoringNamespace != aitenantNamespace {
+		configMapNsCfg[monitoringNamespace] = cache.Config{}
+	}
+
+	// NetworkPolicy: LifecycleReconciler watches managed NetworkPolicies in monitoringNamespace.
+	// Fall back to controllerNamespace when monitoring is disabled.
+	networkPolicyNsCfg := map[string]cache.Config{controllerNamespace: {}}
+	if monitoringNamespace != "" && monitoringNamespace != controllerNamespace {
+		networkPolicyNsCfg[monitoringNamespace] = cache.Config{}
+	}
+
+	// ClusterRoleBinding and NetworkPolicy: only resources managed by maas-controller matter.
+	managedBySelector := labels.SelectorFromSet(labels.Set{"app.kubernetes.io/managed-by": "maas-controller"})
+
 	cacheOpts := cache.Options{
 		ByObject: map[client.Object]cache.ByObject{
 			// MaasTenantConfig CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
@@ -1107,6 +1145,13 @@ func main() {
 			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
 			// to avoid caching cluster-wide Secrets.
 			&corev1.Secret{}: {Namespaces: infraNsCfg},
+
+			// Scope Deployment, ConfigMap, NetworkPolicy, and ClusterRoleBinding informers
+			// to the namespaces and labels the controller actually uses.
+			&appsv1.Deployment{}:          {Namespaces: deploymentNsCfg},
+			&corev1.ConfigMap{}:           {Namespaces: configMapNsCfg},
+			&rbacv1.ClusterRoleBinding{}:  {Label: managedBySelector},
+			&netwv1.NetworkPolicy{}:       {Namespaces: networkPolicyNsCfg, Label: managedBySelector},
 		},
 	}
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
@@ -1121,6 +1166,12 @@ func main() {
 				// Keep Secret informer scoped to the infra namespace even in multi-tenant mode —
 				// maas-db-config always lives in the infra namespace regardless of tenant count.
 				&corev1.Secret{}: {Namespaces: infraNsCfg},
+
+				// Standard K8s type scoping (same in all modes — these do not vary with tenant discovery).
+				&appsv1.Deployment{}:          {Namespaces: deploymentNsCfg},
+				&corev1.ConfigMap{}:           {Namespaces: configMapNsCfg},
+				&rbacv1.ClusterRoleBinding{}:  {Label: managedBySelector},
+				&netwv1.NetworkPolicy{}:       {Namespaces: networkPolicyNsCfg, Label: managedBySelector},
 			},
 		}
 		setupLog.Info("watching MaaS CRs across all namespaces",
