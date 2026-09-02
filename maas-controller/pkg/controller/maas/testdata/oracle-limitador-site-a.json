@@ -1,0 +1,26 @@
+[
+ {
+  "conditions": [
+   "descriptors[0][\"tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29\"] == \"1\""
+  ],
+  "max_value": 200000,
+  "name": "ai-tenant-site-a-site-a-tier-qwen3-tokens",
+  "namespace": "ai-tenant-site-a/qwen3-kserve-route",
+  "seconds": 3600,
+  "variables": [
+   "descriptors[0][\"auth.identity.userid\"]"
+  ]
+ },
+ {
+  "conditions": [
+   "descriptors[0][\"tokenlimit.deny_all_by_default__d3136ae7\"] == \"1\""
+  ],
+  "max_value": 0,
+  "name": "deny-all-by-default",
+  "namespace": "redhat-ai-gateway-infra/maas-api-route-site-a",
+  "seconds": 60,
+  "variables": [
+   "descriptors[0][\"auth.identity.userid\"]"
+  ]
+ }
+]
