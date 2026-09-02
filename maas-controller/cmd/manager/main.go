@@ -987,7 +987,10 @@ func buildCacheOptions(
 	}
 
 	networkPolicyNsCfg := map[string]cache.Config{controllerNamespace: {}}
-	if monitoringNamespace != "" && monitoringNamespace != controllerNamespace {
+	if infraNamespace != controllerNamespace {
+		networkPolicyNsCfg[infraNamespace] = cache.Config{}
+	}
+	if monitoringNamespace != "" && monitoringNamespace != controllerNamespace && monitoringNamespace != infraNamespace {
 		networkPolicyNsCfg[monitoringNamespace] = cache.Config{}
 	}
 
