@@ -9,3 +9,4 @@ resources:
 
 patches:
 - path: patches/debug-mode.yaml
+- path: patches/metrics-insecure.yaml

@@ -16,7 +16,7 @@ The MaaS Platform provides metrics collection, monitoring, and visualization for
 | **Authorino** | `/metrics`, `/server-metrics` | Yes (MaaS ServiceMonitor) | Auth latency, success/deny rate |
 | **Istio Gateway** | `/stats/prometheus` | Yes | Latency histograms, request counts |
 | **vLLM / llm-d** | `/metrics` port 8000 | Yes | TTFT, ITL, queue depth, tokens |
-| **maas-api** | **None** | No | Pod status only |
+| **maas-api** | `/metrics` (HTTPS `:9090`) | Yes (ServiceMonitor) | Request rates, latency, key validation |
 
 !!! note
     The observability stack will be enhanced in future releases.

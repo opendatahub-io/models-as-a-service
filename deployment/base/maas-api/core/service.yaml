@@ -10,8 +10,6 @@ spec:
     port: 8080
     targetPort: http
     protocol: TCP
-  - name: metrics
-    port: 9090
-    targetPort: metrics
-    protocol: TCP
+  # Metrics are exposed only via Service/maas-api-metrics (see metrics_service.yaml).
+  # That dedicated Service owns the OpenShift service-ca serving cert for HTTPS scrape.
   type: ClusterIP
