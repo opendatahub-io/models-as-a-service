@@ -5,6 +5,7 @@ import (
 	"context"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -1409,6 +1410,31 @@ func TestSyncModuleStatus(t *testing.T) {
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		g.Expect(cond.Message).To(ContainSubstring("postgres secret missing"))
+	})
+
+	t.Run("message truncated when both operand messages are very long", func(t *testing.T) {
+		g := NewWithT(t)
+		longMsg := strings.Repeat("x", 20000)
+		cfg := makeCfg("uid-long")
+		at := makeAITenant(metav1.ConditionFalse, longMsg)
+		tc := makeTenantConfig(metav1.ConditionFalse, longMsg)
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(len(cond.Message)).To(BeNumerically("<=", conditionMessageMaxLen),
+			"condition message must not exceed Kubernetes 32768-char limit")
 	})
 
 	t.Run("Ready=False when AITenant not yet created", func(t *testing.T) {

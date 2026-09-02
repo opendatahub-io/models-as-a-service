@@ -890,6 +890,25 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
 }
 
+// conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
+// schema (maxLength: 32768). Messages that exceed this limit are truncated on a valid UTF-8
+// rune boundary and suffixed with "…" so the stored value is always within spec.
+const conditionMessageMaxLen = 32768
+
+func truncateConditionMessage(msg string) string {
+	if len(msg) <= conditionMessageMaxLen {
+		return msg
+	}
+	const suffix = "…"
+	limit := conditionMessageMaxLen - len(suffix)
+	truncated := msg[:limit]
+	// Walk back to the last valid UTF-8 rune boundary so we don't store a broken sequence.
+	for len(truncated) > 0 && truncated[len(truncated)-1]&0xC0 == 0x80 {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + suffix
+}
+
 // syncModuleStatus aggregates the Ready condition from the default AITenant and the default
 // MaasTenantConfig into Config.Status.Conditions so that the platform operator (DSC) can
 // surface configuration errors (e.g. missing gateway, missing postgres secret) without
@@ -963,7 +982,7 @@ func (r *LifecycleReconciler) syncModuleStatus(ctx context.Context, cfg *maasv1a
 			parts = append(parts, "MaasTenantConfig: "+tenantMsg)
 		}
 		if len(parts) > 0 {
-			readyMessage = strings.Join(parts, "; ")
+			readyMessage = truncateConditionMessage(strings.Join(parts, "; "))
 		} else {
 			readyMessage = "one or more MaaS operands are not ready"
 		}
