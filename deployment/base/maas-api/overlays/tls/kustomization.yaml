@@ -4,11 +4,18 @@ kind: Kustomization
 resources:
   - ../../default
   - destinationrule.yaml
-  - service-ca-configmap.yaml
+
+configMapGenerator:
+  - name: maas-parameters
+    literals:
+      - namespace=opendatahub
+    options:
+      disableNameSuffixHash: true
 
 patches:
   - path: deployment-patch.yaml
   - path: service-patch.yaml
+  - path: servicemonitor-patch.yaml
   - path: cronjob-cleanup-patch.yaml
   - path: networkpolicy-cleanup-patch.yaml
   - target:
@@ -37,3 +44,31 @@ patches:
         value:
           authorino-resource: authorino
 
+# Derive ServiceMonitor tlsConfig.serverName as <service-name>.<namespace>.svc
+replacements:
+  - source:
+      kind: Service
+      name: maas-api-metrics
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-api-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 0
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-api-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 1

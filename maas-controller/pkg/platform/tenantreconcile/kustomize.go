@@ -22,9 +22,9 @@ const overlayDefaultNamespace = "opendatahub"
 // RenderKustomize runs kustomize build for the ODH maas-api overlay and
 // applies ODH-equivalent namespace remapping and component labels.
 func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructured, error) {
-	kustomizationPath := manifestDir
-	if !fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
-		kustomizationPath = filepath.Join(manifestDir, "default")
+	kustomizationPath, err := resolveKustomizationPath(manifestDir)
+	if err != nil {
+		return nil, err
 	}
 
 	k := krusty.MakeKustomizer(krusty.MakeDefaultOptions())
@@ -50,6 +50,19 @@ func RenderKustomize(manifestDir, appNamespace string) ([]unstructured.Unstructu
 	}
 	return out, nil
 }
+
+func resolveKustomizationPath(manifestDir string) (string, error) {
+	if fileExists(filepath.Join(manifestDir, "kustomization.yaml")) {
+		return manifestDir, nil
+	}
+	fallback := filepath.Join(manifestDir, "default")
+	if fileExists(filepath.Join(fallback, "kustomization.yaml")) {
+		return fallback, nil
+	}
+	return "", fmt.Errorf("kustomization.yaml not found under %q", manifestDir)
+}
+
+const maasAPIMetricsServiceMonitorName = "maas-api-metrics"
 
 // postBuildTransform remaps the overlay's hardcoded default namespace to the
 // actual appNamespace and merges ODH component labels into metadata. Unlike the
@@ -78,6 +91,12 @@ func postBuildTransform(resMap resmap.ResMap, appNamespace string) error {
 
 			if err := remapSubjectNamespaces(res, appNamespace); err != nil {
 				return fmt.Errorf("remap subjects on %s %s: %w", res.GetKind(), res.GetName(), err)
+			}
+
+			if appNamespace != overlayDefaultNamespace {
+				if err := remapServiceMonitorServerName(res, appNamespace); err != nil {
+					return fmt.Errorf("remap ServiceMonitor serverName on %s %s: %w", res.GetKind(), res.GetName(), err)
+				}
 			}
 		}
 
@@ -132,6 +151,59 @@ func remapSubjectNamespaces(res *resource.Resource, appNamespace string) error {
 
 	// Write modified map back to the RNode via YAML round-trip.
 	m["subjects"] = subjects
+	b, err := yaml.Marshal(m)
+	if err != nil {
+		return fmt.Errorf("marshal: %w", err)
+	}
+	node, err := kyaml.Parse(string(b))
+	if err != nil {
+		return fmt.Errorf("parse: %w", err)
+	}
+	res.ResetRNode((&resource.Resource{RNode: *node}))
+	return nil
+}
+
+// remapServiceMonitorServerName rewrites maas-api-metrics tlsConfig.serverName
+// after kustomize build. The overlay derives serverName from maas-parameters
+// data.namespace (opendatahub); postBuildTransform remaps resource namespaces
+// but cannot change that baked-in value without a writable temp kustomize dir.
+func remapServiceMonitorServerName(res *resource.Resource, appNamespace string) error {
+	if res.GetKind() != "ServiceMonitor" || res.GetName() != maasAPIMetricsServiceMonitorName {
+		return nil
+	}
+
+	m, err := res.Map()
+	if err != nil {
+		return fmt.Errorf("map: %w", err)
+	}
+
+	spec, ok := m["spec"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	endpoints, ok := spec["endpoints"].([]any)
+	if !ok || len(endpoints) == 0 {
+		return nil
+	}
+
+	ep, ok := endpoints[0].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	tlsCfg, ok := ep["tlsConfig"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	want := fmt.Sprintf("%s.%s.svc", maasAPIMetricsServiceMonitorName, appNamespace)
+	if current, ok := tlsCfg["serverName"].(string); ok && current == want {
+		return nil
+	}
+	tlsCfg["serverName"] = want
+
+	spec["endpoints"] = endpoints
+
 	b, err := yaml.Marshal(m)
 	if err != nil {
 		return fmt.Errorf("marshal: %w", err)

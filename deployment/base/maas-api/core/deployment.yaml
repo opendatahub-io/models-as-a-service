@@ -18,7 +18,7 @@ spec:
           name: http
           protocol: TCP
         - containerPort: 9090
-          name: metrics
+          name: https-metrics
           protocol: TCP
         env:
         - name: NAMESPACE
@@ -31,6 +31,9 @@ spec:
           value: "models-as-a-service"
         - name: METRICS_PORT
           value: "9090"
+        - name: METRICS_SECURE
+          value: "false"
+        # METRICS_CERT_DIR defaults in Go (DefaultMetricsCertDir); set explicitly in overlays/tls.
         resources:
           requests:
             memory: "128Mi"
@@ -63,4 +66,15 @@ spec:
           runAsNonRoot: true
           seccompProfile:
             type: RuntimeDefault
+        volumeMounts:
+        - name: metrics-certs
+          mountPath: /tmp/k8s-metrics-server/metrics-certs
+          readOnly: true
+      volumes:
+      - name: metrics-certs
+        secret:
+          secretName: maas-api-metrics-tls
+          defaultMode: 420
+          # optional in base/dev (no service-ca). overlays/tls sets optional: false.
+          optional: true
       terminationGracePeriodSeconds: 30
