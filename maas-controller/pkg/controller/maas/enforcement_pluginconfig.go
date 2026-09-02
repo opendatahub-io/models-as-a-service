@@ -21,6 +21,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strings"
+
+	"k8s.io/apimachinery/pkg/types"
 )
 
 // Compiles the ext_proc pluginConfig from a gateway's routes and
@@ -266,6 +268,9 @@ type GatewayEnforcementInput struct {
 	Subscriptions   []SubscriptionBinding
 	MaasAPIMatches  []RouteMatch
 	DenyAll         SubscriptionBinding
+
+	// EnforcedSubscriptions get marked Active after their config is applied.
+	EnforcedSubscriptions []types.NamespacedName
 }
 
 // GatewayArtifacts are the three resources MaaS emits per gateway to enforce

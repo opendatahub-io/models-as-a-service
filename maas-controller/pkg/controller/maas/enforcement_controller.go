@@ -24,6 +24,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -87,6 +88,7 @@ type GatewayEnforcementReconciler struct {
 
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways;httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions;maasmodelrefs,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=authorino.kuadrant.io,resources=authconfigs,verbs=get;list;watch;create;update;patch
 //+kubebuilder:rbac:groups=limitador.kuadrant.io,resources=limitadors,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch
@@ -134,9 +136,41 @@ func (r *GatewayEnforcementReconciler) Reconcile(ctx context.Context, req ctrl.R
 		}
 	}
 
+	if err := r.markSubscriptionsActive(ctx, in.EnforcedSubscriptions); err != nil {
+		return ctrl.Result{}, fmt.Errorf("mark subscriptions active: %w", err)
+	}
+
 	log.Info("reconciled gateway enforcement", "gateway", req.NamespacedName,
 		"actionSets", len(arts.PluginConfig.ActionSets), "limits", len(arts.Limits))
 	return ctrl.Result{}, nil
+}
+
+// markSubscriptionsActive sets each enforced subscription Active. In native mode
+// the MaaSSubscription reconciler is off, so this owns the status maas-api and the
+// authorization policy read.
+func (r *GatewayEnforcementReconciler) markSubscriptionsActive(ctx context.Context, subs []types.NamespacedName) error {
+	for _, nn := range subs {
+		sub := &maasv1alpha1.MaaSSubscription{}
+		if err := r.Get(ctx, nn, sub); err != nil {
+			return fmt.Errorf("get subscription %s: %w", nn, err)
+		}
+		ready := apimeta.IsStatusConditionTrue(sub.Status.Conditions, "Ready")
+		if sub.Status.Phase == maasv1alpha1.PhaseActive && ready {
+			continue
+		}
+		sub.Status.Phase = maasv1alpha1.PhaseActive
+		apimeta.SetStatusCondition(&sub.Status.Conditions, metav1.Condition{
+			Type:               "Ready",
+			Status:             metav1.ConditionTrue,
+			Reason:             "EnforcementApplied",
+			Message:            "auth and token limits applied",
+			ObservedGeneration: sub.Generation,
+		})
+		if err := r.Status().Update(ctx, sub); err != nil {
+			return fmt.Errorf("update subscription %s status: %w", nn, err)
+		}
+	}
+	return nil
 }
 
 // isGatewayNotReady reports whether err means the gateway is not yet a complete

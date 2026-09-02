@@ -1253,33 +1253,36 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
 	}
-	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		InfraNamespace:                  infraNamespace,
-		TenantNamespace:                 maasSubscriptionNamespace,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		ClusterAudience:                 clusterAudience,
-		MetadataCacheTTL:                metadataCacheTTL,
-		AuthzCacheTTL:                   authzCacheTTL,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		MaxConcurrentReconciles:         maxConcurrentReconciles,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
-		os.Exit(1)
-	}
-	if err := (&maas.MaaSSubscriptionReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		DefaultTenantNamespace:          maasSubscriptionNamespace,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		MaxConcurrentReconciles:         maxConcurrentReconciles,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
-		os.Exit(1)
+	// Native enforcement replaces the Kuadrant-policy reconcilers, so skip them when it is on.
+	if !enableNativeEnforcement {
+		if err := (&maas.MaaSAuthPolicyReconciler{
+			Client:                          mgr.GetClient(),
+			Scheme:                          mgr.GetScheme(),
+			InfraNamespace:                  infraNamespace,
+			TenantNamespace:                 maasSubscriptionNamespace,
+			GatewayName:                     gatewayName,
+			GatewayNamespace:                gatewayNamespace,
+			ClusterAudience:                 clusterAudience,
+			MetadataCacheTTL:                metadataCacheTTL,
+			AuthzCacheTTL:                   authzCacheTTL,
+			TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+			MaxConcurrentReconciles:         maxConcurrentReconciles,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
+			os.Exit(1)
+		}
+		if err := (&maas.MaaSSubscriptionReconciler{
+			Client:                          mgr.GetClient(),
+			Scheme:                          mgr.GetScheme(),
+			DefaultTenantNamespace:          maasSubscriptionNamespace,
+			TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
+			GatewayName:                     gatewayName,
+			GatewayNamespace:                gatewayNamespace,
+			MaxConcurrentReconciles:         maxConcurrentReconciles,
+		}).SetupWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
+			os.Exit(1)
+		}
 	}
 	aitenantDeletionTimeout := parseAITenantDeletionTimeout()
 	if err := (&maas.AITenantReconciler{

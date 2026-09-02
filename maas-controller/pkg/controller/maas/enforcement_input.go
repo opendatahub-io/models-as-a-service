@@ -69,6 +69,7 @@ func (r *GatewayEnforcementReconciler) gatherGatewayInput(ctx context.Context, g
 	if err != nil {
 		return in, err
 	}
+	seenSub := map[types.NamespacedName]bool{}
 	for _, sm := range subs {
 		limit := sm.ref.TokenRateLimits[0]
 		limitName := strings.ReplaceAll(qualifiedName(sm.sub.Namespace, sm.sub.Name), "/", "-") + "-" + sm.ref.Name + "-tokens"
@@ -79,6 +80,11 @@ func (r *GatewayEnforcementReconciler) gatherGatewayInput(ctx context.Context, g
 			MaxValue:        limit.Limit,
 			Window:          limit.Window,
 		})
+		nn := types.NamespacedName{Namespace: sm.sub.Namespace, Name: sm.sub.Name}
+		if !seenSub[nn] {
+			seenSub[nn] = true
+			in.EnforcedSubscriptions = append(in.EnforcedSubscriptions, nn)
+		}
 	}
 	slices.SortFunc(in.Subscriptions, func(a, b SubscriptionBinding) int {
 		return cmp.Compare(a.LimitName, b.LimitName)
