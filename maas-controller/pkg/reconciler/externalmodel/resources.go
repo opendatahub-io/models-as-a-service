@@ -160,7 +160,7 @@ func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, na
 								{
 									Name:  "X-Gateway-Model-Name",
 									Type:  &headerType,
-									Value: targetModel,
+									Value: modelName,
 								},
 							},
 						},

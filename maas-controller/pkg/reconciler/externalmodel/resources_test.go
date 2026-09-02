@@ -84,7 +84,7 @@ func TestBuildHTTPRoute(t *testing.T) {
 	assert.Equal(t, "/llm/gpt-4o", *rule1.Matches[0].Path.Value)
 	assert.Equal(t, "maas-gpt-4o", string(rule1.BackendRefs[0].Name))
 
-	// Rule 2: header-based match uses targetModel
+	// Rule 2: header-based match uses modelName (MaaS-facing name from request body)
 	rule2 := hr.Spec.Rules[1]
 	assert.Equal(t, "X-Gateway-Model-Name", string(rule2.Matches[0].Headers[0].Name))
 	assert.Equal(t, "gpt-4o", rule2.Matches[0].Headers[0].Value)
@@ -106,8 +106,8 @@ func TestBuildHTTPRoute_TargetModelDiffersFromName(t *testing.T) {
 	assert.Equal(t, "maas-my-bedrock", hr.Name)
 	assert.Equal(t, "/llm/my-bedrock", *hr.Spec.Rules[0].Matches[0].Path.Value)
 
-	// Header match uses targetModel (what the user sends in body.model)
-	assert.Equal(t, "openai.gpt-oss-20b", hr.Spec.Rules[1].Matches[0].Headers[0].Value)
+	// Header match uses modelName (MaaS-facing name from request body, not targetModel)
+	assert.Equal(t, "my-bedrock", hr.Spec.Rules[1].Matches[0].Headers[0].Value)
 
 	// BackendRef uses the MaaS-owned Service name.
 	assert.Equal(t, "maas-my-bedrock", string(hr.Spec.Rules[0].BackendRefs[0].Name))
