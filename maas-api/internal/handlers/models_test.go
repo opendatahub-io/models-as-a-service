@@ -365,7 +365,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -486,7 +486,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
@@ -725,7 +725,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -914,7 +914,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1032,7 +1032,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1140,7 +1140,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1247,7 +1247,7 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
@@ -1341,7 +1341,7 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister, nil)
@@ -1396,7 +1396,7 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
