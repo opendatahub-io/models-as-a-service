@@ -4,7 +4,6 @@ kind: Kustomization
 resources:
   - ../../default
   - destinationrule.yaml
-  - service-ca-configmap.yaml
 
 configMapGenerator:
   - name: maas-parameters
