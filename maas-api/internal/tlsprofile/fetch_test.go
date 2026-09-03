@@ -57,7 +57,7 @@ func TestParseProfileFromAPIServer_NamedProfiles(t *testing.T) {
 		wantType tlsprofile.ProfileType
 		wantMin  confv1.TLSProtocolVersion
 	}{
-		{"Old", confv1.TLSProfileOldType, tlsprofile.ProfileOld, confv1.VersionTLS10},
+		{"Old", confv1.TLSProfileOldType, confv1.TLSProfileOldType, confv1.VersionTLS10},
 		{"Intermediate", confv1.TLSProfileIntermediateType, tlsprofile.ProfileIntermediate, confv1.VersionTLS12},
 		{"Modern", confv1.TLSProfileModernType, tlsprofile.ProfileModern, confv1.VersionTLS13},
 	}

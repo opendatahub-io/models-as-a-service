@@ -1,0 +1,16 @@
+# Semgrep TLS rule suppressions
+# Format: RULE_ID:FILE_PATH
+#
+# server.go / metrics/server.go: TLS listeners apply the cluster TLS security profile
+# (MinVersion, CipherSuites) from setupTLSProfile; explicit tls.Config is required for
+# certificate loading and profile application.
+go-http-server-tls-override:maas-api/cmd/server.go
+go-http-server-tls-override:maas-api/internal/metrics/server.go
+#
+# discovery.go: Cluster-internal HTTP client uses cluster CA bundle plus profile
+# MinVersion/CipherSuites plumbed from setupTLSProfile; required assignment for probes.
+go-http-client-tls-override:maas-api/internal/models/discovery.go
+#
+# provider.go: OTEL gRPC exporter uses insecure credentials only when
+# OTEL_EXPORTER_OTLP_INSECURE=true (default false).
+go-grpc-tls-credential-override:maas-api/internal/tracing/provider.go
