@@ -52,9 +52,34 @@ oc get datasciencecluster default-dsc -o jsonpath='{.spec.components.aigateway.m
     See [Infrastructure Namespace Separation](../configuration-and-management/infra-namespace-migration.md)
     for details.
 
+## Dashboard Feature Flags
+
+The `maasAuthPolicies` field in `OdhDashboardConfig` is **deprecated** and frozen via a CEL
+transition rule. Clusters upgrading from 3.4 that already have it set will retain the value
+without error, but the field is no longer used. New installs that attempt to set it will
+receive a validation error.
+
+Replace it with the new MaaS dashboard flags:
+
+```bash
+kubectl patch odhdashboardconfig odh-dashboard-config \
+  -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"modelAsService":true,"vLLMDeploymentOnMaaS":true}}}'
+```
+
+| 3.4 (deprecated) | 3.5+ replacement | Effect |
+|---|---|---|
+| `maasAuthPolicies: true` | `modelAsService: true` | Enables MaaS UI in the Dashboard |
+| *(not available)* | `vLLMDeploymentOnMaaS: true` | Enables vLLM deployment via the MaaS Dashboard UI |
+
+!!! note
+    The deprecated `maasAuthPolicies` value cannot be cleared until the field is removed in a
+    future version. Leave it as-is; it has no effect on the dashboard once `modelAsService` is set.
+
 ## DSC Field Reference
 
 | 3.4 | 3.5+ |
 |-----|------|
 | `kserve.managementState: Managed` | Not required for MaaS |
 | `kserve.modelsAsService.managementState: Managed` | `aigateway.modelsAsAService.managementState: Managed` |
+| `dashboardConfig.maasAuthPolicies: true` | `dashboardConfig.modelAsService: true` |
