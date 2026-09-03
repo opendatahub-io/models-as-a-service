@@ -23,6 +23,7 @@ const (
 	AnnotationManaged = "opendatahub.io/managed"
 
 	// AnnotationMaaSAPIReplicas overrides the maas-api Deployment replica count for a tenant.
+	// spec.maasApi.replicas takes precedence when both are set.
 	AnnotationMaaSAPIReplicas = "maas.opendatahub.io/maas-api-replicas"
 
 	// AnnotationPayloadProcessingReplicas overrides the payload-processing Deployment replica count for a tenant.

@@ -2,11 +2,21 @@ package metrics_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
+	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -14,6 +24,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/metrics"
 )
@@ -30,14 +41,18 @@ func TestMetricsServerIntegration(t *testing.T) {
 	port := tcpAddr.Port
 	require.NoError(t, listener.Close())
 
-	srv, err := metrics.NewMetricsServer(fmt.Sprintf(":%d", port), reg)
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:   fmt.Sprintf(":%d", port),
+		Reg:    reg,
+		Secure: false,
+	})
 	require.NoError(t, err)
 	go func() {
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		if err := metrics.ListenAndServe(srv); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			t.Logf("metrics server error: %v", err)
 		}
 	}()
-	t.Cleanup(func() { srv.Close() })
+	t.Cleanup(func() { _ = srv.Close() })
 
 	client := &http.Client{Timeout: 2 * time.Second}
 
@@ -47,7 +62,7 @@ func TestMetricsServerIntegration(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 		return resp.StatusCode == http.StatusOK
 	}, 2*time.Second, 50*time.Millisecond)
 
@@ -72,4 +87,128 @@ func TestMetricsServerIntegration(t *testing.T) {
 
 	assert.Contains(t, bodyStr, `maas_api_http_requests_total{method="GET",route="/v1/models",status="200",tenant_name="test-tenant"} 1`)
 	assert.Contains(t, bodyStr, "maas_api_http_request_duration_seconds")
+
+	// Verify new metrics are also present
+	assert.Contains(t, bodyStr, `maas_requests_total 1`)
+	assert.Contains(t, bodyStr, "maas_request_duration_seconds")
+	assert.Contains(t, bodyStr, "maas_request_rejections_total")
+}
+
+func TestNewMetricsServer_Insecure(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:   ":0",
+		Reg:    reg,
+		Secure: false,
+	})
+	require.NoError(t, err)
+	require.Nil(t, srv.TLSConfig)
+}
+
+func TestNewMetricsServer_SecureRequiresRESTConfig(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	_, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:    ":0",
+		Reg:     reg,
+		Secure:  true,
+		CertDir: t.TempDir(),
+	})
+	require.Error(t, err)
+}
+
+func TestNewMetricsServer_SecureRequiresCertDir(t *testing.T) {
+	t.Parallel()
+	reg := prometheus.NewRegistry()
+	_, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:       ":0",
+		Reg:        reg,
+		Secure:     true,
+		RESTConfig: &rest.Config{Host: "https://example.invalid"},
+	})
+	require.Error(t, err)
+}
+
+func TestNewMetricsServer_SecureLoadsTLS(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestCertPair(t, dir)
+
+	reg := prometheus.NewRegistry()
+	restCfg := &rest.Config{Host: "https://127.0.0.1:1"}
+	httpClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true}, //nolint:gosec // test-only
+		},
+		Timeout: 50 * time.Millisecond,
+	}
+
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:       ":0",
+		Reg:        reg,
+		Secure:     true,
+		CertDir:    dir,
+		RESTConfig: restCfg,
+		HTTPClient: httpClient,
+	})
+	require.NoError(t, err)
+	require.NotNil(t, srv.TLSConfig)
+	require.Nil(t, srv.TLSConfig.Certificates)
+	require.NotNil(t, srv.TLSConfig.GetCertificate)
+	require.Equal(t, uint16(tls.VersionTLS12), srv.TLSConfig.MinVersion)
+
+	cert, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotNil(t, cert)
+	require.NotEmpty(t, cert.Certificate)
+}
+
+func TestNewMetricsServer_SecureReloadsTLSAfterRotation(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+	writeTestCertPair(t, dir)
+
+	reg := prometheus.NewRegistry()
+	srv, err := metrics.NewMetricsServer(metrics.ServerOptions{
+		Addr:       ":0",
+		Reg:        reg,
+		Secure:     true,
+		CertDir:    dir,
+		RESTConfig: &rest.Config{Host: "https://127.0.0.1:1"},
+		HTTPClient: &http.Client{Timeout: 50 * time.Millisecond},
+	})
+	require.NoError(t, err)
+
+	certBefore, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, certBefore.Certificate[0])
+
+	writeTestCertPair(t, dir)
+
+	certAfter, err := srv.TLSConfig.GetCertificate(nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, certAfter.Certificate[0])
+	require.NotEqual(t, certBefore.Certificate[0], certAfter.Certificate[0])
+}
+
+func writeTestCertPair(t *testing.T, dir string) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	require.NoError(t, err)
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})
+	keyBytes, err := x509.MarshalECPrivateKey(key)
+	require.NoError(t, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyBytes})
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.crt"), certPEM, 0o600))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tls.key"), keyPEM, 0o600))
 }

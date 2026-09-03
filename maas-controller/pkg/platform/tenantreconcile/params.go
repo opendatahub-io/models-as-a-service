@@ -38,6 +38,9 @@ type PlatformParams struct {
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
+	// MaaSAPIResources overrides resource requests/limits for the maas-api container.
+	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
+	MaaSAPIResources *corev1.ResourceRequirements
 	// PayloadProcessingReplicas overrides the payload-processing Deployment replica count when non-nil.
 	// When PayloadProcessingAutoscaling is true, this value becomes the HPA minReplicas instead.
 	PayloadProcessingReplicas *int32
@@ -91,6 +94,12 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
+
+	maasAPIReplicas, maasAPIResources := resolveMaasAPIConfig(tenant, log)
+	params.MaaSAPIResources = maasAPIResources
+	if maasAPIReplicas != nil {
+		params.MaaSAPIReplicas = maasAPIReplicas
+	}
 
 	var ppReplicas *int32
 	var resourceWarnings []string
@@ -274,6 +283,37 @@ func validatePayloadProcessingResources(cfg *maasv1alpha1.TenantPayloadProcessin
 	}
 
 	return nil, resources
+}
+
+func resolveMaasAPIConfig(tenant client.Object, log logr.Logger) (replicas *int32, resources *corev1.ResourceRequirements) {
+	cfg := maasAPIConfigFor(tenant)
+	if cfg == nil {
+		return nil, nil
+	}
+
+	if cfg.Replicas != nil {
+		replicas = cfg.Replicas
+		log.Info("Resolved maas-api replicas from spec", "replicas", *replicas)
+	}
+	if cfg.Resources != nil {
+		resources = tenantResourcesToCorev1(cfg.Resources)
+		if resources != nil {
+			log.Info("maas-api resource overrides configured")
+		}
+	}
+
+	return replicas, resources
+}
+
+func maasAPIConfigFor(tenant client.Object) *maasv1alpha1.TenantMaasAPIConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.MaasAPI
+	case *maasv1alpha1.Tenant:
+		return t.Spec.MaasAPI
+	default:
+		return nil
+	}
 }
 
 func tenantResourcesToCorev1(in *maasv1alpha1.TenantResourceRequirements) *corev1.ResourceRequirements {
@@ -491,6 +531,12 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+	if params.MaaSAPIResources != nil {
+		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {
+			return fmt.Errorf("patch maas-api resources: %w", err)
+		}
+		log.V(4).Info("Patching maas-api resources")
 	}
 
 	// Set TENANT_NAME environment variable for per-tenant maas-api instances.

@@ -54,6 +54,7 @@ type Handler struct {
 type MetricsRecorder interface {
 	RecordKeyValidation(tenant, result string)
 	RecordTokenMint(tenant, result string)
+	RecordRejection(reason string)
 }
 
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
@@ -398,6 +399,10 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 	}
 
 	if !result.Valid {
+		// Record rejection for invalid API key
+		if h.metrics != nil {
+			h.metrics.RecordRejection(constant.RejectionUnauthorized)
+		}
 		// Return 200 with validation result for Authorino
 		// Per design doc section 7.7: invalid keys should return 200 with valid:false
 		c.JSON(http.StatusOK, result)

@@ -407,6 +407,7 @@ class TestModelsEndpoint:
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=maas_ns)
 
     def test_explicit_subscription_header(self):
         """
@@ -774,6 +775,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=maas_ns)
 
     @pytest.mark.serial
     def test_different_modelrefs_same_model_id(self):
@@ -975,6 +977,7 @@ class TestModelsEndpoint:
                 _delete_cr("llminferenceservice", ref, namespace=MODEL_NAMESPACE)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=maas_ns)
 
     def test_multiple_distinct_models_in_subscription(self):
         """
@@ -1135,6 +1138,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=maas_ns)
 
     def test_user_token_returns_all_models(self):
         """
@@ -1226,6 +1230,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", sub1_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth2_name, namespace=maas_ns)
 
     def test_user_token_with_subscription_header_filters(self):
         """
@@ -1286,6 +1291,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=ns)
 
     @pytest.mark.serial
     def test_empty_model_list(self):
@@ -1526,6 +1532,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=ns)
 
     def test_api_key_with_deleted_subscription_403(self):
         """
@@ -1655,6 +1662,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_user, namespace=ns)
             _delete_sa(sa_other, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=ns)
 
     def test_invalid_subscription_header_403(self):
         """
@@ -1716,6 +1724,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=ns)
 
     def test_access_denied_to_subscription_403(self):
         """
@@ -1788,6 +1797,7 @@ class TestModelsEndpoint:
             _delete_sa(sa_user, namespace=ns)
             _delete_sa(sa_other, namespace=ns)
             _wait_for_cr_absent("maassubscription", user_subscription, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name, namespace=ns)
 
     def test_api_key_ignores_subscription_header(self):
         """
@@ -1868,6 +1878,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", sub1_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth2_name, namespace=maas_ns)
 
     def test_multiple_api_keys_different_subscriptions(self):
         """
@@ -1967,6 +1978,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", sub1_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth2_name, namespace=maas_ns)
 
     def test_service_account_token_multiple_subs_no_header(self):
         """
@@ -2035,6 +2047,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", sub1_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth2_name, namespace=maas_ns)
 
     def test_service_account_token_multiple_subs_with_header(self):
         """
@@ -2120,6 +2133,7 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth2_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
             _wait_for_cr_absent("maassubscription", sub1_name, namespace=maas_ns)
+            _wait_for_cr_absent("maasauthpolicy", auth2_name, namespace=maas_ns)
 
     def test_unauthenticated_request_401(self):
         """
@@ -2298,4 +2312,5 @@ class TestModelsEndpoint:
             _delete_cr("maasauthpolicy", auth_policy_name)
             _delete_sa(sa_name, namespace=_ns())
             _wait_for_cr_absent("maassubscription", subscription_name)
+            _wait_for_cr_absent("maasauthpolicy", auth_policy_name)
             log.info("Cleaned up central models endpoint exemption test resources")

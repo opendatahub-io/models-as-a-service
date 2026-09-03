@@ -1418,6 +1418,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     def test_create_key_for_degraded_subscription(self):
         """API key creation succeeds for Degraded subscription."""
@@ -1459,6 +1460,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     def test_create_key_for_failed_subscription(self):
         """API key creation is rejected for Failed subscription to prevent key spam."""
@@ -1499,6 +1501,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     @pytest.mark.serial
     def test_create_key_for_pending_subscription(self):
@@ -1566,6 +1569,7 @@ class TestAPIKeySubscriptionPhases:
             except Exception:
                 log.exception("Best-effort controller scale-up failed")
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     @pytest.mark.serial
     def test_reject_key_for_unreconciled_subscription(self):
@@ -1688,6 +1692,7 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
             # Only raise webhook restore error after cleanup is complete
             if webhook_restore_error:

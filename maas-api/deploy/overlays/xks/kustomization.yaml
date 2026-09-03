@@ -48,17 +48,29 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
 
-  # Exclude monitoring resources on xKS (PodMonitor CRD requires Prometheus Operator,
-  # NetworkPolicy references OCP-specific redhat-ods-monitoring namespace)
+  # Insecure metrics on xKS: no OpenShift service-ca, so drop the dedicated metrics
+  # Service (and its maas-api-metrics-tls Secret) and ServiceMonitor scrape config.
+  - target:
+      kind: Service
+      name: maas-api-metrics
+    patch: |
+      $patch: delete
+      apiVersion: v1
+      kind: Service
+      metadata:
+        name: maas-api-metrics
+
+  # Exclude monitoring resources on xKS (ServiceMonitor references OCP service-ca ConfigMap;
+  # NetworkPolicy references OCP-specific redhat-ods-monitoring namespace).
   - target:
       group: monitoring.coreos.com
       version: v1
-      kind: PodMonitor
+      kind: ServiceMonitor
       name: maas-api-metrics
     patch: |
       $patch: delete
       apiVersion: monitoring.coreos.com/v1
-      kind: PodMonitor
+      kind: ServiceMonitor
       metadata:
         name: maas-api-metrics
   - target:
@@ -70,3 +82,30 @@ patches:
       kind: NetworkPolicy
       metadata:
         name: maas-api-allow-monitoring
+
+  # overlays/tls enables secure metrics and requires maas-api-metrics-tls (service-ca).
+  # cert-manager on xKS only provisions maas-api-serving-cert — disable secure metrics.
+  - target:
+      kind: Deployment
+      name: maas-api
+    patch: |
+      apiVersion: apps/v1
+      kind: Deployment
+      metadata:
+        name: maas-api
+      spec:
+        template:
+          spec:
+            containers:
+            - name: maas-api
+              env:
+              - name: METRICS_SECURE
+                value: "false"
+  # Make metrics-certs optional (index 2 after overlays/tls volume list).
+  - target:
+      kind: Deployment
+      name: maas-api
+    patch: |
+      - op: replace
+        path: /spec/template/spec/volumes/2/secret/optional
+        value: true

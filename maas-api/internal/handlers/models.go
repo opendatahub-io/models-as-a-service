@@ -10,11 +10,17 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordRejection(reason string)
+}
 
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
@@ -22,6 +28,7 @@ type ModelsHandler struct {
 	subscriptionSelector *subscription.Selector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
+	metrics              MetricsRecorder
 }
 
 // NewModelsHandler creates a new models handler.
@@ -31,6 +38,7 @@ func NewModelsHandler(
 	modelMgr *models.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
+	metrics MetricsRecorder,
 ) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
@@ -40,6 +48,7 @@ func NewModelsHandler(
 		subscriptionSelector: subscriptionSelector,
 		logger:               log,
 		maasModelRefLister:   maasModelRefLister,
+		metrics:              metrics,
 	}
 }
 
@@ -169,6 +178,9 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader == "" {
 		h.logger.Debug("Authorization header missing") // SAFE: Logging that header is missing, not the value itself
+		if h.metrics != nil {
+			h.metrics.RecordRejection(constant.RejectionUnauthorized)
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Authorization required",
