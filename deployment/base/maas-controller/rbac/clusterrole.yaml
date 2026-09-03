@@ -289,6 +289,7 @@ rules:
   - maas.opendatahub.io
   resources:
   - aitenants/status
+  - externalmodels/status
   - maasauthpolicies/status
   - maasmodelrefs/status
   - maassubscriptions/status
