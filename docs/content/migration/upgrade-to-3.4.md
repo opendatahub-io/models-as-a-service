@@ -1,177 +1,56 @@
-# Upgrade Guide: RHOAI 3.2 to 3.4 (MaaS Migration)
+# Upgrade Guide: RHOAI 3.3 to 3.4
 
-This guide documents the full manual upgrade procedure from RHOAI 3.2 (tier-based architecture) to RHOAI 3.4 (subscription-driven architecture). It covers the initial 3.2 setup, upgrade steps, manual cleanup of old resources, creation of new subscription CRs, and validation.
+This guide covers upgrading MaaS from RHOAI 3.3 to 3.4. The main changes are:
+
+- **ModelsAsService CR replaced by Tenant CR** for platform configuration
+- **Tier-based access replaced by subscription CRDs** (MaaSModelRef, MaaSAuthPolicy, MaaSSubscription)
+- **Gateway default policies** automatically created by maas-controller
 
 ## Background
 
-RHOAI 3.4 replaces the tier-based access system with a CRD-driven subscription model. The old tier system used:
+RHOAI 3.4 replaces the tier-based access system with a CRD-driven subscription model. The old tier system (3.3 and earlier) used:
 
 - A `tier-to-group-mapping` ConfigMap to define tiers and group membership
 - Gateway-level AuthPolicy and TokenRateLimitPolicy with tier-based predicates
 - Tier annotations on LLMInferenceService resources
+- A cluster-scoped `ModelsAsService` CR for platform configuration
 
 The new system uses:
 
 - **MaaSModelRef** to register models with the MaaS platform
 - **MaaSAuthPolicy** to define per-model access control
 - **MaaSSubscription** to define per-model rate limits and billing
-- **Tenant** for platform-wide configuration (auto-created by maas-controller)
+- **Tenant** for platform-wide configuration (auto-created by maas-controller, replaces ModelsAsService)
 
 The operator upgrade installs the new CRDs and deploys maas-controller, but **does not clean up old tier resources**. Old Kuadrant policies will coexist with the new gateway defaults and must be removed manually.
 
 ## Prerequisites
 
 - Cluster admin access
-- RHOAI 3.2 deployed with tier-based MaaS configuration
+- RHOAI 3.3 deployed with MaaS enabled (`kserve.modelsAsService.managementState: Managed`)
 - Kuadrant/RHCL compatible with 3.4 (Kuadrant v1.4.2+ for ODH, RHCL v1.3+ for RHOAI)
 - PostgreSQL instance available for maas-api (API key storage)
 
-## Phase 1: RHOAI 3.2 Setup (Tier-Based System)
+## Phase 1: Pre-Upgrade Backup
 
-This phase documents the resources that exist in a typical 3.2 deployment. If you are setting up a fresh 3.2 environment for testing, create these resources.
-
-### 1.1 Tier-to-Group Mapping ConfigMap
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: tier-to-group-mapping
-  namespace: maas-api
-  labels:
-    app: maas-api
-    component: tier-mapping
-data:
-  tiers: |
-    - name: free
-      displayName: Free Tier
-      level: 0
-      groups:
-        - system:authenticated
-    - name: premium
-      displayName: Premium Tier
-      level: 1
-      groups:
-        - premium-users
-```
-
-```bash
-kubectl apply -f tier-to-group-mapping.yaml
-```
-
-### 1.2 Gateway-Level AuthPolicy
-
-```yaml
-apiVersion: kuadrant.io/v1
-kind: AuthPolicy
-metadata:
-  name: gateway-auth-policy
-  namespace: openshift-ingress
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: Gateway
-    name: maas-default-gateway
-  rules:
-    authentication:
-      oidc-token:
-        jwt:
-          issuerUrl: https://kubernetes.default.svc
-    authorization:
-      tier-check:
-        patternMatching:
-          patterns:
-            - predicate: auth.identity.tier != ""
-```
-
-```bash
-kubectl apply -f gateway-auth-policy.yaml
-```
-
-### 1.3 Gateway-Level TokenRateLimitPolicy (Tier-Based)
-
-```yaml
-apiVersion: kuadrant.io/v1alpha1
-kind: TokenRateLimitPolicy
-metadata:
-  name: gateway-tier-rate-limits
-  namespace: openshift-ingress
-spec:
-  targetRef:
-    group: gateway.networking.k8s.io
-    kind: Gateway
-    name: maas-default-gateway
-  limits:
-    free-user-tokens:
-      rates:
-        - limit: 100
-          window: 1m
-      when:
-        - predicate: auth.identity.tier == "free"
-      counters:
-        - expression: auth.identity.userid
-    premium-user-tokens:
-      rates:
-        - limit: 50000
-          window: 1m
-      when:
-        - predicate: auth.identity.tier == "premium"
-      counters:
-        - expression: auth.identity.userid
-```
-
-```bash
-kubectl apply -f gateway-tier-rate-limits.yaml
-```
-
-### 1.4 Model Tier Annotations
-
-```bash
-kubectl annotate llminferenceservice my-model -n llm \
-  alpha.maas.opendatahub.io/tiers='["free","premium"]' --overwrite
-```
-
-### 1.5 Verify 3.2 Setup
-
-```bash
-# Verify ConfigMap
-kubectl get configmap tier-to-group-mapping -n maas-api
-
-# Verify gateway policies
-kubectl get authpolicy gateway-auth-policy -n openshift-ingress
-kubectl get tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress
-
-# Verify tier annotations on models
-kubectl get llminferenceservice -n llm -o jsonpath='{range .items[*]}{.metadata.name}: {.metadata.annotations.alpha\.maas\.opendatahub\.io/tiers}{"\n"}{end}'
-
-# Test tier lookup endpoint (3.2 only)
-HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-curl -s -X POST "https://${HOST}/v1/tiers/lookup" \
-  -H "Content-Type: application/json" \
-  -d '{"groups":["premium-users"]}' | jq .
-# Expected: {"tier":"premium","displayName":"Premium Tier"}
-```
-
-## Phase 2: Pre-Upgrade Backup
-
-Back up all tier-based resources before upgrading.
+Back up tier-based resources and the ModelsAsService CR before upgrading.
 
 ```bash
 mkdir -p migration-backup
 
-# Backup tier-to-group-mapping ConfigMap
+# Backup tier-to-group-mapping ConfigMap (if present)
 kubectl get configmap tier-to-group-mapping -n maas-api -o yaml \
   > migration-backup/tier-to-group-mapping.yaml 2>/dev/null \
   && echo "Backed up tier-to-group-mapping" \
   || echo "No tier-to-group-mapping found"
 
-# Backup gateway-auth-policy
+# Backup gateway-auth-policy (if present)
 kubectl get authpolicy gateway-auth-policy -n openshift-ingress -o yaml \
   > migration-backup/gateway-auth-policy.yaml 2>/dev/null \
   && echo "Backed up gateway-auth-policy" \
   || echo "No gateway-auth-policy found"
 
-# Backup gateway TokenRateLimitPolicy
+# Backup gateway TokenRateLimitPolicy (if present)
 kubectl get tokenratelimitpolicy -n openshift-ingress -o yaml \
   > migration-backup/gateway-rate-limits.yaml 2>/dev/null \
   && echo "Backed up TokenRateLimitPolicy resources" \
@@ -183,11 +62,16 @@ kubectl get llminferenceservice -n llm -o yaml \
   && echo "Backed up LLMInferenceService resources" \
   || echo "No LLMInferenceService found"
 
-# Backup ModelsAsService CR (if upgrading from 3.3 with custom config)
-kubectl get modelsasservice default-modelsasservice -o yaml \
-  > migration-backup/modelsasservice.yaml 2>/dev/null \
-  && echo "Backed up ModelsAsService CR" \
-  || echo "No ModelsAsService CR found (expected if upgrading from 3.2)"
+# Backup ModelsAsService CR (capture custom config before it gets replaced)
+if kubectl get modelsasservice default-modelsasservice -o yaml > migration-backup/modelsasservice.yaml 2>/dev/null; then
+  if [ -s migration-backup/modelsasservice.yaml ]; then
+    echo "Backed up ModelsAsService CR"
+  else
+    echo "ERROR: ModelsAsService backup is empty" >&2; exit 1
+  fi
+else
+  echo "No ModelsAsService CR found (expected if MaaS was not enabled in 3.3)"
+fi
 
 # Record current state
 echo "=== Pre-upgrade snapshot ===" > migration-backup/pre-upgrade-state.txt
@@ -197,35 +81,20 @@ kubectl get tokenratelimitpolicy -A >> migration-backup/pre-upgrade-state.txt 2>
 kubectl get configmap -n maas-api >> migration-backup/pre-upgrade-state.txt 2>/dev/null
 ```
 
-## Phase 3: Upgrade RHOAI Operator to 3.4
+## Phase 2: Upgrade RHOAI Operator to 3.4
 
-### 3.1 Upgrade the Operator
+### 2.1 Upgrade the Operator
 
 Follow the standard RHOAI operator upgrade procedure. The operator upgrade will:
 
 - Install MaaS CRDs (`maas.opendatahub.io/v1alpha1`): Tenant, MaaSModelRef, MaaSAuthPolicy, MaaSSubscription, ExternalModel
 - Deploy maas-controller when `modelsAsService: Managed` is set in the DSC
-- Replace the old cluster-scoped `ModelsAsService` CR (`components.platform.opendatahub.io/v1alpha1`) with a namespace-scoped `Tenant` CR (`maas.opendatahub.io/v1alpha1`) -- see [Phase 3.5](#phase-35-modelsasservice-to-tenant-transition) for details
+- Replace the old cluster-scoped `ModelsAsService` CR with a namespace-scoped `Tenant` CR -- see [Phase 2.5](#phase-25-modelsasservice-to-tenant-transition) for details
 - Create gateway-level default policies: `gateway-default-auth` and `gateway-default-deny`
 
-**Important:** The `modelsAsService` field defaults to `Removed` if not specified in the DSC. The operator will not deploy maas-controller until you explicitly set `modelsAsService: Managed`. This means the upgrade itself is safe -- MaaS is opt-in.
+**Important:** The `modelsAsService` field defaults to `Removed` if not specified in the DSC. If you already had `modelsAsService: Managed` in 3.3, it carries over. The DSC spec field `kserve.modelsAsService.managementState` is unchanged between 3.3 and 3.4 -- no DSC changes are required.
 
-**Note:** The DSC spec field `kserve.modelsAsService.managementState` is unchanged between 3.3 and 3.4. No changes to the DSC are required for the CR transition.
-
-### 3.2 Enable MaaS
-
-After the operator upgrade completes and the DSC is Ready, enable MaaS:
-
-```bash
-kubectl patch datasciencecluster default-dsc --type merge \
-  -p '{"spec":{"components":{"kserve":{"modelsAsService":{"managementState":"Managed"}}}}}'
-
-# Wait for MaaS to become ready
-kubectl wait datasciencecluster default-dsc \
-  --for=jsonpath='{.status.conditions[?(@.type=="Ready")].status}'=True --timeout=300s
-```
-
-### 3.3 Verify Upgrade
+### 2.2 Verify Upgrade
 
 ```bash
 # Verify MaaS CRDs are installed
@@ -239,14 +108,14 @@ kubectl get authpolicy gateway-default-auth -n redhat-ods-applications
 kubectl get tokenratelimitpolicy gateway-default-deny -n redhat-ods-applications
 ```
 
-### 3.4 Identify Policy Conflicts
+### 2.3 Identify Policy Conflicts
 
-After enabling MaaS, both old and new gateway-level policies target the same gateway from different namespaces. Audit the state:
+After the upgrade, both old and new gateway-level policies may target the same gateway from different namespaces. Audit the state:
 
 ```bash
 echo "=== AuthPolicies targeting maas-default-gateway ==="
 kubectl get authpolicy -A
-# You will see BOTH:
+# You may see BOTH:
 #   openshift-ingress         gateway-auth-policy    (OLD - tier-based)
 #   redhat-ods-applications   gateway-default-auth   (NEW - maas-controller managed)
 #   redhat-ods-applications   maas-api-auth-policy   (NEW - targets maas-api HTTPRoute)
@@ -254,14 +123,14 @@ kubectl get authpolicy -A
 echo ""
 echo "=== TokenRateLimitPolicies targeting maas-default-gateway ==="
 kubectl get tokenratelimitpolicy -A
-# You will see BOTH:
+# You may see BOTH:
 #   openshift-ingress         gateway-tier-rate-limits   (OLD - tier predicates)
 #   redhat-ods-applications   gateway-default-deny       (NEW - maas-controller managed)
 ```
 
-Both old and new policies target the same `maas-default-gateway` from different namespaces. This creates conflicting policy behavior in Kuadrant and must be resolved by removing the old policies.
+Both old and new policies targeting the same `maas-default-gateway` creates conflicting policy behavior in Kuadrant. This must be resolved by removing the old policies in Phase 3.
 
-## Phase 3.5: ModelsAsService to Tenant Transition
+## Phase 2.5: ModelsAsService to Tenant Transition
 
 Starting in 3.4, MaaS platform configuration is owned by `maas-controller` via `Tenant/default-tenant` instead of the operator's `ModelsAsService` CR. This section covers what changes automatically and what manual steps may be required.
 
@@ -334,18 +203,14 @@ kubectl patch tenant default-tenant -n models-as-a-service --type merge \
   }'
 ```
 
-**Tip:** If you backed up the old `ModelsAsService` CR before the upgrade, you can extract the spec values from the backup:
+**Tip:** If you backed up the old `ModelsAsService` CR before the upgrade, compare specs:
 
 ```bash
-# If you captured the old CR before upgrading:
-kubectl get modelsasservice default-modelsasservice -o yaml > migration-backup/modelsasservice.yaml
-
-# After upgrade, compare MaaS config spec:
 diff <(yq '.spec' migration-backup/modelsasservice.yaml) \
      <(kubectl get tenant default-tenant -n models-as-a-service -o yaml | yq '.spec')
 ```
 
-### 3.5.1 Verify CR Transition
+### Verify CR Transition
 
 ```bash
 # Old ModelsAsService CR should be gone
@@ -374,39 +239,38 @@ echo ""
 # Expected: True
 ```
 
-### Migration Tooling
+## Phase 3: Cleanup Old Tier Resources
 
-The `migrate-tier-to-subscription.sh` script does **not** need extension for this transition. That script covers the tier ConfigMap to MaaS CRD migration (a separate concern). The ModelsAsService to Tenant transition is handled entirely by the operator and maas-controller at the platform level.
+The operator does not clean up old tier resources automatically. If your 3.3 deployment used the tier-based system, each resource must be removed manually.
 
-## Phase 4: Manual Cleanup of Old Tier Resources
+!!! note "Skip if no tiers"
+    If your 3.3 deployment did not use tier-based access (no `tier-to-group-mapping` ConfigMap, no tier-based gateway policies, no `alpha.maas.opendatahub.io/tiers` annotations on models), skip to [Phase 4](#phase-4-create-subscription-resources).
 
-This is the critical phase. The operator does not clean up old resources automatically. Each resource must be removed manually.
-
-### 4.1 Delete Old Gateway AuthPolicy
+### 3.1 Delete Old Gateway AuthPolicy
 
 ```bash
-kubectl delete authpolicy gateway-auth-policy -n openshift-ingress
+kubectl delete authpolicy gateway-auth-policy -n openshift-ingress --ignore-not-found
 # Verify only the new policy remains
 kubectl get authpolicy -A
 # Expected: gateway-default-auth in redhat-ods-applications (managed by maas-controller)
 ```
 
-### 4.2 Delete Old Gateway TokenRateLimitPolicy
+### 3.2 Delete Old Gateway TokenRateLimitPolicy
 
 ```bash
-kubectl delete tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress
+kubectl delete tokenratelimitpolicy gateway-tier-rate-limits -n openshift-ingress --ignore-not-found
 # Verify only the new policy remains
 kubectl get tokenratelimitpolicy -A
 # Expected: gateway-default-deny in redhat-ods-applications (managed by maas-controller)
 ```
 
-### 4.3 Delete Tier-to-Group Mapping ConfigMap
+### 3.3 Delete Tier-to-Group Mapping ConfigMap
 
 ```bash
-kubectl delete configmap tier-to-group-mapping -n maas-api
+kubectl delete configmap tier-to-group-mapping -n maas-api --ignore-not-found
 ```
 
-### 4.4 Remove Tier Annotations from Models
+### 3.4 Remove Tier Annotations from Models
 
 ```bash
 # Remove tier annotations from all LLMInferenceServices
@@ -420,7 +284,7 @@ kubectl get llminferenceservice -n llm -o jsonpath='{range .items[*]}{.metadata.
 # Expected: no tier annotations
 ```
 
-### 4.5 Verify Cleanup Complete
+### 3.5 Verify Cleanup
 
 ```bash
 echo "=== Cleanup verification ==="
@@ -442,32 +306,23 @@ kubectl get authpolicy gateway-default-auth -n redhat-ods-applications
 
 echo "New gateway-default-deny:"
 kubectl get tokenratelimitpolicy gateway-default-deny -n redhat-ods-applications
-
-# Tier lookup endpoint should return 404
-HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
-echo ""
-echo "Tier lookup endpoint (should 404):"
-curl -s -o /dev/null -w "%{http_code}" -X POST "https://${HOST}/v1/tiers/lookup" \
-  -H "Content-Type: application/json" \
-  -d '{"groups":["premium-users"]}'
-echo ""
 ```
 
-### Complete Cleanup Inventory
+### Cleanup Inventory
 
-| # | Resource | Kind | Namespace | Action | Conflict |
-|---|----------|------|-----------|--------|----------|
-| 1 | `gateway-auth-policy` | AuthPolicy | `openshift-ingress` | Delete | Conflicts with `gateway-default-auth` in `redhat-ods-applications` -- both target `maas-default-gateway` |
-| 2 | `gateway-tier-rate-limits` | TokenRateLimitPolicy | `openshift-ingress` | Delete | Conflicts with `gateway-default-deny` in `redhat-ods-applications` -- both target `maas-default-gateway` |
+| # | Resource | Kind | Namespace | Action | Notes |
+|---|----------|------|-----------|--------|-------|
+| 1 | `gateway-auth-policy` | AuthPolicy | `openshift-ingress` | Delete | Conflicts with `gateway-default-auth` in `redhat-ods-applications` |
+| 2 | `gateway-tier-rate-limits` | TokenRateLimitPolicy | `openshift-ingress` | Delete | Conflicts with `gateway-default-deny` in `redhat-ods-applications` |
 | 3 | `tier-to-group-mapping` | ConfigMap | `maas-api` | Delete | Orphaned -- no code reads this in 3.4 |
 | 4 | `alpha.maas.opendatahub.io/tiers` | Annotation | `llm` (on each model) | Remove | Orphaned -- annotation is ignored in 3.4 |
 | 5 | `/v1/tiers/lookup` | API Endpoint | N/A | Gone in 3.4 (no action) | Clients calling this will get 404 |
 
-## Phase 5: Create New Subscription Resources
+## Phase 4: Create Subscription Resources
 
-With old resources cleaned up, create the new CRD-based configuration. For each model and each access tier, create three resources.
+With old resources cleaned up, create the new CRD-based configuration. For each model, create one MaaSModelRef. For each model/group access pair, create one MaaSAuthPolicy and one MaaSSubscription.
 
-### 5.1 Register Models with MaaS (MaaSModelRef)
+### 4.1 Register Models with MaaS (MaaSModelRef)
 
 Create one MaaSModelRef per model:
 
@@ -490,7 +345,7 @@ kubectl apply -f maasmodelref-my-model.yaml
 kubectl wait maasmodelref my-model -n llm --for=jsonpath='{.status.phase}'=Ready --timeout=60s
 ```
 
-### 5.2 Create Access Policies (MaaSAuthPolicy)
+### 4.2 Create Access Policies (MaaSAuthPolicy)
 
 Create one MaaSAuthPolicy per access group:
 
@@ -517,7 +372,7 @@ kubectl apply -f maasauthpolicy-premium.yaml
 kubectl get authpolicy -n llm -l maas.opendatahub.io/model=my-model
 ```
 
-### 5.3 Create Subscriptions with Rate Limits (MaaSSubscription)
+### 4.3 Create Subscriptions with Rate Limits (MaaSSubscription)
 
 Create one MaaSSubscription per group with rate limits:
 
@@ -547,7 +402,7 @@ kubectl apply -f maassubscription-premium.yaml
 kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model=my-model
 ```
 
-### 5.4 Verify New Configuration
+### 4.4 Verify New Configuration
 
 ```bash
 # All MaaS CRs should be Active/Ready
@@ -560,12 +415,12 @@ kubectl get authpolicy -n llm
 kubectl get tokenratelimitpolicy -n llm
 ```
 
-## Phase 6: Validation
+## Phase 5: Validation
 
 !!! note "Body-based routing"
     The curl examples in this section use path-based URLs for continuity with the migration context. For new integrations, use the body-based endpoint (`https://${HOST}/v1/chat/completions` with the model in the request body). See [Inference](../user-guide/inference.md) for details.
 
-### 6.1 Test Authorized Access
+### 5.1 Test Authorized Access
 
 ```bash
 HOST="maas.$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
@@ -577,36 +432,40 @@ TOKEN=$(oc whoami -t)
 
 # Test model access
 curl -s -w "\nHTTP %{http_code}\n" \
-  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   "https://${HOST}/llm/my-model/v1/chat/completions" \
   -d '{"model":"my-model","messages":[{"role":"user","content":"hello"}],"max_tokens":10}'
 # Expected: HTTP 200
 ```
 
-### 6.2 Test Unauthorized Access
+### 5.2 Test Unauthorized Access
 
 ```bash
 # Log in as a user NOT in any authorized group
 oc login --username=unauthorized-user
 
-TOKEN=$(oc whoami -t)
+UNAUTH_TOKEN=$(oc whoami -t)
 
 curl -s -w "\nHTTP %{http_code}\n" \
-  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Authorization: Bearer $UNAUTH_TOKEN" \
   -H "Content-Type: application/json" \
   "https://${HOST}/llm/my-model/v1/chat/completions" \
   -d '{"model":"my-model","messages":[{"role":"user","content":"hello"}],"max_tokens":10}'
 # Expected: HTTP 401 or 403
 ```
 
-### 6.3 Test Rate Limiting
+### 5.3 Test Rate Limiting
 
 ```bash
+# Log back in as the authorized user
+oc login --username=premium-user
+TOKEN=$(oc whoami -t)
+
 # Send rapid requests to trigger rate limits
 for i in $(seq 1 100); do
   code=$(curl -s -o /dev/null -w "%{http_code}" \
-    -H "Authorization: Bearer ${TOKEN}" \
+    -H "Authorization: Bearer $TOKEN" \
     -H "Content-Type: application/json" \
     "https://${HOST}/llm/my-model/v1/chat/completions" \
     -d '{"model":"my-model","messages":[{"role":"user","content":"hello"}],"max_tokens":10}')
@@ -615,14 +474,13 @@ done
 # Expected: mix of 200 and 429 after exceeding rate limit
 ```
 
-### 6.4 Test API Key Flow (New in 3.4)
+### 5.4 Test API Key Flow (New in 3.4)
 
 ```bash
-# Create an API key via maas-api
-TOKEN=$(oc whoami -t)
+# Reuse the authorized user's token from the rate-limit test above
 
 API_KEY=$(curl -s -X POST \
-  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Authorization: Bearer $TOKEN" \
   -H "Content-Type: application/json" \
   "https://${HOST}/maas-api/v1/api-keys" \
   -d '{"name":"test-key"}' | jq -r '.key')
@@ -631,7 +489,7 @@ echo "API Key: ${API_KEY}"
 
 # Use API key for model access
 curl -s -w "\nHTTP %{http_code}\n" \
-  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Authorization: Bearer $API_KEY" \
   -H "Content-Type: application/json" \
   "https://${HOST}/llm/my-model/v1/chat/completions" \
   -d '{"model":"my-model","messages":[{"role":"user","content":"hello"}],"max_tokens":10}'
@@ -643,21 +501,31 @@ curl -s -w "\nHTTP %{http_code}\n" \
 If the migration fails, restore the old tier-based configuration from backups:
 
 ```bash
-# Restore old resources
-kubectl apply -f migration-backup/tier-to-group-mapping.yaml
-kubectl apply -f migration-backup/gateway-auth-policy.yaml
-kubectl apply -f migration-backup/gateway-rate-limits.yaml
+# Restore old resources (if they existed)
+kubectl apply -f migration-backup/tier-to-group-mapping.yaml 2>/dev/null
+kubectl apply -f migration-backup/gateway-auth-policy.yaml 2>/dev/null
+kubectl apply -f migration-backup/gateway-rate-limits.yaml 2>/dev/null
 
 # Restore tier annotations
-kubectl apply -f migration-backup/llm-models.yaml
+kubectl apply -f migration-backup/llm-models.yaml 2>/dev/null
 
-# Delete new MaaS CRs (controller will clean up generated policies)
-kubectl delete maasmodelref --all -n llm
-kubectl delete maasauthpolicy --all -n models-as-a-service
-kubectl delete maassubscription --all -n models-as-a-service
+# Delete MaaS CRs created during migration (use specific names, not --all,
+# to avoid deleting unrelated resources if the cluster has other MaaS config)
+kubectl delete maasmodelref my-model -n llm --ignore-not-found
+kubectl delete maasauthpolicy my-model-premium-access -n models-as-a-service --ignore-not-found
+kubectl delete maassubscription my-model-premium-subscription -n models-as-a-service --ignore-not-found
+# Repeat for each resource created during Phase 4
 ```
 
-Note that rollback requires reverting the operator to 3.2 as well, since the 3.4 maas-api no longer has the `/v1/tiers/lookup` endpoint.
+Note that a full rollback requires reverting the operator to 3.3 as well, since the 3.4 maas-api no longer has the `/v1/tiers/lookup` endpoint.
+
+After reverting the operator, restore the ModelsAsService CR if it was backed up:
+
+```bash
+kubectl apply -f migration-backup/modelsasservice.yaml 2>/dev/null \
+  && echo "Restored ModelsAsService CR" \
+  || echo "No ModelsAsService backup found"
+```
 
 ## Troubleshooting
 
@@ -681,7 +549,7 @@ kubectl get tokenratelimitpolicy -n llm -l maas.opendatahub.io/model=<model-name
 
 ### Duplicate gateway policies after upgrade
 
-If both old and new gateway policies exist targeting the same gateway, Kuadrant behavior is undefined. The old policies are in `openshift-ingress`, the new ones in `redhat-ods-applications`. Delete the old policies (Phase 4).
+If both old and new gateway policies exist targeting the same gateway, Kuadrant behavior is undefined. The old policies are in `openshift-ingress`, the new ones in `redhat-ods-applications`. Delete the old policies (Phase 3).
 
 ```bash
 kubectl get authpolicy -A
