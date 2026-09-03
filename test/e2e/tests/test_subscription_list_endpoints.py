@@ -328,7 +328,7 @@ class TestListSubscriptionsForModel:
 
             _wait_for_maas_subscription_phase(sub_with_model, namespace=maas_ns)
             _wait_for_maas_subscription_phase(sub_without_model, namespace=maas_ns)
-            
+
             _wait_for_maas_auth_policy_phase(ap_with_model, require_enforced=False, namespace=maas_ns)
             _wait_for_maas_auth_policy_phase(ap_without_model, require_enforced=False, namespace=maas_ns)
 
