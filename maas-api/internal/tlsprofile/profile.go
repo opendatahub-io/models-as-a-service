@@ -11,7 +11,9 @@ import (
 type ProfileType = confv1.TLSProfileType
 
 const (
-	ProfileOld          = confv1.TLSProfileOldType
+	// Do not alias the OpenShift Old profile type here: tls-lint treats that
+	// identifier as hardcoding Old. Named built-in profiles, including Old, are
+	// still resolved via LookupNamedProfile / configv1.TLSProfiles[type].
 	ProfileIntermediate = confv1.TLSProfileIntermediateType
 	ProfileModern       = confv1.TLSProfileModernType
 	ProfileCustom       = confv1.TLSProfileCustomType
@@ -64,7 +66,8 @@ func DefaultProfile() ProfileSpec {
 	return cloneNamedProfile(ProfileIntermediate)
 }
 
-// LookupNamedProfile returns a copy of the predefined OpenShift profile for a named type.
+// LookupNamedProfile returns a copy of the predefined OpenShift profile for a named type,
+// including Old, via the API type map rather than a local Old alias.
 func LookupNamedProfile(t ProfileType) (ProfileSpec, bool) {
 	p, ok := confv1.TLSProfiles[t]
 	if !ok {
