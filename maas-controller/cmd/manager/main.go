@@ -80,7 +80,10 @@ const (
 	metricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
 )
 
-var tlsProfileRetryDelay = tlsProfileFetchRetryDelay
+var (
+	tlsProfileRetryDelay = tlsProfileFetchRetryDelay
+	fatalExit            = os.Exit
+)
 
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
@@ -826,8 +829,9 @@ func (c managerTLSConfig) setupWatcher(mgr ctrl.Manager, cancel context.CancelFu
 
 func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.CancelFunc) {
 	if err := c.setupWatcher(mgr, cancel); err != nil {
-		setupLog.Info("unable to create TLS profile watcher, continuing with current TLS profile",
-			"controller", "TLSProfileWatcher", "error", err)
+		cancel()
+		setupLog.Error(err, "unable to set up TLS security profile watcher")
+		fatalExit(1)
 	}
 }
 
