@@ -285,10 +285,11 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
 | `modelAsService: true` | Enables the **Models as a Service** UI in the Dashboard | `aigateway.modelsAsAService` set to `Managed` in DSC |
 | `vLLMDeploymentOnMaaS: true` | Enables vLLM model deployment via the MaaS Dashboard UI | `modelAsService` enabled |
 
-!!! warning "Deprecated field"
-    The field `maasAuthPolicies` was previously documented but has been **deprecated and removed**
-    from the `OdhDashboardConfig` CRD validation. Setting it will cause an error. Use
-    `modelAsService: true` instead.
+!!! warning "Deprecated field: `maasAuthPolicies`"
+    The field `maasAuthPolicies` is **deprecated** and frozen via a CEL transition rule in the
+    `OdhDashboardConfig` CRD. On new installs, setting it returns a validation error. Clusters
+    upgraded from RHOAI 3.4 that already had the field set will retain the existing value without
+    error, but the field is no longer used. Use `modelAsService: true` instead.
 
 !!! note "Namespace"
     For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
