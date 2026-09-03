@@ -313,7 +313,6 @@ class TestListSubscriptionsForModel:
         ap_with_model = "e2e-model-match-auth"
         ap_without_model = "e2e-model-nomatch-auth"
 
-
         try:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
