@@ -289,7 +289,8 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
     The field `maasAuthPolicies` is **deprecated** and frozen via a CEL transition rule in the
     `OdhDashboardConfig` CRD. On new installs, setting it returns a validation error. Clusters
     upgraded from RHOAI 3.4 that already had the field set will retain the existing value without
-    error, but the field is no longer used. Use `modelAsService: true` instead.
+    error, but the field is no longer used. The field will be removed in a future release.
+    Use `modelAsService: true` instead.
 
 !!! note "Namespace"
     For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
