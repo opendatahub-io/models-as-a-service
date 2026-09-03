@@ -52,7 +52,14 @@ const (
 var (
 	fetchClusterTLSSettings = tlsprofile.FetchTLSSettings
 	tlsProfileRetryDelay    = tlsProfileFetchRetryDelay
+	newTLSProfileWatcher    = func(restConfig *rest.Config, initial tlsprofile.Settings, onChange func(oldSettings, newSettings tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		return tlsprofile.NewWatcher(restConfig, initial, onChange)
+	}
 )
+
+type tlsProfileWatcher interface {
+	Start(stopCh <-chan struct{}) error
+}
 
 func serve() error {
 	cfg := config.Load()
@@ -130,7 +137,7 @@ func serve() error {
 	}
 	router.Use(metrics.NewMiddleware(metricsRecorder, cfg.TenantName))
 
-	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster, cancel)
+	profileMinVersion, profileCipherSuites, tlsErr := setupTLSProfile(ctx, log, cfg, cluster.RESTConfig(), cancel)
 	if tlsErr != nil {
 		return fmt.Errorf("failed to set up TLS profile: %w", tlsErr)
 	}
@@ -171,7 +178,7 @@ func serve() error {
 		}
 	}()
 
-	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder); err != nil {
+	if err = registerHandlers(ctx, log, router, cfg, cluster, store, metricsRecorder, profileMinVersion, profileCipherSuites); err != nil {
 		return fmt.Errorf("failed to register handlers: %w", err)
 	}
 
@@ -235,6 +242,8 @@ func registerHandlers(
 	cluster *config.ClusterConfig,
 	store api_keys.MetadataStore,
 	metricsRecorder *metrics.PrometheusRecorder,
+	profileMinVersion uint16,
+	profileCipherSuites []uint16,
 ) error {
 	router.GET("/health", handlers.NewHealthHandler().HealthCheck)
 
@@ -261,7 +270,7 @@ func registerHandlers(
 	}
 	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2)
+	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2, profileMinVersion, profileCipherSuites)
 	if err != nil {
 		log.Fatal("Failed to create model manager", "error", err)
 	}
@@ -355,16 +364,18 @@ func debugCORSConfig() cors.Config {
 
 // setupTLSProfile fetches the OpenShift cluster TLS security profile and starts
 // a watcher that cancels the context on profile changes. Returns the profile's
-// minVersion and cipherSuites for use in buildTLSConfig. When HTTPS is disabled,
-// returns zero values so flag-based defaults apply.
+// minVersion and cipherSuites for use in buildTLSConfig. When both API and
+// metrics HTTPS are disabled, returns zero values so flag-based defaults apply.
 //
-// Fetch and watcher errors are logged and the server continues with the
-// Intermediate profile defaults so transient config API issues do not block
-// startup.
-func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, cluster *config.ClusterConfig, cancel context.CancelFunc) (uint16, []uint16, error) {
-	restConfig := cluster.RESTConfig()
-	if (!cfg.Secure && !cfg.MetricsSecure) || restConfig == nil {
+// Watcher create and cache-sync failures fail closed so the process cannot
+// serve with a stale cluster TLS profile. Transient fetch errors still fall
+// back to Intermediate defaults (with the watcher registered to self-heal).
+func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config, restConfig *rest.Config, cancel context.CancelFunc) (uint16, []uint16, error) {
+	if !cfg.Secure && !cfg.MetricsSecure {
 		return 0, nil, nil
+	}
+	if restConfig == nil {
+		return 0, nil, errors.New("HTTPS is enabled but Kubernetes REST configuration is unavailable")
 	}
 
 	settings, watchSettings, fetchErr := fetchTLSSettingsWithRetry(ctx, log, restConfig)
@@ -389,22 +400,17 @@ func setupTLSProfile(ctx context.Context, log *logger.Logger, cfg *config.Config
 	}
 
 	if watchSettings {
-		watcher, watchErr := tlsprofile.NewWatcher(restConfig, settings, func(oldSettings, newSettings tlsprofile.Settings) {
+		watcher, watchErr := newTLSProfileWatcher(restConfig, settings, func(oldSettings, newSettings tlsprofile.Settings) {
 			log.Info("TLS security profile or adherence policy changed, initiating graceful shutdown to reload",
 				"oldType", string(oldSettings.Profile.Type), "newType", string(newSettings.Profile.Type),
 				"oldAdherence", oldSettings.Adherence, "newAdherence", newSettings.Adherence)
 			cancel()
 		})
 		if watchErr != nil {
-			log.Info("TLS profile watcher could not be created; continuing with current TLS profile",
-				"error", watchErr)
-		} else {
-			go func() {
-				if err := watcher.Start(ctx.Done()); err != nil {
-					log.Info("TLS profile watcher stopped before syncing; continuing with current TLS profile",
-						"error", err)
-				}
-			}()
+			return 0, nil, fmt.Errorf("unable to create TLS profile watcher: %w", watchErr)
+		}
+		if err := watcher.Start(ctx.Done()); err != nil {
+			return 0, nil, fmt.Errorf("TLS profile watcher failed to sync: %w", err)
 		}
 	}
 
