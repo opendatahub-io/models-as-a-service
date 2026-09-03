@@ -464,7 +464,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list
+//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -1960,6 +1960,23 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
+	// Watch IPP ExternalModel (inference.opendatahub.io) so that creating or
+	// deleting a CR with apiFormat=messages re-runs discoverXAPIKeyNeeded and
+	// adds/removes the x-api-key identity source from the gateway AuthPolicy.
+	// The CRD may not be installed, so the watch is conditional.
+	const ippExternalModelCRD = "externalmodels.inference.opendatahub.io"
+	if crdExists(context.Background(), mgr.GetAPIReader(), ippExternalModelCRD) {
+		ippExternalModel := &unstructured.Unstructured{}
+		ippExternalModel.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "inference.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "ExternalModel",
+		})
+		b = b.Watches(ippExternalModel, handler.EnqueueRequestsFromMapFunc(
+			r.mapIPPExternalModelToMaaSAuthPolicies,
+		))
+	}
+
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		startLog := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("phase", "startup")
 		if err := r.ensureBaseGatewayAuthPolicy(ctx, startLog, nil, false, "", r.GatewayNamespace, r.GatewayName); err != nil {
@@ -2068,6 +2085,23 @@ func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Co
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(ns)); err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy for namespace label change", "namespace", ns)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, p := range policyList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return requests
+}
+
+// mapIPPExternalModelToMaaSAuthPolicies enqueues all MaaSAuthPolicies when an
+// IPP ExternalModel (inference.opendatahub.io) is created, updated, or deleted.
+// discoverXAPIKeyNeeded scans cluster-wide, so any ExternalModel change may
+// affect whether the x-api-key identity source should be present.
+func (r *MaaSAuthPolicyReconciler) mapIPPExternalModelToMaaSAuthPolicies(ctx context.Context, _ client.Object) []reconcile.Request {
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for IPP ExternalModel change")
 		return nil
 	}
 	requests := make([]reconcile.Request, len(policyList.Items))
