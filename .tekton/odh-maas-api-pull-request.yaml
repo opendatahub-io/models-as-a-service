@@ -38,6 +38,8 @@ spec:
     value: pull-request
   - name: enable-group-testing
     value: "true"
+  - name: enable-early-gate-testing
+    value: "false"
   pipelineRef:
     resolver: git
     params:
