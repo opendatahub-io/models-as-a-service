@@ -42,6 +42,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       - [ ] Verify the model is deployed and the `LLMInferenceService` has the `maas-default-gateway` gateway specified
       - [ ] Verify that the model is recognized by maas-api by checking the `maas-api/v1/models` endpoint (see [Validation Guide - List Available Models](validation.md#3-list-available-models))
 5. **Rate limiting not working**: Verify AuthPolicy and TokenRateLimitPolicy are applied
+      - [ ] If using RHCL v1.4.0 or v1.4.1, see [issue #17](#16-token-rate-limits-bypassed-on-rhcl-v140v141) -- token rate limits are silently bypassed due to an upstream wasm-shim bug. Upgrade to RHCL v1.4.2+
       - [ ] Verify `gateway-rate-limits` RateLimitPolicy is applied
       - [ ] Verify TokenRateLimitPolicy is applied (e.g. gateway-default-deny or per-route policies)
       - [ ] If **multiple** TokenRateLimitPolicies target the **same** HTTPRoute, see [Quota and Access Configuration](../configuration-and-management/quota-and-access-configuration.md)
@@ -149,7 +150,19 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
       kubectl get subscription -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,VERSION:.status.currentCSV' | grep -i rhcl
       ```
 
-      - [ ] Upgrade RHCL to v1.4.1 or later
+      - [ ] Upgrade RHCL to v1.4.2 or later (v1.4.1 fixes auth bypass but still has the token rate limit bypass below)
+
+17. <a id="16-token-rate-limits-bypassed-on-rhcl-v140v141"></a>**Token rate limits bypassed on RHCL v1.4.0/v1.4.1**: Token rate limits set in `MaaSSubscription` are silently ignored -- HTTP 429 responses never fire. Adding `tokenMetadata` to the subscription spec appears to work around the issue but is not a proper fix. This is caused by a bug in the Kuadrant wasm-shim v0.12.0 (shipped with RHCL 1.4.0 and 1.4.1) that cannot handle nested JSON objects in auth dynamic metadata. The MaaS identity filter stores a `subscription_info` object with nested fields (e.g., `modelRefs` arrays), which the wasm-shim silently drops or fails to convert to CEL values, breaking the TRLP `when` predicate evaluation. Fixed in wasm-shim v0.12.1 ([Kuadrant/wasm-shim#312](https://github.com/Kuadrant/wasm-shim/pull/312)), shipped in RHCL v1.4.2.
+
+      - [ ] Confirm you are on RHCL v1.4.0 or v1.4.1:
+
+      ```bash
+      kubectl get subscription -A -o custom-columns='NS:.metadata.namespace,NAME:.metadata.name,VERSION:.status.currentCSV' | grep -i rhcl
+      ```
+
+      - [ ] Upgrade RHCL to v1.4.2 or later, or downgrade to RHCL v1.3.x
+
+      - [ ] After upgrading, verify rate limits are enforced by sending requests that exceed the configured `tokenRateLimits` and confirming HTTP 429 responses
 
 ## Conflicting AuthPolicy Detection
 
