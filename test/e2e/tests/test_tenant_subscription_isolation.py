@@ -20,6 +20,7 @@ from multitenancy_helpers import (
     redact_sensitive,
     response_summary,
     select_subscription_at,
+    tenant_internal_url,
     wait_for_gateway_authpolicy_ready,
     wait_for_status_phase,
 )
@@ -188,7 +189,7 @@ class TestTenantSubscriptionIsolation:
 
         requested_model_a = f"{tenant_a['model_namespace']}/{tenant_a['model_name']}"
         response_a = select_subscription_at(
-            tenant_a["base_url"],
+            tenant_internal_url(tenant_a["name"]),
             key_a,
             "e2e-sub-user",
             ["system:authenticated"],
@@ -203,7 +204,7 @@ class TestTenantSubscriptionIsolation:
 
         requested_model_b = f"{tenant_b['model_namespace']}/{tenant_b['model_name']}"
         response_b = select_subscription_at(
-            tenant_b["base_url"],
+            tenant_internal_url(tenant_b["name"]),
             key_b,
             "e2e-sub-user",
             ["system:authenticated"],

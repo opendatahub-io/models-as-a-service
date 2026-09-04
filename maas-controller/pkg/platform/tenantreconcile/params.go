@@ -1024,7 +1024,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	const (
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
-		routeDisablePatchCount   = 4
+		routeDisablePatchCount   = 5
 	)
 	if !found {
 		return errors.New("EnvoyFilter configPatches not found")

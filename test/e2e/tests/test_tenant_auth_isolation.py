@@ -28,6 +28,7 @@ from multitenancy_helpers import (
     response_summary,
     search_api_keys_at,
     select_subscription_at,
+    tenant_internal_url,
     validate_api_key_at,
 )
 from test_helper import _get_cluster_token, _delete_cr
@@ -283,7 +284,7 @@ class TestTenantAuthIsolation:
         """3.x/4.x: Internal subscription selection reports the tenant-local subscription namespace."""
         tenant_a = tenant_auth_setup["tenant_a"]
         response = select_subscription_at(
-            tenant_a["base_url"],
+            tenant_internal_url(tenant_a["name"]),
             tenant_api_keys["a"]["key"],
             "e2e-auth-user",
             ["system:authenticated"],
