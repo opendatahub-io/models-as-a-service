@@ -175,41 +175,68 @@ _SA_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
 _CUSTOM_CA_PATH = "/tmp/ca-bundle.crt"
 
 
+def _fetch_openshift_service_ca() -> Optional[str]:
+    """Try to fetch the OpenShift service-serving CA bundle.
+
+    On OpenShift clusters, service-serving certificates are signed by a
+    dedicated CA that differs from the Kubernetes API server CA.  The
+    canonical source is the ``signing-cabundle`` ConfigMap in the
+    ``openshift-service-ca`` namespace.
+    """
+    tpl = '{{index .data "ca-bundle.crt"}}'
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "configmap", "signing-cabundle",
+             "-n", "openshift-service-ca",
+             "-o", f"go-template={tpl}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    except subprocess.TimeoutExpired:
+        pass
+    return None
+
+
 def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
     """Determine the CA cert path and optional content for curl TLS verification.
 
-    When E2E_CURL_CA_CONFIGMAP is set, fetches the CA bundle from that ConfigMap
-    and returns (pod_path, cert_content) so the caller can write the content into
-    the ephemeral curl pod before running curl.
-
-    Otherwise falls back to the service-account CA already mounted in the pod.
+    Resolution order:
+    1. If ``E2E_CURL_CA_CONFIGMAP`` is set, fetch that ConfigMap from *namespace*.
+    2. Otherwise, try the OpenShift service-serving CA (``signing-cabundle``
+       in ``openshift-service-ca``).
+    3. Fall back to the service-account CA already mounted in the pod.
 
     Returns:
         (ca_cert_path_inside_pod, ca_bundle_content_or_None)
     """
-    if not E2E_CURL_CA_CONFIGMAP:
-        return _SA_CA_PATH, None
+    if E2E_CURL_CA_CONFIGMAP:
+        tpl = '{{index .data "' + E2E_CURL_CA_CONFIGMAP_KEY + '"}}'
+        try:
+            result = subprocess.run(
+                ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
+                 "-n", namespace, "-o", f"go-template={tpl}"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "Timed out fetching E2E_CURL_CA_CONFIGMAP=%s in namespace %s, falling back to SA CA",
+                E2E_CURL_CA_CONFIGMAP, namespace,
+            )
+            return _SA_CA_PATH, None
+        if result.returncode == 0 and result.stdout.strip():
+            return _CUSTOM_CA_PATH, result.stdout
 
-    tpl = '{{index .data "' + E2E_CURL_CA_CONFIGMAP_KEY + '"}}'
-    try:
-        result = subprocess.run(
-            ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
-             "-n", namespace, "-o", f"go-template={tpl}"],
-            capture_output=True, text=True, timeout=15,
-        )
-    except subprocess.TimeoutExpired:
         log.warning(
-            "Timed out fetching E2E_CURL_CA_CONFIGMAP=%s in namespace %s, falling back to SA CA",
+            "E2E_CURL_CA_CONFIGMAP=%s not found in namespace %s, falling back to SA CA",
             E2E_CURL_CA_CONFIGMAP, namespace,
         )
         return _SA_CA_PATH, None
-    if result.returncode == 0 and result.stdout.strip():
-        return _CUSTOM_CA_PATH, result.stdout
 
-    log.warning(
-        "E2E_CURL_CA_CONFIGMAP=%s not found in namespace %s, falling back to SA CA",
-        E2E_CURL_CA_CONFIGMAP, namespace,
-    )
+    ca_content = _fetch_openshift_service_ca()
+    if ca_content:
+        return _CUSTOM_CA_PATH, ca_content
+
     return _SA_CA_PATH, None
 
 
