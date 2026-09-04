@@ -256,10 +256,17 @@ echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
 echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
 
+echo "📈 Recording rules configured (if Authorino found):"
+echo "   maas:auth_decisions:rate5m - per-policy auth decision rate by status"
+echo "   maas:auth_deny_ratio:rate5m - per-policy deny ratio"
+echo "   maas:auth_latency_p95:5m - per-policy P95 auth decision latency"
+echo ""
+
 echo "🚨 Alerting configured (if Authorino found):"
 echo "   MaaSAuthorinoMetadataEvaluatorHighFailureRate - maas-api metadata call failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication failure rate above configured threshold"
 echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"
+echo "   MaaSHighAuthDenyRate - per-policy auth deny ratio above 10% sustained for 10 minutes"
 echo ""
 
 echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
