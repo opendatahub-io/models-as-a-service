@@ -231,7 +231,7 @@ def maas_api_internal_url() -> str:
         return url.rstrip("/")
 
     # Default: cluster-internal service URL
-    # maas-api uses TLS on port 8443 (self-signed cert, use -k/verify=False)
+    # maas-api uses TLS on port 8443 (OpenShift service-serving cert)
     namespace = os.environ.get("MAAS_NAMESPACE", MAAS_API_DEPLOYMENT_NAMESPACE)
     service_name = os.environ.get("MAAS_API_SERVICE_NAME", "maas-api")
     port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
