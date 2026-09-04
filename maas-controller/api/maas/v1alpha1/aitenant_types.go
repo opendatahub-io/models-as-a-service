@@ -26,6 +26,10 @@ const (
 
 	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
 	AITenantConditionReady = "Ready"
+
+	// AITenantConditionUsageLogsReady indicates whether the per-tenant usage-logs
+	// EnvoyFilter is deployed for this tenant.
+	AITenantConditionUsageLogsReady = "UsageLogsReady"
 )
 
 // +kubebuilder:object:root=true
