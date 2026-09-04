@@ -83,8 +83,14 @@ type CredentialReference struct {
 // ExternalModelStatus defines the observed state of ExternalModel
 type ExternalModelStatus struct {
 	// Phase represents the current phase of the external model
-	// +kubebuilder:validation:Enum=Pending;Ready;Failed
+	// Migrated means networking is managed by the corresponding
+	// inference.opendatahub.io ExternalModel.
+	// +kubebuilder:validation:Enum=Pending;Ready;Failed;Migrated
 	Phase string `json:"phase,omitempty"`
+
+	// Message provides details about the current phase.
+	// +optional
+	Message string `json:"message,omitempty"`
 
 	// Conditions represent the latest available observations of the external model's state
 	// +optional

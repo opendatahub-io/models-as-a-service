@@ -65,8 +65,9 @@ func settingsEventHandler(initial Settings, onChange func(oldSettings, newSettin
 	}
 }
 
-// Start begins watching and blocks until stopCh is closed.
-// Returns an error if the informer cache fails to sync.
+// Start begins watching and blocks until the informer cache has synced.
+// Informers keep running in the background until stopCh is closed.
+// Returns an error if the cache fails to sync.
 func (w *Watcher) Start(stopCh <-chan struct{}) error {
 	w.factory.Start(stopCh)
 	synced := w.factory.WaitForCacheSync(stopCh)
@@ -75,7 +76,6 @@ func (w *Watcher) Start(stopCh <-chan struct{}) error {
 			return fmt.Errorf("informer cache sync failed for %s", gvr.String())
 		}
 	}
-	<-stopCh
 	return nil
 }
 

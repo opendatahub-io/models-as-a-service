@@ -119,6 +119,7 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 # Ephemeral curl probes run from the deployment namespace (where the UI runs),
 # matching the real traffic path for internal endpoints like /v1/tenants.
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
+E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ubi9/ubi-minimal:latest")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
@@ -137,9 +138,16 @@ DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simu
 DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
 DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2")
-TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
-TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
-TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
+TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model")
+EMBEDDING_MODEL_REF = os.environ.get("E2E_EMBEDDING_MODEL_REF", "e2e-embedding-simulated")
+EMBEDDING_MODEL_PATH = os.environ.get("E2E_EMBEDDING_MODEL_PATH", "/llm/e2e-embedding-simulated")
+EMBEDDING_MODEL_NAME = os.environ.get("E2E_EMBEDDING_MODEL_NAME", "test/e2e-embedding-model")
+EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_EMBEDDING_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -560,6 +568,62 @@ def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None
     return matching
 
 
+def _get_auth_policies_authorizing_identity_for_model(
+    model_ref,
+    username,
+    groups,
+    namespace=None,
+    model_namespace=None,
+):
+    """Get policy names that authorize an identity for a model.
+
+    A policy authorizes the identity when it references the specified model
+    name and namespace, and it matches the username or one of the groups.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        username: Kubernetes username to match
+        groups: Kubernetes groups to match
+        namespace: Namespace to search for policies (defaults to _ns())
+        model_namespace: Expected modelRef namespace (defaults to MODEL_NAMESPACE)
+
+    Returns:
+        List of matching MaaSAuthPolicy names
+    """
+    namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
+    username = username.strip()
+    groups = {group.strip() for group in groups}
+
+    matching_policies = []
+    for policy in _list_crs("maasauthpolicy", namespace):
+        spec = policy.get("spec", {})
+        policy_models = spec.get("modelRefs", [])
+        references_model = any(
+            isinstance(ref, dict)
+            and ref.get("name") == model_ref
+            and ref.get("namespace") == model_namespace
+            for ref in policy_models
+        )
+        if not references_model:
+            continue
+
+        subjects = spec.get("subjects", {})
+        users = subjects.get("users", [])
+        policy_groups = subjects.get("groups", [])
+        matches_user = username and any(
+            isinstance(user, str) and user.strip() == username for user in users
+        )
+        matches_group = any(
+            isinstance(group, dict) and group.get("name", "").strip() in groups
+            for group in policy_groups
+        )
+        if matches_user or matches_group:
+            matching_policies.append(policy["metadata"]["name"])
+
+    return matching_policies
+
+
 def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None):
     """Get all MaaSSubscriptions that reference a model.
 
@@ -708,15 +772,16 @@ def _inference(api_key, path=None, extra_headers=None, model_name=None, max_toke
     )
 
 
-def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
+def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2, inference_fn=None):
     """Poll inference endpoint until expected HTTP status or timeout."""
+    inference_fn = inference_fn or _inference
     timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
     last = None
     last_err = None
     while time.time() < deadline:
         try:
-            r = _inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
+            r = inference_fn(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
             last_err = None
             ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
             if ok:
@@ -765,6 +830,28 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     url = f"{model_v1}/completions"
     body = {"model": model_name, "prompt": prompt, "max_tokens": 16}
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+def embeddings(text: str, model_v1: str, headers: dict, model_name: str):
+    url = f"{model_v1}/embeddings"
+    body = {"model": model_name, "input": text}
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None):
+    """POST embeddings using an API key only (subscription is bound at mint)."""
+    path = path or MODEL_PATH
+    if model_name is None:
+        model_name = MODEL_NAME
+    url = f"{_gateway_url()}{path}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return requests.post(
+        url, headers=headers,
+        json={"model": model_name, "input": "Hello world"},
+        timeout=TIMEOUT, verify=TLS_VERIFY,
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -99,6 +100,7 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=apps,resources=deployments/finalizers,verbs=update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=configs/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
@@ -153,6 +155,11 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
 			return ctrl.Result{}, err
+		}
+		if cfg != nil {
+			if err := r.syncModuleStatus(ctx, cfg); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
@@ -882,6 +889,121 @@ func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
 	}
 	configPatches[0] = patch
 	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
+}
+
+// conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
+// schema (maxLength: 32768). Messages that exceed this limit are truncated on a valid UTF-8
+// rune boundary and suffixed with "…" so the stored value is always within spec.
+const conditionMessageMaxLen = 32768
+
+func truncateConditionMessage(msg string) string {
+	if len(msg) <= conditionMessageMaxLen {
+		return msg
+	}
+	const suffix = "…"
+	limit := conditionMessageMaxLen - len(suffix)
+	truncated := msg[:limit]
+	// Walk back until the prefix is valid UTF-8. This handles both continuation
+	// bytes and incomplete leading bytes (e.g. 0xE2 without its two following
+	// bytes) that may appear at the truncation boundary.
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
+		truncated = truncated[:len(truncated)-1]
+	}
+	return truncated + suffix
+}
+
+// syncModuleStatus aggregates the Ready condition from the default AITenant and the default
+// MaasTenantConfig into Config.Status.Conditions so that the platform operator (DSC) can
+// surface configuration errors (e.g. missing gateway, missing postgres secret) without
+// watching MaaS operands directly.
+func (r *LifecycleReconciler) syncModuleStatus(ctx context.Context, cfg *maasv1alpha1.Config) error {
+	if cfg == nil || cfg.UID == "" {
+		return nil
+	}
+
+	// Fetch the default AITenant.
+	var aitenantReady bool
+	var aitenantMsg string
+	if r.AITenantNamespace != "" {
+		aitenantKey := client.ObjectKey{Name: tenantreconcile.DefaultAITenantName, Namespace: r.AITenantNamespace}
+		var aitenant maasv1alpha1.AITenant
+		switch err := r.Get(ctx, aitenantKey, &aitenant); {
+		case err == nil:
+			aitenantReady = apimeta.IsStatusConditionTrue(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionReady)
+			if !aitenantReady {
+				if cond := apimeta.FindStatusCondition(aitenant.Status.Conditions, maasv1alpha1.AITenantConditionReady); cond != nil {
+					aitenantMsg = cond.Message
+				} else {
+					aitenantMsg = fmt.Sprintf("AITenant phase=%s", aitenant.Status.Phase)
+				}
+			}
+		case apierrors.IsNotFound(err):
+			aitenantMsg = "default AITenant not yet created"
+		default:
+			return fmt.Errorf("get default AITenant for module status: %w", err)
+		}
+	} else {
+		aitenantReady = true // AITenant namespace not configured; skip the check.
+	}
+
+	// Fetch the default MaasTenantConfig.
+	var tenantReady bool
+	var tenantMsg string
+	if r.TenantSubscriptionNamespace != "" {
+		tKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: r.TenantSubscriptionNamespace}
+		var tenant maasv1alpha1.MaasTenantConfig
+		switch err := r.Get(ctx, tKey, &tenant); {
+		case err == nil:
+			tenantReady = apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ReadyConditionType)
+			if !tenantReady {
+				if cond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ReadyConditionType); cond != nil {
+					tenantMsg = cond.Message
+				} else {
+					tenantMsg = fmt.Sprintf("MaasTenantConfig phase=%s", tenant.Status.Phase)
+				}
+			}
+		case apierrors.IsNotFound(err):
+			tenantMsg = "default MaasTenantConfig not yet created"
+		default:
+			return fmt.Errorf("get default MaasTenantConfig for module status: %w", err)
+		}
+	} else {
+		tenantReady = true // namespace not configured; skip the check.
+	}
+
+	readyStatus := metav1.ConditionTrue
+	readyReason := "AllOperandsReady"
+	readyMessage := "Default AITenant and tenant configuration are ready"
+	if !aitenantReady || !tenantReady {
+		readyStatus = metav1.ConditionFalse
+		readyReason = "OperandNotReady"
+		var parts []string
+		if !aitenantReady && aitenantMsg != "" {
+			parts = append(parts, "AITenant: "+aitenantMsg)
+		}
+		if !tenantReady && tenantMsg != "" {
+			parts = append(parts, "MaasTenantConfig: "+tenantMsg)
+		}
+		if len(parts) > 0 {
+			readyMessage = truncateConditionMessage(strings.Join(parts, "; "))
+		} else {
+			readyMessage = "one or more MaaS operands are not ready"
+		}
+	}
+
+	base := cfg.DeepCopy()
+	apimeta.SetStatusCondition(&cfg.Status.Conditions, metav1.Condition{
+		Type:               tenantreconcile.ReadyConditionType,
+		Status:             readyStatus,
+		Reason:             readyReason,
+		Message:            readyMessage,
+		ObservedGeneration: cfg.Generation,
+		LastTransitionTime: metav1.Now(),
+	})
+	if err := r.Status().Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch Config status: %w", err)
+	}
+	return nil
 }
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
