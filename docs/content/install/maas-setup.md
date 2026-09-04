@@ -9,6 +9,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable modelsAsAService in your DataScienceCluster
 4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
+6. [Enable Observability](../observability/setup.md) — Set up metrics, dashboards, and monitoring (recommended)
 
 ## Database Setup
 
@@ -255,7 +256,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 The RHOAI Dashboard uses feature flags in the `OdhDashboardConfig` resource to control which tabs
 and features are visible in the UI. The operator creates this resource automatically when the
-Dashboard component is deployed, but the following flags may need to be enabled manually.
+Dashboard component is deployed. Enable `genAiStudio` manually if you need GenAI Studio.
 
 Patch the `OdhDashboardConfig` in your applications namespace (typically `redhat-ods-applications`
 for RHOAI or `opendatahub` for ODH):
@@ -263,13 +264,13 @@ for RHOAI or `opendatahub` for ODH):
 ```bash
 kubectl patch odhdashboardconfig odh-dashboard-config \
   -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"observabilityDashboard":true}}}'
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true}}}'
 ```
 
 | Flag | Effect | Prerequisites |
 |------|--------|---------------|
 | `genAiStudio: true` | Shows the **GenAI Studio** tab in the Dashboard | `llamastackoperator` set to `Managed` in DSC |
-| `observabilityDashboard: true` | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+| `observabilityDashboard: true` (default) | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
 
 !!! note "Namespace"
     For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
@@ -351,3 +352,4 @@ Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS
 * **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.
+* **Enable observability.** See [Observability Setup](../observability/setup.md).

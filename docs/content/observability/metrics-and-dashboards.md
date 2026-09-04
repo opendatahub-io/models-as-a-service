@@ -165,78 +165,18 @@ histogram_quantile(0.5, sum by (subscription, le)
   (rate(istio_request_duration_milliseconds_bucket{subscription!=""}[5m])))
 ```
 
-## Grafana Dashboards
+## Perses Dashboards
 
-MaaS includes two dashboards for different personas.
+Usage dashboards appear in the ODH/RHOAI observability console. Enable them with operator-managed telemetry (and optionally `usageLogging`) — see [Setup](setup.md). Operator vs Kustomize ownership and cleanup: [Operations](operations.md#cleanup).
 
-### Platform Admin Dashboard
-
-| Section | Metrics |
-|---------|---------|
-| **Component Health** | Limitador up, Authorino pods, MaaS API pods, Gateway pods, Alerts |
-| **Key Metrics** | Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users, P50 Latency, Rate Limit Ratio |
-| **Auth Evaluation** | Auth Latency (P50/P95/P99), Auth Success/Deny Rate |
-| **Traffic Analysis** | Token/Request Rate by Model, Error Rates (4xx, 5xx, 429), Token/Request by Subscription, P95 Latency |
-| **Model Metrics** | vLLM queue depth, latency, KV cache, token throughput, prompt/gen ratio, queue wait, TTFT, ITL |
-| **Top Users** | By token usage, by declined requests |
-| **Resource Allocation** | CPU/Memory/GPU per model pod |
-
-**Template variables:**
-
-- `$datasource`: `prometheus`
-- `$maas_namespace`: Auto-detected from `kube_pod_info{pod=~"maas-api.*"}`
-- `$kuadrant_namespace`: `kuadrant-system`
-- `$gateway_namespace`: `openshift-ingress`
-- `$llm_namespace`: `llm`
-- `$model`: `All`
-
-### AI Engineer Dashboard
-
-| Section | Metrics |
-|---------|---------|
-| **Usage Summary** | My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Success Rate |
-| **Usage Trends** | Token Usage by Model, Usage vs Rate Limited |
-| **Detailed Analysis** | Token Volume by Model, Rate Limited by Subscription |
+| Dashboard | When | Contents |
+|-----------|------|----------|
+| **Usage** (`dashboard-3-maas-usage-admin`) | Operator (`ensureUsageDashboard`) or Kustomize dashboards overlay | Token consumption overview and per-user usage (Prometheus) |
+| **All usage (logs)** (`dashboard-4-maas-usage-logs-admin`) | `usageLogging: true` | Admin usage from structured access logs (Loki) |
+| **Usage (logs)** (`dashboard-5-maas-usage-logs`) | `usageLogging: true` | User-scoped usage from structured access logs |
 
 !!! note "Inference Success Rate"
     Dashboards use `rate()` on vLLM counters to handle pod restarts correctly. `NaN` (when no traffic) is filtered to default to 100%.
 
 !!! info "Tokens vs Requests"
-    **Token consumption** (`authorized_hits`) for billing/cost. **Request counts** (`authorized_calls`) for capacity planning. Blue = requests, Green = tokens.
-
-### Prerequisites
-
-- **Grafana** installed (via observability team, centralized instance, or [Grafana Operator](https://grafana.github.io/grafana-operator/docs/installation/))
-- Grafana instance has label `app=grafana`
-- **Prometheus datasource** configured in Grafana
-
-### Deploy Dashboards
-
-```bash
-./scripts/observability/install-grafana-dashboards.sh
-```
-
-**Behavior:** Discovers Grafana cluster-wide. Deploys to namespace if one instance found. Warns if none or multiple.
-
-**Target specific instance:**
-
-```bash
-./scripts/observability/install-grafana-dashboards.sh --grafana-namespace maas-api
-./scripts/observability/install-grafana-dashboards.sh --grafana-label app=grafana
-```
-
-**Manual deployment:**
-
-```bash
-kustomize build deployment/components/observability/grafana | \
-  sed "s/namespace: maas-api/namespace: <your-namespace>/g" | \
-  kubectl apply -f -
-```
-
-### Sample Dashboard JSON
-
-For manual import: [MaaS Token Metrics Dashboard](https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json)
-
-1. Grafana → Dashboards → Import
-2. Upload JSON or paste content
-3. Select Prometheus datasource
+    **Token consumption** (`authorized_hits`) for billing/cost. **Request counts** (`authorized_calls`) for capacity planning.

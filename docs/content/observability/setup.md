@@ -10,7 +10,7 @@ Verify the ODH monitoring stack is available by checking the status of both `Mon
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
 ```
 
-See [Observability Prerequisites](../install/prerequisites.md#optional-observability-prerequisites)
+See [Observability Prerequisites](../install/prerequisites.md#observability-prerequisites-recommended)
 
 ### Perses
 
@@ -76,7 +76,10 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
 !!! warning "AuthPolicy Dependency"
     Istio Telemetry reads `X-MaaS-Subscription` header injected by AuthPolicy. Without header injection, `subscription` label will be empty.
 
-Additionally, a Perses dashboard for metrics-based usage will be added to the ODH observability dashboard, and it would show data when `captureUser` and `captureModelUsage` are turned on.
+Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) with a controller ownerReference on `Config`. It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
+
+!!! note "Operator prerequisite"
+    Operator-managed `PersesDashboard` CRs require a running maas-controller, a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable` above). Ownership and cleanup differ from Kustomize-applied dashboards — see [Operations: Cleanup](operations.md#cleanup).
 
 #### Logs-based usage dashboards
 
@@ -106,11 +109,8 @@ This creates:
     Production deployments should use operator-managed telemetry (Option 1).
 
 ```bash
-# Deploy base telemetry + conditional ServiceMonitors
+# Deploy base telemetry + conditional ServiceMonitors (does not apply Perses dashboards)
 ./scripts/observability/install-observability.sh [--namespace NAMESPACE]
-
-# Deploy Grafana dashboards
-./scripts/observability/install-grafana-dashboards.sh
 ```
 
 **Manual deployment:**
@@ -122,8 +122,8 @@ kustomize build deployment/base/observability | kubectl apply -f -
 # Conditional ServiceMonitors (auto-detects Kuadrant monitors)
 ./scripts/observability/install-observability.sh
 
-# Grafana dashboards (discovers Grafana instance)
-./scripts/observability/install-grafana-dashboards.sh
+# Perses metrics Usage dashboard (optional; labeled app.kubernetes.io/managed-by: maas-observability)
+kustomize build deployment/components/observability/observability/dashboards | kubectl apply -f -
 ```
 
 **Kustomize entrypoints:**
@@ -131,8 +131,9 @@ kustomize build deployment/base/observability | kubectl apply -f -
 | Path | Contents |
 |------|----------|
 | `deployment/base/observability/` | TelemetryPolicy, Istio Telemetry, metadata-evaluator PrometheusRule |
-| `deployment/components/observability/grafana/` | GrafanaDashboard CRs |
 | `deployment/components/observability/prometheus/` | Standalone Prometheus (dev/test) |
+| `deployment/components/observability/observability/dashboards/` | Perses usage dashboard (metrics) |
+| `deployment/components/observability/usage-logs/` | Perses usage-log dashboards |
 
 **Operator vs Kustomize drift:**
 
@@ -142,4 +143,4 @@ kustomize build deployment/base/observability | kubectl apply -f -
 | Istio Telemetry | `base/observability/` | Yes (Tenant reconciler) |
 | Limitador ServiceMonitor | Conditional | Kuadrant PodMonitor when `observability.enable: true` |
 | Authorino /server-metrics | `authorino-server-metrics-servicemonitor.yaml` | No (Kuadrant only scrapes `/metrics`) |
-| Grafana Dashboards | `components/observability/grafana/` | No (same CRs used) |
+| Perses usage dashboards | `deployment/components/observability/observability/dashboards/` (`managed-by: maas-observability`) | Yes (`ensureUsageDashboard`; `Config` controller owner). Not applied by `install-observability.sh`. |

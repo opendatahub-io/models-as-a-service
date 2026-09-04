@@ -1,17 +1,18 @@
 #!/bin/bash
 
 # MaaS Observability Stack Installation Script
-# Configures metrics collection (ServiceMonitors, TelemetryPolicy). For dashboards, use install-grafana-dashboards.sh.
+# Configures metrics collection (ServiceMonitors, TelemetryPolicy).
 #
 # This script is idempotent - safe to run multiple times
 #
 # Usage: ./install-observability.sh [--namespace NAMESPACE]
-# For Grafana dashboards, run the helper: ./scripts/observability/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]
+# Does not apply PersesDashboard manifests. Operator: LifecycleReconciler.ensureUsageDashboard.
+# Kustomize: deployment/components/observability/observability/dashboards/. See docs/content/observability/setup.md.
 
 set -euo pipefail
 
 # Preflight checks
-for cmd in kubectl kustomize jq yq; do
+for cmd in kubectl kustomize yq; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "❌ Required command '$cmd' not found. Please install it first."
         exit 1
@@ -25,16 +26,12 @@ NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
 show_help() {
     echo "Usage: $0 [--namespace NAMESPACE]"
     echo ""
-    echo "Installs monitoring components only (no dashboards):"
-    echo "  - Enables user-workload-monitoring"
+    echo "Installs monitoring components:"
     echo "  - Deploys TelemetryPolicy and ServiceMonitors"
-    echo "  - Configures Istio Gateway and LLM model metrics"
+    echo "  - Configures Istio Gateway metrics"
     echo ""
     echo "Options:"
     echo "  -n, --namespace   Target namespace for observability (default: opendatahub)"
-    echo ""
-    echo "To install MaaS Grafana dashboards (separate step), run:"
-    echo "  $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
     echo ""
     echo "Examples:"
     echo "  $0                    # Install monitoring only"
@@ -107,58 +104,7 @@ echo ""
 echo "Target namespace: $NAMESPACE"
 echo ""
 
-# ==========================================
-# Step 1: Enable user-workload-monitoring
-# ==========================================
-echo "1️⃣ Enabling user-workload-monitoring..."
-
-if kubectl get configmap cluster-monitoring-config -n openshift-monitoring &>/dev/null; then
-    CURRENT_CONFIG=$(kubectl get configmap cluster-monitoring-config -n openshift-monitoring -o jsonpath='{.data.config\.yaml}' 2>/dev/null || echo "")
-    CURRENT_VALUE=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload // false' 2>/dev/null || echo "false")
-    if [ "$CURRENT_VALUE" = "true" ]; then
-        echo "   ✅ user-workload-monitoring already enabled"
-    else
-        echo "   Patching cluster-monitoring-config to enable user-workload-monitoring..."
-        NEW_CONFIG=$(echo "$CURRENT_CONFIG" | yq '.enableUserWorkload = true')
-        kubectl patch configmap cluster-monitoring-config -n openshift-monitoring \
-            --type merge -p "{\"data\":{\"config.yaml\":$(echo "$NEW_CONFIG" | jq -Rs .)}}"
-        echo "   ✅ user-workload-monitoring enabled (existing config preserved)"
-    fi
-else
-    echo "   Creating cluster-monitoring-config..."
-    kubectl apply -f "$PROJECT_ROOT/docs/samples/observability/cluster-monitoring-config.yaml"
-    echo "   ✅ user-workload-monitoring enabled"
-fi
-
-# Wait for user-workload-monitoring pods
-echo "   Waiting for user-workload-monitoring pods..."
-sleep 5
-kubectl wait --for=condition=Ready pods -l app.kubernetes.io/name=prometheus \
-    -n openshift-user-workload-monitoring --timeout=120s 2>/dev/null || \
-    echo "   ⚠️  Pods still starting, continuing..."
-
-# ==========================================
-# Step 2: Ensure namespaces do NOT have cluster-monitoring label
-# ==========================================
-echo ""
-echo "2️⃣ Configuring namespaces for user-workload-monitoring..."
-
-# IMPORTANT: Do NOT add openshift.io/cluster-monitoring=true label!
-# That label is for cluster-monitoring (infrastructure) and BLOCKS user-workload-monitoring.
-# User-workload-monitoring (which we need) scrapes namespaces that DON'T have this label.
-for ns in kuadrant-system "$NAMESPACE" llm; do
-    if kubectl get namespace "$ns" &>/dev/null; then
-        # Remove the cluster-monitoring label if present (it blocks user-workload-monitoring)
-        kubectl label namespace "$ns" openshift.io/cluster-monitoring- 2>/dev/null || true
-        echo "   ✅ Configured namespace: $ns (user-workload-monitoring enabled)"
-    fi
-done
-
-# ==========================================
-# Step 3: Deploy TelemetryPolicy and Base ServiceMonitors
-# ==========================================
-echo ""
-echo "3️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
+echo "1️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
 
 # Deploy base observability resources (TelemetryPolicy + Istio Telemetry)
 # TelemetryPolicy is CRITICAL - it extracts user/subscription/model labels for Limitador metrics
@@ -194,6 +140,9 @@ else
     echo "   ⚠️  Base observability directory not found - TelemetryPolicy may be missing!"
 fi
 
+echo ""
+echo "2️⃣ Deploying Istio Gateway metrics..."
+
 # Deploy Istio Gateway metrics (if gateway exists)
 if kubectl get deploy -n openshift-ingress maas-default-gateway-openshift-default &>/dev/null; then
     kubectl apply -f "$BASE_OBSERVABILITY_DIR/istio-gateway-service.yaml"
@@ -203,22 +152,16 @@ else
     echo "   ⚠️  Istio Gateway not found - skipping Istio metrics"
 fi
 
-# Deploy LLM models ServiceMonitor (for vLLM metrics)
-# NOTE: This ServiceMonitor is in docs/samples/ as it's optional/user-configurable
-if kubectl get ns llm &>/dev/null; then
-    kubectl apply -f "$PROJECT_ROOT/docs/samples/observability/kserve-llm-models-servicemonitor.yaml"
-    echo "   ✅ LLM models metrics configured"
-else
-    echo "   ⚠️  llm namespace not found - skipping LLM metrics"
-fi
+echo ""
+echo "3️⃣ Deploying Authorino PrometheusRules..."
 
-# Deploy metadata evaluator PrometheusRule (alerts on maas-api metadata failures)
 # Detect Authorino namespace: rh-connectivity-link (RHOAI) or kuadrant-system (ODH)
 AUTHORINO_NAMESPACE="kuadrant-system"
 if kubectl get ns rh-connectivity-link &>/dev/null && kubectl get deploy -n rh-connectivity-link authorino &>/dev/null 2>&1; then
     AUTHORINO_NAMESPACE="rh-connectivity-link"
 fi
 
+# Deploy metadata evaluator PrometheusRule (alerts on maas-api metadata failures)
 METADATA_RULE_FILE="$BASE_OBSERVABILITY_DIR/authorino-maas-metadata-evaluator-prometheusrule.yaml"
 if ! kubectl get deploy -n "$AUTHORINO_NAMESPACE" authorino &>/dev/null 2>&1; then
     echo "   ⚠️  Authorino deployment not found in $AUTHORINO_NAMESPACE - skipping metadata evaluator PrometheusRule"
@@ -253,7 +196,6 @@ echo "📝 Metrics collection configured:"
 echo "   Limitador: authorized_hits, authorized_calls, limited_calls, limitador_up"
 echo "   Authorino: auth_server_authconfig_duration_seconds, auth_server_authconfig_response_status, auth_server_evaluator_* (metadata HTTP)"
 echo "   Istio:     istio_requests_total, istio_request_duration_milliseconds"
-echo "   vLLM:      vllm:num_requests_running, vllm:num_requests_waiting, vllm:kv_cache_usage_perc"
 echo ""
 
 echo "🚨 Alerting configured (if Authorino found):"
@@ -262,6 +204,8 @@ echo "   MaaSAuthorinoAuthenticationHighFailureRate - gateway authentication fai
 echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 latency above configured threshold"
 echo ""
 
-echo "💡 To install MaaS Grafana dashboards (discovers Grafana cluster-wide, warn-only):"
-echo "   $(dirname "$0")/install-grafana-dashboards.sh [--grafana-namespace NS] [--grafana-label KEY=VALUE]"
+echo "💡 This script does not apply Perses dashboards."
+echo "   Operator-managed: LifecycleReconciler.ensureUsageDashboard (requires maas-controller + Config)."
+echo "   Kustomize: deployment/components/observability/observability/dashboards/"
+echo "   See docs/content/observability/setup.md and docs/content/observability/operations.md"
 echo ""

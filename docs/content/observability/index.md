@@ -5,7 +5,7 @@ The MaaS Platform provides metrics collection, monitoring, and visualization for
 ## Getting Started
 
 1. **[Setup](setup.md)** - Prerequisites and installation
-2. **[Metrics & Dashboards](metrics-and-dashboards.md)** - Available metrics and Grafana visualization
+2. **[Metrics & Dashboards](metrics-and-dashboards.md)** - Available metrics and Perses visualization
 3. **[Operations](operations.md)** - High availability, maintenance, and known limitations
 
 ## Component Metrics

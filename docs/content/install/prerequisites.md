@@ -50,7 +50,7 @@ component enabled (KServe) and properly configured for deploying models with
 
 A specific requirement for MaaS v0.1.0+ is to set up RHOAI Model Serving with Red Hat Connectivity Link (RHCL) v1.3 or later.
 
-## Optional: Observability Prerequisites
+## Observability Prerequisites (Recommended)
 
 If you plan to use MaaS dashboards, showback, or usage metrics, the ODH monitoring stack needs to be enabled in the [Platform Operator](../install/platform-setup.md#install-platform-operator).
 

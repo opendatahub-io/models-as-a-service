@@ -263,7 +263,7 @@ Token usage and rate-limit data flow from Limitador into Prometheus and onward t
 1. Limitador stores token usage counters (e.g., `authorized_hits`, `authorized_calls`, `limited_calls`) with labels (`user`, `model`).
 2. A ServiceMonitor (or Kuadrant PodMonitor) configures Prometheus to scrape Limitador's `/metrics` endpoint.
 3. Prometheus stores the metrics in its time-series database.
-4. Grafana (or other visualization tools) queries Prometheus to build dashboards for usage, billing, and operational health.
+4. Perses (ODH/RHOAI observability console) queries Prometheus to build usage dashboards.
 
 ```mermaid
 graph LR
@@ -280,16 +280,16 @@ graph LR
     end
     
     subgraph Visualization["Visualization"]
-        Grafana[Grafana<br/>Dashboards]
+        Perses[Perses<br/>ODH dashboards]
     end
     
     Limitador -->|"/metrics"| SM
     SM -->|"Scrape"| Prometheus
-    Prometheus -->|"Query"| Grafana
+    Prometheus -->|"Query"| Perses
     
     style Limitador fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style Prometheus fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style Grafana fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
+    style Perses fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff
 ```
 
 ## 🔄 Component Flows

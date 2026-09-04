@@ -101,7 +101,7 @@ High cardinality in `authorized_hits`, `authorized_calls`, and `limited_calls` m
 
 - **Prometheus memory and storage** — each unique label combination creates a new time series.
 - **Query performance** — queries like `sum by (user) (rate(authorized_hits[5m]))` become slow when thousands of user values exist.
-- **Dashboard responsiveness** — Grafana panels using high-cardinality metrics may time out.
+- **Dashboard responsiveness** — Perses panels using high-cardinality metrics may time out.
 
 Gateway latency metrics (`istio_request_duration_milliseconds_bucket`) are labeled by **subscription only** (not by user) specifically to keep cardinality bounded. See [Metrics & Dashboards](../observability/metrics-and-dashboards.md#per-subscription-latency-tracking).
 
