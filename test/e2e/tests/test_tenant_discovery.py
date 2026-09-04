@@ -21,7 +21,7 @@ import uuid
 import pytest
 import requests
 from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE
+from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE, _write_ca_to_pod, get_curl_ca_bundle
 
 log = logging.getLogger(__name__)
 
@@ -44,7 +44,7 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
     """
     namespace = namespace or _curl_pod_namespace()
     pod_name = f"test-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    ca_cert = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
 
     try:
         # 1. Create an ephemeral pod (no credentials in spec)
@@ -64,6 +64,10 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
         ]
         subprocess.run(wait_cmd, capture_output=True, text=True, timeout=45, check=True)
 
+        # 2.5. Write custom CA bundle into the pod if configured
+        if ca_bundle_content:
+            _write_ca_to_pod(pod_name, namespace, ca_bundle_content)
+
         # 3. Build a shell script that reads credentials from stdin
         script_lines = []
         stdin_lines = []
@@ -73,7 +77,7 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
                 script_lines.append(f"IFS= read -r HDR{i}")
                 stdin_lines.append(f"{key}: {value}")
 
-        curl_parts = ["curl", "-s", "--cacert", ca_cert, "-m", "10"]
+        curl_parts = ["curl", "-s", "--cacert", ca_cert_path, "-m", "10"]
         if headers:
             for i in range(len(headers)):
                 curl_parts.append(f'-H "$HDR{i}"')

@@ -21,6 +21,8 @@ Environment variables (all optional unless noted):
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Baseline for poll timeouts in seconds (default: 8)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
+  - E2E_CURL_CA_CONFIGMAP: ConfigMap containing CA bundle for curl pod TLS (default: "" = SA ca.crt)
+  - E2E_CURL_CA_CONFIGMAP_KEY: Key within the CA ConfigMap (default: service-ca.crt)
   - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
   - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
   - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
@@ -120,6 +122,8 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 # matching the real traffic path for internal endpoints like /v1/tenants.
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
 E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ubi9/ubi-minimal:9.5")
+E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
+E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
@@ -165,6 +169,50 @@ def _gateway_url():
         raise RuntimeError("GATEWAY_HOST env var is required")
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
+
+
+_SA_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+_CUSTOM_CA_PATH = "/tmp/ca-bundle.crt"
+
+
+def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
+    """Determine the CA cert path and optional content for curl TLS verification.
+
+    When E2E_CURL_CA_CONFIGMAP is set, fetches the CA bundle from that ConfigMap
+    and returns (pod_path, cert_content) so the caller can write the content into
+    the ephemeral curl pod before running curl.
+
+    Otherwise falls back to the service-account CA already mounted in the pod.
+
+    Returns:
+        (ca_cert_path_inside_pod, ca_bundle_content_or_None)
+    """
+    if not E2E_CURL_CA_CONFIGMAP:
+        return _SA_CA_PATH, None
+
+    tpl = '{{index .data "' + E2E_CURL_CA_CONFIGMAP_KEY + '"}}'
+    result = subprocess.run(
+        ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
+         "-n", namespace, "-o", f"go-template={tpl}"],
+        capture_output=True, text=True, timeout=15,
+    )
+    if result.returncode == 0 and result.stdout.strip():
+        return _CUSTOM_CA_PATH, result.stdout
+
+    log.warning(
+        "E2E_CURL_CA_CONFIGMAP=%s not found in namespace %s, falling back to SA CA",
+        E2E_CURL_CA_CONFIGMAP, namespace,
+    )
+    return _SA_CA_PATH, None
+
+
+def _write_ca_to_pod(pod_name: str, namespace: str, ca_content: str) -> None:
+    """Write CA bundle content into an ephemeral curl pod at _CUSTOM_CA_PATH."""
+    subprocess.run(
+        ["kubectl", "exec", "-i", pod_name, "-n", namespace,
+         "--", "sh", "-c", f"cat > {_CUSTOM_CA_PATH}"],
+        input=ca_content, capture_output=True, text=True, timeout=15, check=True,
+    )
 
 
 def _maas_api_url():

@@ -32,6 +32,8 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
+    _write_ca_to_pod,
+    get_curl_ca_bundle,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -1362,7 +1364,7 @@ def _kubectl_curl_post(
     """
     pod_name = f"mt-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
     namespace = os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-    ca_cert = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+    ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
 
     try:
         # 1. Create an ephemeral pod (no credentials in spec)
@@ -1382,6 +1384,10 @@ def _kubectl_curl_post(
         ]
         subprocess.run(wait_cmd, capture_output=True, text=True, timeout=45, check=True)
 
+        # 2.5. Write custom CA bundle into the pod if configured
+        if ca_bundle_content:
+            _write_ca_to_pod(pod_name, namespace, ca_bundle_content)
+
         # 3. Build a shell script that reads credentials from stdin
         script_lines = []
         stdin_lines = []
@@ -1395,12 +1401,14 @@ def _kubectl_curl_post(
         if json_body is not None:
             script_lines.append("BODY=$(cat)")
 
-        curl_parts = ["curl", "-s", "--cacert", ca_cert, "-m", "10", "-X", "POST"]
+        curl_parts = ["curl", "-s", "--cacert", ca_cert_path, "-m", "10", "-X", "POST"]
         if headers:
             for i in range(len(headers)):
                 curl_parts.append(f'-H "$HDR{i}"')
         if json_body is not None:
-            curl_parts.append('-H "Content-Type: application/json"')
+            has_ct = any(k.lower() == "content-type" for k in (headers or {}))
+            if not has_ct:
+                curl_parts.append('-H "Content-Type: application/json"')
             curl_parts.append('-d "$BODY"')
         curl_parts.append('-w "\\nHTTP_CODE:%{http_code}"')
         curl_parts.append(shlex.quote(url))
