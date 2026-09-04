@@ -14,15 +14,22 @@
 # - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
 # - MaaS validating webhook configuration
 # - Keycloak identity provider (if deployed)
-# - ODH CRDs (optional)
+# - KServe/MaaS/ODH CRDs (on by default; use --skip-crds to preserve them)
 #
-# Usage: ./cleanup-odh.sh [--include-crds]
+# Usage: ./cleanup-odh.sh [--skip-crds]
+#
+#   --skip-crds   Keep all CRDs (KServe, MaaS, ODH). By default CRDs are
+#                 deleted to prevent storedVersions schema conflicts on reinstall.
 #
 
 set -euo pipefail
 
-INCLUDE_CRDS=false
+INCLUDE_CRDS=true
 
+if [[ "${1:-}" == "--skip-crds" ]]; then
+    INCLUDE_CRDS=false
+fi
+# Legacy flag kept for backwards compatibility
 if [[ "${1:-}" == "--include-crds" ]]; then
     INCLUDE_CRDS=true
 fi
@@ -98,13 +105,14 @@ cleanup_maas_resources() {
     kubectl delete deployment maas-api maas-controller postgres -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete service maas-api postgres -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete secret maas-db-config postgres-creds -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete configmap maas-parameters -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete authpolicy maas-api-auth-policy -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete httproute maas-api-route -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete destinationrule maas-api-backend-tls -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete networkpolicy maas-api-cleanup-restrict maas-authorino-allow -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete cronjob maas-api-key-cleanup -n "$ns" --ignore-not-found 2>/dev/null || true
-    kubectl delete role maas-api-db-secret maas-controller-leader-election-role -n "$ns" --ignore-not-found 2>/dev/null || true
-    kubectl delete rolebinding maas-api-db-secret maas-controller-leader-election-rolebinding -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete role maas-api-db-secret maas-controller-leader-election-role maas-controller-secret-migrate -n "$ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete rolebinding maas-api-db-secret maas-controller-leader-election-rolebinding maas-controller-secret-migrate -n "$ns" --ignore-not-found 2>/dev/null || true
     kubectl delete serviceaccount maas-api maas-controller -n "$ns" --ignore-not-found 2>/dev/null || true
     echo "   ✅ MaaS resources cleaned from $ns"
 }
@@ -119,9 +127,18 @@ echo "8a-infra. Cleaning MaaS resources from infrastructure namespaces (if prese
 cleanup_maas_resources "redhat-ai-gateway-infra"  # derived from redhat-ods-applications
 cleanup_maas_resources "odh-ai-gateway-infra"     # derived from opendatahub
 
-# 8b. Delete opendatahub namespace
-echo "8b. Deleting opendatahub namespace..."
+# 8b. Delete opendatahub and infrastructure namespaces
+echo "8b. Deleting opendatahub and related namespaces..."
 kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
+for infra_ns in odh-ai-gateway-infra redhat-ai-gateway-infra opendatahub-monitoring; do
+    if kubectl get namespace "$infra_ns" &>/dev/null; then
+        echo "   Deleting $infra_ns namespace..."
+        # Clean OLM resources that may block namespace deletion
+        kubectl delete subscription --all -n "$infra_ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+        kubectl delete csv --all -n "$infra_ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+        kubectl delete ns "$infra_ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+    fi
+done
 
 force_delete_namespace() {
     local ns=$1
@@ -163,8 +180,30 @@ patch_clear_cluster_anchor_finalizers() {
     fi
 }
 
-# 8c. Delete cluster-scoped MaaS anchor CRs (Config; legacy ClusterTenant before rename)
-echo "8c. Deleting MaaS cluster-scoped anchor CRs..."
+# 8c. Delete MaasTenantConfig CRs (all namespaces — controller creates these and they have finalizers)
+echo "8c. Deleting MaasTenantConfig CRs..."
+for name in $(kubectl get maastenantconfigs.maas.opendatahub.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+    ns="${name%%/*}"
+    cr="${name##*/}"
+    kubectl patch maastenantconfigs.maas.opendatahub.io "$cr" -n "$ns" --type=json \
+        -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    kubectl delete maastenantconfigs.maas.opendatahub.io "$cr" -n "$ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+done
+
+# 8d. Delete AITenant CRs and ai-tenants namespace (controller bootstrap creates these)
+echo "8d. Deleting AITenant CRs..."
+for name in $(kubectl get aitenants.maas.opendatahub.io -A -o jsonpath='{range .items[*]}{.metadata.namespace}/{.metadata.name}{"\n"}{end}' 2>/dev/null); do
+    ns="${name%%/*}"
+    cr="${name##*/}"
+    kubectl patch aitenants.maas.opendatahub.io "$cr" -n "$ns" --type=json \
+        -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
+    kubectl delete aitenants.maas.opendatahub.io "$cr" -n "$ns" --ignore-not-found --timeout=30s 2>/dev/null || true
+done
+echo "   Deleting ai-tenants namespace..."
+force_delete_namespace "ai-tenants" "aitenants.maas.opendatahub.io"
+
+# 8e. Delete cluster-scoped MaaS anchor CRs (Config; legacy ClusterTenant before rename)
+echo "8e. Deleting MaaS cluster-scoped anchor CRs..."
 patch_clear_cluster_anchor_finalizers configs.maas.opendatahub.io default
 patch_clear_cluster_anchor_finalizers config default
 patch_clear_cluster_anchor_finalizers clustertenants.maas.opendatahub.io default
@@ -178,7 +217,8 @@ kubectl delete clustertenant default --ignore-not-found --timeout=120s 2>/dev/nu
 echo "9. Deleting models-as-a-service namespace..."
 force_delete_namespace "models-as-a-service" \
     "tenants.maas.opendatahub.io" \
-    "maasauthpolicies.maas.opendatahub.io" "maassubscriptions.maas.opendatahub.io"
+    "maasauthpolicies.maas.opendatahub.io" "maassubscriptions.maas.opendatahub.io" \
+    "maastenantconfigs.maas.opendatahub.io"
 
 # 10. Delete policy engine workload CRs (before operator cleanup)
 # This allows operators to cleanly delete Deployments/ReplicaSets before we delete the operators themselves
@@ -240,6 +280,11 @@ fi
 echo "11b. Deleting AuthConfig CRs..."
 kubectl delete authconfig --all --all-namespaces --ignore-not-found 2>/dev/null || true
 
+# 11c. Delete Authorino OIDC CA ConfigMap (created by prow when external OIDC is enabled)
+for policy_ns in kuadrant-system rh-connectivity-link; do
+    kubectl delete configmap authorino-oidc-ca -n "$policy_ns" --ignore-not-found 2>/dev/null || true
+done
+
 # 12. Delete policy engine namespaces (Kuadrant or RHCL)
 for policy_ns in kuadrant-system rh-connectivity-link; do
     echo "12. Deleting $policy_ns namespace (if installed)..."
@@ -270,34 +315,54 @@ fi
 echo "14. Deleting LLM models and namespace..."
 force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodelrefs.maas.opendatahub.io"
 
+# 14b. Delete E2E test namespaces and resources (created by prow_run_smoke_test.sh)
+echo "14b. Deleting E2E test namespaces and resources..."
+kubectl delete namespace premium-users-namespace --ignore-not-found --timeout=60s 2>/dev/null || true
+kubectl delete namespace maas-admin --ignore-not-found --timeout=60s 2>/dev/null || true
+
 # 15. Delete gateway resources in openshift-ingress
 echo "15. Deleting gateway resources..."
 kubectl delete gateway maas-default-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete gateway data-science-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter -n openshift-ingress -l kuadrant.io/managed=true --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete envoyfilter payload-processing -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
-kubectl delete gatewayclass openshift-default --ignore-not-found 2>/dev/null || true
+kubectl delete telemetrypolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
+kubectl delete telemetry -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
+kubectl delete destinationrule -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
+kubectl delete deployment payload-processing payload-pre-processing -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete service payload-processing payload-pre-processing -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete serviceaccount payload-processing -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete configmap payload-processing-plugins -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete networkpolicy payload-processing -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete gatewayclass openshift-default data-science-gateway-class --ignore-not-found 2>/dev/null || true
 
 # 16. Delete MaaS cluster-scoped resources (webhook configuration, ClusterRoles, ClusterRoleBindings)
 echo "16. Deleting MaaS cluster-scoped resources..."
 kubectl delete validatingwebhookconfiguration maas-validating-webhook-configuration --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
+kubectl delete clusterrolebinding payload-processing-reader --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 # Extra operator-safe binding for Config API (and legacy ClusterTenant binding/role if present)
 kubectl delete clusterrolebinding maas-controller-cluster-config-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-controller-cluster-config-role --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrolebinding maas-controller-cluster-tenant-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-controller-cluster-tenant-role --ignore-not-found 2>/dev/null || true
+# E2E test RBAC (created by prow_run_smoke_test.sh)
+kubectl delete clusterrole maas-admin --ignore-not-found 2>/dev/null || true
+kubectl delete group odh-admins --ignore-not-found 2>/dev/null || true
 
 # 17. Delete CRDs
 # Always delete KServe/MaaS CRDs to prevent storedVersions schema conflicts on reinstall.
 # This removes all maas.opendatahub.io CRDs (configs, tenants, subscriptions, legacy clustertenants, …).
 # ODH-internal CRDs are only deleted with --include-crds.
 echo "17. Deleting KServe/MaaS CRDs (always removed to prevent version conflicts)..."
-for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io'); do
+for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'serving\.kserve\.io|maas\.opendatahub\.io|inference\.opendatahub\.io'); do
     echo "   Deleting $crd"
+    kubectl patch "$crd" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
     kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
 done
 
@@ -305,6 +370,7 @@ if $INCLUDE_CRDS; then
     echo "17b. Deleting all ODH CRDs..."
     for crd in $(kubectl get crd -o name 2>/dev/null | grep -E 'opendatahub\.io|trustyai\.opendatahub'); do
         echo "   Deleting $crd"
+        kubectl patch "$crd" --type=json -p='[{"op": "remove", "path": "/metadata/finalizers"}]' 2>/dev/null || true
         kubectl delete "$crd" --ignore-not-found --timeout=30s 2>/dev/null || true
     done
 else
@@ -317,5 +383,5 @@ echo ""
 echo "Verify cleanup with:"
 echo "  kubectl get subscription -A | grep -i odh"
 echo "  kubectl get csv -A | grep -i odh"
-echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm'
-  kubectl get deployment maas-api maas-controller postgres -n redhat-ods-applications 2>/dev/null || echo '  (no MaaS resources in redhat-ods-applications)'"
+echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm|ai-tenants|premium-users|maas-admin'"
+echo "  kubectl get deployment maas-api maas-controller postgres -n redhat-ods-applications 2>/dev/null || echo '  (no MaaS resources in redhat-ods-applications)'"
