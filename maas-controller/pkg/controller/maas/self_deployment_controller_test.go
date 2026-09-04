@@ -7,6 +7,7 @@ import (
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -1435,6 +1436,24 @@ func TestSyncModuleStatus(t *testing.T) {
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		g.Expect(len(cond.Message)).To(BeNumerically("<=", conditionMessageMaxLen),
 			"condition message must not exceed Kubernetes 32768-char limit")
+	})
+
+	t.Run("truncated message is valid UTF-8 when multibyte rune crosses limit", func(t *testing.T) {
+		g := NewWithT(t)
+		// Build a message whose truncation boundary (conditionMessageMaxLen - len("…"))
+		// falls in the middle of a 3-byte UTF-8 rune (e.g. '€' = 0xE2 0x82 0xAC).
+		// Fill up to just before the boundary with ASCII, then append multibyte runes
+		// so that the leading byte of one rune lands exactly at the cut point.
+		const suffix = "…" // 3 bytes
+		limit := conditionMessageMaxLen - len(suffix)
+		// Place a 3-byte rune (€) straddling position limit-1 / limit / limit+1.
+		base := strings.Repeat("a", limit-1) // limit-1 ASCII bytes
+		msg := base + "€" + strings.Repeat("b", 100)
+		result := truncateConditionMessage(msg)
+		g.Expect(len(result)).To(BeNumerically("<=", conditionMessageMaxLen),
+			"truncated message must not exceed 32768 chars")
+		g.Expect(utf8.ValidString(result)).To(BeTrue(),
+			"truncated message must be valid UTF-8 (no incomplete multibyte leading byte)")
 	})
 
 	t.Run("Ready=False when AITenant not yet created", func(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
@@ -902,8 +903,10 @@ func truncateConditionMessage(msg string) string {
 	const suffix = "…"
 	limit := conditionMessageMaxLen - len(suffix)
 	truncated := msg[:limit]
-	// Walk back to the last valid UTF-8 rune boundary so we don't store a broken sequence.
-	for len(truncated) > 0 && truncated[len(truncated)-1]&0xC0 == 0x80 {
+	// Walk back until the prefix is valid UTF-8. This handles both continuation
+	// bytes and incomplete leading bytes (e.g. 0xE2 without its two following
+	// bytes) that may appear at the truncation boundary.
+	for len(truncated) > 0 && !utf8.ValidString(truncated) {
 		truncated = truncated[:len(truncated)-1]
 	}
 	return truncated + suffix
