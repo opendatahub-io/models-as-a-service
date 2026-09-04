@@ -21,7 +21,7 @@ Environment variables (all optional unless noted):
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
   - E2E_RECONCILE_WAIT: Baseline for poll timeouts in seconds (default: 8)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
-  - E2E_CURL_CA_CONFIGMAP: ConfigMap containing CA bundle for curl pod TLS (default: "" = SA ca.crt)
+  - E2E_CURL_CA_CONFIGMAP: ConfigMap containing CA bundle for curl pod TLS (default: "" = OpenShift service CA, then SA ca.crt fallback)
   - E2E_CURL_CA_CONFIGMAP_KEY: Key within the CA ConfigMap (default: service-ca.crt)
   - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
   - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
