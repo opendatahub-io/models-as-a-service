@@ -91,6 +91,7 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_namespace_scoping.py"
     "$TEST_DIR/tests/test_negative_security.py"
     "$TEST_DIR/tests/test_subscription.py"
+    "$TEST_DIR/tests/test_model_identity_conflict.py"
     "$TEST_DIR/tests/test_subscription_list_endpoints.py"
     "$TEST_DIR/tests/test_models_endpoint.py"
     "$TEST_DIR/tests/test_external_models.py"
@@ -109,6 +110,7 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_tenant_subscription_isolation.py"
     "$TEST_DIR/tests/test_tenant_rate_limit_isolation.py"
     "$TEST_DIR/tests/test_per_tenant_ipp_isolation.py"
+    "$TEST_DIR/tests/test_tenant_auto_resolve.py"
     "$TEST_DIR/tests/test_external_oidc.py"
     "$TEST_DIR/tests/test_embedding_inference.py"
 )
