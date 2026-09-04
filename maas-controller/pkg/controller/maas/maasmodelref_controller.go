@@ -201,6 +201,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 			return ctrl.Result{}, nil
 		}
+		// Backing kind's CRD not installed on this cluster: don't hot-loop.
+		if apimeta.IsNoMatchError(err) {
+			model.Status.Endpoint = ""
+			model.Status.Phase = "Failed"
+			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("backing kind not installed: %s", kind), "Unsupported", statusSnapshot)
+			return ctrl.Result{}, nil
+		}
 		log.Error(err, "failed to update model status")
 		model.Status.Endpoint = ""
 		model.Status.Phase = "Failed"

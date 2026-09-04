@@ -78,6 +78,11 @@ const (
 	// metricsCertDir is where OpenShift service-ca mounts the metrics serving cert.
 	// Must match the Deployment volumeMount added for SecureServing.
 	metricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
+
+	// defaultEnforcementLimitadorName is the shared Limitador CR native enforcement
+	// merges token limits into. Other native-enforcement flags default to empty; the
+	// deployment supplies environment-specific values.
+	defaultEnforcementLimitadorName = "limitador"
 )
 
 var (
@@ -960,6 +965,98 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 	return nil
 }
 
+// gatewayEnforcementOptions carries the native-enforcement wiring from flags.
+type gatewayEnforcementOptions struct {
+	infraNamespace      string
+	clusterAudience     string
+	metadataCacheTTL    int64
+	authzCacheTTL       int64
+	authConfigNamespace string
+	limitadorNamespace  string
+	limitadorName       string
+	authUpstream        string
+	ratelimitUpstream   string
+	authCACert          string
+	authSNI             string
+	maasAPIURL          string
+}
+
+// subscriptionReconcilerOptions carries the config for the Kuadrant-policy reconcilers.
+type subscriptionReconcilerOptions struct {
+	infraNamespace, subscriptionNamespace string
+	gatewayName, gatewayNamespace         string
+	clusterAudience                       string
+	metadataCacheTTL, authzCacheTTL       int64
+	tenantNamespaceDiscovery              bool
+	maxConcurrentReconciles               int
+}
+
+// setupSubscriptionReconcilers registers the MaaSAuthPolicy and MaaSSubscription
+// reconcilers, which compile subscriptions into Kuadrant policies. Native
+// enforcement replaces that path and owns the subscription status, so skip them
+// when it is on. Logs and exits on failure, matching the other setups.
+func setupSubscriptionReconcilers(mgr ctrl.Manager, nativeEnforcement bool, o subscriptionReconcilerOptions) {
+	if nativeEnforcement {
+		return
+	}
+	if err := (&maas.MaaSAuthPolicyReconciler{
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		InfraNamespace:                  o.infraNamespace,
+		TenantNamespace:                 o.subscriptionNamespace,
+		GatewayName:                     o.gatewayName,
+		GatewayNamespace:                o.gatewayNamespace,
+		ClusterAudience:                 o.clusterAudience,
+		MetadataCacheTTL:                o.metadataCacheTTL,
+		AuthzCacheTTL:                   o.authzCacheTTL,
+		TenantNamespaceDiscoveryEnabled: o.tenantNamespaceDiscovery,
+		MaxConcurrentReconciles:         o.maxConcurrentReconciles,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
+		os.Exit(1)
+	}
+	if err := (&maas.MaaSSubscriptionReconciler{
+		Client:                          mgr.GetClient(),
+		Scheme:                          mgr.GetScheme(),
+		DefaultTenantNamespace:          o.subscriptionNamespace,
+		TenantNamespaceDiscoveryEnabled: o.tenantNamespaceDiscovery,
+		GatewayName:                     o.gatewayName,
+		GatewayNamespace:                o.gatewayNamespace,
+		MaxConcurrentReconciles:         o.maxConcurrentReconciles,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
+		os.Exit(1)
+	}
+}
+
+// setupNativeEnforcement registers the GatewayEnforcement reconciler when enabled.
+// It logs and exits on failure, matching the other controller setups in main.
+func setupNativeEnforcement(mgr ctrl.Manager, enabled bool, o gatewayEnforcementOptions) {
+	if !enabled {
+		return
+	}
+	if err := (&maas.GatewayEnforcementReconciler{
+		Client:              mgr.GetClient(),
+		Scheme:              mgr.GetScheme(),
+		InfraNamespace:      o.infraNamespace,
+		ClusterAudience:     o.clusterAudience,
+		MetadataCacheTTL:    o.metadataCacheTTL,
+		AuthzCacheTTL:       o.authzCacheTTL,
+		AuthConfigNamespace: o.authConfigNamespace,
+		LimitadorNamespace:  o.limitadorNamespace,
+		LimitadorName:       o.limitadorName,
+		AuthUpstream:        o.authUpstream,
+		RatelimitUpstream:   o.ratelimitUpstream,
+		AuthCACertPath:      o.authCACert,
+		AuthSNI:             o.authSNI,
+		MaaSAPIURL:          o.maasAPIURL,
+	}).SetupWithManager(mgr); err != nil {
+		setupLog.Error(err, "unable to create controller", "controller", "GatewayEnforcement")
+		os.Exit(1)
+	}
+	setupLog.Info("native enforcement enabled")
+}
+
 func main() {
 	var metricsAddr string
 	var secureMetrics bool
@@ -979,6 +1076,15 @@ func main() {
 	var observabilityManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
+	var enableNativeEnforcement bool
+	var authConfigNamespace string
+	var limitadorNamespace string
+	var limitadorName string
+	var authUpstream string
+	var ratelimitUpstream string
+	var authCACert string
+	var authSNI string
+	var maasAPIURL string
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
@@ -1006,6 +1112,24 @@ func main() {
 		"Maximum number of concurrent reconciles for subscription and auth policy controllers (1-10). Values above 5 may require increased CPU/memory on the controller pod.")
 	flag.BoolVar(&enableTenantNamespaceDiscovery, "enable-tenant-namespace-discovery", false,
 		"Discover AITenant-managed tenant namespaces labeled ai-gateway.opendatahub.io/tenant or maas.opendatahub.io/managed-by-aitenant=true and reconcile MaaS tenant CRs from them.")
+	flag.BoolVar(&enableNativeEnforcement, "enable-native-enforcement", false,
+		"Compile enforcement config directly (ext_proc ConfigMap, AuthConfig, Limitador limits) instead of Kuadrant policies.")
+	flag.StringVar(&authConfigNamespace, "authconfig-namespace", "",
+		"Namespace to apply the generated AuthConfig into. Empty disables the apply.")
+	flag.StringVar(&limitadorNamespace, "limitador-namespace", "",
+		"Namespace of the Limitador CR to merge token limits into. Empty disables the apply.")
+	flag.StringVar(&limitadorName, "limitador-name", defaultEnforcementLimitadorName,
+		"Name of the Limitador CR to merge token limits into.")
+	flag.StringVar(&authUpstream, "auth-upstream", "",
+		"gRPC endpoint ext_proc dials for Authorino auth.")
+	flag.StringVar(&ratelimitUpstream, "ratelimit-upstream", "",
+		"Endpoint ext_proc dials for Limitador rate limiting.")
+	flag.StringVar(&authCACert, "auth-ca-cert", "",
+		"Path to the CA trusting the Authorino TLS cert. Empty means plaintext.")
+	flag.StringVar(&authSNI, "auth-sni", "",
+		"Server name to verify the Authorino TLS certificate against.")
+	flag.StringVar(&maasAPIURL, "maas-api-url", "",
+		"Overrides scheme://host:port of the AuthConfig maas-api callouts. Empty keeps the default.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -1114,7 +1238,7 @@ func main() {
 		},
 	}
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
-	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
+	if enableTenantNamespaceDiscovery || enableNativeEnforcement || !defaultSubscriptionNamespaceExists {
 		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
 		cacheOpts = cache.Options{
 			ByObject: map[client.Object]cache.ByObject{
@@ -1181,34 +1305,18 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "MaaSModelRef")
 		os.Exit(1)
 	}
-	if err := (&maas.MaaSAuthPolicyReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		InfraNamespace:                  infraNamespace,
-		TenantNamespace:                 maasSubscriptionNamespace,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		ClusterAudience:                 clusterAudience,
-		MetadataCacheTTL:                metadataCacheTTL,
-		AuthzCacheTTL:                   authzCacheTTL,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		MaxConcurrentReconciles:         maxConcurrentReconciles,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "MaaSAuthPolicy")
-		os.Exit(1)
-	}
-	if err := (&maas.MaaSSubscriptionReconciler{
-		Client:                          mgr.GetClient(),
-		Scheme:                          mgr.GetScheme(),
-		DefaultTenantNamespace:          maasSubscriptionNamespace,
-		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
-		GatewayName:                     gatewayName,
-		GatewayNamespace:                gatewayNamespace,
-		MaxConcurrentReconciles:         maxConcurrentReconciles,
-	}).SetupWithManager(mgr); err != nil {
-		setupLog.Error(err, "unable to create controller", "controller", "MaaSSubscription")
-		os.Exit(1)
-	}
+	// Native enforcement replaces the Kuadrant-policy reconcilers.
+	setupSubscriptionReconcilers(mgr, enableNativeEnforcement, subscriptionReconcilerOptions{
+		infraNamespace:           infraNamespace,
+		subscriptionNamespace:    maasSubscriptionNamespace,
+		gatewayName:              gatewayName,
+		gatewayNamespace:         gatewayNamespace,
+		clusterAudience:          clusterAudience,
+		metadataCacheTTL:         metadataCacheTTL,
+		authzCacheTTL:            authzCacheTTL,
+		tenantNamespaceDiscovery: enableTenantNamespaceDiscovery,
+		maxConcurrentReconciles:  maxConcurrentReconciles,
+	})
 	aitenantDeletionTimeout := parseAITenantDeletionTimeout()
 	if err := (&maas.AITenantReconciler{
 		Client:            mgr.GetClient(),
@@ -1235,6 +1343,23 @@ func main() {
 		setupLog.Error(err, "unable to create controller", "controller", "ExternalModel")
 		os.Exit(1)
 	}
+
+	// GatewayEnforcement (opt-in): compile enforcement config directly instead of
+	// via Kuadrant policies.
+	setupNativeEnforcement(mgr, enableNativeEnforcement, gatewayEnforcementOptions{
+		infraNamespace:      infraNamespace,
+		clusterAudience:     clusterAudience,
+		metadataCacheTTL:    metadataCacheTTL,
+		authzCacheTTL:       authzCacheTTL,
+		authConfigNamespace: authConfigNamespace,
+		limitadorNamespace:  limitadorNamespace,
+		limitadorName:       limitadorName,
+		authUpstream:        authUpstream,
+		ratelimitUpstream:   ratelimitUpstream,
+		authCACert:          authCACert,
+		authSNI:             authSNI,
+		maasAPIURL:          maasAPIURL,
+	})
 
 	if err := mgr.Add(&managedNamespaceMonitor{
 		clientset:          clientset,

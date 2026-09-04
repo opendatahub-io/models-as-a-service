@@ -1,0 +1,48 @@
+{
+  "name": "468e50f9a4615ade432b54834f37d8ce85e02d98ac321ba0402829c58e8e3848",
+  "routeRuleConditions": {
+    "hostnames": ["site-a.example.com"],
+    "predicates": [
+      "request.url_path == '/v1/chat/completions'",
+      "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+  },
+  "actions": [
+    {
+      "service": "auth-service",
+      "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+      "sources": ["authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"],
+      "predicates": ["request.path != \"/maas-api/health\" || request.method != \"GET\""]
+    },
+    {
+      "service": "ratelimit-check-service",
+      "scope": "ai-tenant-site-a/qwen3-kserve-route",
+      "sources": ["tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"],
+      "conditionalData": [
+        {
+          "predicates": ["auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"],
+          "data": [
+            {"expression": {"key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29", "value": "1"}},
+            {"expression": {"key": "auth.identity.userid", "value": "auth.identity.userid"}},
+            {"expression": {"key": "ratelimit.hits_addend", "value": "0"}}
+          ]
+        }
+      ]
+    },
+    {
+      "service": "ratelimit-report-service",
+      "scope": "ai-tenant-site-a/qwen3-kserve-route",
+      "sources": ["tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"],
+      "conditionalData": [
+        {
+          "predicates": ["auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"],
+          "data": [
+            {"expression": {"key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29", "value": "1"}},
+            {"expression": {"key": "auth.identity.userid", "value": "auth.identity.userid"}},
+            {"expression": {"key": "ratelimit.hits_addend", "value": "responseBodyJSON(\"/usage/total_tokens\")"}}
+          ]
+        }
+      ]
+    }
+  ]
+}

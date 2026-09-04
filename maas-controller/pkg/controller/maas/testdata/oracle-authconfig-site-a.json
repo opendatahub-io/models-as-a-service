@@ -1,0 +1,286 @@
+{
+ "authentication": {
+  "api-keys": {
+   "credentials": {},
+   "metrics": false,
+   "plain": {
+    "selector": "request.headers.authorization"
+   },
+   "priority": 0,
+   "when": [
+    {
+     "operator": "matches",
+     "selector": "request.headers.authorization",
+     "value": "^Bearer sk-oai-.*"
+    }
+   ]
+  },
+  "openshift-identities": {
+   "credentials": {},
+   "kubernetesTokenReview": {
+    "audiences": [
+     "https://kubernetes.default.svc"
+    ]
+   },
+   "metrics": false,
+   "priority": 2,
+   "when": [
+    {
+     "predicate": "!request.headers.authorization.startsWith(\"Bearer sk-oai-\")"
+    }
+   ]
+  }
+ },
+ "authorization": {
+  "auth-valid": {
+   "cache": {
+    "key": {
+     "selector": "\"api-key|\" + (request.headers.authorization.replace(\"Bearer \", \"\")) + \"|\" + (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))"
+    },
+    "ttl": 60
+   },
+   "metrics": false,
+   "opa": {
+    "allValues": false,
+    "rego": "allow {\n  object.get(input.auth.metadata, \"apiKeyValidation\", {})\n  input.auth.metadata.apiKeyValidation.valid == true\n}\nallow {\n  not input.auth.metadata.apiKeyValidation\n}"
+   },
+   "priority": 0
+  },
+  "deny-client-identity-headers": {
+   "metrics": false,
+   "patternMatching": {
+    "patterns": [
+     {
+      "predicate": "!(\"x-maas-username\" in request.headers)"
+     },
+     {
+      "predicate": "!(\"x-maas-group\" in request.headers)"
+     }
+    ]
+   },
+   "priority": 0
+  },
+  "require-group-membership": {
+   "cache": {
+    "key": {
+     "selector": "((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : (has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))) + \"|\" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)).join(\",\") + \"|\" + (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))"
+    },
+    "ttl": 60
+   },
+   "metrics": false,
+   "opa": {
+    "allValues": false,
+    "rego": "\nmodel_access := {\"ai-tenant-site-a/qwen3\":{\"users\":null,\"groups\":[\"system:authenticated\"]},\"publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B\":{\"users\":null,\"groups\":[\"system:authenticated\"]}}\n\nrequest_path := object.get(input.context.request.http, \"path\", \"\")\nrequest_headers := object.get(input.context.request.http, \"headers\", {})\n\npath_parts := [p | p := split(request_path, \"/\")[_]; p != \"\"]\n\npath_model_identity := sprintf(\"%s/%s\", [path_parts[0], path_parts[1]]) {\n\tcount(path_parts) >= 2\n\tpath_parts[0] != \"v1\"\n\tpath_parts[0] != \"maas-api\"\n}\n\nheader_model_identity := object.get(request_headers, \"x-gateway-model-name\", \"\")\n\nmodel_identity := path_model_identity {\n\tpath_model_identity != \"\"\n} else := header_model_identity {\n\theader_model_identity != \"\"\n} else := \"\"\n\nusername := input.auth.metadata.apiKeyValidation.username\n\t{ object.get(input.auth, \"metadata\", {}).apiKeyValidation.username != \"\" }\nelse := input.auth.identity.preferred_username\n\t{ object.get(input.auth, \"identity\", {}).preferred_username != \"\" }\nelse := input.auth.identity.sub\n\t{ object.get(input.auth, \"identity\", {}).sub != \"\" }\nelse := input.auth.identity.user.username\n\t{ object.get(input.auth, \"identity\", {}).user.username != \"\" }\nelse := \"\"\n\ngroups := input.auth.metadata.apiKeyValidation.groups\n\t{ object.get(input.auth, \"metadata\", {}).apiKeyValidation.groups != [] }\nelse := input.auth.identity.groups\n\t{ object.get(input.auth, \"identity\", {}).groups != [] }\nelse := input.auth.identity.user.groups\n\t{ object.get(input.auth, \"identity\", {}).user.groups != [] }\nelse := []\n\nmodel_rules := object.get(model_access, model_identity, null)\n\n# Management endpoints (e.g. /v1/models, /maas-api/v1/api-keys) carry no model context.\n# Allow them here; subscription and rate-limit checks are gated by model-route conditions.\nallow {\n\tmodel_identity == \"\"\n}\n\n# Inference path: deny by default when no MaaSAuthPolicy covers this model.\n# Allow only when the caller's username or a group is explicitly listed.\nallow {\n\tmodel_rules != null\n\tmodel_rules.users[_] == username\n}\n\nallow {\n\tmodel_rules != null\n\tg := groups[_]\n\tmodel_rules.groups[_] == g\n}\n"
+   },
+   "priority": 0
+  },
+  "subscription-valid": {
+   "cache": {
+    "key": {
+     "selector": "((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : (has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))) + \"|\" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)).join(\",\") + \"|\" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : (\"x-maas-subscription\" in request.headers ? request.headers[\"x-maas-subscription\"] : \"\")) + \"|\" + (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))"
+    },
+    "ttl": 60
+   },
+   "metrics": false,
+   "opa": {
+    "allValues": false,
+    "rego": "allow {\n\tobject.get(input.auth.metadata[\"subscription-info\"], \"name\", \"\") != \"\"\n\tobject.get(input.auth.metadata[\"subscription-info\"], \"error\", \"\") == \"\"\n\tphase := object.get(input.auth.metadata[\"subscription-info\"], \"phase\", \"\")\n\tany([phase == \"Active\", phase == \"Degraded\"])\n\tobject.get(input.auth.metadata[\"subscription-info\"], \"deletionTimestamp\", \"\") == \"\"\n}"
+   },
+   "priority": 0,
+   "when": [
+    {
+     "predicate": "(size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" || \"x-gateway-model-name\" in request.headers)"
+    }
+   ]
+  },
+  "tenant-gateway-isolation": {
+   "metrics": false,
+   "opa": {
+    "allValues": false,
+    "rego": "# Tenant hostname isolation stub.\n# Replace with a real maas-api call to validate that the API key's tenant\n# matches the gateway hostname (prevents Coke key on Pepsi gateway).\nallow { true }"
+   },
+   "priority": 0
+  }
+ },
+ "hosts": [
+  "1a07c4c259ae5ccbdb664ec4cc466b61fb3b40e501526de43dfef1e068827ab7"
+ ],
+ "metadata": {
+  "apiKeyValidation": {
+   "cache": {
+    "key": {
+     "selector": "request.headers.authorization.replace(\"Bearer \", \"\")"
+    },
+    "ttl": 60
+   },
+   "http": {
+    "body": {
+     "expression": "{\"key\": request.headers.authorization.replace(\"Bearer \", \"\")}"
+    },
+    "contentType": "application/json",
+    "credentials": {},
+    "method": "POST",
+    "url": "https://maas-api-site-a.redhat-ai-gateway-infra.svc.cluster.local:8443/internal/v1/api-keys/validate"
+   },
+   "metrics": false,
+   "priority": 0,
+   "when": [
+    {
+     "predicate": "request.headers.authorization.matches(\"^Bearer sk-oai-.*\")"
+    }
+   ]
+  },
+  "subscription-info": {
+   "cache": {
+    "key": {
+     "selector": "((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.userId : (has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))) + \"|\" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)).join(\",\") + \"|\" + ((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : (\"x-maas-subscription\" in request.headers ? request.headers[\"x-maas-subscription\"] : \"\")) + \"|\" + (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))"
+    },
+    "ttl": 60
+   },
+   "http": {
+    "body": {
+     "expression": "{\n  \"groups\": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups),\n  \"username\": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : (has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)),\n  \"requestedSubscription\": (has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : (\"x-maas-subscription\" in request.headers ? request.headers[\"x-maas-subscription\"] : \"\"),\n  \"requestedModel\": (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))\n}"
+    },
+    "contentType": "application/json",
+    "credentials": {},
+    "method": "POST",
+    "url": "https://maas-api-site-a.redhat-ai-gateway-infra.svc.cluster.local:8443/internal/v1/subscriptions/select"
+   },
+   "metrics": false,
+   "priority": 1,
+   "when": [
+    {
+     "predicate": "(size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" || \"x-gateway-model-name\" in request.headers)"
+    }
+   ]
+  }
+ },
+ "response": {
+  "success": {
+   "dynamicMetadata": {
+    "identity": {
+     "json": {
+      "properties": {
+       "groups": {
+        "expression": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)"
+       },
+       "groups_str": {
+        "expression": "((has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.groups : (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)).join(\",\")"
+       },
+       "keyId": {
+        "expression": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyId : \"\""
+       },
+       "keyName": {
+        "expression": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.keyName : \"\""
+       },
+       "selected_subscription": {
+        "expression": "has(auth.metadata[\"subscription-info\"].name) ? auth.metadata[\"subscription-info\"].name : \"\""
+       },
+       "selected_subscription_key": {
+        "expression": "(has(auth.metadata[\"subscription-info\"].namespace) && has(auth.metadata[\"subscription-info\"].name)) ? auth.metadata[\"subscription-info\"].namespace + \"/\" + auth.metadata[\"subscription-info\"].name + \"@\" + (has(auth.metadata[\"subscription-info\"].resolvedModel) && auth.metadata[\"subscription-info\"].resolvedModel != \"\" ? auth.metadata[\"subscription-info\"].resolvedModel : (size(request.path.split(\"/\").filter(x, x != \"\")) >= 2 && request.path.split(\"/\").filter(x, x != \"\")[0] != \"v1\" && request.path.split(\"/\").filter(x, x != \"\")[0] != \"maas-api\" ? request.path.split(\"/\").filter(x, x != \"\")[0] + \"/\" + request.path.split(\"/\").filter(x, x != \"\")[1] : (\"x-gateway-model-name\" in request.headers   ? request.headers[\"x-gateway-model-name\"]   : \"\"))) : \"\""
+       },
+       "subscription_error": {
+        "expression": "has(auth.metadata[\"subscription-info\"].error) ? auth.metadata[\"subscription-info\"].error : \"\""
+       },
+       "subscription_error_message": {
+        "expression": "has(auth.metadata[\"subscription-info\"].message) ? auth.metadata[\"subscription-info\"].message : \"\""
+       },
+       "subscription_info": {
+        "expression": "has(auth.metadata[\"subscription-info\"].name) ? auth.metadata[\"subscription-info\"] : {}"
+       },
+       "userid": {
+        "expression": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.username : (has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username))"
+       }
+      }
+     },
+     "metrics": true,
+     "priority": 0
+    }
+   },
+   "headers": {
+    "X-MaaS-Group": {
+     "metrics": false,
+     "plain": {
+      "expression": "size(auth.metadata.apiKeyValidation.groups) > 0 ? '[\"' + auth.metadata.apiKeyValidation.groups.join('\",\"') + '\"]' : '[]'"
+     },
+     "priority": 0,
+     "when": [
+      {
+       "predicate": "request.headers.authorization.matches(\"^Bearer sk-oai-.*\")"
+      }
+     ]
+    },
+    "X-MaaS-Group-Token": {
+     "key": "X-MaaS-Group",
+     "metrics": false,
+     "plain": {
+      "expression": "has(auth.identity.groups) ? (size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? '[\"system:authenticated\",\"' + auth.identity.groups.join('\",\"') + '\"]' : '[\"system:authenticated\"]') : (has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? '[\"system:authenticated\",\"' + auth.identity.user.groups.join('\",\"') + '\"]' : '[\"system:authenticated\"]')"
+     },
+     "priority": 1,
+     "when": [
+      {
+       "predicate": "!request.headers.authorization.startsWith(\"Bearer sk-oai-\")"
+      }
+     ]
+    },
+    "X-MaaS-Subscription": {
+     "metrics": false,
+     "plain": {
+      "expression": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ? auth.metadata.apiKeyValidation.subscription : (\"x-maas-subscription\" in request.headers ? request.headers[\"x-maas-subscription\"] : \"\")"
+     },
+     "priority": 0,
+     "when": [
+      {
+       "predicate": "(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != \"\") || \"x-maas-subscription\" in request.headers"
+      }
+     ]
+    },
+    "X-MaaS-Username": {
+     "metrics": false,
+     "plain": {
+      "selector": "auth.metadata.apiKeyValidation.username"
+     },
+     "priority": 0,
+     "when": [
+      {
+       "predicate": "request.headers.authorization.matches(\"^Bearer sk-oai-.*\")"
+      }
+     ]
+    },
+    "X-MaaS-Username-Token": {
+     "key": "X-MaaS-Username",
+     "metrics": false,
+     "plain": {
+      "expression": "has(auth.identity.preferred_username) ? auth.identity.preferred_username : (has(auth.identity.sub) ? auth.identity.sub : auth.identity.user.username)"
+     },
+     "priority": 1,
+     "when": [
+      {
+       "predicate": "!request.headers.authorization.startsWith(\"Bearer sk-oai-\")"
+      }
+     ]
+    }
+   }
+  },
+  "unauthenticated": {
+   "code": 401,
+   "message": {
+    "value": "Authentication required"
+   }
+  },
+  "unauthorized": {
+   "body": {
+    "expression": "has(auth.metadata[\"subscription-info\"].message) ? auth.metadata[\"subscription-info\"].message : \"Access denied\""
+   },
+   "code": 403,
+   "headers": {
+    "content-type": {
+     "value": "text/plain"
+    },
+    "x-ext-auth-reason": {
+     "expression": "has(auth.metadata[\"subscription-info\"].error) ? auth.metadata[\"subscription-info\"].error : \"unauthorized\""
+    }
+   }
+  }
+ }
+}

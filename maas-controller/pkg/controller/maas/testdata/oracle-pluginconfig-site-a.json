@@ -1,0 +1,2132 @@
+{
+ "actionSets": [
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "e00320cf06fef706a33db4c6d166f654826cac7f7a28c6eb1c8f677c13bd472d",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/chat/completions/'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "468e50f9a4615ade432b54834f37d8ce85e02d98ac321ba0402829c58e8e3848",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/chat/completions'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "96814282a42fbf9cb9598184a9bbd8a539657004c8c1ace5e39813e0ff9d8476",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/completions/'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "10334ced6f431f90098e62fd0172640da9b83c99063d0f38aa2261be79bd2fe9",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/completions'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "f07a772aebc6df3768d1621e6d8c23f2dc25e4ce2425db79231ffa01660e346c",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/responses/'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "8c796b760975e3612dd49b0ba2048aaacc857808312c798f77835d2e99980243",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/messages/'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "8f9253af731e56e0dd5809ac4c0eeb3d47aa3252413e8b5d71a2660596d54ad9",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/responses'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "410f8ee4ef0bb20b515d4c56db735b69d29d244f2091bfcb8bd32f5c93ef312f",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "49bbc0691cefb40aa40ea60b23302f4c5ebce92b7c710ca23f615c3d80be70c7",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path == '/v1/messages'",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "d394bfba395025cf537ff9cf27f127b1e736003961237be92c44fe6591b3a068",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "041229d140685cc3406b9b53001e1a48464c6c38787958e5e0e8f64ebc0a54be",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B/v1/chat/completions')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "86badcbd108cb97b7b2c881395e74e8135984b7d1b308593c25812b7da53a020",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "186e7455fcaa00b130aa111b8283c43092c2116fdc26cfcd1757ca287855831a",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B/v1/completions')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "678ebffd06cc248d2ea677b762f18d3aacd1532d046e04aea69385386f515094",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "df70711c5d8f5e6f8cada5ff0c665a81e32533324da0ceeee52edb5de537145f",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B/v1/responses')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "bd34e3b0c82105ae352214ffa523bcccef200712c87d67801afd983448f6aaff",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "6a1bb720c447e5a0ffa2e2d37729ef69fcbbbf7060a3b2f22db4df72166fdf87",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B/v1/messages')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "71610575e35e16b640298d74871d0adad2229486fb98d86003590e77b1933a82",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "ff9969f950fff09f056626c3c1184d24fd84e3e717953d7ac43e65bbf7be6868",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "c4b9b61bd91369cdc60bd17155d0e5c03a2e39865c461c97ffb123f0f03ba79a",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "d72a4ec7b914afb375a9d0da664d8d325378e689f2b9373886640ad2f7c52d66",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/ai-tenant-site-a/qwen3/v1/chat/completions')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "9077fcabfc2dab2c42f92e1a9308bf5ec724533d258b2eb3b44145d5ba4c32ce",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "344a7b3e89d21e632c2b99dbe00e07682c4b06a9c3084ca8e2b01eabbb90913f",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/ai-tenant-site-a/qwen3/v1/completions')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "df0a1f9d3026f7ef6a6281176be468467ce2d689eea3815372972f9c872ffed7",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "f14f2dd3356fa57cd85ddf660e0e08846f44d01570b72c6ce1824c62db56f89e",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/ai-tenant-site-a/qwen3/v1/responses')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "ff7f844efb9e9377dd88ca6e6ff3f13a992dd55c68f82feb4a3bdd5c54e0f393",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "6b71f5e0dc68b6ed3a1419f849bf3a35aebcf2a6c647cfde4dae321b44d1d0a8",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/ai-tenant-site-a/qwen3/v1/messages')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "e419bdfcf283c0971abea66fa777b4886bbd0548a0b2d21c5275f72f93b1bc28",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "78efc3942e9454f6c42d4658f48a737c5f8adaf69b981023232822db514b6418",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/ai-tenant-site-a/qwen3')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "c606e92e65e343721096f47e75b7bd35eb373b7881e22a219888e928fbcd52bc",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    }
+   ],
+   "name": "1f7d132fc8ed475e71177c74637ee867ed48355cf5d50e0ef8dd365ba71b2fa5",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/v1/subscriptions')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "1a07c4c259ae5ccbdb664ec4cc466b61fb3b40e501526de43dfef1e068827ab7",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    }
+   ],
+   "name": "593016ff49d89d59ce7151304262879eef910bf0989f9a3f86127db2cd365f58",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/v1/api-keys')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "c287ceab29bba4cd6ce10d734ae583a8e7eec74503eee87f3f93fa6f0295f60e",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    }
+   ],
+   "name": "75d5eae514a62aa7d0735f1d727b83ea27b5cea13f478753214c8e640075ca40",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/v1/models')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "c46ee200e43b3011e96cc5770aae1f79223f03d2b0a91d4bad6b7b8b16f86e57",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.deny_all_by_default__d3136ae7",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "!request.path.startsWith(\"/maas-api\") && !request.path.startsWith(\"/v1/models\") && !request.path.startsWith(\"/v1/subscriptions\") && !request.path.startsWith(\"/v1/api-keys\")"
+       ]
+      }
+     ],
+     "scope": "redhat-ai-gateway-infra/maas-api-route-site-a",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:openshift-ingress/gateway-default-deny-site-a"
+     ]
+    }
+   ],
+   "name": "2214c49dcf72716de962a80222fb3c51c1c881581bd7ebefc2ba0e019957a8b0",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/maas-api')"
+    ]
+   }
+  },
+  {
+   "actions": [
+    {
+     "predicates": [
+      "request.path != \"/maas-api/health\" || request.method != \"GET\""
+     ],
+     "scope": "dae973d1cc3575d9566fb78aeac31d838c706462df6058bf56495c046dee5afc",
+     "service": "auth-service",
+     "sources": [
+      "authpolicy.kuadrant.io:openshift-ingress/maas-site-a-gateway-maas-auth"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "0"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-check-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    },
+    {
+     "conditionalData": [
+      {
+       "data": [
+        {
+         "expression": {
+          "key": "tokenlimit.ai_tenant_site_a_site_a_tier_qwen3_tokens__b42c1f29",
+          "value": "1"
+         }
+        },
+        {
+         "expression": {
+          "key": "auth.identity.userid",
+          "value": "auth.identity.userid"
+         }
+        },
+        {
+         "expression": {
+          "key": "ratelimit.hits_addend",
+          "value": "responseBodyJSON(\"/usage/total_tokens\")"
+         }
+        }
+       ],
+       "predicates": [
+        "auth.identity.selected_subscription_key == \"ai-tenant-site-a/site-a-tier@ai-tenant-site-a/qwen3\" && !request.path.endsWith(\"/v1/models\")"
+       ]
+      }
+     ],
+     "scope": "ai-tenant-site-a/qwen3-kserve-route",
+     "service": "ratelimit-report-service",
+     "sources": [
+      "tokenratelimitpolicy.kuadrant.io:ai-tenant-site-a/maas-trlp-qwen3"
+     ]
+    }
+   ],
+   "name": "4ac69625b2ea94c6b09db934722cf3c787760014b94d07a3bd23bf94da0c7966",
+   "routeRuleConditions": {
+    "hostnames": [
+     "site-a.example.com"
+    ],
+    "predicates": [
+     "request.url_path.startsWith('/')",
+     "request.headers.exists(h, h.lowerAscii() == 'x-gateway-model-name' && request.headers[h] == 'publishers/ai-tenant-site-a/models/Qwen/Qwen3-0.6B')"
+    ]
+   }
+  }
+ ],
+ "services": {
+  "auth-service": {
+   "endpoint": "kuadrant-auth-service",
+   "failureMode": "deny",
+   "timeout": "200ms",
+   "type": "auth"
+  },
+  "ratelimit-check-service": {
+   "endpoint": "kuadrant-ratelimit-service",
+   "failureMode": "allow",
+   "timeout": "100ms",
+   "type": "ratelimit-check"
+  },
+  "ratelimit-report-service": {
+   "endpoint": "kuadrant-ratelimit-service",
+   "failureMode": "allow",
+   "timeout": "100ms",
+   "type": "ratelimit-report"
+  },
+  "ratelimit-service": {
+   "endpoint": "kuadrant-ratelimit-service",
+   "failureMode": "allow",
+   "timeout": "100ms",
+   "type": "ratelimit"
+  }
+ }
+}
