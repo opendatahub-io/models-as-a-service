@@ -3728,6 +3728,41 @@ for RHOAI or <code>opendatahub</code> for ODH):</p>
 </tr>
 </tbody>
 </table>
+<p>When using the <strong>Managed</strong> deployment path (i.e. <code>aigateway.modelsAsAService</code> set to <code>Managed</code> in
+the DSC), also enable the MaaS-specific dashboard flags:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>odhdashboardconfig<span class="w"> </span>odh-dashboard-config<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="w">  </span>-n<span class="w"> </span>redhat-ods-applications<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;dashboardConfig&quot;:{&quot;modelAsService&quot;:true,&quot;vLLMDeploymentOnMaaS&quot;:true}}}&#39;</span>
+</code></pre></div>
+<table>
+<thead>
+<tr>
+<th>Flag</th>
+<th>Effect</th>
+<th>Prerequisites</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>modelAsService: true</code></td>
+<td>Enables the <strong>Models as a Service</strong> UI in the Dashboard</td>
+<td><code>aigateway.modelsAsAService</code> set to <code>Managed</code> in DSC</td>
+</tr>
+<tr>
+<td><code>vLLMDeploymentOnMaaS: true</code></td>
+<td>Enables vLLM model deployment via the MaaS Dashboard UI</td>
+<td><code>modelAsService</code> enabled</td>
+</tr>
+</tbody>
+</table>
+<div class="admonition warning">
+<p class="admonition-title">Deprecated field: <code>maasAuthPolicies</code></p>
+<p>The field <code>maasAuthPolicies</code> is <strong>deprecated</strong> and frozen via a CEL transition rule in the
+<code>OdhDashboardConfig</code> CRD. On new installs, setting it returns a validation error. Clusters
+upgraded from RHOAI 3.4 that already had the field set will retain the existing value without
+error, but the field is no longer used. The field will be removed in a future release.
+Use <code>modelAsService: true</code> instead.</p>
+</div>
 <div class="admonition note">
 <p class="admonition-title">Namespace</p>
 <p>For ODH installations, replace <code>redhat-ods-applications</code> with <code>opendatahub</code> (or your configured
@@ -3749,17 +3784,17 @@ defaults if it is deleted, but does not overwrite user changes to existing field
 </div>
 <h3 id="2-create-aitenant-cr">2. Create AITenant CR</h3>
 <p>Create an <code>AITenant</code> resource in the <code>ai-tenants</code> namespace:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-17-1" name="__codelineno-17-1" href="#__codelineno-17-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
-<a id="__codelineno-17-2" name="__codelineno-17-2" href="#__codelineno-17-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AITenant</span>
-<a id="__codelineno-17-3" name="__codelineno-17-3" href="#__codelineno-17-3"></a><span class="nt">metadata</span><span class="p">:</span>
-<a id="__codelineno-17-4" name="__codelineno-17-4" href="#__codelineno-17-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-red</span>
-<a id="__codelineno-17-5" name="__codelineno-17-5" href="#__codelineno-17-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ai-tenants</span>
-<a id="__codelineno-17-6" name="__codelineno-17-6" href="#__codelineno-17-6"></a><span class="nt">spec</span><span class="p">:</span>
-<a id="__codelineno-17-7" name="__codelineno-17-7" href="#__codelineno-17-7"></a><span class="w">  </span><span class="nt">gateway</span><span class="p">:</span>
-<a id="__codelineno-17-8" name="__codelineno-17-8" href="#__codelineno-17-8"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-red-gateway</span><span class="w">  </span><span class="c1"># Must already exist in openshift-ingress</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas.opendatahub.io/v1alpha1</span>
+<a id="__codelineno-18-2" name="__codelineno-18-2" href="#__codelineno-18-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">AITenant</span>
+<a id="__codelineno-18-3" name="__codelineno-18-3" href="#__codelineno-18-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-18-4" name="__codelineno-18-4" href="#__codelineno-18-4"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-red</span>
+<a id="__codelineno-18-5" name="__codelineno-18-5" href="#__codelineno-18-5"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">ai-tenants</span>
+<a id="__codelineno-18-6" name="__codelineno-18-6" href="#__codelineno-18-6"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-18-7" name="__codelineno-18-7" href="#__codelineno-18-7"></a><span class="w">  </span><span class="nt">gateway</span><span class="p">:</span>
+<a id="__codelineno-18-8" name="__codelineno-18-8" href="#__codelineno-18-8"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">team-red-gateway</span><span class="w">  </span><span class="c1"># Must already exist in openshift-ingress</span>
 </code></pre></div>
 <p>Apply the manifest:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-18-1" name="__codelineno-18-1" href="#__codelineno-18-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>aitenant.yaml
+<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>aitenant.yaml
 </code></pre></div>
 <p>The controller will automatically create:
 - Tenant namespace: <code>ai-tenant-team-red</code>
@@ -3767,14 +3802,14 @@ defaults if it is deleted, but does not overwrite user changes to existing field
 - maas-api deployment: <code>maas-api-team-red</code>
 - HTTPRoute and AuthPolicy for the tenant</p>
 <h3 id="3-verify">3. Verify</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-19-1" name="__codelineno-19-1" href="#__codelineno-19-1"></a><span class="c1"># Check AITenant status</span>
-<a id="__codelineno-19-2" name="__codelineno-19-2" href="#__codelineno-19-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>aitenant<span class="w"> </span>team-red<span class="w"> </span>-n<span class="w"> </span>ai-tenants<span class="w"> </span>-o<span class="w"> </span>yaml
-<a id="__codelineno-19-3" name="__codelineno-19-3" href="#__codelineno-19-3"></a>
-<a id="__codelineno-19-4" name="__codelineno-19-4" href="#__codelineno-19-4"></a><span class="c1"># Check tenant namespace was created</span>
-<a id="__codelineno-19-5" name="__codelineno-19-5" href="#__codelineno-19-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>namespace<span class="w"> </span>ai-tenant-team-red
-<a id="__codelineno-19-6" name="__codelineno-19-6" href="#__codelineno-19-6"></a>
-<a id="__codelineno-19-7" name="__codelineno-19-7" href="#__codelineno-19-7"></a><span class="c1"># Check MaasTenantConfig CR</span>
-<a id="__codelineno-19-8" name="__codelineno-19-8" href="#__codelineno-19-8"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>ai-tenant-team-red
+<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a><span class="c1"># Check AITenant status</span>
+<a id="__codelineno-20-2" name="__codelineno-20-2" href="#__codelineno-20-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>aitenant<span class="w"> </span>team-red<span class="w"> </span>-n<span class="w"> </span>ai-tenants<span class="w"> </span>-o<span class="w"> </span>yaml
+<a id="__codelineno-20-3" name="__codelineno-20-3" href="#__codelineno-20-3"></a>
+<a id="__codelineno-20-4" name="__codelineno-20-4" href="#__codelineno-20-4"></a><span class="c1"># Check tenant namespace was created</span>
+<a id="__codelineno-20-5" name="__codelineno-20-5" href="#__codelineno-20-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>namespace<span class="w"> </span>ai-tenant-team-red
+<a id="__codelineno-20-6" name="__codelineno-20-6" href="#__codelineno-20-6"></a>
+<a id="__codelineno-20-7" name="__codelineno-20-7" href="#__codelineno-20-7"></a><span class="c1"># Check MaasTenantConfig CR</span>
+<a id="__codelineno-20-8" name="__codelineno-20-8" href="#__codelineno-20-8"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>ai-tenant-team-red
 </code></pre></div>
 <p>For complete AITenant configuration options (OIDC, RBAC), see the <a href="../../reference/crds/ai-tenant/">AITenant CRD reference</a>.</p>
 <h3 id="delete-a-tenant">Delete a tenant</h3>
@@ -3783,7 +3818,7 @@ defaults if it is deleted, but does not overwrite user changes to existing field
 <p class="admonition-title">Do not delete the default tenant</p>
 <p>Do not delete <code>AITenant/models-as-a-service</code> in <code>ai-tenants</code> unless you are intentionally tearing down MaaS. The controller bootstraps the default AITenant only once per <code>Config/default</code>; after deletion it is not automatically recreated. MaaS UI and API workflows that depend on the default tenant may stop working until the default tenant state is restored.</p>
 </div>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-20-1" name="__codelineno-20-1" href="#__codelineno-20-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>aitenant<span class="w"> </span>team-red<span class="w"> </span>-n<span class="w"> </span>ai-tenants
+<div class="highlight"><pre><span></span><code><a id="__codelineno-21-1" name="__codelineno-21-1" href="#__codelineno-21-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>aitenant<span class="w"> </span>team-red<span class="w"> </span>-n<span class="w"> </span>ai-tenants
 </code></pre></div>
 <p>Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (<code>MaaSSubscription</code>, <code>MaaSAuthPolicy</code>), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The <code>AITenant</code> can remain in <code>Terminating</code> phase while cleanup is in progress, or report <code>Ready=False</code> with reason <code>DeletionBlocked</code> if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.</p>
 <h2 id="next-steps">Next steps</h2>
@@ -3814,7 +3849,7 @@ defaults if it is deleted, but does not overwrite user changes to existing field
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 17, 2026 22:22:28 UTC">July 17, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 18:20:05 UTC">September 4, 2026</span>
   </span>
 
     
