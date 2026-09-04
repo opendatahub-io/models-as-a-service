@@ -18,7 +18,7 @@ import os
 import pytest
 import requests
 from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_POD_NAMESPACE
+from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
     cmd = [
         "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
         "--rm", "-i", "--restart=Never",
-        "--image=curlimages/curl:latest",
+        f"--image={E2E_CURL_IMAGE}",
         "-n", namespace,
         "--",
         "curl"
