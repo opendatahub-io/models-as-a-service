@@ -82,4 +82,3 @@ kubectl patch odhdashboardconfig odh-dashboard-config \
 |-----|------|
 | `kserve.managementState: Managed` | Not required for MaaS |
 | `kserve.modelsAsService.managementState: Managed` | `aigateway.modelsAsAService.managementState: Managed` |
-| `dashboardConfig.maasAuthPolicies: true` | `dashboardConfig.modelAsService: true` |
