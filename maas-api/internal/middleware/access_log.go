@@ -27,7 +27,7 @@ func AccessLogger(log *logger.Logger, cfg TenantLoggerConfig) gin.HandlerFunc {
 			}
 		}
 
-		log.Info("request completed",
+		log.WithContext(c.Request.Context()).Info("request completed",
 			"method", c.Request.Method,
 			"path", c.Request.URL.Path,
 			"status", c.Writer.Status(),

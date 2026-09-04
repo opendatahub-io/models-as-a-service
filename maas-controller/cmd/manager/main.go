@@ -60,6 +60,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/webhook"
@@ -1055,6 +1056,7 @@ func main() {
 	// Derive infrastructure namespace if needed
 	infraNamespace = resolveInfraNamespace(infraNamespace, controllerNamespace)
 
+	oteljson.Apply(&opts, "maas-controller")
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	cfg := ctrl.GetConfigOrDie()
