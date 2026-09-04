@@ -1401,7 +1401,7 @@ def _kubectl_curl_post(
         if json_body is not None:
             script_lines.append("BODY=$(cat)")
 
-        curl_parts = ["curl", "-s", "--cacert", ca_cert_path, "-m", "10", "-X", "POST"]
+        curl_parts = ["curl", "-s", "--proto", "=https", "--cacert", ca_cert_path, "-m", "10", "-X", "POST"]
         if headers:
             for i in range(len(headers)):
                 curl_parts.append(f'-H "$HDR{i}"')

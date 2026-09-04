@@ -191,11 +191,18 @@ def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
         return _SA_CA_PATH, None
 
     tpl = '{{index .data "' + E2E_CURL_CA_CONFIGMAP_KEY + '"}}'
-    result = subprocess.run(
-        ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
-         "-n", namespace, "-o", f"go-template={tpl}"],
-        capture_output=True, text=True, timeout=15,
-    )
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
+             "-n", namespace, "-o", f"go-template={tpl}"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired:
+        log.warning(
+            "Timed out fetching E2E_CURL_CA_CONFIGMAP=%s in namespace %s, falling back to SA CA",
+            E2E_CURL_CA_CONFIGMAP, namespace,
+        )
+        return _SA_CA_PATH, None
     if result.returncode == 0 and result.stdout.strip():
         return _CUSTOM_CA_PATH, result.stdout
 

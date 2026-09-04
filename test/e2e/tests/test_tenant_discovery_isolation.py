@@ -71,7 +71,7 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
                 script_lines.append(f"IFS= read -r HDR{i}")
                 stdin_lines.append(f"{key}: {value}")
 
-        curl_parts = ["curl", "-s", "--cacert", ca_cert_path, "-m", "10"]
+        curl_parts = ["curl", "-s", "--proto", "=https", "--cacert", ca_cert_path, "-m", "10"]
         if headers:
             for i in range(len(headers)):
                 curl_parts.append(f'-H "$HDR{i}"')
