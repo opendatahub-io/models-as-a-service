@@ -477,9 +477,10 @@ func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
 }
 
 // registerWatchWhenCRDAppears dynamically registers a resource watch the first time
-// the target CRD becomes available. It watches CRD objects (always available) and
-// calls makeSource() exactly once via sync.Once when the named CRD is detected —
-// so multiple CRD update events never produce duplicate watchers. No pod restart needed.
+// the target CRD becomes available. It watches CRD metadata (not full objects, which
+// are 50-200 KB each due to OpenAPI schemas) and calls makeSource() exactly once via
+// sync.Once when the named CRD is detected — so multiple CRD update events never
+// produce duplicate watchers. No pod restart needed.
 func registerWatchWhenCRDAppears(
 	c controller.Controller,
 	mgr ctrl.Manager,
@@ -489,11 +490,12 @@ func registerWatchWhenCRDAppears(
 	log := ctrl.Log.WithName("crd-watcher").WithValues("crdName", crdName)
 	log.Info("CRD not yet registered at startup; will register watch dynamically when it appears")
 	var once sync.Once
+	crdMeta := crdPartialMetadata()
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
-			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
+		crdMeta,
+		handler.TypedEnqueueRequestsFromMapFunc[*metav1.PartialObjectMetadata](
+			func(ctx context.Context, crd *metav1.PartialObjectMetadata) []reconcile.Request {
 				if crd.Name != crdName {
 					return nil
 				}

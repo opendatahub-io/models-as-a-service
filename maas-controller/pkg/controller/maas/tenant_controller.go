@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -241,8 +240,10 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&maasv1alpha1.AITenant{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		// WatchesMetadata avoids caching full CRD objects (50-200 KB each due to OpenAPI
+		// schemas); only name and labels are needed for the predicate.
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).
