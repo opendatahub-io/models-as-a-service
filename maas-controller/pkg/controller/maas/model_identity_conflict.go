@@ -88,7 +88,12 @@ func (r *MaaSModelRefReconciler) checkModelIdentityConflict(ctx context.Context,
 		return
 	}
 
-	prev := apimeta.FindStatusCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+	previous := apimeta.FindStatusCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+	var prev *metav1.Condition
+	if previous != nil {
+		prevCopy := *previous
+		prev = &prevCopy
+	}
 
 	conflicts, err := r.findModelAliasConflicts(ctx, model)
 	if err != nil {

@@ -218,7 +218,7 @@ See [Tenant RBAC](../configuration-and-management/tenant-rbac.md) for examples w
 
 ## 5. Configure Models
 
-Create the MaaSModelRef in the **model namespace** (co-located with the backend resource) and use `tenantRef` to associate it with the tenant's gateway. MaaSAuthPolicy and MaaSSubscription must be created in the **tenant namespace** (where the MaasTenantConfig CR lives).
+Create the MaaSModelRef in the **model namespace** (co-located with the backend resource). The controller auto-resolves the tenant from the HTTPRoute's gateway parentRef — `spec.tenantRef` can be omitted. MaaSAuthPolicy and MaaSSubscription must be created in the **tenant namespace** (where the MaasTenantConfig CR lives).
 
 ```bash
 TENANT_NS="ai-tenant-${TENANT_NAME}"
@@ -229,8 +229,8 @@ MODEL_NS="llm"   # namespace where the LLMInferenceService runs
 oc label namespace "${MODEL_NS}" "maas.opendatahub.io/gateway-access-${TENANT_NAME}=true" --overwrite
 
 # Create a MaaSModelRef in the model namespace.
-# tenantRef tells the controller to resolve the gateway from this AITenant
-# instead of using namespace-based inference (which defaults to the default tenant).
+# The controller auto-resolves the tenant from the LLMInferenceService's
+# HTTPRoute gateway parentRef. No tenantRef needed.
 cat <<EOF | oc apply -f -
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
@@ -241,7 +241,7 @@ spec:
   modelRef:
     kind: LLMInferenceService
     name: my-llm-inference-service
-  tenantRef: ${TENANT_NAME}
+  # tenantRef: ${TENANT_NAME}  # optional — set only as an advanced override
 EOF
 
 # Create a MaaSAuthPolicy in the tenant namespace.
@@ -286,8 +286,8 @@ EOF
 !!! note
     MaaSAuthPolicy and MaaSSubscription must be created in a namespace that contains a `MaasTenantConfig` CR. The admission webhook rejects them otherwise.
 
-!!! tip "MaaSModelRef for the default tenant"
-    For models that belong to the default tenant, `tenantRef` can be omitted. The controller falls back to namespace-based gateway resolution. See [MaaSModelRef CRD Reference](../reference/crds/maas-model-ref.md#multi-tenant-models) for details.
+!!! tip "Explicit tenantRef override"
+    Setting `spec.tenantRef` explicitly is an advanced override that bypasses auto-resolution. Use it only when the HTTPRoute's gateway does not match the intended tenant. See [MaaSModelRef CRD Reference](../reference/crds/maas-model-ref.md#multi-tenant-models) for details.
 
 ## Webhook Validation
 
