@@ -57,6 +57,7 @@ IPP_EXTERNAL_MODEL_CR = {
             "ref": {"name": "dummy-anthropic"},
             "targetModel": "claude-sonnet-4-20250514",
             "apiFormat": "messages",
+            "path": "/v1/messages",
         }],
     },
 }
@@ -108,24 +109,23 @@ def _wait_for_identity_source(identity_name, present=True, timeout=120):
 
 
 def _trigger_reconcile():
-    """Annotate all MaaSAuthPolicies to trigger controller reconciliation."""
-    ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+    """Trigger controller reconciliation by touching the IPP ExternalModel CR.
+
+    Annotating the ExternalModel causes the controller's ExternalModel watch to
+    fire, which enqueues all MaaSAuthPolicies for reconciliation.  Annotating
+    MaaSAuthPolicies directly is ineffective because their watch uses
+    GenerationChangedPredicate, which ignores metadata-only updates.
+    """
     result = subprocess.run(
-        ["oc", "get", "maasauthpolicy", "-n", ns, "-o", "name"],
+        ["oc", "annotate",
+         f"externalmodel.inference.opendatahub.io/{IPP_EXTERNAL_MODEL_NAME}",
+         "-n", MODEL_NAMESPACE,
+         f"e2e.maas/reconcile-trigger={int(time.time())}", "--overwrite"],
         capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
-        log.warning("Failed to list MaaSAuthPolicies: %s", result.stderr.strip())
-        return
-
-    for resource in result.stdout.strip().splitlines():
-        if not resource:
-            continue
-        subprocess.run(
-            ["oc", "annotate", resource, "-n", ns,
-             f"e2e.maas/reconcile-trigger={int(time.time())}", "--overwrite"],
-            capture_output=True, text=True, timeout=30,
-        )
+        log.warning("Failed to annotate ExternalModel to trigger reconcile: %s",
+                    result.stderr.strip())
 
 
 def _inference_x_api_key(api_key, path=None, model_name=None):
