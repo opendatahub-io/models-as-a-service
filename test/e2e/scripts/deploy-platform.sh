@@ -17,7 +17,6 @@ fi
 [[ "$(type -t apply_default_oidc_for_keycloak 2>/dev/null)" == "function" ]] || source "$PROJECT_ROOT/test/e2e/scripts/auth_utils.sh"
 
 # Env defaults (no-op if already set by orchestrator)
-DEPLOY_MODE="${DEPLOY_MODE:-kustomize}"
 INSECURE_HTTP="${INSECURE_HTTP:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 SKIP_AUTH_CHECK="${SKIP_AUTH_CHECK:-true}"
@@ -33,24 +32,7 @@ deploy_maas_platform() {
     [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]] && echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     [[ -n "${OPERATOR_CATALOG:-}" ]] && echo "Using ODH catalog: ${OPERATOR_CATALOG}"
     [[ -n "${OPERATOR_IMAGE:-}" ]] && echo "Using custom ODH operator image: ${OPERATOR_IMAGE}"
-    [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && echo "Using custom ai-gateway-operator image: ${AI_GATEWAY_OPERATOR_IMAGE} (requires DEPLOY_MODE=operator)"
-    echo "Deployment mode: ${DEPLOY_MODE}"
-
-    echo "Installing cert-manager and LeaderWorkerSet operators..."
-    if ! bash "$PROJECT_ROOT/.github/hack/install-cert-manager-and-lws.sh"; then
-        echo "❌ ERROR: cert-manager/LWS installation failed"
-        exit 1
-    fi
-
-    if [[ "${DEPLOY_MODE}" == "kustomize" ]]; then
-        echo "Installing OpenDataHub operator..."
-        if ! bash "$PROJECT_ROOT/.github/hack/install-odh.sh"; then
-            echo "❌ ERROR: ODH installation failed"
-            exit 1
-        fi
-    else
-        echo "Skipping standalone ODH install (DEPLOY_MODE=${DEPLOY_MODE}; deploy.sh installs ODH + DSC directly)"
-    fi
+    [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && echo "Using custom ai-gateway-operator image: ${AI_GATEWAY_OPERATOR_IMAGE}"
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
         echo "External OIDC enabled (Keycloak via deploy.sh --enable-keycloak, realm tenant-a defaults)..."
@@ -65,7 +47,6 @@ deploy_maas_platform() {
     export MODEL_NAMESPACE
     local deploy_cmd=(
         "$PROJECT_ROOT/scripts/deploy.sh"
-        --deployment-mode "${DEPLOY_MODE}"
         --policy-engine "${POLICY_ENGINE}"
     )
     [[ -n "${OPERATOR_CATALOG:-}" ]] && deploy_cmd+=(--operator-catalog "${OPERATOR_CATALOG}")

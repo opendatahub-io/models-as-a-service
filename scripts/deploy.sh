@@ -133,7 +133,6 @@ esac
 # DEFAULT CONFIGURATION
 #──────────────────────────────────────────────────────────────
 
-DEPLOYMENT_MODE="${DEPLOYMENT_MODE:-operator}"
 OPERATOR_TYPE="${OPERATOR_TYPE:-odh}"
 POLICY_ENGINE="${POLICY_ENGINE:-}"  # Auto-determined unless set via env or --policy-engine
 RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
@@ -169,21 +168,17 @@ USAGE:
   ./scripts/deploy.sh [OPTIONS]
 
 OPTIONS:
-  --deployment-mode <operator|kustomize>
-      Deployment method (default: operator)
-
   --operator-type <odh|rhoai>
       Which operator to install (default: odh)
       Policy engine is auto-selected based on operator type:
       - rhoai → rhcl (Red Hat Connectivity Link)
       - odh → kuadrant (community v1.4.2 with AuthPolicy v1)
-      Only applies when --deployment-mode=operator
 
   --policy-engine <rhcl|kuadrant>
       Rate-limiting policy engine (default: auto-selected)
       - rhcl: Red Hat Connectivity Link from redhat-operators (stable channel head)
       - kuadrant: upstream community catalog (v1.4.2)
-      Overrides auto-selection for both operator and kustomize modes.
+      Overrides auto-selection.
 
   --enable-tls-backend
       Enable TLS backend for Authorino and MaaS API (default: enabled)
@@ -290,9 +285,6 @@ EXAMPLES:
   # Deploy with Keycloak for external OIDC support
   ./scripts/deploy.sh --enable-keycloak
 
-  # Deploy via Kustomize
-  ./scripts/deploy.sh --deployment-mode kustomize
-
   # Test MaaS API PR #123
   MAAS_API_IMAGE=quay.io/myuser/maas-api:pr-123 \\
     ./scripts/deploy.sh --operator-type odh
@@ -329,11 +321,6 @@ require_flag_value() {
 parse_arguments() {
   while [[ $# -gt 0 ]]; do
     case $1 in
-      --deployment-mode)
-        require_flag_value "$1" "${2:-}"
-        DEPLOYMENT_MODE="$2"
-        shift 2
-        ;;
       --operator-type)
         require_flag_value "$1" "${2:-}"
         OPERATOR_TYPE="$2"
@@ -475,25 +462,14 @@ check_required_tools() {
 validate_configuration() {
   log_info "Validating configuration..."
 
-  # Validate deployment mode
-  if [[ ! "$DEPLOYMENT_MODE" =~ ^(operator|kustomize)$ ]]; then
-    log_error "Invalid deployment mode: $DEPLOYMENT_MODE"
-    log_error "Must be 'operator' or 'kustomize'"
+  # Validate operator type
+  if [[ ! "$OPERATOR_TYPE" =~ ^(rhoai|odh)$ ]]; then
+    log_error "Invalid operator type: $OPERATOR_TYPE"
+    log_error "Must be 'rhoai' or 'odh'"
     exit 1
   fi
 
-  # Validate operator type
-  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
-    if [[ ! "$OPERATOR_TYPE" =~ ^(rhoai|odh)$ ]]; then
-      log_error "Invalid operator type: $OPERATOR_TYPE"
-      log_error "Must be 'rhoai' or 'odh'"
-      exit 1
-    fi
-  fi
-
   # Auto-determine policy engine based on operator type unless explicitly set.
-  # - ODH uses community Kuadrant (v1.4.2 from upstream catalog has AuthPolicy v1)
-  # - RHOAI uses RHCL (Red Hat Connectivity Link - downstream)
   if [[ -n "$POLICY_ENGINE" ]]; then
     if [[ ! "$POLICY_ENGINE" =~ ^(rhcl|kuadrant)$ ]]; then
       log_error "Invalid policy engine: $POLICY_ENGINE"
@@ -501,7 +477,7 @@ validate_configuration() {
       exit 1
     fi
     log_debug "Using explicitly configured policy engine: $POLICY_ENGINE"
-  elif [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+  else
     case "$OPERATOR_TYPE" in
       odh)
         POLICY_ENGINE="kuadrant"
@@ -512,33 +488,18 @@ validate_configuration() {
         log_debug "Auto-selected policy engine for RHOAI: rhcl (Red Hat Connectivity Link)"
         ;;
     esac
-  else
-    # Kustomize mode: default to kuadrant (community)
-    POLICY_ENGINE="kuadrant"
-    log_debug "Using auto-determined policy engine for kustomize mode: $POLICY_ENGINE"
   fi
 
-  # Determine namespace based on deployment mode
-  if [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    # Kustomize mode: use provided namespace or default to opendatahub
-    if [[ -z "$NAMESPACE" ]]; then
+  # Determine namespace based on operator type
+  case "$OPERATOR_TYPE" in
+    rhoai)
+      NAMESPACE="redhat-ods-applications"
+      ;;
+    odh|*)
       NAMESPACE="opendatahub"
-    fi
-    log_debug "Using namespace for kustomize mode: $NAMESPACE"
-  else
-    # Operator mode: ALWAYS use fixed namespace based on operator type
-    # This matches upstream deploy-rhoai-stable.sh behavior where the
-    # applications namespace is determined by DSCInitialization, not env vars.
-    case "$OPERATOR_TYPE" in
-      rhoai)
-        NAMESPACE="redhat-ods-applications"
-        ;;
-      odh|*)
-        NAMESPACE="opendatahub"
-        ;;
-    esac
-    log_debug "Using fixed namespace for operator mode: $NAMESPACE"
-  fi
+      ;;
+  esac
+  log_debug "Using namespace: $NAMESPACE"
 
   # Export so subprocesses (subscripts called via bash, not sourced functions) inherit the values.
   export NAMESPACE OPERATOR_TYPE
@@ -560,15 +521,12 @@ main() {
   validate_configuration
 
   log_info "Deployment configuration:"
-  log_info "  Mode: $DEPLOYMENT_MODE"
-  if [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
-    log_info "  Operator: $OPERATOR_TYPE"
-  fi
+  log_info "  Operator: $OPERATOR_TYPE"
   log_info "  Policy Engine: $POLICY_ENGINE"
   log_info "  Namespace: $NAMESPACE"
   log_info "  TLS Backend: $ENABLE_TLS_BACKEND"
   log_info "  External OIDC: $EXTERNAL_OIDC"
-  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "operator" ]]; then
+  if [[ "$EXTERNAL_OIDC" == "true" ]]; then
     log_warn "  --external-oidc is ignored in operator mode. Configure external OIDC via"
     log_warn "  the ModelsAsService CR: spec.externalOIDC.issuerUrl / clientId instead."
   fi
@@ -588,18 +546,11 @@ main() {
     exit 0
   fi
 
-  case "$DEPLOYMENT_MODE" in
-    operator)
-      deploy_via_operator
-      ;;
-    kustomize)
-      deploy_via_kustomize
-      ;;
-  esac
+  deploy_via_operator
 
-  # Install maas-controller (all deployment modes).
+  # Install maas-controller.
   # The Tenant reconciler in maas-controller is the sole deployer of maas-api.
-  # In operator mode, skip if the ODH operator already created the deployment (3.4+).
+  # Skip if the ODH operator already created the deployment (3.4+).
   log_info ""
   log_info "MaaS Controller..."
   local script_dir
@@ -621,13 +572,11 @@ main() {
   local maas_controller_exists=false
   if kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
     maas_controller_exists=true
-  elif [[ "$DEPLOYMENT_MODE" == "operator" && "$FORCE_OVERWRITE" != "true" ]]; then
-    # In operator mode, the ODH operator's AIGateway/ModelsAsService module reconciler owns
-    # deploying maas-controller. Silently falling back to a direct kustomize install here
-    # would mask the exact integration gaps this deployment mode exists to catch (e.g. RBAC
-    # errors, manifest drift, version skew between the operator and MaaS images). So: wait
-    # briefly for the operator to reconcile, then fail loudly with diagnostics if it doesn't —
-    # rather than quietly installing maas-controller ourselves and reporting false success.
+  elif [[ "$FORCE_OVERWRITE" != "true" ]]; then
+    # The ODH operator's AIGateway/ModelsAsService module reconciler owns deploying
+    # maas-controller. Silently falling back to a direct kustomize install here would
+    # mask integration gaps (e.g. RBAC errors, manifest drift, version skew). So: wait
+    # briefly for the operator to reconcile, then fail loudly with diagnostics if it doesn't.
     log_info "  Waiting for the ODH operator to create maas-controller (operator-managed)..."
     if wait_for_resource "deployment" "maas-controller" "$NAMESPACE" "$ROLLOUT_TIMEOUT"; then
       maas_controller_exists=true
@@ -813,15 +762,6 @@ EOF
 
   # External OIDC: Patch the default AITenant (source of truth for tenant OIDC)
   # so the MaaSAuthPolicy controller can add oidc-identities authentication
-  # to the gateway-level AuthPolicy.
-  # Operator mode uses ModelsAsService.spec.externalOIDC instead (see parse_arguments warning).
-  if [[ "$EXTERNAL_OIDC" == "true" ]] && [[ "$DEPLOYMENT_MODE" == "kustomize" ]]; then
-    if ! configure_tenant_external_oidc; then
-      log_error "configure_tenant_external_oidc failed — gateway AuthPolicy will not include OIDC auth"
-      return 1
-    fi
-  fi
-
   log_info ""
   log_info "MaaS API and MaaS Controller deployment completed successfully!"
   local deployed_api_image deployed_ctrl_image
@@ -842,23 +782,9 @@ EOF
 deploy_via_operator() {
   log_info "Starting operator-based deployment..."
 
-  # Check for conflicting operators before modifying the cluster
-  check_conflicting_operators
-
-  # Install optional operators
-  install_optional_operators
-
-  # Install rate limiter component
-  install_policy_engine
-
-  # Install primary operator (creates namespace)
-  if ! install_primary_operator; then
-    log_error "Primary operator installation failed"
-    exit 1
-  fi
-
-  # Apply custom resources (DSCI + DSC with aigateway.modelsAsAService)
-  apply_custom_resources
+  # Install shared platform dependencies via Helm chart
+  # (cert-manager, LWS, RHCL/Kuadrant, ODH/RHOAI operator, DSCI, DSC, Gateway)
+  "${SCRIPT_DIR}/setup-shared-deps.sh"
 
   # Wait for ai-gateway-operator (deployed by the ODH operator's AIGateway module reconciler)
   # to roll out with the requested image before proceeding.
@@ -884,8 +810,41 @@ deploy_via_operator() {
     deploy_keycloak
   fi
 
-  # Wait for maas-controller (deployed by ai-gateway-operator).
-  log_info "Waiting for maas-controller deployment..."
+  # Wait for maas-controller (deployed by ai-gateway-operator via DSC reconciliation).
+  # The deployment may not exist yet — wait for it to be created, then wait for rollout.
+  local controller_wait=${CONTROLLER_WAIT_TIMEOUT:-600}
+  log_info "Waiting for maas-controller deployment to be created (timeout: ${controller_wait}s)..."
+  if ! wait_for_resource "deployment" "maas-controller" "$NAMESPACE" "$controller_wait"; then
+    log_error "maas-controller deployment was not created within ${controller_wait}s."
+    log_error "Check DSC reconciliation status and ai-gateway-operator logs."
+    local dsc_name_diag
+    dsc_name_diag=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
+    if [[ -n "$dsc_name_diag" ]]; then
+      log_error "Failing DataScienceCluster module conditions:"
+      kubectl get datasciencecluster "$dsc_name_diag" \
+        -o jsonpath='{range .status.conditions[?(@.status=="False")]}  {.type}: {.reason} - {.message}{"\n"}{end}' 2>/dev/null \
+        | while IFS= read -r line; do log_error "$line"; done
+    fi
+    exit 1
+  fi
+  # Apply latest RBAC from local repo after operator has deployed maas-controller.
+  # The operator bundles an older copy of the ClusterRole (e.g. missing HPA permissions).
+  # Applying here overwrites it. No pod restart needed — RBAC takes effect immediately
+  # and the running controller picks up permissions on its next reconcile retry.
+  log_info "Applying latest MaaS RBAC (cluster-scoped) from local repo..."
+  local project_root
+  project_root="$(cd "$SCRIPT_DIR/.." && pwd)"
+  local rbac_dir="${project_root}/deployment/base/maas-controller/rbac"
+  kubectl apply -f "${rbac_dir}/clusterrole.yaml" \
+                -f "${rbac_dir}/clusterrole_maas_configs.yaml" \
+                -f "${rbac_dir}/clusterrole_binding.yaml" \
+                -f "${rbac_dir}/clusterrolebinding_maas_configs.yaml"
+  local ocp_rbac_dir="${rbac_dir}/ocp"
+  if [[ -d "$ocp_rbac_dir" ]]; then
+    kubectl apply -f "${ocp_rbac_dir}/clusterrole_ocp.yaml" \
+                  -f "${ocp_rbac_dir}/clusterrolebinding_ocp.yaml" 2>/dev/null || true
+  fi
+  log_info "Waiting for maas-controller rollout..."
   if ! kubectl rollout status deployment/maas-controller -n "$NAMESPACE" --timeout="${POD_TIMEOUT:-300}s"; then
     log_error "maas-controller not ready (timeout: ${POD_TIMEOUT:-300}s)"
     exit 1
@@ -901,50 +860,6 @@ deploy_via_operator() {
   fi
 
   log_info "Operator deployment completed"
-}
-
-#──────────────────────────────────────────────────────────────
-# KUSTOMIZE-BASED DEPLOYMENT
-#──────────────────────────────────────────────────────────────
-
-deploy_via_kustomize() {
-  log_info "Starting kustomize-based deployment..."
-
-  # Install rate limiter component (RHCL or Kuadrant)
-  install_policy_engine
-
-  # Create namespace (idempotent - treat AlreadyExists as success to avoid TOCTOU races)
-  log_info "Ensuring namespace exists: $NAMESPACE"
-  if ! kubectl create namespace "$NAMESPACE" 2>/dev/null; then
-    if kubectl get namespace "$NAMESPACE" &>/dev/null; then
-      log_debug "Namespace $NAMESPACE already exists"
-    else
-      log_error "Failed to create namespace $NAMESPACE"
-      return 1
-    fi
-  else
-    log_info "Created namespace: $NAMESPACE"
-  fi
-
-  # Deploy PostgreSQL for API key storage (requires namespace to exist)
-  deploy_postgresql
-
-  # Deploy Keycloak identity provider (optional, if enabled)
-  if [[ "$ENABLE_KEYCLOAK" == "true" ]]; then
-    deploy_keycloak
-  fi
-
-  # Configure TLS backend (Authorino only — maas-api is deployed later by the Tenant reconciler)
-  if [[ "$ENABLE_TLS_BACKEND" == "true" ]]; then
-    configure_tls_backend
-  fi
-
-  # maas-api, gateway policies, and AuthPolicy configuration are now handled
-  # by the Tenant reconciler in maas-controller. After the controller starts it creates
-  # AITenant/models-as-a-service, whose reconciler creates/adopts MaasTenantConfig/default-tenant,
-  # which triggers the Tenant reconciler to apply maas-api manifests and gateway policies via SSA.
-
-  log_info "Kustomize prerequisite deployment completed"
 }
 
 #──────────────────────────────────────────────────────────────
@@ -1032,599 +947,6 @@ deploy_postgresql() {
 deploy_keycloak() {
   log_info "Deploying Keycloak identity provider for external OIDC support..."
   "${SCRIPT_DIR}/setup-keycloak.sh"
-}
-
-#──────────────────────────────────────────────────────────────
-# OPTIONAL OPERATORS (cert-manager, LWS)
-#──────────────────────────────────────────────────────────────
-
-install_optional_operators() {
-  log_info "Installing optional operators in parallel..."
-
-  local data_dir="${SCRIPT_DIR}/data"
-
-  # Apply both subscriptions in parallel (they're independent)
-  log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."
-  kubectl apply -f "${data_dir}/cert-manager-subscription.yaml" &
-  local cert_manager_pid=$!
-  kubectl apply -f "${data_dir}/lws-subscription.yaml" &
-  local lws_pid=$!
-
-  # Wait for both apply commands to complete and capture individual exit codes
-  local cert_manager_apply_rc=0
-  local lws_apply_rc=0
-  wait $cert_manager_pid || cert_manager_apply_rc=$?
-  wait $lws_pid || lws_apply_rc=$?
-
-  if [[ $cert_manager_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply cert-manager subscription (exit code: $cert_manager_apply_rc)"
-    return 1
-  fi
-  if [[ $lws_apply_rc -ne 0 ]]; then
-    log_error "Failed to apply LWS subscription (exit code: $lws_apply_rc)"
-    return 1
-  fi
-
-  # Wait for both subscriptions to be installed (can run in parallel too)
-  log_info "Waiting for operators to be installed..."
-  waitsubscriptioninstalled "cert-manager-operator" "openshift-cert-manager-operator" &
-  local cert_wait_pid=$!
-  waitsubscriptioninstalled "openshift-lws-operator" "leader-worker-set" &
-  local lws_wait_pid=$!
-
-  # Wait for both to complete and capture individual exit codes
-  local cert_wait_rc=0
-  local lws_wait_rc=0
-  wait $cert_wait_pid || cert_wait_rc=$?
-  wait $lws_wait_pid || lws_wait_rc=$?
-
-  if [[ $cert_wait_rc -ne 0 ]]; then
-    log_error "cert-manager operator installation failed"
-    return 1
-  fi
-  if [[ $lws_wait_rc -ne 0 ]]; then
-    log_error "LWS operator installation failed"
-    return 1
-  fi
-
-  # Create LeaderWorkerSetOperator CR to activate the LWS controller-manager.
-  # The operator subscription alone only installs the operator pod; the CR is
-  # required to actually deploy the LWS API (controller-manager pods).
-  # See: https://docs.redhat.com/en/documentation/openshift_container_platform/latest/html/ai_workloads/leader-worker-set-operator
-  log_info "Activating LeaderWorkerSet API..."
-  kubectl apply -f "${data_dir}/lws-operator-cr.yaml"
-
-  log_info "Optional operators installed"
-}
-
-
-#──────────────────────────────────────────────────────────────
-# RATE LIMITER INSTALLATION
-#──────────────────────────────────────────────────────────────
-# patch_csv_operator_container_env and patch_kuadrant_csv live in deployment-helpers.sh
-
-install_policy_engine() {
-  log_info "Installing policy engine: $POLICY_ENGINE"
-
-  case "$POLICY_ENGINE" in
-    rhcl)
-      log_info "Installing RHCL (Red Hat Connectivity Link - downstream)"
-      local rhcl_ns="${RHCL_NAMESPACE:-kuadrant-system}"
-      local rhcl_starting_csv="${RHCL_STARTING_CSV:-}"
-      if [[ -n "$rhcl_starting_csv" ]]; then
-        log_info "Pinning RHCL operator to startingCSV: $rhcl_starting_csv"
-      else
-        log_info "Using RHCL channel head from redhat-operators (stable)"
-      fi
-      log_info "Installing RHCL into namespace: $rhcl_ns"
-      if ! install_olm_operator \
-        "rhcl-operator" \
-        "$rhcl_ns" \
-        "redhat-operators" \
-        "stable" \
-        "$rhcl_starting_csv" \
-        "AllNamespaces" \
-        "" \
-        ""; then
-        log_error "RHCL operator installation failed"
-        return 1
-      fi
-
-      # Patch RHCL CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv "$rhcl_ns" "rhcl-operator"
-
-      # Apply RHCL/Kuadrant custom resource
-      apply_kuadrant_cr "$rhcl_ns"
-      ;;
-
-    kuadrant)
-      log_info "Installing Kuadrant v1.4.2 (upstream community)"
-
-      # Create custom catalog for upstream Kuadrant v1.4.2
-      # This version provides AuthPolicy v1 API and Authorino v0.23.1
-      local kuadrant_catalog="kuadrant-operator-catalog"
-      local kuadrant_ns="kuadrant-system"
-
-      log_info "Creating Kuadrant v1.4.2 catalog source..."
-      kubectl create namespace "$kuadrant_ns" 2>/dev/null || true
-
-      cat <<EOF | kubectl apply -f -
-apiVersion: operators.coreos.com/v1alpha1
-kind: CatalogSource
-metadata:
-  name: $kuadrant_catalog
-  namespace: $kuadrant_ns
-spec:
-  sourceType: grpc
-  image: quay.io/kuadrant/kuadrant-operator-catalog:v1.4.2
-  displayName: Kuadrant Operator Catalog
-  publisher: Kuadrant
-  updateStrategy:
-    registryPoll:
-      interval: 45m
-EOF
-
-      # Wait for catalog to be ready
-      log_info "Waiting for Kuadrant catalog to be ready..."
-      sleep 10
-
-      # Create OperatorGroup for Kuadrant
-      cat <<EOF | kubectl apply -f -
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: kuadrant-operator-group
-  namespace: $kuadrant_ns
-spec: {}
-EOF
-
-      # Install Kuadrant operator from the custom catalog
-      # IMPORTANT: source_namespace must match where CatalogSource was created (kuadrant_ns)
-      if ! install_olm_operator \
-        "kuadrant-operator" \
-        "$kuadrant_ns" \
-        "$kuadrant_catalog" \
-        "stable" \
-        "" \
-        "AllNamespaces" \
-        "$kuadrant_ns" \
-        ""; then
-        log_error "Kuadrant operator installation failed"
-        return 1
-      fi
-
-      # Patch Kuadrant CSV to recognize OpenShift Gateway controller
-      patch_kuadrant_csv "$kuadrant_ns" "kuadrant-operator"
-
-      # Apply Kuadrant custom resource
-      apply_kuadrant_cr "$kuadrant_ns"
-      ;;
-  esac
-}
-
-#──────────────────────────────────────────────────────────────
-# PRIMARY OPERATOR INSTALLATION
-#──────────────────────────────────────────────────────────────
-
-check_conflicting_operators() {
-  log_info "Checking if there are any conflicting operators..."
-  local conflicting_operator
-  if [[ "$OPERATOR_TYPE" == "odh" ]]; then
-    conflicting_operator="rhods-operator"
-  else
-    conflicting_operator="opendatahub-operator"
-  fi
-  # Check all namespaces for a conflicting subscription
-  local conflict
-  conflict=$(oc get subscription.operators.coreos.com --all-namespaces --no-headers 2>/dev/null | grep -w "$conflicting_operator" | head -n1 || true)
-
-  if [[ -n "$conflict" ]]; then
-    local ns
-    ns=$(echo "$conflict" | awk '{print $1}')
-    if [[ -z "$ns" ]]; then
-      log_error "Conflicting operator '$conflicting_operator' detected but could not determine its namespace"
-      return 1
-    fi
-    log_error "Conflicting operator found: $conflicting_operator in namespace $ns. ODH and RHOAI operators cannot coexist (they manage the same CRDs)."
-    log_info "Remove the conflicting operator before proceeding (suggested steps):"
-    log_info "  1. Delete custom resources: oc delete datasciencecluster --all && oc delete dscinitializations --all"
-    log_info "  2. Delete subscription: oc delete subscription.operators.coreos.com $conflicting_operator -n $ns"
-    log_info "  3. Delete CSV: oc delete csv -n $ns -l operators.coreos.com/$conflicting_operator"
-    log_info "  4. Try uninstalling $conflicting_operator (can be done via a console as well) before attempting to run deploy.sh again."
-    log_info "  5. Sanity check: delete any lingering operator groups, old namespaces and projects."
-    log_error "Quit the execution of the script. You may try re-running again."
-    return 1
-  fi
-  log_info "No conflicting operators found. Proceeding to installing the primary operator."
-}
-
-#──────────────────────────────────────────────────────────────
-# PRIMARY OPERATOR INSTALLATION
-#──────────────────────────────────────────────────────────────
-
-install_primary_operator() {
-  log_info "Installing primary operator: $OPERATOR_TYPE"
-
-  local catalog_source
-  local channel
-
-  case "$OPERATOR_TYPE" in
-    rhoai)
-      # Support custom catalog for RHOAI snapshot/development builds
-      # This allows testing with pre-release RHOAI versions that have modelsAsAService support
-      if [[ -n "$OPERATOR_CATALOG" ]]; then
-        log_info "Using custom RHOAI catalog: $OPERATOR_CATALOG"
-        create_custom_catalogsource "rhoai-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
-        catalog_source="rhoai-custom-catalog"
-        # Custom catalogs typically use 'fast' channel
-        channel="${OPERATOR_CHANNEL:-fast}"
-      else
-        catalog_source="redhat-operators"
-        # Use 'stable-3.x' channel — required for RHOAI 3.5+ with aigateway.modelsAsAService support
-        channel="${OPERATOR_CHANNEL:-stable-3.x}"
-      fi
-
-      log_info "Installing RHOAI v3 operator..."
-      # RHOAI operator goes in redhat-ods-operator namespace (not redhat-ods-applications)
-      local operator_namespace="redhat-ods-operator"
-      if ! install_olm_operator \
-        "rhods-operator" \
-        "$operator_namespace" \
-        "$catalog_source" \
-        "$channel" \
-        "" \
-        "AllNamespaces" \
-        "" \
-        ""; then
-        log_error "RHOAI operator installation failed"
-        return 1
-      fi
-
-      # Patch CSV with custom operator image if specified
-      if [[ -n "$OPERATOR_IMAGE" ]]; then
-        patch_operator_csv "rhods-operator" "$operator_namespace" "$OPERATOR_IMAGE"
-      fi
-      ;;
-
-    odh)
-      # Support custom catalog for ODH snapshot/development builds
-      # This allows testing with pre-release ODH versions (e.g., v3.4.0-ea snapshots)
-      if [[ -n "$OPERATOR_CATALOG" ]]; then
-        log_info "Using custom ODH catalog: $OPERATOR_CATALOG"
-        create_custom_catalogsource "odh-custom-catalog" "openshift-marketplace" "$OPERATOR_CATALOG"
-        catalog_source="odh-custom-catalog"
-        channel="${OPERATOR_CHANNEL:-fast-3}"
-      else
-        catalog_source="community-operators"
-        channel="${OPERATOR_CHANNEL:-fast-3}"
-      fi
-
-      # Pin to ODH 3.5 EA2 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
-      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
-      [[ "$odh_starting_csv" == "-" ]] && odh_starting_csv=""
-
-      # Manual = no auto-upgrades; install_olm_operator auto-approves the first InstallPlan only
-      local odh_plan_approval="${OPERATOR_INSTALL_PLAN_APPROVAL:-Manual}"
-      [[ "$odh_plan_approval" == "-" ]] && odh_plan_approval=""
-
-      log_info "Installing ODH operator..."
-      if ! install_olm_operator \
-        "opendatahub-operator" \
-        "$NAMESPACE" \
-        "$catalog_source" \
-        "$channel" \
-        "$odh_starting_csv" \
-        "AllNamespaces" \
-        "openshift-marketplace" \
-        "$odh_plan_approval"; then
-        log_error "ODH operator installation failed"
-        return 1
-      fi
-
-      # Patch CSV with custom operator image if specified
-      if [[ -n "$OPERATOR_IMAGE" ]]; then
-        patch_operator_csv "opendatahub-operator" "$NAMESPACE" "$OPERATOR_IMAGE"
-      fi
-
-      # Inject RELATED_IMAGE_* overrides for sub-components the ODH operator's own
-      # module/component reconcilers deploy: ai-gateway-operator, maas-controller, maas-api.
-      # In operator mode these images are otherwise NOT applied once the operator manages
-      # ModelsAsService/AIGateway directly (see MaaS Controller step in main()), so this must
-      # run before apply_custom_resources() creates the DSC that triggers those reconcilers.
-      patch_operator_related_images "$NAMESPACE" "opendatahub-operator" \
-        "RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE}" \
-        "RELATED_IMAGE_ODH_MAAS_API_IMAGE=${MAAS_API_IMAGE}" \
-        "RELATED_IMAGE_ODH_MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE}"
-      ;;
-  esac
-}
-
-#──────────────────────────────────────────────────────────────
-# CUSTOM RESOURCES
-#──────────────────────────────────────────────────────────────
-
-apply_custom_resources() {
-  log_info "Applying custom resources..."
-
-  # Wait for CRDs to be established - this is critical!
-  # The operator creates CRDs when its CSV becomes active, but there can be a delay.
-  # Both CRDs are installed together, so waiting for DataScienceCluster is sufficient.
-  log_info "Waiting for operator CRDs to be established..."
-  wait_for_crd "datascienceclusters.datasciencecluster.opendatahub.io" "$CRD_TIMEOUT" || {
-    log_error "DataScienceCluster CRD not available - operator may not have installed correctly (timeout: ${CRD_TIMEOUT}s)"
-    return 1
-  }
-
-  # Wait for webhook deployment to be ready before applying CRs
-  # This prevents "service not found" errors during conversion webhook calls
-  log_info "Waiting for operator webhook to be ready..."
-
-  local webhook_namespace
-  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_namespace="redhat-ods-operator"
-  else
-    webhook_namespace="opendatahub"
-  fi
-
-  local webhook_deployment
-  if [[ "$OPERATOR_TYPE" == "rhoai" ]]; then
-    webhook_deployment="rhods-operator"
-  else
-    webhook_deployment="opendatahub-operator-controller-manager"
-  fi
-
-  # Wait for webhook deployment to exist and be ready (ensures service + endpoints are ready)
-  wait_for_resource "deployment" "$webhook_deployment" "$webhook_namespace" "$ROLLOUT_TIMEOUT" || {
-    log_error "Webhook deployment not found after ${ROLLOUT_TIMEOUT}s"
-    return 1
-  }
-
-  # Wait for deployment to be fully ready (replicas available)
-  if kubectl get deployment "$webhook_deployment" -n "$webhook_namespace" >/dev/null 2>&1; then
-    kubectl wait --for=condition=Available --timeout="${ROLLOUT_TIMEOUT}s" \
-      deployment/"$webhook_deployment" -n "$webhook_namespace" 2>/dev/null || {
-      log_error "Webhook deployment not fully ready after ${ROLLOUT_TIMEOUT}s"
-      return 1
-    }
-  fi
-
-  # Apply DSCInitialization
-  apply_dsci
-
-  # Apply DataScienceCluster
-  apply_dsc
-
-  # Enable the AIGateway component (ai-gateway-operator) when a custom image was requested.
-  # Not part of the base DSC manifest since most callers don't need this sub-component.
-  enable_ai_gateway_component
-
-  # Wait for DataScienceCluster to be ready
-  log_info "Waiting for DataScienceCluster to be ready..."
-  wait_datasciencecluster_ready "default-dsc" "$CUSTOM_RESOURCE_TIMEOUT"
-}
-
-apply_dsci() {
-  log_info "Applying DSCInitialization..."
-
-  # Check if DSCI already exists (operator may create it automatically)
-  if kubectl get dscinitializations default-dsci &>/dev/null; then
-    log_info "DSCInitialization already exists, skipping creation (operator auto-created)"
-    return 0
-  fi
-
-  # Create DSCI with retries
-  local max_attempts=5
-  local wait_seconds=15
-  for attempt in $(seq 1 $max_attempts); do
-    if cat <<EOF | kubectl apply -f -
-apiVersion: dscinitialization.opendatahub.io/v1
-kind: DSCInitialization
-metadata:
-  name: default-dsci
-spec:
-  applicationsNamespace: ${NAMESPACE}
-  monitoring:
-    managementState: Managed
-    namespace: ${NAMESPACE}-monitoring
-    metrics: {}
-  trustedCABundle:
-    managementState: Managed
-EOF
-    then
-      return 0
-    fi
-    log_warn "DSCInitialization apply attempt $attempt/$max_attempts failed (webhook may not be ready), retrying in ${wait_seconds}s..."
-    sleep $wait_seconds
-  done
-
-  log_error "Failed to apply DSCInitialization after $max_attempts attempts"
-  return 1
-}
-
-apply_dsc() {
-  log_info "Applying DataScienceCluster with aigateway.modelsAsAService..."
-
-  local data_dir="${SCRIPT_DIR}/data"
-
-  # Scope to default-dsc — consistent with the manifest name and wait_datasciencecluster_ready target
-  if kubectl get datasciencecluster default-dsc &>/dev/null; then
-    local existing_dsc="default-dsc"
-
-    # Check for 3.5+ field: aigateway.modelsAsAService=Managed
-    local new_field
-    new_field=$(kubectl get datasciencecluster default-dsc \
-      -o jsonpath='{.spec.components.aigateway.modelsAsAService.managementState}' 2>/dev/null || echo "")
-
-    # Check for 3.4 legacy field: kserve.modelsAsService=Managed
-    local old_field
-    old_field=$(kubectl get datasciencecluster default-dsc \
-      -o jsonpath='{.spec.components.kserve.modelsAsService.managementState}' 2>/dev/null || echo "")
-
-    if [[ "$new_field" == "Managed" ]]; then
-      log_info "Existing DSC '$existing_dsc' already has aigateway.modelsAsAService=Managed, skipping"
-      return 0
-    elif [[ "$old_field" == "Managed" ]]; then
-      # 3.4 → 3.5 upgrade: existing DSC uses kserve.modelsAsService (backward compat path).
-      # Apply the new DSC on top — server-side merge adds aigateway fields while the old
-      # kserve.modelsAsService field stays frozen (CEL self==oldSelf). The operator's
-      # backward compat handles MaaS deployment until the user migrates the DSC.
-      log_info "Existing DSC '$existing_dsc' has kserve.modelsAsService=Managed (3.4 style) — upgrading to aigateway.modelsAsAService"
-      kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
-      return 0
-    else
-      log_error "Existing DSC '$existing_dsc' does not have MaaS enabled."
-      log_error "  aigateway.modelsAsAService: '${new_field:-unset}' (expected Managed)"
-      log_error "  kserve.modelsAsService (legacy): '${old_field:-unset}'"
-      log_error "Enable MaaS via aigateway.modelsAsAService in your DSC and re-run."
-      return 1
-    fi
-  fi
-
-  # No existing DSC — apply fresh 3.5+ DSC with aigateway.modelsAsAService
-  kubectl apply --server-side=true -f "${data_dir}/datasciencecluster.yaml"
-}
-
-# enable_ai_gateway_component
-#   Enables spec.components.aigateway.managementState=Managed on the DataScienceCluster so the
-#   ODH operator deploys ai-gateway-operator (pinned via patch_operator_related_images earlier
-#   in install_primary_operator). No-op unless --ai-gateway-operator-image/AI_GATEWAY_OPERATOR_IMAGE
-#   was set, since most callers don't exercise this sub-component.
-#   Note: the DSC schema field is lowercase "aigateway" (see componentApi.AIGatewayKind /
-#   opendatahub-operator's tests/e2e/aigateway_test.go), not "aiGateway".
-enable_ai_gateway_component() {
-  [[ -z "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]] && return 0
-
-  local dsc_name
-  dsc_name=$(kubectl get datasciencecluster -A -o jsonpath='{.items[0].metadata.name}' 2>/dev/null)
-  if [[ -z "$dsc_name" ]]; then
-    log_warn "No DataScienceCluster found, cannot enable AIGateway component"
-    return 1
-  fi
-
-  log_info "Enabling AIGateway component on DataScienceCluster '$dsc_name'..."
-  kubectl patch datasciencecluster "$dsc_name" --type=merge \
-    -p '{"spec":{"components":{"aigateway":{"managementState":"Managed"}}}}' || {
-    log_error "Failed to enable AIGateway component on DataScienceCluster '$dsc_name'"
-    return 1
-  }
-}
-
-#──────────────────────────────────────────────────────────────
-# KUADRANT SETUP
-#──────────────────────────────────────────────────────────────
-
-apply_kuadrant_cr() {
-  local namespace=$1
-
-  log_info "Initializing Gateway API and ModelsAsAService gateway..."
-
-  # Setup Gateway using standalone script (replaces inline setup_gateway_api + setup_maas_gateway)
-  # The script handles GatewayClass creation, Gateway creation with TLS cert detection,
-  # and waits for Gateway to be Programmed before returning.
-  # Default allowedRoutes to the app namespace so maas-api HTTPRoutes can attach.
-  # Include MODEL_NAMESPACE when set (e2e/demos deploy models outside the app ns).
-  # Override with ALLOWED_ROUTE_NAMESPACES or NAMESPACE_SELECTOR_LABELS as needed.
-  local gateway_allowed_namespaces="${ALLOWED_ROUTE_NAMESPACES:-}"
-  if [[ -z "$gateway_allowed_namespaces" && -z "${NAMESPACE_SELECTOR_LABELS:-}" ]]; then
-    # Always include the infra namespace: maas-api-route lives there and must attach
-    # to the gateway for API key/subscription calls to reach maas-api.
-    local infra_ns
-    infra_ns=$(derive_infra_namespace "$NAMESPACE")
-    gateway_allowed_namespaces="$NAMESPACE,$infra_ns"
-    if [[ -n "${MODEL_NAMESPACE:-}" && "${MODEL_NAMESPACE}" != "$NAMESPACE" ]]; then
-      gateway_allowed_namespaces="${gateway_allowed_namespaces},${MODEL_NAMESPACE}"
-    fi
-  fi
-
-  INGRESS_MODE="${INGRESS_MODE:-route}" \
-  DISCONNECTED="${DISCONNECTED:-false}" \
-  CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
-  CERT_NAME="${CERT_NAME:-}" \
-  DRY_RUN="${DRY_RUN:-false}" \
-  MAAS_MANIFEST_REF="${MAAS_MANIFEST_REF:-}" \
-  ALLOWED_ROUTE_NAMESPACES="${gateway_allowed_namespaces}" \
-  NAMESPACE_SELECTOR_LABELS="${NAMESPACE_SELECTOR_LABELS:-}" \
-  "${SCRIPT_DIR}/setup-gateway.sh" || {
-    log_error "Gateway setup failed"
-    return 1
-  }
-
-  log_info "Applying Kuadrant custom resource in $namespace..."
-
-  local data_dir="${SCRIPT_DIR}/data"
-  kubectl apply -f "${data_dir}/kuadrant.yaml" -n "$namespace"
-
-  # Wait for Kuadrant to be ready (initial attempt - configurable timeout)
-  # If it fails with MissingDependency, restart the operator and retry
-  log_info "Waiting for Kuadrant to become ready (initial check)..."
-  local kuadrant_initial_timeout=$((CUSTOM_CHECK_TIMEOUT / 2))  # Use half of standard timeout for initial check
-  if ! wait_for_custom_check "Kuadrant ready in $namespace" \
-    "$kuadrant_initial_timeout" \
-    5 -- \
-    bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True"; then
-
-    # Check if it's a MissingDependency issue
-    local kuadrant_reason
-    kuadrant_reason=$(kubectl get kuadrant kuadrant -n "$namespace" -o jsonpath='{.status.conditions[?(@.type=="Ready")].reason}' 2>/dev/null || echo "")
-
-    if [[ "$kuadrant_reason" == "MissingDependency" ]]; then
-      log_info "Kuadrant shows MissingDependency - restarting operator to re-register Gateway controller..."
-      kubectl delete pod -n "$namespace" -l control-plane=controller-manager --force --grace-period=0 2>/dev/null || true
-      sleep 15
-
-      # Retry waiting for Kuadrant
-      log_info "Retrying Kuadrant readiness check after operator restart..."
-      wait_for_custom_check "Kuadrant ready in $namespace" \
-        "$CUSTOM_CHECK_TIMEOUT" \
-        5 -- \
-        bash -c "kubectl get kuadrant kuadrant -n $namespace -o jsonpath='{.status.conditions[?(@.type==\"Ready\")].status}' 2>/dev/null | grep -q True" \
-        || log_warn "Kuadrant not ready yet (timeout: ${CUSTOM_CHECK_TIMEOUT}s) - AuthPolicy enforcement may fail on model HTTPRoutes"
-    else
-      log_warn "Kuadrant not ready (reason: $kuadrant_reason) - AuthPolicy enforcement may fail"
-    fi
-  fi
-  
-  log_info "Kuadrant setup complete"
-}
-
-patch_operator_csv() {
-  local operator_prefix=$1
-  local namespace=$2
-  local operator_image=$3
-
-  log_info "Patching operator CSV with custom image: $operator_image"
-
-  # Poll for CSV to be created instead of hardcoded sleep
-  local csv_name=""
-  local timeout=60
-  local elapsed=0
-  local interval=5
-
-  log_info "Waiting for CSV to be created (timeout: ${timeout}s)..."
-  while [[ $elapsed -lt $timeout ]]; do
-    csv_name=$(kubectl get csv -n "$namespace" --no-headers 2>/dev/null | grep "^${operator_prefix}" | head -n1 | awk '{print $1}')
-    if [[ -n "$csv_name" ]]; then
-      log_debug "Found CSV: $csv_name after ${elapsed}s"
-      break
-    fi
-    sleep $interval
-    elapsed=$((elapsed + interval))
-  done
-
-  if [[ -z "$csv_name" ]]; then
-    log_warn "Could not find CSV for $operator_prefix after ${timeout}s, skipping image patch"
-    return 0
-  fi
-
-  # Add managed: false annotation to prevent operator reconciliation from reverting the patch
-  log_info "Adding managed: false annotation to CSV $csv_name"
-  kubectl annotate csv "$csv_name" -n "$namespace" opendatahub.io/managed=false --overwrite
-
-  kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
-    {\"op\": \"replace\", \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/image\", \"value\": \"$operator_image\"}
-  ]"
-
-  log_info "CSV $csv_name patched with image $operator_image"
 }
 
 #──────────────────────────────────────────────────────────────
