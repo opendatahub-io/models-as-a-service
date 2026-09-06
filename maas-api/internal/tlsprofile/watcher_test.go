@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/rest"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
@@ -135,4 +136,15 @@ func TestSettingsEventHandlerIgnoresIrrelevantEvents(t *testing.T) {
 	handler(newAPIServerObj(nil))
 
 	assert.Zero(t, called)
+}
+
+func TestWatcherStart_StopBeforeSync(t *testing.T) {
+	watcher, err := tlsprofile.NewWatcher(&rest.Config{Host: "https://127.0.0.1:1"}, tlsprofile.DefaultSettings(), nil)
+	require.NoError(t, err)
+
+	stop := make(chan struct{})
+	close(stop)
+	err = watcher.Start(stop)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "informer cache sync failed")
 }

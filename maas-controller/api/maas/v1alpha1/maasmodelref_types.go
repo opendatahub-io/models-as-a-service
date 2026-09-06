@@ -47,7 +47,10 @@ type MaaSModelSpec struct {
 	// +optional
 	EndpointOverride string `json:"endpointOverride,omitempty"`
 	// TenantRef is the name of the AITenant this model belongs to.
-	// When omitted, the model is assigned to the default tenant.
+	// When omitted, the controller auto-resolves the tenant from the
+	// HTTPRoute's gateway parentRef via reverse lookup against AITenants.
+	// Set this only as an advanced override; prefer letting the controller
+	// resolve the tenant automatically.
 	// +optional
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
@@ -131,8 +134,8 @@ type MaaSModelStatus struct {
 	HTTPRouteHostnames []string `json:"httpRouteHostnames,omitempty"`
 
 	// ResolvedTenantRef is the name of the AITenant this model was resolved to.
-	// Set from spec.tenantRef when provided, or left empty for models using the
-	// default tenant.
+	// Set from spec.tenantRef when provided explicitly, or auto-resolved from
+	// the HTTPRoute's gateway parentRef via reverse lookup against AITenants.
 	// +optional
 	ResolvedTenantRef string `json:"resolvedTenantRef,omitempty"`
 

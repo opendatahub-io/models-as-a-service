@@ -18,6 +18,7 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
+    E2E_CURL_POD_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
     GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
@@ -1336,35 +1337,87 @@ def search_api_keys_at(
     )
 
 
-def validate_api_key_at(base_url: str, api_key: str) -> requests.Response:
-    return requests.post(
-        f"{base_url}/internal/v1/api-keys/validate",
-        json={"key": api_key},
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
+class _InternalResponse:
+    """Minimal response wrapper for kubectl curl results (internal endpoints)."""
+
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self.text = body
+        self.content = body.encode()
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _kubectl_curl_post(
+    url: str, *, headers: dict = None, json_body: dict = None,
+) -> _InternalResponse:
+    """POST to an in-cluster URL via kubectl run (for internal endpoints)."""
+    curl_args = ["-sk", "-m", "10", "-X", "POST"]
+    if headers:
+        for key, value in headers.items():
+            curl_args.extend(["-H", f"{key}: {value}"])
+    if json_body is not None:
+        curl_args.extend([
+            "-H", "Content-Type: application/json",
+            "-d", json.dumps(json_body),
+        ])
+    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
+
+    pod_name = f"mt-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    namespace = os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
+    cmd = [
+        "kubectl", "run", pod_name,
+        "--rm", "-i", "--restart=Never",
+        "--image=curlimages/curl:latest",
+        "-n", namespace,
+        "--", "curl",
+    ] + curl_args
+
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+    output = result.stdout
+    if "HTTP_CODE:" in output:
+        body, code_line = output.rsplit("HTTP_CODE:", 1)
+        match = re.search(r"(\d{3})", code_line)
+        if match:
+            return _InternalResponse(int(match.group(1)), body.strip())
+    return _InternalResponse(0, output)
+
+
+def tenant_internal_url(tenant_name: str) -> str:
+    """Return the in-cluster Service URL for a tenant's maas-api."""
+    service_name = per_tenant_resource_name("maas-api", tenant_name)
+    port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
+    return f"https://{service_name}.{INFRA_NAMESPACE}.svc.cluster.local:{port}"
+
+
+def validate_api_key_at(service_url: str, api_key: str) -> _InternalResponse:
+    """Validate an API key via the internal endpoint (in-cluster call)."""
+    return _kubectl_curl_post(
+        f"{service_url}/internal/v1/api-keys/validate",
+        json_body={"key": api_key},
     )
 
 
 def select_subscription_at(
-    base_url: str,
+    service_url: str,
     api_key: str,
     username: str,
     groups: list[str],
     *,
     requested_subscription: Optional[str] = None,
     requested_model: Optional[str] = None,
-) -> requests.Response:
+) -> _InternalResponse:
+    """Select a subscription via the internal endpoint (in-cluster call)."""
     payload: dict[str, Any] = {"username": username, "groups": groups}
     if requested_subscription:
         payload["requestedSubscription"] = requested_subscription
     if requested_model:
         payload["requestedModel"] = requested_model
-    return requests.post(
-        f"{base_url}/internal/v1/subscriptions/select",
+    return _kubectl_curl_post(
+        f"{service_url}/internal/v1/subscriptions/select",
         headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
+        json_body=payload,
     )
 
 

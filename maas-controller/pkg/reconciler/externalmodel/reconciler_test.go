@@ -371,6 +371,7 @@ func TestReconcile_SupersededByInference(t *testing.T) {
 	inferenceEM := newInferenceExternalModel(name, ns, resourceName)
 
 	c := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&maasv1alpha1.ExternalModel{}).
 		WithObjects(em, legacySvc, legacyHR).
 		WithObjects(inferenceEM).
 		Build()
@@ -392,6 +393,13 @@ func TestReconcile_SupersededByInference(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(
 		c.Get(context.Background(), types.NamespacedName{Name: resourceName, Namespace: ns}, gotHR)),
 		"expected legacy HTTPRoute to be deleted")
+
+	// Legacy ExternalModel remains as owner of the inference resources and
+	// exposes a durable signal that migration completed.
+	gotEM := &maasv1alpha1.ExternalModel{}
+	require.NoError(t, c.Get(context.Background(), types.NamespacedName{Name: name, Namespace: ns}, gotEM))
+	assert.Equal(t, "Migrated", gotEM.Status.Phase)
+	assert.Equal(t, "Model migrated to inference.opendatahub.io ExternalModel: gpt-4o", gotEM.Status.Message)
 }
 
 // TestReconcile_NoInferenceModel_ProceedsNormally verifies that without an
@@ -484,6 +492,7 @@ func TestReconcile_SupersededDoesNotTeardownOptedOut(t *testing.T) {
 	inferenceEM := newInferenceExternalModel(name, ns, resourceName)
 
 	c := fake.NewClientBuilder().WithScheme(testScheme).
+		WithStatusSubresource(&maasv1alpha1.ExternalModel{}).
 		WithObjects(em, legacySvc).
 		WithObjects(inferenceEM).
 		Build()

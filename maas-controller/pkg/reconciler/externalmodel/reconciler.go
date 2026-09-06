@@ -108,6 +108,7 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels/finalizers,verbs=update
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=externalmodels/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;delete
 //+kubebuilder:rbac:groups=networking.istio.io,resources=serviceentries,verbs=get;list;watch;create;update
 //+kubebuilder:rbac:groups=networking.istio.io,resources=destinationrules,verbs=get;list;watch;create;update;delete
@@ -136,7 +137,10 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	} else if superseded {
 		log.FromContext(ctx).Info("inference ExternalModel exists, tearing down legacy networking",
 			"name", req.Name, "namespace", req.Namespace)
-		return r.teardownLegacyChildren(ctx, extModel)
+		if _, err := r.teardownLegacyChildren(ctx, extModel); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, r.markMigrated(ctx, extModel)
 	}
 
 	tls, port, err := getTLSInfo(extModel)
@@ -398,6 +402,23 @@ func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// markMigrated records that the inference API now owns networking for this
+// legacy ExternalModel. The legacy object remains as the owner of the migrated
+// inference resources, so the status gives users a durable migration signal.
+func (r *Reconciler) markMigrated(ctx context.Context, extModel *maasv1alpha1.ExternalModel) error {
+	desiredMessage := fmt.Sprintf("Model migrated to inference.opendatahub.io ExternalModel: %s", extModel.Name)
+	if extModel.Status.Phase == "Migrated" && extModel.Status.Message == desiredMessage {
+		return nil
+	}
+
+	extModel.Status.Phase = "Migrated"
+	extModel.Status.Message = desiredMessage
+	if err := r.Status().Update(ctx, extModel); err != nil {
+		return fmt.Errorf("failed to mark legacy ExternalModel %s/%s as migrated: %w", extModel.Namespace, extModel.Name, err)
+	}
+	return nil
 }
 
 // SetupWithManager registers the reconciler to watch ExternalModel CRs.

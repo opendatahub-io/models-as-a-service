@@ -338,11 +338,11 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual WASM anchors (router fallback omitted when Kuadrant WASM present):
-	//   [0..3] WasmPlugin + RHCL wasm, [4..7] per-route disable MERGE on maas-api-route rules 0–3.
+	//   [0..3] WasmPlugin + RHCL wasm, [4..8] per-route disable MERGE on maas-api-route rules 0–4.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 8, "expected eight configPatches (4x filter insert + 4x MERGE)")
+	require.Len(t, configPatches, 9, "expected nine configPatches (4x filter insert + 5x MERGE)")
 
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
@@ -365,8 +365,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		assert.Equal(t, wantWasmClusters[i], cluster, "configPatches[%d] grpc cluster_name", i)
 	}
 
-	// Verify per-route ext_proc disable on maas-api-route rules 0–3.
-	for i := 4; i < 8; i++ {
+	// Verify per-route ext_proc disable on maas-api-route rules 0–4.
+	for i := 4; i < 9; i++ {
 		cp, ok := configPatches[i].(map[string]any)
 		require.True(t, ok, "configPatches[%d] should be a map", i)
 

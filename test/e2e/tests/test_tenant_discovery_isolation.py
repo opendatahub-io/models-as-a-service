@@ -16,7 +16,7 @@ import json
 import os
 
 from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token
+from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token
 
 log = logging.getLogger(__name__)
 
@@ -35,7 +35,7 @@ def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tupl
     cmd = [
         "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
         "--rm", "-i", "--restart=Never",
-        "--image=curlimages/curl:latest",
+        f"--image={E2E_CURL_IMAGE}",
         "-n", namespace,
         "--", "curl"
     ] + curl_args

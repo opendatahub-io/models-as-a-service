@@ -37,6 +37,11 @@ var ErrKindNotImplemented = errors.New("model kind not implemented")
 // Controller should set status to Pending and requeue to retry.
 var ErrHTTPRouteNotFound = errors.New("HTTPRoute not found yet")
 
+// ErrTenantResolutionPending indicates tenant resolution cannot complete yet
+// because the HTTPRoute parentRefs are not populated. This is a transient
+// condition during startup; the controller should set Pending and requeue.
+var ErrTenantResolutionPending = errors.New("tenant resolution pending")
+
 // RouteResolver returns the HTTPRoute name and namespace for a MaaSModelRef.
 // Used by findHTTPRouteForModel and by AuthPolicy/Subscription controllers to attach policies.
 type RouteResolver interface {

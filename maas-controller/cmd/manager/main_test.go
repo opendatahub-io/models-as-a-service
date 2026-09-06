@@ -18,9 +18,12 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
@@ -983,4 +986,68 @@ func TestParseAITenantDeletionTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newTestManager(t *testing.T) ctrl.Manager {
+	t.Helper()
+	mgr, err := ctrl.NewManager(&rest.Config{Host: "https://127.0.0.1:1"}, ctrl.Options{
+		Scheme:                 runtime.NewScheme(),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		t.Fatalf("failed to create test manager: %v", err)
+	}
+	return mgr
+}
+
+func TestSetupWatcher_SkipsWhenAPIUnavailable(t *testing.T) {
+	cfg := managerTLSConfig{available: false}
+	if err := cfg.setupWatcher(nil, func() {}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSetupWatcher_ReturnsErrorWhenRegistrationFails(t *testing.T) {
+	cfg := managerTLSConfig{
+		available: true,
+		profile:   *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+	}
+	err := cfg.setupWatcher(newTestManager(t), func() {})
+	if err == nil {
+		t.Fatal("expected error when the manager cannot watch APIServer")
+	}
+}
+
+func TestRegisterWatcher_FailsClosedWhenSetupFails(t *testing.T) {
+	mgr := newTestManager(t)
+	cfg := managerTLSConfig{
+		available: true,
+		profile:   *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+	}
+
+	orig := fatalExit
+	defer func() { fatalExit = orig }()
+	exited := 0
+	fatalExit = func(code int) {
+		exited = code
+		panic("fatalExit")
+	}
+
+	cancelled := false
+	defer func() {
+		r := recover()
+		if r != "fatalExit" {
+			t.Fatalf("recover = %v, want fatalExit", r)
+		}
+		if exited != 1 {
+			t.Fatalf("exit code = %d, want 1", exited)
+		}
+		if !cancelled {
+			t.Fatal("expected cancel before exit")
+		}
+	}()
+
+	cfg.registerWatcher(mgr, func() { cancelled = true })
+	t.Fatal("registerWatcher should have exited")
 }

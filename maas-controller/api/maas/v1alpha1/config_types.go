@@ -31,6 +31,7 @@ const (
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=maasconfig
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'default'",message="Config name must be default"
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Config is a cluster-scoped anchor for MaaS platform resources. Namespaced and
@@ -68,7 +69,14 @@ type ConfigSpec struct {
 }
 
 // ConfigStatus defines the observed state of Config.
-type ConfigStatus struct{}
+type ConfigStatus struct {
+	// Conditions represent the latest available observations of the MaaS platform state.
+	// The Ready condition aggregates status from the default AITenant and MaasTenantConfig
+	// so that the platform operator (DSC) can report configuration issues without watching
+	// MaaS operands directly.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
 
 // +kubebuilder:object:root=true
 

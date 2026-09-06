@@ -181,8 +181,8 @@ func TestExternalModel_ReconcileRoute_WrongGateway(t *testing.T) {
 	if err == nil {
 		t.Fatal("ReconcileRoute: expected error for wrong gateway")
 	}
-	if !strings.Contains(err.Error(), "does not reference gateway") {
-		t.Errorf("ReconcileRoute: error = %q, want to contain 'does not reference gateway'", err.Error())
+	if !strings.Contains(err.Error(), "no AITenant found") {
+		t.Errorf("ReconcileRoute: error = %q, want to contain 'no AITenant found'", err.Error())
 	}
 }
 
@@ -323,17 +323,20 @@ func newInferenceExternalModelCR(name, ns, providerRef string) *unstructured.Uns
 }
 
 func newTestReconcilerWithMapper(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
+	// Include default AITenant for tenant auto-resolution
+	allObjects := append([]client.Object{defaultTestAITenant()}, objects...)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(objects...).
+		WithObjects(allObjects...).
 		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
 		Build()
 	return &MaaSModelRefReconciler{
-		Client:           c,
-		Scheme:           scheme,
-		GatewayName:      "maas-default-gateway",
-		GatewayNamespace: "openshift-ingress",
+		Client:            c,
+		Scheme:            scheme,
+		GatewayName:       testGatewayName,
+		GatewayNamespace:  testGatewayNamespace,
+		AITenantNamespace: testAITenantNamespace,
 	}, c
 }
 
