@@ -222,7 +222,7 @@ func int32Ptr(i int32) *int32 { return &i }
 
 func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
-	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+	params := PlatformParams{
 		AppNamespace:                           "tenant-ns",
 		ControllerNamespace:                    "controller-ns",
 		GatewayNamespace:                       "gateway-ns",
