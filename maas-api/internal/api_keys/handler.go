@@ -196,12 +196,39 @@ type CreateAPIKeyRequest struct {
 	Labels       map[string]string `json:"labels,omitempty"`       // Structured key-value pairs for API key metadata
 }
 
+// rejectAPIKeyMintAuth blocks key minting when the caller authenticated with an existing
+// API key. Minting requires a live OpenShift or OIDC identity token.
+func (h *Handler) rejectAPIKeyMintAuth(c *gin.Context) bool {
+	if !CredentialUsesAPIKey(c.GetHeader("Authorization"), c.GetHeader("X-Api-Key")) {
+		return false
+	}
+
+	tenant := ""
+	if userCtx, exists := c.Get("user"); exists {
+		if user, ok := userCtx.(*token.UserContext); ok {
+			tenant = user.Tenant
+		}
+	}
+	h.recordTokenMint(tenant, "rejected")
+	if h.metrics != nil {
+		h.metrics.RecordRejection(constant.RejectionUnauthorized)
+	}
+	c.JSON(http.StatusForbidden, gin.H{
+		"error": "API keys cannot be used to create new API keys; authenticate with your OpenShift or OIDC token",
+	})
+	return true
+}
+
 // CreateAPIKey handles POST /v1/api-keys
 // Creates a new API key (sk-oai-* format) per Feature Refinement.
 // If expiresIn is not provided, defaults to API_KEY_MAX_EXPIRATION_DAYS (1hr for ephemeral).
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
+	if h.rejectAPIKeyMintAuth(c) {
+		return
+	}
+
 	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

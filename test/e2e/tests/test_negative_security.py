@@ -166,6 +166,42 @@ class TestHeaderSpoofing:
             if control_key_id:
                 _revoke_api_key(oc_token, control_key_id)
 
+    def test_api_key_cannot_mint_new_api_key(self):
+        """POST /v1/api-keys with an existing API key must be denied.
+
+        Minting requires a live OpenShift/OIDC identity token. An existing
+        sk-oai-* credential must not be able to create additional keys.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+        parent_key = _create_api_key(oc_token, subscription=SIMULATOR_SUBSCRIPTION)
+
+        url = f"{_maas_api_url()}/v1/api-keys"
+        body = {
+            "name": f"e2e-nested-mint-{uuid.uuid4().hex[:8]}",
+            "subscription": SIMULATOR_SUBSCRIPTION,
+        }
+
+        r = requests.post(
+            url,
+            headers={
+                "Authorization": f"Bearer {parent_key}",
+                "Content-Type": "application/json",
+            },
+            json=body,
+            timeout=TIMEOUT,
+            verify=TLS_VERIFY,
+        )
+
+        log.info("API key mint-with-key -> %s body_bytes=%d", r.status_code, len(r.content))
+        assert r.status_code in (401, 403), (
+            f"Expected 401/403 denying API-key-authenticated mint, "
+            f"got {r.status_code} body_bytes={len(r.content)}"
+        )
+        assert "sk-oai-" not in r.text, (
+            "Denied mint response must not contain API key material"
+        )
+
     def test_injected_identity_headers_rejected_on_inference(self):
         """Client injects X-MaaS-Username/Group — gateway rejects the request.
 

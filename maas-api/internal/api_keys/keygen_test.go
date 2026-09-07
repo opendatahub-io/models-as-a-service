@@ -8,6 +8,28 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/api_keys"
 )
 
+func TestCredentialUsesAPIKey(t *testing.T) {
+	tests := []struct {
+		name       string
+		authHeader string
+		xAPIKey    string
+		want       bool
+	}{
+		{"bearer api key", "Bearer sk-oai-keyid_secret", "", true},
+		{"openshift token", "Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9", "", false},
+		{"x-api-key header", "", "sk-oai-keyid_secret", true},
+		{"empty", "", "", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := api_keys.CredentialUsesAPIKey(tt.authHeader, tt.xAPIKey); got != tt.want {
+				t.Errorf("CredentialUsesAPIKey() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestGenerateAPIKey(t *testing.T) {
 	plaintext, hash, prefix, err := api_keys.GenerateAPIKey()
 

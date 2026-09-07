@@ -130,6 +130,16 @@ func HashAPIKey(key string) string {
 	return hashWithSalt(keyID, secret)
 }
 
+// CredentialUsesAPIKey reports whether the caller authenticated with an sk-oai-* API key
+// via Authorization Bearer or the X-Api-Key header (Anthropic SDK path).
+func CredentialUsesAPIKey(authHeader, xAPIKeyHeader string) bool {
+	if strings.HasPrefix(authHeader, "Bearer "+KeyPrefix) {
+		return true
+	}
+	xKey := strings.TrimSpace(xAPIKeyHeader)
+	return strings.HasPrefix(xKey, KeyPrefix)
+}
+
 // IsValidKeyFormat checks if a key has the correct format: sk-oai-{key_id}_{secret}
 // Both key_id and secret must be non-empty base62 strings.
 func IsValidKeyFormat(key string) bool {

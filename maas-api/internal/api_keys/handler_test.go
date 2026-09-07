@@ -183,6 +183,36 @@ func TestCreateAPIKey_TokenMintMetrics(t *testing.T) {
 	}
 }
 
+func TestCreateAPIKey_RejectsAPIKeyAuth(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	spy := &spyMetricsRecorder{}
+	store := NewMockStore()
+	svc := NewServiceWithLogger(store, &config.Config{}, fixedSubSelector{}, logger.Development())
+	h := NewHandler(logger.Development(), svc, newMockAdminChecker(), spy)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Header.Set("Authorization", "Bearer sk-oai-testKeyID123_testSecretValue456")
+	c.Request.Body = io.NopCloser(strings.NewReader(`{"name": "nested-mint-key"}`))
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"system:authenticated"},
+		Tenant:   "redteam",
+	})
+
+	h.CreateAPIKey(c)
+
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	assert.Contains(t, w.Body.String(), "API keys cannot be used to create new API keys")
+	require.Len(t, spy.tokenMints, 1)
+	assert.Equal(t, "redteam", spy.tokenMints[0].tenant)
+	assert.Equal(t, "rejected", spy.tokenMints[0].result)
+	require.Len(t, spy.rejections, 1)
+	assert.Equal(t, "unauthorized", spy.rejections[0])
+}
+
 func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()

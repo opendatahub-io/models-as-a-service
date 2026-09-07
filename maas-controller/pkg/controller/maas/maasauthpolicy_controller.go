@@ -813,6 +813,23 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 }`
 
 	authorizationRules := map[string]any{
+		// API keys are for inference and discovery; minting requires a live identity token.
+		"deny-api-key-mint": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": `request.method == "POST" && request.path.endsWith("/v1/api-keys")`,
+				},
+			},
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{
+						"predicate": `!(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`,
+					},
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,

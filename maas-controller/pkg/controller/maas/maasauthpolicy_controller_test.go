@@ -1780,6 +1780,40 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayAuthPolicySpec_DenyAPIKeyMint(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	authz := nestedMapRequired(t, obj, "spec", "defaults", "rules", "authorization")
+	if _, exists := authz["deny-api-key-mint"]; !exists {
+		t.Fatal("deny-api-key-mint must be present to block API-key-authenticated minting")
+	}
+
+	whenPred := nestedWhenPredicateRequired(t, obj, "spec", "defaults", "rules", "authorization", "deny-api-key-mint", "when")
+	if !contains(whenPred, `request.method == "POST"`) || !contains(whenPred, `request.path.endsWith("/v1/api-keys")`) {
+		t.Errorf("deny-api-key-mint when should scope to POST /v1/api-keys, got: %s", whenPred)
+	}
+
+	patterns, found, err := unstructured.NestedSlice(
+		obj.Object,
+		"spec", "defaults", "rules", "authorization", "deny-api-key-mint", "patternMatching", "patterns",
+	)
+	if err != nil || !found || len(patterns) != 1 {
+		t.Fatalf("deny-api-key-mint patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
+	}
+	pattern, ok := patterns[0].(map[string]any)
+	if !ok {
+		t.Fatalf("deny-api-key-mint patterns[0] is not a map: %T", patterns[0])
+	}
+	pred, ok := pattern["predicate"].(string)
+	if !ok {
+		t.Fatal("deny-api-key-mint patterns[0] missing predicate string")
+	}
+	wantPred := `!(has(auth.metadata) && has(auth.metadata.apiKeyValidation))`
+	if pred != wantPred {
+		t.Fatalf("deny-api-key-mint predicate = %q, want %q", pred, wantPred)
+	}
+}
+
 func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	oidc := &oidcConfig{
 		IssuerURL: "https://keycloak.example.com/realms/test",
