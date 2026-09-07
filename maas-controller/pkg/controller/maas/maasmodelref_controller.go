@@ -476,8 +476,16 @@ func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
 	return false
 }
 
+func crdPartialMetadata() *metav1.PartialObjectMetadata {
+	// CRD specs contain large OpenAPI schemas; all current CRD predicates only
+	// inspect metadata, so the informer does not need to cache the full object.
+	metadata := &metav1.PartialObjectMetadata{}
+	metadata.SetGroupVersionKind(apiextensionsv1.SchemeGroupVersion.WithKind("CustomResourceDefinition"))
+	return metadata
+}
+
 // registerWatchWhenCRDAppears dynamically registers a resource watch the first time
-// the target CRD becomes available. It watches CRD objects (always available) and
+// the target CRD becomes available. It watches CRD metadata (always available) and
 // calls makeSource() exactly once via sync.Once when the named CRD is detected —
 // so multiple CRD update events never produce duplicate watchers. No pod restart needed.
 func registerWatchWhenCRDAppears(
@@ -491,9 +499,9 @@ func registerWatchWhenCRDAppears(
 	var once sync.Once
 	return c.Watch(source.Kind(
 		mgr.GetCache(),
-		&apiextensionsv1.CustomResourceDefinition{},
-		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
-			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
+		crdPartialMetadata(),
+		handler.TypedEnqueueRequestsFromMapFunc[*metav1.PartialObjectMetadata](
+			func(ctx context.Context, crd *metav1.PartialObjectMetadata) []reconcile.Request {
 				if crd.Name != crdName {
 					return nil
 				}

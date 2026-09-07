@@ -9,10 +9,14 @@ import (
 	"time"
 
 	confv1 "github.com/openshift/api/config/v1"
+	"github.com/stretchr/testify/require"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
@@ -20,6 +24,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -29,6 +34,73 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
+
+func cacheByObjectFor[T client.Object](t *testing.T, options cache.Options) cache.ByObject {
+	t.Helper()
+	for object, byObject := range options.ByObject {
+		if _, ok := object.(T); ok {
+			return byObject
+		}
+	}
+	t.Fatalf("cache configuration for %T not found", *new(T))
+	return cache.ByObject{}
+}
+
+func TestBuildCacheOptionsScopesRenderedMaaSResources(t *testing.T) {
+	t.Parallel()
+
+	options := buildCacheOptions(
+		"models-as-a-service", "odh-ai-gateway-infra", "opendatahub",
+		"ai-tenants", "openshift-ingress", "opendatahub",
+		false, true,
+	)
+
+	deployment := cacheByObjectFor[*appsv1.Deployment](t, options)
+	require.Contains(t, deployment.Namespaces, "opendatahub")
+	require.Contains(t, deployment.Namespaces, "odh-ai-gateway-infra")
+	require.Contains(t, deployment.Namespaces, "openshift-ingress")
+
+	configMap := cacheByObjectFor[*corev1.ConfigMap](t, options)
+	for _, namespace := range []string{"odh-ai-gateway-infra", "ai-tenants", "openshift-ingress", "opendatahub"} {
+		require.Contains(t, configMap.Namespaces, namespace)
+	}
+
+	selectorLabels := labels.Set{
+		tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
+	}
+	clusterRoleBinding := cacheByObjectFor[*rbacv1.ClusterRoleBinding](t, options)
+	require.True(t, clusterRoleBinding.Label.Matches(selectorLabels))
+	require.False(t, clusterRoleBinding.Label.Matches(labels.Set{}))
+
+	networkPolicy := cacheByObjectFor[*netwv1.NetworkPolicy](t, options)
+	for _, namespace := range []string{"opendatahub", "odh-ai-gateway-infra", "openshift-ingress"} {
+		require.Contains(t, networkPolicy.Namespaces, namespace)
+	}
+	require.True(t, networkPolicy.Label.Matches(selectorLabels))
+
+	secret := cacheByObjectFor[*corev1.Secret](t, options)
+	require.Equal(t, map[string]cache.Config{"odh-ai-gateway-infra": {}}, secret.Namespaces)
+}
+
+func TestBuildCacheOptionsKeepsStandardScopesWhenTenantDiscoveryIsEnabled(t *testing.T) {
+	t.Parallel()
+
+	options := buildCacheOptions(
+		"models-as-a-service", "odh-ai-gateway-infra", "opendatahub",
+		"ai-tenants", "openshift-ingress", "opendatahub",
+		true, true,
+	)
+
+	tenant := cacheByObjectFor[*maasv1alpha1.Tenant](t, options)
+	require.Contains(t, tenant.Namespaces, cache.AllNamespaces)
+
+	deployment := cacheByObjectFor[*appsv1.Deployment](t, options)
+	require.Contains(t, deployment.Namespaces, "openshift-ingress")
+	configMap := cacheByObjectFor[*corev1.ConfigMap](t, options)
+	require.Contains(t, configMap.Namespaces, "openshift-ingress")
+	networkPolicy := cacheByObjectFor[*netwv1.NetworkPolicy](t, options)
+	require.Contains(t, networkPolicy.Namespaces, "openshift-ingress")
+}
 
 func TestEnsureAITenantNamespaceWithClientCreatesNamespace(t *testing.T) {
 	clientset := clientsetfake.NewSimpleClientset()

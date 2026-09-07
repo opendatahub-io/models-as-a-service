@@ -47,6 +47,7 @@ func RunPlatform(
 	ctx context.Context,
 	log logr.Logger,
 	c client.Client,
+	reader client.Reader,
 	scheme *runtime.Scheme,
 	tenant client.Object,
 	platformContext PlatformContext,
@@ -110,7 +111,10 @@ func RunPlatform(
 		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
 	}
 
-	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
+	if reader == nil {
+		reader = c
+	}
+	if err := ApplyRendered(ctx, c, reader, scheme, tenant, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
 	}
 
@@ -177,7 +181,7 @@ func Run(
 		return nil, err
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
+	return RunPlatform(ctx, log, c, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
 }
 
 const maasParametersConfigMapName = "maas-parameters"

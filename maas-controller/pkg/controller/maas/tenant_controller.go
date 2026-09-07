@@ -23,7 +23,6 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -47,7 +46,9 @@ import (
 // The MaasTenantConfig CR is the runtime object; DSC.modelsAsService controls only enablement.
 type TenantReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the manager cache for live ownership and managed annotation checks.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// OperatorNamespace overrides POD_NAMESPACE / WATCH_NAMESPACE when discovering namespaced platform workloads (tests).
 	OperatorNamespace string
 	// ManifestPath is the directory containing kustomization.yaml for the ODH maas-api overlay (e.g. maas-api/deploy/overlays/odh).
@@ -241,8 +242,8 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&maasv1alpha1.AITenant{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
 		).
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).

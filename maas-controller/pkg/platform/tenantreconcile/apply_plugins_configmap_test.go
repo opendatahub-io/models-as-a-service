@@ -51,7 +51,7 @@ func TestPreparePayloadProcessingPluginsConfigMapApply(t *testing.T) {
 		t.Parallel()
 		c := fake.NewClientBuilder().WithScheme(scheme).Build()
 		u := newRendered()
-		preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u)
+		require.NoError(t, preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u))
 		assert.Equal(t, "false", u.GetAnnotations()[AnnotationManaged])
 	})
 
@@ -65,7 +65,7 @@ func TestPreparePayloadProcessingPluginsConfigMapApply(t *testing.T) {
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(live).Build()
 		u := newRendered()
-		preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u)
+		require.NoError(t, preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u))
 		assert.Equal(t, "false", u.GetAnnotations()[AnnotationManaged])
 	})
 
@@ -82,7 +82,7 @@ func TestPreparePayloadProcessingPluginsConfigMapApply(t *testing.T) {
 		}
 		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(live).Build()
 		u := newRendered()
-		preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u)
+		require.NoError(t, preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u))
 		assert.Equal(t, "true", u.GetAnnotations()[AnnotationManaged])
 	})
 
@@ -92,7 +92,7 @@ func TestPreparePayloadProcessingPluginsConfigMapApply(t *testing.T) {
 		u := &unstructured.Unstructured{}
 		u.SetGroupVersionKind(GVKConfigMap)
 		u.SetName("unrelated")
-		preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u)
+		require.NoError(t, preparePayloadProcessingPluginsConfigMapApply(context.Background(), c, u))
 		assert.Nil(t, u.GetAnnotations())
 	})
 }

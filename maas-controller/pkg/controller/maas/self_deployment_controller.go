@@ -31,7 +31,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
-	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -1060,8 +1059,8 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
-		Watches(
-			&extv1.CustomResourceDefinition{},
+		WatchesMetadata(
+			crdPartialMetadata(),
 			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
 				return []reconcile.Request{{NamespacedName: types.NamespacedName{
 					Namespace: r.DeploymentNS,

@@ -33,11 +33,14 @@ import (
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -960,6 +963,80 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 	return nil
 }
 
+func buildCacheOptions(
+	maasSubscriptionNamespace, infraNamespace, controllerNamespace,
+	aitenantNamespace, gatewayNamespace, monitoringNamespace string,
+	enableTenantNamespaceDiscovery, defaultSubscriptionNamespaceExists bool,
+) cache.Options {
+	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
+	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
+
+	// Scope standard Kubernetes resources to the namespaces where MaaS renders or
+	// observes them. Predicates only filter reconciliation events; they do not
+	// reduce the objects loaded by an informer.
+	deploymentNsCfg := map[string]cache.Config{controllerNamespace: {}}
+	if infraNamespace != controllerNamespace {
+		deploymentNsCfg[infraNamespace] = cache.Config{}
+	}
+	if gatewayNamespace != controllerNamespace && gatewayNamespace != infraNamespace {
+		deploymentNsCfg[gatewayNamespace] = cache.Config{}
+	}
+
+	configMapNsCfg := map[string]cache.Config{infraNamespace: {}}
+	for _, namespace := range []string{aitenantNamespace, gatewayNamespace, monitoringNamespace} {
+		if namespace != "" {
+			configMapNsCfg[namespace] = cache.Config{}
+		}
+	}
+
+	networkPolicyNsCfg := map[string]cache.Config{controllerNamespace: {}}
+	for _, namespace := range []string{infraNamespace, gatewayNamespace, monitoringNamespace} {
+		if namespace != "" {
+			networkPolicyNsCfg[namespace] = cache.Config{}
+		}
+	}
+
+	// postBuildTransform applies this label to every rendered MaaS resource,
+	// including ClusterRoleBindings and NetworkPolicies. It is stable across
+	// namespace remapping and matches resources from existing installations.
+	maasResourceSelector := labels.SelectorFromSet(labels.Set{
+		tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
+	})
+
+	standardByObject := map[client.Object]cache.ByObject{
+		&appsv1.Deployment{}:         {Namespaces: deploymentNsCfg},
+		&corev1.ConfigMap{}:          {Namespaces: configMapNsCfg},
+		&rbacv1.ClusterRoleBinding{}: {Label: maasResourceSelector},
+		&netwv1.NetworkPolicy{}:      {Namespaces: networkPolicyNsCfg, Label: maasResourceSelector},
+	}
+
+	cacheOpts := cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			// These CRs are intentionally cluster-wide when tenant discovery is
+			// disabled because AITenant can create them outside the default namespace.
+			&maasv1alpha1.MaasTenantConfig{}: {},
+			&maasv1alpha1.Tenant{}:           {},
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
+			&corev1.Secret{}:                 {Namespaces: infraNsCfg},
+		},
+	}
+	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
+		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
+		cacheOpts.ByObject = map[client.Object]cache.ByObject{
+			&maasv1alpha1.MaasTenantConfig{}: {Namespaces: allNamespacesCfg},
+			&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
+			&corev1.Secret{}:                 {Namespaces: infraNsCfg},
+		}
+	}
+	for object, byObject := range standardByObject {
+		cacheOpts.ByObject[object] = byObject
+	}
+	return cacheOpts
+}
+
 func main() {
 	var metricsAddr string
 	var secureMetrics bool
@@ -1097,36 +1174,13 @@ func main() {
 		setupLog.Error(err, "unable to inspect subscription namespace", "namespace", maasSubscriptionNamespace)
 		os.Exit(1)
 	}
-	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
-	// maas-db-config lives in the infrastructure namespace (where maas-api runs).
-	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
-	cacheOpts := cache.Options{
-		ByObject: map[client.Object]cache.ByObject{
-			// MaasTenantConfig CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
-			// TODO: Replace with proper namespace discovery from S1 when merged.
-			&maasv1alpha1.MaasTenantConfig{}: {},
-			&maasv1alpha1.Tenant{}:           {},
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
-			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
-			// to avoid caching cluster-wide Secrets.
-			&corev1.Secret{}: {Namespaces: infraNsCfg},
-		},
-	}
+	cacheOpts := buildCacheOptions(
+		maasSubscriptionNamespace, infraNamespace, controllerNamespace,
+		aitenantNamespace, gatewayNamespace, monitoringNamespace,
+		enableTenantNamespaceDiscovery, defaultSubscriptionNamespaceExists,
+	)
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
 	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
-		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
-		cacheOpts = cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&maasv1alpha1.MaasTenantConfig{}: {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
-				// Keep Secret informer scoped to the infra namespace even in multi-tenant mode —
-				// maas-db-config always lives in the infra namespace regardless of tenant count.
-				&corev1.Secret{}: {Namespaces: infraNsCfg},
-			},
-		}
 		setupLog.Info("watching MaaS CRs across all namespaces",
 			"defaultNamespace", maasSubscriptionNamespace,
 			"defaultNamespaceExists", defaultSubscriptionNamespaceExists,
@@ -1273,6 +1327,7 @@ func main() {
 
 	if err := (&maas.TenantReconciler{
 		Client:                          mgr.GetClient(),
+		APIReader:                       mgr.GetAPIReader(),
 		Scheme:                          mgr.GetScheme(),
 		ManifestPath:                    manifestPath,
 		AppNamespace:                    infraNamespace,

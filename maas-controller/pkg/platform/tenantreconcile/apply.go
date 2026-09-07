@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -27,9 +28,12 @@ const ssaFieldOwner = "maas-controller"
 // Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
 // Config controller ownerReference; they still receive tenant tracking labels. Add predicates
 // there for future exceptions (e.g. shared config that must outlive Config GC).
-func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant client.Object, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
+func ApplyRendered(ctx context.Context, c client.Client, reader client.Reader, scheme *runtime.Scheme, tenant client.Object, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
 		return errors.New("config with UID is required for platform apply")
+	}
+	if reader == nil {
+		reader = c
 	}
 
 	for i := range objs {
@@ -41,7 +45,11 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// bootstrap/migrate (see preparePayloadProcessingPluginsConfigMapApply) so
 		// subsequent reconciles leave user plugin edits alone unless they set
 		// opendatahub.io/managed=true to opt back into continuous management.
-		if isLiveResourceUnmanaged(ctx, c, u) {
+		unmanaged, err := isLiveResourceUnmanaged(ctx, reader, u)
+		if err != nil {
+			return fmt.Errorf("check managed annotation on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+		}
+		if unmanaged {
 			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
 				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
 			continue
@@ -51,7 +59,11 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// controller (e.g. ODH operator's ModelsAsService component). SSA-applying
 		// over them would fail on immutable fields like spec.selector and produce
 		// conflicting controller:true ownerReferences.
-		if isOwnedByExternalController(ctx, c, u, mcfg.UID) {
+		externallyOwned, err := isOwnedByExternalController(ctx, reader, u, mcfg.UID)
+		if err != nil {
+			return fmt.Errorf("check owner references on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+		}
+		if externallyOwned {
 			ctrl.LoggerFrom(ctx).Info("Skipping SSA: resource owned by external controller",
 				"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName())
 			continue
@@ -72,7 +84,9 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			}
 			setTenantTrackingLabels(u, tenant)
 		}
-		preparePayloadProcessingPluginsConfigMapApply(ctx, c, u)
+		if err := preparePayloadProcessingPluginsConfigMapApply(ctx, reader, u); err != nil {
+			return fmt.Errorf("prepare %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
+		}
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
 		unstructured.RemoveNestedField(u.Object, "metadata", "resourceVersion")
 		unstructured.RemoveNestedField(u.Object, "status")
@@ -110,18 +124,21 @@ func isMaaSControllerDeployment(u *unstructured.Unstructured, appNs string) bool
 	return strings.EqualFold(u.GetKind(), "Deployment") && u.GetName() == MaaSControllerDeploymentName
 }
 
-func isLiveResourceUnmanaged(ctx context.Context, c client.Client, rendered *unstructured.Unstructured) bool {
+func isLiveResourceUnmanaged(ctx context.Context, reader client.Reader, rendered *unstructured.Unstructured) (bool, error) {
 	live := &unstructured.Unstructured{}
 	live.SetGroupVersionKind(rendered.GroupVersionKind())
 	key := client.ObjectKeyFromObject(rendered)
 	if key.Name == "" {
-		return false
+		return false, nil
 	}
-	if err := c.Get(ctx, key, live); err != nil {
-		return false
+	if err := reader.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	ann := live.GetAnnotations()
-	return ann != nil && ann[AnnotationManaged] == "false"
+	return ann != nil && ann[AnnotationManaged] == "false", nil
 }
 
 // isPayloadProcessingPluginsConfigMap reports whether u is the IPP plugins ConfigMap
@@ -147,19 +164,21 @@ func isPayloadProcessingPluginsConfigMap(u *unstructured.Unstructured) bool {
 //
 // Do not put managed=false in the source YAML: PostRender drops resources that
 // already carry that annotation, which would prevent first-time creation.
-func preparePayloadProcessingPluginsConfigMapApply(ctx context.Context, c client.Client, u *unstructured.Unstructured) {
+func preparePayloadProcessingPluginsConfigMapApply(ctx context.Context, reader client.Reader, u *unstructured.Unstructured) error {
 	if !isPayloadProcessingPluginsConfigMap(u) {
-		return
+		return nil
 	}
 	managedValue := "false"
 	live := &unstructured.Unstructured{}
 	live.SetGroupVersionKind(u.GroupVersionKind())
 	key := client.ObjectKeyFromObject(u)
 	if key.Name != "" {
-		if err := c.Get(ctx, key, live); err == nil {
+		if err := reader.Get(ctx, key, live); err == nil {
 			if ann := live.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "true" {
 				managedValue = "true"
 			}
+		} else if !apierrors.IsNotFound(err) {
+			return err
 		}
 	}
 	ann := u.GetAnnotations()
@@ -168,6 +187,7 @@ func preparePayloadProcessingPluginsConfigMapApply(ctx context.Context, c client
 	}
 	ann[AnnotationManaged] = managedValue
 	u.SetAnnotations(ann)
+	return nil
 }
 
 // isOwnedByExternalController returns true when the live cluster copy of the
@@ -176,22 +196,25 @@ func preparePayloadProcessingPluginsConfigMapApply(ctx context.Context, c client
 // over resources the ODH operator's ModelsAsService component already owns,
 // which would fail on immutable fields (spec.selector) and produce conflicting
 // controller ownerReferences.
-func isOwnedByExternalController(ctx context.Context, c client.Client, rendered *unstructured.Unstructured, configUID types.UID) bool {
+func isOwnedByExternalController(ctx context.Context, reader client.Reader, rendered *unstructured.Unstructured, configUID types.UID) (bool, error) {
 	live := &unstructured.Unstructured{}
 	live.SetGroupVersionKind(rendered.GroupVersionKind())
 	key := client.ObjectKeyFromObject(rendered)
 	if key.Name == "" {
-		return false
+		return false, nil
 	}
-	if err := c.Get(ctx, key, live); err != nil {
-		return false
+	if err := reader.Get(ctx, key, live); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, err
 	}
 	for _, ref := range live.GetOwnerReferences() {
 		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
-			return true
+			return true, nil
 		}
 	}
-	return false
+	return false, nil
 }
 
 func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
