@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import time
@@ -19,8 +18,6 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    E2E_CURL_IMAGE,
-    E2E_CURL_POD_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
     GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
@@ -32,8 +29,7 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
-    _write_ca_to_pod,
-    get_curl_ca_bundle,
+    kubectl_curl,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -1356,95 +1352,11 @@ class _InternalResponse:
 def _kubectl_curl_post(
     url: str, *, headers: dict = None, json_body: dict = None,
 ) -> _InternalResponse:
-    """POST to an in-cluster URL via kubectl exec (for internal endpoints).
-
-    The pod is created without credentials in its spec.  Credentials
-    (headers, request body) are passed only via stdin to ``kubectl exec -i``
-    so that they never appear in the Pod object stored in the Kubernetes API.
-    """
-    pod_name = f"mt-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    namespace = os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-    ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
-
-    try:
-        # 1. Create an ephemeral pod (no credentials in spec)
-        create_cmd = [
-            "kubectl", "run", pod_name,
-            "--restart=Never",
-            f"--image={E2E_CURL_IMAGE}",
-            "-n", namespace,
-            "--command", "--", "sleep", "300",
-        ]
-        subprocess.run(create_cmd, capture_output=True, text=True, timeout=30, check=True)
-
-        # 2. Wait for pod readiness
-        wait_cmd = [
-            "kubectl", "wait", "--for=condition=Ready",
-            f"pod/{pod_name}", "-n", namespace, "--timeout=30s",
-        ]
-        subprocess.run(wait_cmd, capture_output=True, text=True, timeout=45, check=True)
-
-        # 2.5. Write custom CA bundle into the pod if configured
-        if ca_bundle_content:
-            _write_ca_to_pod(pod_name, namespace, ca_bundle_content)
-
-        # 3. Build a shell script that reads credentials from stdin
-        script_lines = []
-        stdin_lines = []
-
-        if headers:
-            for i, (key, value) in enumerate(headers.items()):
-                script_lines.append(f"IFS= read -r HDR{i}")
-                stdin_lines.append(f"{key}: {value}")
-
-        # If a JSON body is provided, read it from remaining stdin
-        if json_body is not None:
-            script_lines.append("BODY=$(cat)")
-
-        curl_parts = ["curl", "-s", "--proto", "=https", "--cacert", ca_cert_path, "-m", "10", "-X", "POST"]
-        if headers:
-            for i in range(len(headers)):
-                curl_parts.append(f'-H "$HDR{i}"')
-        if json_body is not None:
-            has_ct = any(k.lower() == "content-type" for k in (headers or {}))
-            if not has_ct:
-                curl_parts.append('-H "Content-Type: application/json"')
-            curl_parts.append('-d "$BODY"')
-        curl_parts.append('-w "\\nHTTP_CODE:%{http_code}"')
-        curl_parts.append(shlex.quote(url))
-
-        script_lines.append(" ".join(curl_parts))
-        script = "\n".join(script_lines)
-
-        # Compose stdin: header lines followed by JSON body
-        if json_body is not None:
-            stdin_lines.append(json.dumps(json_body))
-        stdin_data = "\n".join(stdin_lines) + "\n" if stdin_lines else None
-
-        # 4. Execute via kubectl exec -i; credentials travel through stdin
-        exec_cmd = [
-            "kubectl", "exec", "-i", pod_name, "-n", namespace,
-            "--", "sh", "-c", script,
-        ]
-        result = subprocess.run(
-            exec_cmd, capture_output=True, text=True, timeout=60,
-            input=stdin_data,
-        )
-
-        # 5. Parse status code from output
-        output = result.stdout
-        if "HTTP_CODE:" in output:
-            body, code_line = output.rsplit("HTTP_CODE:", 1)
-            match = re.search(r"(\d{3})", code_line)
-            if match:
-                return _InternalResponse(int(match.group(1)), body.strip())
-        return _InternalResponse(0, output)
-    finally:
-        delete_cmd = [
-            "kubectl", "delete", "pod", pod_name, "-n", namespace,
-            "--grace-period=0", "--force", "--wait=false",
-        ]
-        subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
+    """POST to an in-cluster URL via kubectl exec (for internal endpoints)."""
+    status_code, body = kubectl_curl(
+        url, method="POST", headers=headers, json_body=json_body,
+    )
+    return _InternalResponse(status_code, body)
 
 
 def tenant_internal_url(tenant_name: str) -> str:
