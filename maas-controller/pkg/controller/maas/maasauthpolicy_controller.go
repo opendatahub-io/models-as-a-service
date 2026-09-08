@@ -813,6 +813,22 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 }`
 
 	authorizationRules := map[string]any{
+		// API keys are inference credentials, not management credentials. Block the
+		// MaaS API key-management surface at the gateway before proxying the request.
+		"deny-api-key-management": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsAPIKey + ` && (request.path == "/maas-api/v1/api-keys" || request.path.startsWith("/maas-api/v1/api-keys/"))`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{"predicate": "false"},
+				},
+			},
+		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,

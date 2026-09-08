@@ -3,6 +3,7 @@ Negative-path and security-oriented E2E tests for MaaS.
 
 Validates that the platform correctly rejects abuse scenarios:
 - Header spoofing: client-supplied X-MaaS identity headers are rejected at the gateway
+- API key delegation: API keys cannot access the API-key management surface
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
 - AuthPolicy removal: access revoked when policy deleted
@@ -63,6 +64,72 @@ from test_helper import (
 log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.xdist_group("security")
+
+
+# ============================================================================
+# P0: API Key Management Isolation
+# ============================================================================
+
+class TestAPIKeyManagementIsolation:
+    """Verify that inference API keys cannot act as management credentials."""
+
+    def test_api_key_cannot_mint_another_api_key(self):
+        """A valid subscription-bound API key must be denied on POST /v1/api-keys.
+
+        The initial key is minted with a cluster token as a control. The test then
+        presents that valid key to the management endpoint and verifies that the
+        gateway or MaaS API rejects it without returning new key material.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+        parent_key_id = None
+
+        try:
+            parent = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-delegation-parent-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert parent.status_code in (200, 201), (
+                f"Control API key mint failed: {parent.status_code} "
+                f"body_bytes={len(parent.content)}"
+            )
+            parent_body = parent.json()
+            parent_key_id = parent_body.get("id")
+            parent_key = parent_body.get("key", "")
+            assert parent_key.startswith("sk-oai-"), "Control mint did not return an API key"
+
+            # Use the API key, not the cluster token, to attempt delegation.
+            # Do not log the response body: a regression could return a live key.
+            delegated = requests.post(
+                f"{_maas_api_url()}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {parent_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "name": f"e2e-delegation-child-{uuid.uuid4().hex[:8]}",
+                    "subscription": SIMULATOR_SUBSCRIPTION,
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            log.info(
+                "API-key-authenticated key mint -> %s body_bytes=%d",
+                delegated.status_code,
+                len(delegated.content),
+            )
+            assert delegated.status_code in (401, 403), (
+                f"Expected API-key-authenticated mint to be denied, got "
+                f"{delegated.status_code} body_bytes={len(delegated.content)}"
+            )
+            assert "sk-oai-" not in delegated.text, (
+                "Denied delegation response must not contain API key material"
+            )
+        finally:
+            if parent_key_id:
+                _revoke_api_key(oc_token, parent_key_id)
 
 
 # ============================================================================
