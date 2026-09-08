@@ -29,6 +29,7 @@ import (
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
@@ -65,6 +66,9 @@ func TestBuildCacheOptionsScopesRenderedMaaSResources(t *testing.T) {
 		require.Contains(t, configMap.Namespaces, namespace)
 	}
 
+	gateway := cacheByObjectFor[*gatewayapiv1.Gateway](t, options)
+	require.Equal(t, map[string]cache.Config{"openshift-ingress": {}}, gateway.Namespaces)
+
 	selectorLabels := labels.Set{
 		tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
 	}
@@ -98,6 +102,8 @@ func TestBuildCacheOptionsKeepsStandardScopesWhenTenantDiscoveryIsEnabled(t *tes
 	require.Contains(t, deployment.Namespaces, "openshift-ingress")
 	configMap := cacheByObjectFor[*corev1.ConfigMap](t, options)
 	require.Contains(t, configMap.Namespaces, "openshift-ingress")
+	gateway := cacheByObjectFor[*gatewayapiv1.Gateway](t, options)
+	require.Equal(t, map[string]cache.Config{"openshift-ingress": {}}, gateway.Namespaces)
 	networkPolicy := cacheByObjectFor[*netwv1.NetworkPolicy](t, options)
 	require.Contains(t, networkPolicy.Namespaces, "openshift-ingress")
 }

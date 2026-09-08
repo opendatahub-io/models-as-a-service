@@ -163,7 +163,7 @@ func (h *llmisvcHandler) GetModelEndpoint(ctx context.Context, log logr.Logger, 
 
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
-	if err := h.r.Get(ctx, key, gateway); err != nil {
+	if err := h.r.getGateway(ctx, key, gateway); err != nil {
 		return "", fmt.Errorf("failed to get gateway %s/%s: %w", gatewayNS, gatewayName, err)
 	}
 	if len(gateway.Spec.Listeners) > 0 {

@@ -55,7 +55,9 @@ import (
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
 type MaaSModelRefReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the scoped cache for Gateway lookups that may use a legacy/custom namespace.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 
 	// GatewayName and GatewayNamespace identify the Gateway used for model HTTPRoutes (configurable via flags).
 	GatewayName      string

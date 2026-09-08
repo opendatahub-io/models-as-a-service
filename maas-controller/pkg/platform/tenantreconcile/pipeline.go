@@ -70,8 +70,11 @@ func RunPlatform(
 	if platformContext.GatewayRef.Namespace == "" || platformContext.GatewayRef.Name == "" {
 		return nil, errors.New("gateway ref must be set before calling RunPlatform")
 	}
+	if reader == nil {
+		reader = c
+	}
 	gw := &gwapiv1.Gateway{}
-	if err := c.Get(ctx, types.NamespacedName{Namespace: platformContext.GatewayRef.Namespace, Name: platformContext.GatewayRef.Name}, gw); err != nil {
+	if err := reader.Get(ctx, types.NamespacedName{Namespace: platformContext.GatewayRef.Namespace, Name: platformContext.GatewayRef.Name}, gw); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil, fmt.Errorf("gateway %s/%s not found", platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
 		}
@@ -111,9 +114,6 @@ func RunPlatform(
 		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
 	}
 
-	if reader == nil {
-		reader = c
-	}
 	if err := ApplyRendered(ctx, c, reader, scheme, tenant, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
 	}

@@ -58,7 +58,9 @@ import (
 // MaaSAuthPolicyReconciler reconciles a MaaSAuthPolicy object
 type MaaSAuthPolicyReconciler struct {
 	client.Client
-	Scheme *runtime.Scheme
+	// APIReader bypasses the scoped cache for Gateway owner-reference lookups.
+	APIReader client.Reader
+	Scheme    *runtime.Scheme
 	// InfraNamespace is the infrastructure namespace where maas-api service is deployed.
 	// Used to construct the subscription selector endpoint URL.
 	InfraNamespace string
@@ -1346,7 +1348,11 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if isTenantGateway {
 		gateway = &gatewayapiv1.Gateway{}
 		gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
-		if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
+		gatewayReader := client.Reader(r.Client)
+		if r.APIReader != nil {
+			gatewayReader = r.APIReader
+		}
+		if gwErr := gatewayReader.Get(ctx, gwKey, gateway); gwErr != nil {
 			if apierrors.IsNotFound(gwErr) {
 				// Gateway is gone. If a managed tenant AuthPolicy still exists,
 				// delete it to prevent orphaned resources.

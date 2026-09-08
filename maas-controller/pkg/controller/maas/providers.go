@@ -155,3 +155,11 @@ func getHTTPRoute(ctx context.Context, c client.Reader, name, ns string) (*gatew
 	}
 	return route, nil
 }
+
+func (r *MaaSModelRefReconciler) getGateway(ctx context.Context, key client.ObjectKey, gateway *gatewayapiv1.Gateway) error {
+	reader := client.Reader(r.Client)
+	if r.APIReader != nil {
+		reader = r.APIReader
+	}
+	return reader.Get(ctx, key, gateway)
+}

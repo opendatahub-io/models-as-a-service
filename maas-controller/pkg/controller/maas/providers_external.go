@@ -251,7 +251,7 @@ func (h *externalModelHandler) GetModelEndpoint(ctx context.Context, log logr.Lo
 	gatewayNS := h.r.gatewayNamespace()
 	gateway := &gatewayapiv1.Gateway{}
 	key := client.ObjectKey{Name: gatewayName, Namespace: gatewayNS}
-	if err := h.r.Get(ctx, key, gateway); err != nil {
+	if err := h.r.getGateway(ctx, key, gateway); err != nil {
 		return "", fmt.Errorf("failed to get gateway %s/%s: %w", gatewayNS, gatewayName, err)
 	}
 

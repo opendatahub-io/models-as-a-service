@@ -1006,6 +1006,7 @@ func buildCacheOptions(
 	standardByObject := map[client.Object]cache.ByObject{
 		&appsv1.Deployment{}:         {Namespaces: deploymentNsCfg},
 		&corev1.ConfigMap{}:          {Namespaces: configMapNsCfg},
+		&gatewayapiv1.Gateway{}:      {Namespaces: map[string]cache.Config{gatewayNamespace: {}}},
 		&rbacv1.ClusterRoleBinding{}: {Label: maasResourceSelector},
 		&netwv1.NetworkPolicy{}:      {Namespaces: networkPolicyNsCfg, Label: maasResourceSelector},
 	}
@@ -1225,6 +1226,7 @@ func main() {
 
 	if err := (&maas.MaaSModelRefReconciler{
 		Client:                          mgr.GetClient(),
+		APIReader:                       mgr.GetAPIReader(),
 		Scheme:                          mgr.GetScheme(),
 		GatewayName:                     gatewayName,
 		GatewayNamespace:                gatewayNamespace,
@@ -1237,6 +1239,7 @@ func main() {
 	}
 	if err := (&maas.MaaSAuthPolicyReconciler{
 		Client:                          mgr.GetClient(),
+		APIReader:                       mgr.GetAPIReader(),
 		Scheme:                          mgr.GetScheme(),
 		InfraNamespace:                  infraNamespace,
 		TenantNamespace:                 maasSubscriptionNamespace,
