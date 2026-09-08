@@ -140,6 +140,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Surface the infrastructure namespace so operators know where maas-db-config lives.
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
 
+	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
+		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
+
 	// Handle management states
 	if result, err := r.handleManagementState(ctx, log, &tenant); result != nil {
 		return *result, err
@@ -169,8 +174,13 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	usageLogsWarning, err := r.ensureUsageLogsEnvoyFilter(ctx, log, &tenant, platformContext, mcfg)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Aggregate all warnings and set Degraded condition once
-	r.aggregateWarningsAndSetDegraded(&tenant, prereqReport, runRes)
+	r.aggregateWarningsAndSetDegraded(&tenant, prereqReport, runRes, usageLogsWarning)
 
 	// Cleanup legacy resources
 	r.attemptLegacyCleanup(ctx, log)
@@ -366,31 +376,45 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	tenant *maasv1alpha1.MaasTenantConfig,
 	prereqReport tenantreconcile.PrerequisiteReport,
 	runRes *tenantreconcile.RunResult,
+	usageLogsWarning string,
 ) {
 	var allWarnings []string
 	hasPrereqWarnings := len(prereqReport.Warnings) > 0
-	hasReplicaWarnings := runRes != nil && len(runRes.Warnings) > 0
+	hasPlatformWarnings := runRes != nil && len(runRes.Warnings) > 0
+	hasUsageLogsWarning := usageLogsWarning != ""
 
-	// Collect prerequisite warnings
 	if hasPrereqWarnings {
 		allWarnings = append(allWarnings, prereqReport.Warnings...)
 	}
-
-	// Collect replica warnings
-	if hasReplicaWarnings {
+	if hasPlatformWarnings {
 		allWarnings = append(allWarnings, runRes.Warnings...)
 	}
+	if hasUsageLogsWarning {
+		allWarnings = append(allWarnings, usageLogsWarning)
+	}
 
-	// Set Degraded condition once with all aggregated warnings
 	if len(allWarnings) > 0 {
+		warningKinds := 0
+		if hasPrereqWarnings {
+			warningKinds++
+		}
+		if hasPlatformWarnings {
+			warningKinds++
+		}
+		if hasUsageLogsWarning {
+			warningKinds++
+		}
+
 		var reason string
 		switch {
-		case hasPrereqWarnings && hasReplicaWarnings:
+		case warningKinds > 1:
 			reason = "MultipleWarnings"
 		case hasPrereqWarnings:
 			reason = "PrerequisitesWarning"
-		case hasReplicaWarnings:
+		case hasPlatformWarnings:
 			reason = "InvalidReplicaAnnotation"
+		default:
+			reason = "UsageLoggingNotProvided"
 		}
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
 			reason, strings.Join(allWarnings, "; "))
@@ -698,6 +722,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		{
 			gvk:       tenantreconcile.GVKEnvoyFilter,
 			name:      tenantreconcile.PayloadProcessingEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.UsageLogsEnvoyFilterName(tenantID),
 			namespace: gatewayNs,
 		},
 		{

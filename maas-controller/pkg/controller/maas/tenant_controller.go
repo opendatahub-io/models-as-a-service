@@ -81,6 +81,9 @@ type TenantReconciler struct {
 	MetadataCacheTTL int64
 	// MonitoringNamespace is the namespace where the platform monitoring stack is deployed.
 	MonitoringNamespace string
+	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests
+	// (--usage-logs-manifest-path). The EnvoyFilter YAML is resolved from this path at reconcile time.
+	UsageLogsManifestPath string
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -185,6 +188,30 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 	}}}
 }
 
+// mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
+// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
+func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
+	if !r.TenantNamespaceDiscoveryEnabled {
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: r.TenantNamespace,
+		}}}
+	}
+
+	var tenantList maasv1alpha1.MaasTenantConfigList
+	if err := r.List(ctx, &tenantList); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaasTenantConfigs for Config change mapping")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(tenantList.Items))
+	for i := range tenantList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&tenantList.Items[i]),
+		})
+	}
+	return requests
+}
+
 // crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
 func crdLabeledForMaaSComponent() predicate.Predicate {
 	key := tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName
@@ -229,12 +256,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&maasv1alpha1.MaasTenantConfig{}).
 		Watches(
 			&maasv1alpha1.Config{},
-			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
-				return []reconcile.Request{{NamespacedName: types.NamespacedName{
-					Namespace: r.TenantNamespace,
-					Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-				}}}
-			}),
+			handler.EnqueueRequestsFromMapFunc(r.mapConfigToMaasTenantConfigs),
 			builder.WithPredicates(configResourceDefault()),
 		).
 		Watches(
