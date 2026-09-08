@@ -1271,7 +1271,7 @@ func main() {
 	}
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
-	if err := (&maas.TenantReconciler{
+	tenantReconciler := &maas.TenantReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
 		ManifestPath:                    manifestPath,
@@ -1284,7 +1284,9 @@ func main() {
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
 		MonitoringNamespace:             monitoringNamespace,
-	}).SetupWithManager(mgr); err != nil {
+		UsageLogsManifestPath:           usageLogsManifestPath,
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaasTenantConfig")
 		os.Exit(1)
 	}
