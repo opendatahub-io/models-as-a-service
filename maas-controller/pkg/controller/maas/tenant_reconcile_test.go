@@ -843,12 +843,13 @@ func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 	tests := []struct {
-		name            string
-		prereqWarnings  []string
-		replicaWarnings []string
-		wantReason      string
-		wantStatus      metav1.ConditionStatus
-		wantMessage     string
+		name             string
+		prereqWarnings   []string
+		replicaWarnings  []string
+		usageLogsWarning string
+		wantReason       string
+		wantStatus       metav1.ConditionStatus
+		wantMessage      string
 	}{
 		{
 			name:            "no warnings",
@@ -906,6 +907,21 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 			wantStatus:      metav1.ConditionTrue,
 			wantMessage:     "DSCI monitoring stack not available; Perses not available; invalid replica annotation on maas-api; invalid replica annotation on payload-processing",
 		},
+		{
+			name:             "usage logging warning only",
+			usageLogsWarning: "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			wantReason:       "UsageLoggingNotProvided",
+			wantStatus:       metav1.ConditionTrue,
+			wantMessage:      "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+		},
+		{
+			name:             "usage logging warning with prerequisite warning",
+			prereqWarnings:   []string{"DSCI monitoring stack not available"},
+			usageLogsWarning: "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			wantReason:       "MultipleWarnings",
+			wantStatus:       metav1.ConditionTrue,
+			wantMessage:      "DSCI monitoring stack not available; Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+		},
 	}
 
 	for _, tt := range tests {
@@ -937,7 +953,7 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 				Scheme: s,
 			}
 
-			r.aggregateWarningsAndSetDegraded(tenant, prereqReport, runRes)
+			r.aggregateWarningsAndSetDegraded(tenant, prereqReport, runRes, tt.usageLogsWarning)
 
 			degradedCond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 			g.Expect(degradedCond).NotTo(BeNil(), "Degraded condition should be set")
