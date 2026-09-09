@@ -28,7 +28,8 @@ spec:
         env:
           # Granite-specific configuration via environment variables
           - name: VLLM_ADDITIONAL_ARGS
-            value: "--max-model-len 4096 --trust-remote-code --dtype float16"
+            # --enable-force-include-usage required for token rate limiting: https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage
+            value: "--max-model-len 4096 --trust-remote-code --dtype float16 --enable-force-include-usage"
           - name: VLLM_ATTENTION_BACKEND
             value: XFORMERS
           - name: VLLM_USE_V1
