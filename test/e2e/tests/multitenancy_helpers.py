@@ -18,7 +18,6 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    E2E_CURL_POD_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
     GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
@@ -30,6 +29,7 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
+    kubectl_curl,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -1352,36 +1352,11 @@ class _InternalResponse:
 def _kubectl_curl_post(
     url: str, *, headers: dict = None, json_body: dict = None,
 ) -> _InternalResponse:
-    """POST to an in-cluster URL via kubectl run (for internal endpoints)."""
-    curl_args = ["-sk", "-m", "10", "-X", "POST"]
-    if headers:
-        for key, value in headers.items():
-            curl_args.extend(["-H", f"{key}: {value}"])
-    if json_body is not None:
-        curl_args.extend([
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(json_body),
-        ])
-    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
-
-    pod_name = f"mt-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    namespace = os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-    cmd = [
-        "kubectl", "run", pod_name,
-        "--rm", "-i", "--restart=Never",
-        "--image=curlimages/curl:latest",
-        "-n", namespace,
-        "--", "curl",
-    ] + curl_args
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    output = result.stdout
-    if "HTTP_CODE:" in output:
-        body, code_line = output.rsplit("HTTP_CODE:", 1)
-        match = re.search(r"(\d{3})", code_line)
-        if match:
-            return _InternalResponse(int(match.group(1)), body.strip())
-    return _InternalResponse(0, output)
+    """POST to an in-cluster URL via kubectl exec (for internal endpoints)."""
+    status_code, body = kubectl_curl(
+        url, method="POST", headers=headers, json_body=json_body,
+    )
+    return _InternalResponse(status_code, body)
 
 
 def tenant_internal_url(tenant_name: str) -> str:
