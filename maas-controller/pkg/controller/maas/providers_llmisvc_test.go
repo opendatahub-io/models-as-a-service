@@ -109,9 +109,9 @@ func TestGetEndpointFromLLMISvc_NoExpectedHostnames_FallbackToFirstAddress(t *te
 	h := &llmisvcHandler{}
 
 	got := h.getEndpointFromLLMISvc(llmisvc, nil)
-	want := "http://test-model.default.svc.cluster.local"
+	want := "https://test-model.default.svc.cluster.local"
 	if got != want {
-		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (legacy fallback to first address)", got, want)
+		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (legacy fallback should upgrade to HTTPS)", got, want)
 	}
 }
 
@@ -265,5 +265,70 @@ func TestGetEndpointFromLLMISvc_ModelRouting_NoMatch_ReturnsEmpty(t *testing.T) 
 	got := h.getEndpointFromLLMISvc(llmisvc, []string{"maas.example.com"})
 	if got != "" {
 		t.Errorf("getEndpointFromLLMISvc() = %q, want empty (no matching hostname for any address type)", got)
+	}
+}
+
+func TestSelectAddress_UpgradesHTTPToHTTPS(t *testing.T) {
+	// When only HTTP URLs are available for a named address, selectAddress should
+	// upgrade the scheme to HTTPS for the external-facing endpoint.
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("gateway-external"), URL: mustParseURL("http://maas.example.com/test-model")},
+	})
+	h := &llmisvcHandler{}
+
+	got := h.selectAddress(llmisvc, "gateway-external", nil, false)
+	want := "https://maas.example.com/test-model"
+	if got != want {
+		t.Errorf("selectAddress() = %q, want %q (should upgrade HTTP to HTTPS)", got, want)
+	}
+}
+
+func TestSelectAddress_UpgradesHTTPToHTTPS_WithFiltering(t *testing.T) {
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("gateway-external"), URL: mustParseURL("http://maas.example.com/test-model")},
+	})
+	h := &llmisvcHandler{}
+	hostSet := map[string]struct{}{"maas.example.com": {}}
+
+	got := h.selectAddress(llmisvc, "gateway-external", hostSet, true)
+	want := "https://maas.example.com/test-model"
+	if got != want {
+		t.Errorf("selectAddress() = %q, want %q (should upgrade HTTP to HTTPS with filtering)", got, want)
+	}
+}
+
+func TestGetEndpointFromLLMISvc_UnfilteredFallback_UpgradesHTTP(t *testing.T) {
+	// When the unfiltered legacy fallback returns an HTTP URL from a base-URL address,
+	// it should be upgraded to HTTPS.
+	llmisvc := newReadyLLMISvc("test-model", "default", []duckv1.Addressable{
+		{Name: strPtr("other"), URL: mustParseURL("http://maas.example.com")},
+	})
+	h := &llmisvcHandler{}
+
+	got := h.getEndpointFromLLMISvc(llmisvc, nil)
+	want := "https://maas.example.com"
+	if got != want {
+		t.Errorf("getEndpointFromLLMISvc() = %q, want %q (unfiltered fallback should upgrade HTTP to HTTPS)", got, want)
+	}
+}
+
+func TestUpgradeToHTTPS(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"http URL", "http://example.com/path", "https://example.com/path"},
+		{"https URL unchanged", "https://example.com/path", "https://example.com/path"},
+		{"empty string", "", ""},
+		{"non-http scheme", "ftp://example.com", "ftp://example.com"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := upgradeToHTTPS(tt.input)
+			if got != tt.want {
+				t.Errorf("upgradeToHTTPS(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
 	}
 }

@@ -126,6 +126,18 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 		}
 	} else if endpoint != "" {
 		if parsed, err := url.Parse(endpoint); err == nil {
+			// Normalize to the HTTPS gateway base URL. The controller endpoint
+			// may include a model-specific path suffix and could use the HTTP
+			// scheme when TLS is terminated upstream. The API must expose only
+			// the secure gateway base URL, consistent with the httpRouteHostnames
+			// primary path above which constructs "https://<hostname>".
+			if parsed.Scheme == "http" {
+				parsed.Scheme = "https"
+			}
+			parsed.Path = ""
+			parsed.RawPath = ""
+			parsed.RawQuery = ""
+			parsed.Fragment = ""
 			urlPtr = (*apis.URL)(parsed)
 		}
 	}
