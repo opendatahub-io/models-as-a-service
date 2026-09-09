@@ -26,34 +26,34 @@ MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 
 wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
-    echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
-
-    local llm_namespaces
-    llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
-    local namespaces
-    namespaces=$(printf '%s\n%s\n' "${GATEWAY_NAMESPACE:-openshift-ingress}" "$llm_namespaces" | sort -u | xargs)
+    local gateway_name="${GATEWAY_NAME:-maas-default-gateway}"
+    local gateway_ns="${GATEWAY_NAMESPACE:-openshift-ingress}"
+    echo "Waiting for AuthPolicies targeting gateway '$gateway_name' to be enforced (timeout: ${timeout}s)..."
 
     local deadline=$((SECONDS + timeout))
     while [[ $SECONDS -lt $deadline ]]; do
         local all_enforced=true
         local total=0
-        for ns in $namespaces; do
-            while IFS= read -r status; do
-                total=$((total + 1))
-                if [[ "$status" != "True" ]]; then
-                    all_enforced=false
-                fi
-            done < <(oc get authpolicies -n "$ns" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
-        done
+        while IFS=$'\t' read -r name target enforced; do
+            [[ -z "$name" ]] && continue
+            if [[ "$target" != "$gateway_name" ]]; then
+                echo "  Skipping $name (targets $target, not $gateway_name)"
+                continue
+            fi
+            total=$((total + 1))
+            if [[ "$enforced" != "True" ]]; then
+                all_enforced=false
+            fi
+        done < <(oc get authpolicies -n "$gateway_ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.targetRef.name}{"\t"}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
         if $all_enforced && [[ $total -gt 0 ]]; then
-            echo "✅ All AuthPolicies enforced ($total policies)"
+            echo "✅ All AuthPolicies targeting $gateway_name enforced ($total policies)"
             return 0
         fi
-        echo "  Waiting... ($total policies found, not all enforced yet)"
+        echo "  Waiting... ($total policies targeting $gateway_name, not all enforced yet)"
         sleep 10
     done
-    echo "❌ ERROR: AuthPolicies not all enforced after ${timeout}s"
-    oc get authpolicies -A -o wide 2>/dev/null || true
+    echo "❌ ERROR: AuthPolicies targeting $gateway_name not all enforced after ${timeout}s"
+    oc get authpolicies -n "$gateway_ns" -o wide 2>/dev/null || true
     return 1
 }
 
