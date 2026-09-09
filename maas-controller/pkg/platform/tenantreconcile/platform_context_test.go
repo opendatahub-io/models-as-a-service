@@ -75,6 +75,45 @@ func TestResolvePlatformContext_AITenantManagedTenantUsesAITenant(t *testing.T) 
 	assert.Equal(t, "https://issuer.example.com/realms/redteam", got.ExternalOIDC.IssuerURL)
 	assert.Equal(t, "redteam-client", got.ExternalOIDC.ClientID)
 	assert.Equal(t, "aitenant", got.Source)
+	assert.Equal(t, maasv1alpha1.PayloadProcessingBackendIPP, got.PayloadProcessingBackend)
+}
+
+func TestResolvePlatformContext_AITenantManagedTenantUsesPraxisBackend(t *testing.T) {
+	scheme := platformContextTestScheme(t)
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "redteam",
+				LabelTenantNamespace:   "ai-tenant-redteam",
+			},
+			Annotations: map[string]string{
+				AnnotationAITenantName:      "redteam",
+				AnnotationAITenantNamespace: DefaultAITenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "redteam", Namespace: DefaultAITenantNamespace},
+		Spec: maasv1alpha1.AITenantSpec{
+			PayloadProcessing: &maasv1alpha1.AITenantPayloadProcessing{
+				Type: maasv1alpha1.PayloadProcessingBackendPraxis,
+			},
+		},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "redteam-gateway",
+			},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, aitenant).Build()
+
+	got, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
+	require.NoError(t, err)
+	assert.Equal(t, maasv1alpha1.PayloadProcessingBackendPraxis, got.PayloadProcessingBackend)
 }
 
 func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {
@@ -102,6 +141,7 @@ func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {
 	require.NotNil(t, got.ExternalOIDC)
 	assert.Equal(t, "default-client", got.ExternalOIDC.ClientID)
 	assert.Equal(t, "legacy-tenant-spec", got.Source)
+	assert.Equal(t, maasv1alpha1.PayloadProcessingBackendIPP, got.PayloadProcessingBackend)
 }
 
 func TestResolvePlatformContext_AITenantStatusGatewayRequired(t *testing.T) {
