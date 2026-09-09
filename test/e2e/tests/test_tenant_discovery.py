@@ -7,79 +7,22 @@ Tests cover:
 - Response structure validation
 - Gateway metadata accuracy
 
-These tests use kubectl run with curl to access the internal maas-api Service,
+These tests use kubectl exec with curl to access the internal maas-api Service,
 since /v1/tenants is not exposed through the Gateway and CI runs outside the cluster.
 """
 
-import logging
-import subprocess
 import json
+import logging
 import os
+
 import pytest
 import requests
 from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE
+from test_helper import kubectl_curl as _kubectl_curl
 
 log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.xdist_group("readonly")
-
-
-def _curl_pod_namespace() -> str:
-    return os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-
-
-def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
-    """
-    Execute curl request from inside the cluster using kubectl run.
-
-    Returns (status_code, response_body)
-    """
-    namespace = namespace or _curl_pod_namespace()
-    curl_args = ["-sk", "-m", "10"]
-
-    # Add headers
-    if headers:
-        for key, value in headers.items():
-            curl_args.extend(["-H", f"{key}: {value}"])
-
-    # Write full response (headers + body) to capture status code
-    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
-
-    # Run curl in a pod
-    cmd = [
-        "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
-        "--rm", "-i", "--restart=Never",
-        f"--image={E2E_CURL_IMAGE}",
-        "-n", namespace,
-        "--",
-        "curl"
-    ] + curl_args
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        output = result.stdout
-
-        # Parse status code from footer
-        if "HTTP_CODE:" in output:
-            body, code_line = output.rsplit("HTTP_CODE:", 1)
-            # Extract just the numeric status code (kubectl deletion message may be appended)
-            # Example: "401pod \"test-curl-...\" deleted..." -> extract "401"
-            import re
-            match = re.search(r'(\d{3})', code_line)
-            if match:
-                status_code = int(match.group(1))
-                return status_code, body.strip()
-            else:
-                log.error(f"Could not parse HTTP code from: {code_line}")
-                return 0, body.strip()
-        log.error(f"kubectl run failed (returncode={result.returncode})")
-        log.error(f"stdout: {output[:500]}")
-        log.error(f"stderr: {result.stderr[:500]}")
-        return 0, output
-    except Exception as e:
-        log.error(f"kubectl curl failed: {e}")
-        return 0, str(e)
 
 
 def test_tenant_discovery_requires_auth(maas_api_internal_url: str):
