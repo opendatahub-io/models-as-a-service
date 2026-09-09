@@ -5,33 +5,4 @@ metadata:
   name: maas-xks-overlay
 
 resources:
-  - ../../base/maas-controller/crd
-  - ../../base/maas-controller/rbac
-  - ../../base/maas-controller/manager
-  - ../../base/maas-controller/webhook
-  - cert-manager/
-
-patches:
-  # Remove OCP service-serving cert annotations. cert-manager provisions both
-  # the webhook and metrics certificates on xKS.
-  - target:
-      kind: Service
-      name: maas-controller-webhook-service
-    patch: |
-      - op: remove
-        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
-  - target:
-      kind: Service
-      name: maas-controller-metrics
-    patch: |
-      - op: remove
-        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
-
-  # Remove OCP CA bundle injection. cert-manager CA injection is handled by
-  # the xKS certificate resources.
-  - target:
-      kind: ValidatingWebhookConfiguration
-      name: maas-validating-webhook-configuration
-    patch: |
-      - op: remove
-        path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
+  - ../../base/maas-controller/overlays/xks

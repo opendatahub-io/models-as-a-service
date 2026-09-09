@@ -5,11 +5,11 @@ metadata:
 spec:
   secretName: maas-controller-metrics-tls
   issuerRef:
-    name: rhai-ca-issuer
-    kind: ClusterIssuer
-    group: cert-manager.io
+    name: $(ISSUER_REF_NAME)
+    kind: $(ISSUER_REF_KIND)
+    group: $(ISSUER_REF_GROUP)
   duration: 2160h
   renewBefore: 360h
   dnsNames:
-    - maas-controller-metrics.opendatahub.svc
-    - maas-controller-metrics.opendatahub.svc.cluster.local
+    - maas-controller-metrics.$(NAMESPACE).svc
+    - maas-controller-metrics.$(NAMESPACE).svc.cluster.local
