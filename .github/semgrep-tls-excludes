@@ -7,6 +7,10 @@
 go-http-server-tls-override:maas-api/cmd/server.go
 go-http-server-tls-override:maas-api/internal/metrics/server.go
 #
+# discovery main.go: TLS listener requires explicit tls.Config for certificate loading
+# (cert/key files or self-signed). Cluster TLS profile integration tracked in RHOAIENG-90729.
+go-http-server-tls-override:maas-discovery/cmd/discovery/main.go
+#
 # discovery.go: Cluster-internal HTTP client uses cluster CA bundle plus profile
 # MinVersion/CipherSuites plumbed from setupTLSProfile; required assignment for probes.
 go-http-client-tls-override:maas-api/internal/models/discovery.go
