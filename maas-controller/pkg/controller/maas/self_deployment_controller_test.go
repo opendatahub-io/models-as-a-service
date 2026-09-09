@@ -3,10 +3,12 @@ package maas
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -1367,4 +1369,85 @@ func TestSyncModuleStatus(t *testing.T) {
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
 		g.Expect(cond.Message).To(ContainSubstring("not yet created"))
 	})
+}
+
+func TestLifecycleReconciler_TeardownOptimizedCleanupAllAITenantsInSinglePass(t *testing.T) {
+	// RHOAIENG-89895: Verify optimized pending detection allows all AITenants
+	// to be deleted in a single pass without sequential 5-second requeue delays.
+	g := NewWithT(t)
+	s := lifecycleTestScheme(t)
+
+	const depNS = "opendatahub"
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: depNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+
+	// Create multiple AITenants to test parallel deletion optimization
+	aitenants := make([]client.Object, 3)
+	for i := 0; i < 3; i++ {
+		aitenant := lifecycleTestUnstructured(
+			schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
+			tenantreconcile.DefaultAITenantNamespace,
+			fmt.Sprintf("aitenant-%d", i),
+			aitenantFinalizer,
+		)
+		aitenants[i] = aitenant
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.Config{}).
+		WithRuntimeObjects(append([]runtime.Object{dep}, 
+			func() []runtime.Object {
+				objs := make([]runtime.Object, len(aitenants))
+				for i, a := range aitenants {
+					objs[i] = a.(runtime.Object)
+				}
+				return objs
+			}()...)...).
+		Build()
+	r := &LifecycleReconciler{
+		Client:            cl,
+		Scheme:            s,
+		DeploymentName:    "maas-controller",
+		DeploymentNS:      depNS,
+		AITenantNamespace: tenantreconcile.DefaultAITenantNamespace,
+	}
+
+	// First reconcile: delete all AITenants in one pass
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: "maas-controller", Namespace: depNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	// Should requeue with optimized 1s interval (per RHOAIENG-89895 fix)
+	g.Expect(res.RequeueAfter).To(Equal(teardownRequeueAfter))
+	g.Expect(res.RequeueAfter).To(Equal(1 * time.Second), "teardownRequeueAfter should be 1 second for faster polling")
+
+	// Verify all AITenants have deletion timestamps (deletion initiated in this pass)
+	for i := 0; i < 3; i++ {
+		updated := &unstructured.Unstructured{}
+		updated.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "maas.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "AITenant",
+		})
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{
+			Name:      fmt.Sprintf("aitenant-%d", i),
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		}, updated)).To(Succeed())
+		g.Expect(updated.GetDeletionTimestamp()).NotTo(BeNil(),
+			"AITenant %d should have deletion timestamp after first reconcile", i)
+	}
 }
