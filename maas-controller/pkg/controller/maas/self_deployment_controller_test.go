@@ -1409,11 +1409,11 @@ func TestLifecycleReconciler_TeardownOptimizedCleanupAllAITenantsInSinglePass(t 
 
 	cl := fake.NewClientBuilder().WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Config{}).
-		WithRuntimeObjects(append([]runtime.Object{dep}, 
+		WithRuntimeObjects(append([]runtime.Object{dep},
 			func() []runtime.Object {
 				objs := make([]runtime.Object, len(aitenants))
 				for i, a := range aitenants {
-					objs[i] = a.(runtime.Object)
+					objs[i] = a.(runtime.Object) //nolint:errcheck
 				}
 				return objs
 			}()...)...).
