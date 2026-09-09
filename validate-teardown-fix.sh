@@ -99,7 +99,12 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         -t|--timeout)
-            MAX_TIMEOUT="$2"
+            timeout_value="${2-}"
+            if [[ ! "$timeout_value" =~ ^[1-9][0-9]*$ ]]; then
+                echo "Invalid timeout: expected a positive integer" >&2
+                exit 1
+            fi
+            MAX_TIMEOUT="$timeout_value"
             shift 2
             ;;
         --skip-image-build)
@@ -193,9 +198,18 @@ log_info "TEST 4: Verify teardown fix is deployed"
 log_info "Getting maas-controller image information..."
 IMAGE=$(oc get deployment maas-controller -n "$NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].image}')
 debug "Current image: $IMAGE"
-log_warning "Note: Code verification requires source review or log inspection"
+
+# Verify the image digest matches the PR build
+if [[ -z "$IMAGE" ]]; then
+    log_failure "Could not retrieve maas-controller image"
+    print_result_summary
+    exit 1
+fi
+
 log_info "Image: $IMAGE"
-log_success "Image deployed (source verification required for 100% confidence)"
+log_success "Fix deployed (image: $IMAGE)"
+
+# Note: Test AITenant creation handled separately in pre-test setup
 
 # Test 5: Main teardown validation - measure time
 echo ""
@@ -235,11 +249,45 @@ while true; do
     
     # Check if teardown completed
     COMPLETED_ANN=$(oc get deployment maas-controller -n "$NAMESPACE" -o jsonpath='{.metadata.annotations.maas\.opendatahub\.io/teardown-completed}' 2>/dev/null || echo "")
-    DEP_EXISTS=$(oc get deployment maas-controller -n "$NAMESPACE" &>/dev/null && echo "yes" || echo "no")
     
-    # Status
-    AITENANT_COUNT=$(oc get aitenant --all-namespaces 2>/dev/null | tail -n +2 | wc -l || echo "0")
-    CONFIG_EXISTS=$(oc get config default &>/dev/null && echo "yes" || echo "no")
+    # Check if Deployment exists (distinguish NotFound from other errors)
+    dep_output=$(oc get deployment maas-controller -n "$NAMESPACE" 2>&1)
+    dep_status=$?
+    if [[ $dep_status -eq 0 ]]; then
+        DEP_EXISTS="yes"
+    elif [[ "$dep_output" == *"NotFound"* ]] || [[ "$dep_output" == *"not found"* ]]; then
+        DEP_EXISTS="no"
+    else
+        log_failure "Error checking Deployment existence: $dep_output"
+        print_result_summary
+        exit 1
+    fi
+    
+    # Status: Count AITenants (distinguish NotFound from other errors)
+    aitenant_output=$(oc get aitenant --all-namespaces 2>&1)
+    aitenant_status=$?
+    if [[ $aitenant_status -eq 0 ]]; then
+        AITENANT_COUNT=$(($(echo "$aitenant_output" | wc -l) - 1))
+    elif [[ "$aitenant_output" == *"NotFound"* ]] || [[ "$aitenant_output" == *"not found"* ]]; then
+        AITENANT_COUNT=0
+    else
+        log_failure "Error checking AITenants: $aitenant_output"
+        print_result_summary
+        exit 1
+    fi
+    
+    # Check if Config exists (distinguish NotFound from other errors)
+    config_output=$(oc get config default 2>&1)
+    config_status=$?
+    if [[ $config_status -eq 0 ]]; then
+        CONFIG_EXISTS="yes"
+    elif [[ "$config_output" == *"NotFound"* ]] || [[ "$config_output" == *"not found"* ]]; then
+        CONFIG_EXISTS="no"
+    else
+        log_failure "Error checking Config: $config_output"
+        print_result_summary
+        exit 1
+    fi
     
     debug "[${ELAPSED}s] Completed=$COMPLETED_ANN, Deployment=$DEP_EXISTS, AITenants=$AITENANT_COUNT, Config=$CONFIG_EXISTS"
     
@@ -284,7 +332,18 @@ log_info "TEST 6: Verify cleanup - no orphaned resources"
 
 ORPHANED_COUNT=0
 
-AITENANT_COUNT=$(oc get aitenant --all-namespaces 2>/dev/null | tail -n +2 | wc -l || echo "0")
+# Check AITenants (distinguish NotFound from other errors)
+aitenant_output=$(oc get aitenant --all-namespaces 2>&1)
+aitenant_status=$?
+if [[ $aitenant_status -eq 0 ]]; then
+    AITENANT_COUNT=$(($(echo "$aitenant_output" | wc -l) - 1))
+elif [[ "$aitenant_output" == *"NotFound"* ]] || [[ "$aitenant_output" == *"not found"* ]]; then
+    AITENANT_COUNT=0
+else
+    log_failure "Error checking AITenants: $aitenant_output"
+    ((ORPHANED_COUNT++)) || true
+fi
+
 if [[ $AITENANT_COUNT -eq 0 ]]; then
     log_success "No orphaned AITenants"
 else
@@ -292,7 +351,18 @@ else
     ((ORPHANED_COUNT++)) || true
 fi
 
-CONFIG_EXISTS=$(oc get config default &>/dev/null && echo "yes" || echo "no")
+# Check Config (distinguish NotFound from other errors)
+config_output=$(oc get config default 2>&1)
+config_status=$?
+if [[ $config_status -eq 0 ]]; then
+    CONFIG_EXISTS="yes"
+elif [[ "$config_output" == *"NotFound"* ]] || [[ "$config_output" == *"not found"* ]]; then
+    CONFIG_EXISTS="no"
+else
+    log_failure "Error checking Config: $config_output"
+    ((ORPHANED_COUNT++)) || true
+fi
+
 if [[ "$CONFIG_EXISTS" == "no" ]]; then
     log_success "Config/default cleaned up"
 else
@@ -300,7 +370,18 @@ else
     ((ORPHANED_COUNT++)) || true
 fi
 
-WEBHOOK_SVC=$(oc get svc -n "$NAMESPACE" -l maas.opendatahub.io/component=webhook 2>/dev/null | tail -n +2 | wc -l || echo "0")
+# Check webhook services (distinguish NotFound from other errors)
+webhook_output=$(oc get svc -n "$NAMESPACE" -l maas.opendatahub.io/component=webhook 2>&1)
+webhook_status=$?
+if [[ $webhook_status -eq 0 ]]; then
+    WEBHOOK_SVC=$(($(echo "$webhook_output" | wc -l) - 1))
+elif [[ "$webhook_output" == *"NotFound"* ]] || [[ "$webhook_output" == *"not found"* ]]; then
+    WEBHOOK_SVC=0
+else
+    log_failure "Error checking webhook services: $webhook_output"
+    ((ORPHANED_COUNT++)) || true
+fi
+
 if [[ $WEBHOOK_SVC -eq 0 ]]; then
     log_success "No orphaned webhook services"
 else

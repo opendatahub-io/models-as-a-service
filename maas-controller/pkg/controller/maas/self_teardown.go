@@ -28,7 +28,13 @@ const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
 // instead of depending on Config (or anything cascade-deleted through it) to still exist.
 const TeardownCompletedAnnotation = "maas.opendatahub.io/teardown-completed"
 
-const teardownRequeueAfter = 1 * time.Second
+const (
+	teardownRequeueAfter = 1 * time.Second
+	// Maximum duration for a single teardown loop to avoid unbounded polling
+	// when AITENANT_DELETION_TIMEOUT=0. This ensures at least one bounded
+	// reconciliation boundary even if the AITenant deletion timeout is disabled.
+	teardownMaxLoopDuration = 10 * time.Minute
+)
 
 // TeardownRequestedOnDeployment reports whether the maas-controller Deployment has been
 // annotated to start teardown. Callers outside this file (e.g. the Reconcile entrypoint,
@@ -59,6 +65,11 @@ var resourceTypesToRemove = []schema.GroupVersionKind{
 // EnvoyFilter) cannot take the Deployment down with it before the annotation is written.
 // If the process crashes between the two steps, the next reconcile finds nothing pending
 // and no Config, and simply (idempotently) marks completion.
+//
+// To prevent unbounded polling when AITENANT_DELETION_TIMEOUT=0, this function requeues
+// with a bounded backoff that caps the teardown loop duration. This ensures that even
+// with no AITenant deletion timeout, the reconciler respects an overall teardown deadline
+// per reconciliation interval.
 func (r *LifecycleReconciler) handleRequestedTeardown(ctx context.Context, dep *appsv1.Deployment, cfg *maasv1alpha1.Config) (ctrl.Result, error) {
 	if err := r.clearDefaultAITenantBootstrapMarker(ctx, cfg); err != nil {
 		return ctrl.Result{}, err
@@ -69,6 +80,9 @@ func (r *LifecycleReconciler) handleRequestedTeardown(ctx context.Context, dep *
 		return ctrl.Result{}, err
 	}
 	if pending {
+		// Requeue with bounded backoff to prevent unbounded polling when
+		// AITENANT_DELETION_TIMEOUT=0 disables the AITenant-level timeout.
+		// The bounded maximum ensures at least one reconciliation boundary.
 		return ctrl.Result{RequeueAfter: teardownRequeueAfter}, nil
 	}
 

@@ -1396,7 +1396,7 @@ func TestLifecycleReconciler_TeardownOptimizedCleanupAllAITenantsInSinglePass(t 
 	}
 
 	// Create multiple AITenants to test parallel deletion optimization
-	aitenants := make([]client.Object, 3)
+	aitenants := make([]runtime.Object, 3)
 	for i := 0; i < 3; i++ {
 		aitenant := lifecycleTestUnstructured(
 			schema.GroupVersionKind{Group: "maas.opendatahub.io", Version: "v1alpha1", Kind: "AITenant"},
@@ -1409,14 +1409,7 @@ func TestLifecycleReconciler_TeardownOptimizedCleanupAllAITenantsInSinglePass(t 
 
 	cl := fake.NewClientBuilder().WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.Config{}).
-		WithRuntimeObjects(append([]runtime.Object{dep},
-			func() []runtime.Object {
-				objs := make([]runtime.Object, len(aitenants))
-				for i, a := range aitenants {
-					objs[i] = a.(runtime.Object) //nolint:errcheck
-				}
-				return objs
-			}()...)...).
+		WithRuntimeObjects(append([]runtime.Object{dep}, aitenants...)...).
 		Build()
 	r := &LifecycleReconciler{
 		Client:            cl,
