@@ -28,7 +28,7 @@ const TeardownRequestedAnnotation = "maas.opendatahub.io/teardown-requested"
 // instead of depending on Config (or anything cascade-deleted through it) to still exist.
 const TeardownCompletedAnnotation = "maas.opendatahub.io/teardown-completed"
 
-const teardownRequeueAfter = 5 * time.Second
+const teardownRequeueAfter = 1 * time.Second
 
 // TeardownRequestedOnDeployment reports whether the maas-controller Deployment has been
 // annotated to start teardown. Callers outside this file (e.g. the Reconcile entrypoint,
@@ -133,17 +133,18 @@ func (r *LifecycleReconciler) cleanupTeardownResources(ctx context.Context) (boo
 		if len(items) == 0 {
 			continue
 		}
-		resourcesPending = true
 
 		for i := range items {
 			obj := items[i].DeepCopy()
 			if !obj.GetDeletionTimestamp().IsZero() {
+				resourcesPending = true
 				continue
 			}
 			if err := r.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 				return false, fmt.Errorf("delete %s %s/%s during teardown: %w",
 					resourceGVK.Kind, obj.GetNamespace(), obj.GetName(), err)
 			}
+			resourcesPending = true
 		}
 	}
 	return resourcesPending, nil
