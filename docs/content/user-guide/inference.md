@@ -17,6 +17,17 @@ POST https://maas.<cluster-domain>/v1/chat/completions   # Chat / text generatio
 POST https://maas.<cluster-domain>/v1/embeddings          # Embeddings
 ```
 
+!!! tip "Discovering your gateway URL"
+    Replace `<cluster-domain>` with your cluster's ingress domain. Run this command to
+    retrieve it and construct the full gateway URL:
+    ```bash
+    CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')
+    MAAS_API_URL="https://maas.${CLUSTER_DOMAIN}"
+    echo "${MAAS_API_URL}"
+    ```
+    The gateway route always uses **HTTPS**. All `curl` examples in this guide use the
+    `MAAS_API_URL` variable set above.
+
 The gateway reads the `model` field from the JSON body and routes the request to the correct backend automatically. This is fully compatible with OpenAI SDKs and any client that speaks the OpenAI Chat Completions or Embeddings API.
 
 !!! note "Administrator prerequisite"
