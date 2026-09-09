@@ -182,6 +182,22 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     
     Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.
 
+### Model server must include usage data
+
+Token rate limiting requires the model server to return `usage` information in every response. By default, vLLM and llm-d only include usage in non-streaming responses. For streaming (SSE) responses — the default for many chat completion clients — usage data is omitted unless explicitly enabled.
+
+**Start the model server with `--enable-force-include-usage`** to ensure usage data is always returned regardless of whether the client requests it. Without this flag, token rate limits will not be enforced for streaming chat completion requests (the gateway sees 0 tokens consumed).
+
+Embedding endpoints are unaffected because they always return non-streaming JSON with `usage.total_tokens`.
+
+How to enable, depending on your deployment:
+
+- **llm-d-inference-sim / vLLM CLI args:** add `--enable-force-include-usage` to the container `args`
+- **vLLM via `VLLM_ADDITIONAL_ARGS`:** add `--enable-force-include-usage` to the env var value
+- **vLLM via shell script:** append `--enable-force-include-usage` to the `vllm serve` command
+
+See [vLLM documentation](https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage) for details.
+
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
 
@@ -273,6 +289,12 @@ When a user belongs to multiple groups that each have a subscription, the access
 - Verify MaaSModelRef exists in the model namespace (e.g. `llm`) and has `status.phase: Ready`
 - Check MaaSAuthPolicy in `models-as-a-service` includes the user's groups and references the MaaSModelRef with correct `name` (e.g. `${MODEL_NAME}-ref`) and `namespace`
 - Ensure MaaSSubscription in `models-as-a-service` exists for the model and user's groups
+
+### Token rate limits not enforced (no 429 errors)
+
+**Cause:** The model server is not returning `usage.total_tokens` in responses. The gateway sees 0 tokens consumed and never triggers the rate limit. This commonly affects streaming chat completion requests.
+
+**Fix:** Start the model server with `--enable-force-include-usage`. See the warning box above for details on how to enable this for different deployment patterns.
 
 ### Policies not enforced
 

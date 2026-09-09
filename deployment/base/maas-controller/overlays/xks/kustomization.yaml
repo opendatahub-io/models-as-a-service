@@ -66,6 +66,14 @@ patches:
       - op: remove
         path: /metadata/annotations/service.beta.openshift.io~1inject-cabundle
 
+  # Replace OpenShift service-ca with the cert-manager metrics Certificate.
+  - target:
+      kind: Service
+      name: maas-controller-metrics
+    patch: |
+      - op: remove
+        path: /metadata/annotations/service.beta.openshift.io~1serving-cert-secret-name
+
   # Replace OCP CA injection with cert-manager CA injection on webhook
   - target:
       kind: ValidatingWebhookConfiguration
