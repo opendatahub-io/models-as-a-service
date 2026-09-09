@@ -365,7 +365,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -375,7 +375,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	// Create a mock subscription selector that auto-selects for single subscription users
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, nil)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -486,7 +486,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
@@ -507,7 +507,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, nil)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
@@ -725,11 +725,11 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -782,7 +782,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 		}
 
 		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister, nil, nil)
-		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 		router2, _ := fixtures.SetupTestServer(t, config)
@@ -914,11 +914,11 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1032,11 +1032,11 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1140,11 +1140,11 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1247,11 +1247,11 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1341,11 +1341,11 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1396,11 +1396,12 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	spy := &spyModelsMetrics{}
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, spy)
 
 	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, cfg)
@@ -1463,6 +1464,7 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusUnauthorized, w.Code, "Should return 401 when Authorization missing but identity present")
+		require.Equal(t, []string{constant.RejectionUnauthorized}, spy.rejections)
 	})
 
 	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
@@ -1519,4 +1521,12 @@ func TestListModels_StrictAuthOnOtherEndpoints(t *testing.T) {
 		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"],
 			"Should return AUTH_FAILURE for missing headers on strict endpoints")
 	})
+}
+
+type spyModelsMetrics struct {
+	rejections []string
+}
+
+func (s *spyModelsMetrics) RecordRejection(reason string) {
+	s.rejections = append(s.rejections, reason)
 }

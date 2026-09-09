@@ -38,11 +38,13 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -817,6 +819,22 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 }`
 
 	authorizationRules := map[string]any{
+		// API keys are inference credentials, not management credentials. Block the
+		// MaaS API key-management surface at the gateway before proxying the request.
+		"deny-api-key-management": map[string]any{
+			"when": []any{
+				map[string]any{
+					"predicate": celIsAPIKey + ` && (request.path == "/maas-api/v1/api-keys" || request.path.startsWith("/maas-api/v1/api-keys/"))`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{"predicate": "false"},
+				},
+			},
+		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,
@@ -1230,7 +1248,9 @@ func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyReady(ctx context.Context, g
 // added by the API server or its controllers (e.g. Kuadrant defaults like
 // "allValues", "strategy") are ignored — only the fields we explicitly set
 // are compared. Both sides are JSON-round-tripped first so Go type
-// differences (int64 vs float64) are normalised.
+// differences (int64 vs float64) are normalised. Empty collections in
+// desired that are absent from current are treated as equivalent (the API
+// server and Kuadrant may strip empty maps/slices).
 func specMatchesDesired(desired, current map[string]any) bool {
 	desiredJSON, err := json.Marshal(desired)
 	if err != nil {
@@ -1248,6 +1268,7 @@ func specMatchesDesired(desired, current map[string]any) bool {
 		return false
 	}
 	stripExtraFields(currentNorm, desiredNorm)
+	stripEmptyDesiredFields(desiredNorm, currentNorm)
 	return reflect.DeepEqual(desiredNorm, currentNorm)
 }
 
@@ -1285,6 +1306,33 @@ func stripExtraFieldsSlice(current, desired []any) {
 				stripExtraFieldsSlice(cSlice, dSlice)
 			}
 		}
+	}
+}
+
+// stripEmptyDesiredFields removes keys from desired whose value is an empty
+// map or empty slice when the same key does not exist in current. The API
+// server and Kuadrant may omit empty collections entirely; treating them as
+// equivalent to absent prevents unnecessary Update() calls.
+func stripEmptyDesiredFields(desired, current map[string]any) {
+	for k, dv := range desired {
+		if dMap, ok := dv.(map[string]any); ok {
+			cMap, _ := current[k].(map[string]any)
+			stripEmptyDesiredFields(dMap, cMap)
+		}
+		if _, exists := current[k]; !exists && isEmptyCollection(dv) {
+			delete(desired, k)
+		}
+	}
+}
+
+func isEmptyCollection(v any) bool {
+	switch val := v.(type) {
+	case map[string]any:
+		return len(val) == 0
+	case []any:
+		return len(val) == 0
+	default:
+		return false
 	}
 }
 
@@ -1942,7 +1990,10 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 		b = b.Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
-		))
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			unstructuredConditionsChangedPredicate{},
+		)))
 	} else {
 		ctrl.Log.Info("AuthPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
@@ -1975,11 +2026,30 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			authPolicy := &unstructured.Unstructured{}
 			authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 			return source.Kind(mgr.GetCache(), authPolicy,
-				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
-					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-						return r.mapGeneratedAuthPolicyToParent(ctx, obj)
+				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
+					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+							q.Add(req)
+						}
 					},
-				),
+					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						if e.ObjectOld == nil || e.ObjectNew == nil {
+							return
+						}
+						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
+							unstructuredConditionSignature(e.ObjectOld) == unstructuredConditionSignature(e.ObjectNew) {
+							return
+						}
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.ObjectNew) {
+							q.Add(req)
+						}
+					},
+					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+							q.Add(req)
+						}
+					},
+				},
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for AuthPolicy: %w", err)

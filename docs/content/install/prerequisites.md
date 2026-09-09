@@ -52,20 +52,69 @@ A specific requirement for MaaS v0.1.0+ is to set up RHOAI Model Serving with Re
 
 ## Optional: Observability Prerequisites
 
-If you plan to use MaaS dashboards, showback, or usage metrics, additional platform configuration is required:
+If you plan to use MaaS dashboards, showback, or usage metrics, the ODH monitoring stack needs to be enabled in the [Platform Operator](../install/platform-setup.md#install-platform-operator).
 
-- **User Workload Monitoring** — Required for Prometheus to scrape metrics from MaaS components
-- **Kuadrant Observability** — Required for rate-limiting and usage metrics (e.g., `authorized_calls`, `limited_calls`)
+To enable the ODH monitoring stack, you need to configure DSCI `monitoring.metrics`. For example:
 
-See [Observability Setup](../observability/setup.md) for detailed configuration steps.
+```shell
+kubectl apply -f - <<EOF
+apiVersion: dscinitialization.opendatahub.io/v2
+kind: DSCInitialization
+metadata:
+    name: default-dsci
+spec:
+    applicationsNamespace: opendatahub
+    monitoring:
+        managementState: Managed
+        namespace: opendatahub
+        metrics:
+            storage:
+                size: 90Gi
+    trustedCABundle:
+        managementState: Managed
+EOF
+```
 
-### RHOAI Dashboard Observability Tab
+Note that enabling the ODH monitoring stack also requires to install the Cluster Observability Operator and OpenTelemetry Operator.
 
-To enable the **Observability** tab in the RHOAI Dashboard (Perses-based dashboards), you need the
-Cluster Observability Operator, OpenTelemetry Operator, DSCI monitoring configuration, and a
-Dashboard feature flag. See [RHOAI Dashboard Observability Tab](../observability/setup.md#rhoai-dashboard-observability-tab-optional) for the full setup and verification steps.
+See [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
 
-### GenAI Studio
+### Loki for Access logs
+
+To enable storing access logs from the MaaS gateway for logs-based showback or auditing, you need to configure a LokiStack. First, install the Loki Operator, and then configure a LokiStack named `usage` in the monitoring namespace configured in DSCI `spec.monitoring.namespace`, for example:
+
+```yaml
+apiVersion: loki.grafana.com/v1
+kind: LokiStack
+metadata:
+  name: usage
+  namespace: opendatahub
+spec:
+  limits:
+    global:
+      otlp:
+        streamLabels:
+          resourceAttributes:
+            - name: service.name
+            - name: subscription
+            - name: model
+            - name: response_type
+            - name: kubernetes_namespace_name
+  managementState: Managed
+  size: 1x.demo
+  storage:
+    schemas:
+      - effectiveDate: '2024-10-01'
+        version: v13
+    secret:
+      credentialMode: static
+      name: <storage-secret-name>
+      type: s3
+  tenants:
+    mode: openshift-logging
+```
+
+## GenAI Studio
 
 To enable **GenAI Studio** in the RHOAI Dashboard, you need the LlamaStack Operator enabled in your
 DSC and a Dashboard feature flag. See [OdhDashboardConfig Feature Flags](maas-setup.md#odhdashboardconfig-feature-flags) for setup.

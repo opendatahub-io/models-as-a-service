@@ -31,7 +31,7 @@ spec:
           args:
             - --config-file
             - "/config/custom-ipp-config.yaml"
-            - --v=2
+            - --v=3
             - --tracing=true
           env:
             - name: OTEL_TRACES_EXPORTER
@@ -57,11 +57,11 @@ spec:
               protocol: TCP
           resources:
             requests:
-              memory: "64Mi"
-              cpu: "50m"
+              memory: "128Mi"
+              cpu: "100m"
             limits:
-              memory: "256Mi"
-              cpu: "500m"
+              memory: "512Mi"
+              cpu: "1"
           livenessProbe:
             tcpSocket:
               port: grpc

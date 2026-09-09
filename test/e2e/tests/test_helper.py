@@ -19,8 +19,10 @@ Environment variables (all optional unless noted):
   - GATEWAY_NAMESPACE: Gateway namespace (default: openshift-ingress)
   - E2E_TEST_TOKEN_SA_NAMESPACE, E2E_TEST_TOKEN_SA_NAME: SA token source for Prow
   - E2E_TIMEOUT: Request timeout in seconds (default: 45)
-  - E2E_RECONCILE_WAIT: Wait time for reconciliation in seconds (default: 8)
+  - E2E_RECONCILE_WAIT: Baseline for poll timeouts in seconds (default: 8)
   - E2E_SKIP_TLS_VERIFY: Set to "true" to skip TLS verification
+  - E2E_CURL_CA_CONFIGMAP: ConfigMap containing CA bundle for curl pod TLS (default: "" = OpenShift service CA, then SA ca.crt fallback)
+  - E2E_CURL_CA_CONFIGMAP_KEY: Key within the CA ConfigMap (default: service-ca.crt)
   - E2E_MODEL_PATH: Path to free model (default: /llm/facebook-opt-125m-simulated)
   - E2E_MODEL_NAME: Model name for API requests (default: facebook/opt-125m)
   - E2E_MODEL_REF: Model ref for CRs (default: facebook-opt-125m-simulated)
@@ -49,9 +51,12 @@ Environment variables (all optional unless noted):
 """
 
 import base64
+import functools
 import json
 import logging
 import os
+import re
+import shlex
 import subprocess
 import time
 import uuid
@@ -119,6 +124,9 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 # Ephemeral curl probes run from the deployment namespace (where the UI runs),
 # matching the real traffic path for internal endpoints like /v1/tenants.
 E2E_CURL_POD_NAMESPACE = os.environ.get("E2E_CURL_POD_NAMESPACE", DEPLOYMENT_NAMESPACE)
+E2E_CURL_IMAGE = os.environ.get("E2E_CURL_IMAGE", "registry.access.redhat.com/ubi9/ubi-minimal:9.5")
+E2E_CURL_CA_CONFIGMAP = os.environ.get("E2E_CURL_CA_CONFIGMAP", "")
+E2E_CURL_CA_CONFIGMAP_KEY = os.environ.get("E2E_CURL_CA_CONFIGMAP_KEY", "service-ca.crt")
 SIMULATOR_SUBSCRIPTION = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
 PREMIUM_MODEL_REF = os.environ.get("E2E_PREMIUM_MODEL_REF", "premium-simulated-simulated-premium")
 PREMIUM_MODEL_NAME = os.environ.get("E2E_PREMIUM_MODEL_NAME", "facebook/opt-125m-premium")
@@ -137,9 +145,16 @@ DISTINCT_MODEL_REF = os.environ.get("E2E_DISTINCT_MODEL_REF", "e2e-distinct-simu
 DISTINCT_MODEL_ID = os.environ.get("E2E_DISTINCT_MODEL_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model")
 DISTINCT_MODEL_2_REF = os.environ.get("E2E_DISTINCT_MODEL_2_REF", "e2e-distinct-2-simulated")
 DISTINCT_MODEL_2_ID = os.environ.get("E2E_DISTINCT_MODEL_2_ID", f"publishers/{MODEL_NAMESPACE}/models/test/e2e-distinct-model-2")
-TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")                                                                                            
-TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")                                                                                     
-TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model") 
+TRLP_TEST_MODEL_REF = os.environ.get("E2E_TRLP_TEST_MODEL_REF", "e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_PATH = os.environ.get("E2E_TRLP_TEST_MODEL_PATH", "/llm/e2e-trlp-test-simulated")
+TRLP_TEST_MODEL_ID = os.environ.get("E2E_TRLP_TEST_MODEL_ID", "test/e2e-trlp-test-model")
+EMBEDDING_MODEL_REF = os.environ.get("E2E_EMBEDDING_MODEL_REF", "e2e-embedding-simulated")
+EMBEDDING_MODEL_PATH = os.environ.get("E2E_EMBEDDING_MODEL_PATH", "/llm/e2e-embedding-simulated")
+EMBEDDING_MODEL_NAME = os.environ.get("E2E_EMBEDDING_MODEL_NAME", "test/e2e-embedding-model")
+EMBEDDING_MODEL_CANONICAL_ID = os.environ.get(
+    "E2E_EMBEDDING_MODEL_CANONICAL_ID",
+    f"publishers/{MODEL_NAMESPACE}/models/{EMBEDDING_MODEL_NAME}",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +172,227 @@ def _gateway_url():
         raise RuntimeError("GATEWAY_HOST env var is required")
     scheme = "http" if os.environ.get("INSECURE_HTTP", "").lower() == "true" else "https"
     return f"{scheme}://{host}"
+
+
+_SA_CA_PATH = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+_CUSTOM_CA_PATH = "/tmp/ca-bundle.crt"
+
+
+@functools.lru_cache(maxsize=1)
+def _fetch_openshift_service_ca() -> Optional[str]:
+    """Try to fetch the OpenShift service-serving CA bundle.
+
+    On OpenShift clusters, service-serving certificates are signed by a
+    dedicated CA that differs from the Kubernetes API server CA.  The
+    canonical source is the ``signing-cabundle`` ConfigMap in the
+    ``openshift-service-ca`` namespace.
+
+    The result is cached for the lifetime of the test session because the
+    service-serving CA does not change during a run.
+    """
+    tpl = '{{index .data "ca-bundle.crt"}}'
+    try:
+        result = subprocess.run(
+            ["kubectl", "get", "configmap", "signing-cabundle",
+             "-n", "openshift-service-ca",
+             "-o", f"go-template={tpl}"],
+            capture_output=True, text=True, timeout=15,
+        )
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout
+    except subprocess.TimeoutExpired:
+        log.warning(
+            "Timed out fetching signing-cabundle from openshift-service-ca; "
+            "will fall back to service-account CA"
+        )
+    return None
+
+
+def get_curl_ca_bundle(namespace: str) -> tuple[str, Optional[str]]:
+    """Determine the CA cert path and optional content for curl TLS verification.
+
+    Resolution order:
+    1. If ``E2E_CURL_CA_CONFIGMAP`` is set, fetch that ConfigMap from *namespace*.
+    2. Otherwise, try the OpenShift service-serving CA (``signing-cabundle``
+       in ``openshift-service-ca``).
+    3. Fall back to the service-account CA already mounted in the pod.
+
+    Returns:
+        (ca_cert_path_inside_pod, ca_bundle_content_or_None)
+    """
+    if E2E_CURL_CA_CONFIGMAP:
+        tpl = '{{index .data "' + E2E_CURL_CA_CONFIGMAP_KEY + '"}}'
+        try:
+            result = subprocess.run(
+                ["kubectl", "get", "configmap", E2E_CURL_CA_CONFIGMAP,
+                 "-n", namespace, "-o", f"go-template={tpl}"],
+                capture_output=True, text=True, timeout=15,
+            )
+        except subprocess.TimeoutExpired:
+            log.warning(
+                "Timed out fetching E2E_CURL_CA_CONFIGMAP=%s in namespace %s, falling back to SA CA",
+                E2E_CURL_CA_CONFIGMAP, namespace,
+            )
+            return _SA_CA_PATH, None
+        if result.returncode == 0 and result.stdout.strip():
+            return _CUSTOM_CA_PATH, result.stdout
+
+        log.warning(
+            "E2E_CURL_CA_CONFIGMAP=%s not found in namespace %s, falling back to SA CA",
+            E2E_CURL_CA_CONFIGMAP, namespace,
+        )
+        return _SA_CA_PATH, None
+
+    ca_content = _fetch_openshift_service_ca()
+    if ca_content:
+        return _CUSTOM_CA_PATH, ca_content
+
+    log.warning(
+        "No service-serving CA found; falling back to service-account CA at %s "
+        "(this uses the API-server CA which may not verify service-serving TLS certificates)",
+        _SA_CA_PATH,
+    )
+    return _SA_CA_PATH, None
+
+
+def _write_ca_to_pod(pod_name: str, namespace: str, ca_content: str) -> None:
+    """Write CA bundle content into an ephemeral curl pod at _CUSTOM_CA_PATH."""
+    subprocess.run(
+        ["kubectl", "exec", "-i", pod_name, "-n", namespace,
+         "--", "sh", "-c", f"cat > {_CUSTOM_CA_PATH}"],
+        input=ca_content, capture_output=True, text=True, timeout=15, check=True,
+    )
+
+
+def kubectl_curl(
+    url: str,
+    *,
+    method: str = "GET",
+    headers: dict = None,
+    json_body: dict = None,
+    namespace: str = None,
+) -> tuple[int, str]:
+    """Execute an HTTP request from inside the cluster via kubectl exec.
+
+    The pod is created without credentials in its spec.  Credentials
+    (headers, request body) are passed only via stdin to ``kubectl exec -i``
+    so that they never appear in the Pod object stored in the Kubernetes API.
+
+    Args:
+        url: Target URL (must be reachable from within the cluster).
+        method: HTTP method (default: GET).
+        headers: Optional HTTP headers (e.g. Authorization).
+        json_body: Optional JSON body (implicitly switches method to POST
+            when *method* is still the default ``GET``).
+        namespace: Kubernetes namespace for the ephemeral curl pod
+            (default: ``E2E_CURL_POD_NAMESPACE``).
+
+    Returns:
+        ``(status_code, response_body)``.  *status_code* is ``0`` on
+        infrastructure failure.
+    """
+    namespace = namespace or os.environ.get(
+        "E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE,
+    )
+    pod_name = f"test-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
+    ca_cert_path, ca_bundle_content = get_curl_ca_bundle(namespace)
+
+    try:
+        # 1. Create an ephemeral pod (no credentials in spec)
+        create_cmd = [
+            "kubectl", "run", pod_name,
+            "--restart=Never",
+            f"--image={E2E_CURL_IMAGE}",
+            "-n", namespace,
+            "--command", "--", "sleep", "300",
+        ]
+        subprocess.run(create_cmd, capture_output=True, text=True, timeout=30, check=True)
+
+        # 2. Wait for pod readiness
+        wait_cmd = [
+            "kubectl", "wait", "--for=condition=Ready",
+            f"pod/{pod_name}", "-n", namespace, "--timeout=30s",
+        ]
+        subprocess.run(wait_cmd, capture_output=True, text=True, timeout=45, check=True)
+
+        # 2.5. Write custom CA bundle into the pod if configured
+        if ca_bundle_content:
+            _write_ca_to_pod(pod_name, namespace, ca_bundle_content)
+
+        # 3. Build a shell script that reads credentials from stdin
+        script_lines = []
+        stdin_lines = []
+
+        if headers:
+            for i, (key, value) in enumerate(headers.items()):
+                script_lines.append(f"IFS= read -r HDR{i}")
+                stdin_lines.append(f"{key}: {value}")
+
+        # If a JSON body is provided, read it from remaining stdin
+        if json_body is not None:
+            script_lines.append("BODY=$(cat)")
+
+        effective_method = method
+        if json_body is not None and effective_method == "GET":
+            effective_method = "POST"
+
+        curl_parts = [
+            "curl", "-s", "--proto", "=https",
+            "--cacert", ca_cert_path, "-m", "10",
+        ]
+        if effective_method != "GET":
+            curl_parts.extend(["-X", effective_method])
+        if headers:
+            for i in range(len(headers)):
+                curl_parts.append(f'-H "$HDR{i}"')
+        if json_body is not None:
+            has_ct = any(k.lower() == "content-type" for k in (headers or {}))
+            if not has_ct:
+                curl_parts.append('-H "Content-Type: application/json"')
+            curl_parts.append('-d "$BODY"')
+        curl_parts.append('-w "\\nHTTP_CODE:%{http_code}"')
+        curl_parts.append(shlex.quote(url))
+
+        script_lines.append(" ".join(curl_parts))
+        script = "\n".join(script_lines)
+
+        # Compose stdin: header lines followed by JSON body
+        if json_body is not None:
+            stdin_lines.append(json.dumps(json_body))
+        stdin_data = "\n".join(stdin_lines) + "\n" if stdin_lines else None
+
+        # 4. Execute via kubectl exec -i; credentials travel through stdin
+        exec_cmd = [
+            "kubectl", "exec", "-i", pod_name, "-n", namespace,
+            "--", "sh", "-c", script,
+        ]
+        result = subprocess.run(
+            exec_cmd, capture_output=True, text=True, timeout=60,
+            input=stdin_data,
+        )
+
+        # 5. Parse status code from output
+        output = result.stdout
+        if "HTTP_CODE:" in output:
+            body, code_line = output.rsplit("HTTP_CODE:", 1)
+            match = re.search(r"(\d{3})", code_line)
+            if match:
+                return int(match.group(1)), body.strip()
+            log.error("Could not parse HTTP code from: %s", code_line)
+            return 0, body.strip()
+        log.error("kubectl exec failed (returncode=%d)", result.returncode)
+        log.error("stdout: %s", output[:500])
+        log.error("stderr: %s", result.stderr[:500])
+        return 0, output
+    except Exception as e:
+        log.error("kubectl curl failed: %s", e)
+        return 0, str(e)
+    finally:
+        delete_cmd = [
+            "kubectl", "delete", "pod", pod_name, "-n", namespace,
+            "--grace-period=0", "--force", "--wait=false",
+        ]
+        subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
 
 
 def _maas_api_url():
@@ -560,6 +796,62 @@ def _get_auth_policies_for_model(model_ref, namespace=None, model_namespace=None
     return matching
 
 
+def _get_auth_policies_authorizing_identity_for_model(
+    model_ref,
+    username,
+    groups,
+    namespace=None,
+    model_namespace=None,
+):
+    """Get policy names that authorize an identity for a model.
+
+    A policy authorizes the identity when it references the specified model
+    name and namespace, and it matches the username or one of the groups.
+
+    Args:
+        model_ref: Name of the MaaSModelRef
+        username: Kubernetes username to match
+        groups: Kubernetes groups to match
+        namespace: Namespace to search for policies (defaults to _ns())
+        model_namespace: Expected modelRef namespace (defaults to MODEL_NAMESPACE)
+
+    Returns:
+        List of matching MaaSAuthPolicy names
+    """
+    namespace = namespace or _ns()
+    model_namespace = model_namespace or MODEL_NAMESPACE
+    username = username.strip()
+    groups = {group.strip() for group in groups}
+
+    matching_policies = []
+    for policy in _list_crs("maasauthpolicy", namespace):
+        spec = policy.get("spec", {})
+        policy_models = spec.get("modelRefs", [])
+        references_model = any(
+            isinstance(ref, dict)
+            and ref.get("name") == model_ref
+            and ref.get("namespace") == model_namespace
+            for ref in policy_models
+        )
+        if not references_model:
+            continue
+
+        subjects = spec.get("subjects", {})
+        users = subjects.get("users", [])
+        policy_groups = subjects.get("groups", [])
+        matches_user = username and any(
+            isinstance(user, str) and user.strip() == username for user in users
+        )
+        matches_group = any(
+            isinstance(group, dict) and group.get("name", "").strip() in groups
+            for group in policy_groups
+        )
+        if matches_user or matches_group:
+            matching_policies.append(policy["metadata"]["name"])
+
+    return matching_policies
+
+
 def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None):
     """Get all MaaSSubscriptions that reference a model.
 
@@ -708,15 +1000,16 @@ def _inference(api_key, path=None, extra_headers=None, model_name=None, max_toke
     )
 
 
-def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2):
+def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=None, timeout=None, poll_interval=2, inference_fn=None):
     """Poll inference endpoint until expected HTTP status or timeout."""
+    inference_fn = inference_fn or _inference
     timeout = timeout or max(RECONCILE_WAIT * 3, 60)
     deadline = time.time() + timeout
     last = None
     last_err = None
     while time.time() < deadline:
         try:
-            r = _inference(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
+            r = inference_fn(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
             last_err = None
             ok = r.status_code == expected if isinstance(expected, int) else r.status_code in expected
             if ok:
@@ -767,6 +1060,28 @@ def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
     return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
 
+def embeddings(text: str, model_v1: str, headers: dict, model_name: str):
+    url = f"{model_v1}/embeddings"
+    body = {"model": model_name, "input": text}
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+
+
+def _embedding_inference(api_key, path=None, extra_headers=None, model_name=None):
+    """POST embeddings using an API key only (subscription is bound at mint)."""
+    path = path or MODEL_PATH
+    if model_name is None:
+        model_name = MODEL_NAME
+    url = f"{_gateway_url()}{path}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    return requests.post(
+        url, headers=headers,
+        json={"model": model_name, "input": "Hello world"},
+        timeout=TIMEOUT, verify=TLS_VERIFY,
+    )
+
+
 # ---------------------------------------------------------------------------
 # IPP (Payload Processing) Helpers
 # ---------------------------------------------------------------------------
@@ -800,10 +1115,6 @@ def _check_ipp_pods_deployed(tenant_name: Optional[str] = None):
 # ---------------------------------------------------------------------------
 # Wait / Polling Helpers
 # ---------------------------------------------------------------------------
-
-def _wait_reconcile(seconds=None):
-    time.sleep(seconds or RECONCILE_WAIT)
-
 
 def _authpolicy_conditions(cr, *types):
     """Return {type: (status, reason, message)} for requested condition types (single pass)."""
@@ -1227,6 +1538,19 @@ def _wait_for_httproute_accepted(name, namespace=MODEL_NAMESPACE, timeout=60):
     raise TimeoutError(
         f"HTTPRoute {namespace}/{name} did not report Accepted=True within {timeout}s "
         f"(parents={parents!r})"
+    )
+
+
+def _wait_for_cr_absent(kind, name, namespace=None, timeout=30, poll_interval=2):
+    """Wait until a CR is deleted (no longer found by the API server)."""
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if _get_cr(kind, name, namespace) is None:
+            return
+        time.sleep(poll_interval)
+    raise TimeoutError(
+        f"{kind}/{name} in {namespace} still exists after {timeout}s"
     )
 
 

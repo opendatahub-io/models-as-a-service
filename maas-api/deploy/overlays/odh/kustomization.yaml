@@ -34,3 +34,33 @@ labels:
 - pairs:
     app.kubernetes.io/component: api
     app.kubernetes.io/name: maas-api
+
+# Recompute after this overlay sets namespace: opendatahub (inner default/
+# replacements bake maas-api.svc before the namespace rewrite).
+replacements:
+  - source:
+      kind: Service
+      name: maas-api-metrics
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-api-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 0
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-api-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 1

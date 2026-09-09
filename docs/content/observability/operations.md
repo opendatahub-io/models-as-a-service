@@ -62,18 +62,54 @@ kubectl create token <sa-name> -n <grafana-namespace> --duration=0s | kubectl ge
 
 ### Monitor ServiceMonitor Health
 
+The ODH/RHOAI monitoring stack scrapes `ServiceMonitor` / `PodMonitor` targets with the
+OpenTelemetry Collector (Target Allocator discovers jobs; the collector scrapes; metrics
+are remote-written to Prometheus). Thanos Query serves PromQL only — it has no scrape
+pool, so `/api/v1/targets` on `data-science-thanos-querier-route` is empty or unimplemented.
+Prometheus **Status → Targets** does not list these jobs either.
+
+The collector's prometheus receiver sets `job` to its own scrape job
+(`data-science-collector-prometheus`). The original ServiceMonitor/PodMonitor job is
+preserved as `exported_job` (for example `limitador-limitador` or
+`redhat-ods-applications/maas-controller-metrics`). Filter scrape health on
+`exported_job`, not `job`.
+
+Do not use the **usage-logs** collector (`usage-logs-collector`) here. That collector
+ingests gateway access logs into Loki. Metrics scraping uses the **monitoring-stack**
+OpenTelemetryCollector in the DSCI monitoring namespace.
+
 ```bash
-# Check ServiceMonitor status
-kubectl get servicemonitor -A
+# Replace <monitoring-namespace> with DSCI `spec.monitoring.namespace`
+# (e.g. opendatahub or redhat-ods-monitoring).
+# Replace <cluster> with your cluster's apps domain (e.g. apps.mycluster.example.com).
 
-# View targets in Prometheus UI: Status → Targets
-# Look for maas-*, kserve-*, authorino-*, limitador-* targets (should be UP)
+# 1. Confirm monitors exist (MaaS labels ServiceMonitors with monitoring.opendatahub.io/scrape=true)
+kubectl get servicemonitor,podmonitor -A -l monitoring.opendatahub.io/scrape='true'
 
-# Query Prometheus directly
-# Replace <cluster> with your cluster's apps domain (e.g., apps.mycluster.example.com)
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
-  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/targets" | \
-  jq '.data.activeTargets[] | select(.labels.job | contains("maas"))'
+# 2. Discovery: Target Allocator job list (what should be scraped)
+# The monitoring OpenTelemetryCollector is named data-science-collector, so its
+# Target Allocator Service is data-science-collector-targetallocator.
+kubectl -n <monitoring-namespace> port-forward svc/data-science-collector-targetallocator 8080:80
+# In another terminal:
+curl -s localhost:8080/jobs | jq
+# Job IDs look like serviceMonitor/<namespace>/<name>/0 — inspect endpoints:
+# curl -s localhost:8080/jobs/serviceMonitor%2F<namespace>%2F<name>%2F0/targets | jq
+# Look for maas, limitador, authorino, kserve jobs. Missing jobs mean the monitor
+# was not discovered (selector, namespace label, or NetworkPolicy).
+
+# 3. Scrape health: `up` is emitted by the prometheus receiver and stored in Thanos.
+# Match exported_job (original target). job is always data-science-collector-prometheus.
+curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
+  --data-urlencode 'query=up{exported_job=~".*(maas|limitador|authorino|kserve).*"}' \
+  "https://data-science-thanos-querier-route-<monitoring-namespace>.<cluster>/api/v1/query" | \
+  jq '.data.result[] | {exported_job: .metric.exported_job, instance: .metric.instance, up: .value[1]}'
+# up==1 is the analogue of a Prometheus target UP. No series usually means the
+# Target Allocator never allocated the job, not that Thanos lost the target.
+
+# 4. If up is 0 or missing, check the monitoring-stack collector logs (exclude usage-logs-collector)
+kubectl logs -n <monitoring-namespace> \
+  -l 'app.kubernetes.io/component=opentelemetry-collector,app.kubernetes.io/name!=usage-logs-collector' \
+  --tail=200 | grep -iE 'scrape|error|limitador|authorino|maas'
 ```
 
 ### Cleanup
@@ -96,18 +132,25 @@ kubectl delete telemetry -n openshift-ingress latency-per-subscription
 # 1. Verify service exposes metrics
 kubectl exec -n <namespace> <pod> -- curl localhost:<port>/metrics
 
-# 2. Verify ServiceMonitor exists
-kubectl get servicemonitor -n <namespace>
+# 2. Verify ServiceMonitor exists and labeled with: "monitoring.opendatahub.io/scrape: 'true'"
+kubectl get servicemonitor -n <namespace> \
+  -l 'monitoring.opendatahub.io/scrape=true'
 
-# 3. Verify User Workload Monitoring enabled
-kubectl get pods -n openshift-user-workload-monitoring
+# 3. Verify ODH monitoring stack enabled
+kubectl get maastenantconfig default-tenant -n models-as-a-service  -o json | jq '.status.conditions[] | select(.type=="Degraded" or .type=="MaaSPrerequisitesAvailable") | {type, status, message}'
 
-# 4. Check Prometheus targets (UI → Status → Targets)
+kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
 
-# 5. Query Prometheus directly
+# 4. Confirm the Target Allocator discovered the monitor and `up` is 1
+# (see Monitor ServiceMonitor Health above). Do not use Thanos /api/v1/targets.
+
+# 5. Query stored samples via Thanos (PromQL only — this is not a scrape-target API)
+# Replace <monitoring-namespace> with DSCI `spec.monitoring.namespace` (e.g., opendatahub)
 # Replace <cluster> with your cluster's apps domain (e.g., apps.mycluster.example.com)
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
-  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/query?query=<metric_name>"
+# For example: https://data-science-thanos-querier-route-redhat-ods-monitoring.apps.mycluster.example.com/api/v1/query?query=authorized_hits_total
+curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
+  --data-urlencode 'query=<metric_name>' \
+  "https://data-science-thanos-querier-route-<monitoring-namespace>.<cluster>/api/v1/query"
 ```
 
 ### Troubleshooting Dashboard Issues
@@ -131,24 +174,28 @@ curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
 
 ```bash
 # Check storage size
-kubectl exec -n openshift-user-workload-monitoring prometheus-user-workload-0 -- \
+kubectl exec prometheus-data-science-monitoringstack-0 -n <monitoring-namespace> -- \
   df -h /prometheus
 
 # View retention
-kubectl get prometheus -n openshift-user-workload-monitoring -o yaml | \
+kubectl get monitoringstack data-science-monitoringstack -n <monitoring-namespace> -o yaml | \
   grep -A 5 retention
 ```
 
 **Metric cardinality:**
 
 ```bash
-# Check high-cardinality metrics
-curl -sk -H "Authorization: Bearer $(oc whoami -t)" \
-  "https://thanos-querier-openshift-monitoring.<cluster>/api/v1/status/tsdb" | \
-  jq '.data.seriesCountByMetricName[] | select(.value > 1000)'
+# Thanos Query has no local TSDB, so /api/v1/status/tsdb is not available.
+# Count active series per MaaS metric via PromQL instead.
+# Replace <monitoring-namespace> with DSCI `spec.monitoring.namespace` (e.g., opendatahub)
+# Replace <cluster> with your cluster's apps domain (e.g., apps.mycluster.example.com)
+curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
+  --data-urlencode 'query=count by (__name__) ({__name__=~"authorized_hits_total|authorized_calls_total|limited_calls_total"})' \
+  "https://data-science-thanos-querier-route-<monitoring-namespace>.<cluster>/api/v1/query" | \
+  jq '.data.result[] | {metric: .metric.__name__, series: .value[1]}'
 ```
 
-Watch: `authorized_hits{user}`, `authorized_calls{user}`, `istio_request_duration_milliseconds_bucket{subscription}`.
+Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `istio_request_duration_milliseconds_bucket{subscription!=""}`.
 
 ### Regular Maintenance Tasks
 
@@ -156,7 +203,7 @@ Watch: `authorized_hits{user}`, `authorized_calls{user}`, `istio_request_duratio
 |------|-----------|--------|
 | **Token Rotation** | Per cluster token TTL | Rotate Grafana datasource token before expiration (verify cluster-specific lifetime) |
 | **Storage Check** | Weekly | Monitor Prometheus storage usage |
-| **ServiceMonitor Health** | Daily | Check Prometheus targets |
+| **ServiceMonitor Health** | Daily | Check Target Allocator jobs and `up` series (not Thanos `/api/v1/targets`) |
 | **Cardinality Review** | Monthly | Review high-cardinality metrics |
 | **Dashboard Testing** | After deployment | Verify dashboards load |
 | **Backup Redis** (HA) | Daily | Backup Redis data |
@@ -167,29 +214,29 @@ Watch: `authorized_hits{user}`, `authorized_calls{user}`, `istio_request_duratio
 
 | Feature | Blocker | Workaround |
 |---------|---------|------------|
-| **`model` label on `authorized_calls` / `limited_calls`** | Kuadrant wasm-shim doesn't pass `responseBodyJSON` context | Use `authorized_hits` for per-model breakdown |
-| **Input/output token split** | TokenRateLimitPolicy sends single `hits_addend` | Total tokens via `authorized_hits`; response body has `usage.prompt_tokens` and `usage.completion_tokens` but wasm-shim doesn't split |
-| **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits{user}`; vLLM prompt/gen metrics are per-model only |
-| **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls` from Limitador (has correct labels) |
+| **`model` label on `authorized_calls_total` / `limited_calls_total`** | Kuadrant wasm-shim doesn't pass `responseBodyJSON` context | Use `authorized_hits_total` for per-model breakdown |
+| **Input/output token split** | TokenRateLimitPolicy sends single `hits_addend` | Total tokens via `authorized_hits_total`; response body has `usage.prompt_tokens` and `usage.completion_tokens` but wasm-shim doesn't split |
+| **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user}`; vLLM prompt/gen metrics are per-model only |
+| **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls_total` from Limitador (has correct labels) |
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
-| **maas-api metrics** | No `/metrics` endpoint | No workaround; requires adding Prometheus instrumentation |
-| **PromQL warnings** | Counter names don't end in `_total` | Cosmetic only; all queries work correctly |
+| **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
+| **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
 
 !!! note "Total vs Split"
-    Total token consumption per user **is available** via `authorized_hits{user}`. Input/output split at gateway requires wasm-shim to send two counter updates.
+    Total token consumption per user **is available** via `authorized_hits_total{user}`. Input/output split at gateway requires wasm-shim to send two counter updates.
 
 ### Available Metrics
 
 | Feature | Metric | Label |
 |---------|--------|-------|
 | **Latency per subscription** | `istio_request_duration_milliseconds_bucket` | `subscription` |
-| **Tokens per user** | `authorized_hits` | `user` |
-| **Tokens per subscription** | `authorized_hits` | `subscription` |
-| **Tokens per model** | `authorized_hits` | `model` |
-| **Requests per user** | `authorized_calls` | `user` |
-| **Requests per subscription** | `authorized_calls` | `subscription` |
-| **Rate limited per user** | `limited_calls` | `user` |
-| **Rate limited per subscription** | `limited_calls` | `subscription` |
+| **Tokens per user** | `authorized_hits_total` | `user` |
+| **Tokens per subscription** | `authorized_hits_total` | `subscription` |
+| **Tokens per model** | `authorized_hits_total` | `model` |
+| **Requests per user** | `authorized_calls_total` | `user` |
+| **Requests per subscription** | `authorized_calls_total` | `subscription` |
+| **Rate limited per user** | `limited_calls_total` | `user` |
+| **Rate limited per subscription** | `limited_calls_total` | `subscription` |
 
 ## Reporting Issues
 

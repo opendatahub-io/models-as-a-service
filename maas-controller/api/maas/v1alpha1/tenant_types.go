@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -67,6 +68,10 @@ type TenantSpec struct {
 	// Telemetry contains configuration for telemetry and metrics collection.
 	// +kubebuilder:validation:Optional
 	Telemetry *TenantTelemetryConfig `json:"telemetry,omitempty"`
+
+	// MaasAPI defines scaling and resource configuration for maas-api pods.
+	// +kubebuilder:validation:Optional
+	MaasAPI *TenantMaasAPIConfig `json:"maasApi,omitempty"`
 
 	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
 	// +kubebuilder:validation:Optional
@@ -133,7 +138,23 @@ type TenantAPIKeysConfig struct {
 	MaxExpirationDays *int32 `json:"maxExpirationDays,omitempty"`
 }
 
-// TenantPayloadProcessingConfig defines scaling configuration for payload-processing pods.
+// TenantMaasAPIConfig defines scaling and resource configuration for maas-api pods.
+type TenantMaasAPIConfig struct {
+	// Replicas overrides the maas-api Deployment replica count.
+	// Spec-based replicas take precedence over the maas.opendatahub.io/maas-api-replicas annotation.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=100
+	Replicas *int32 `json:"replicas,omitempty"`
+
+	// Resources overrides the resource requests and limits for the maas-api container.
+	// When set, replaces the entire resource block (full replacement, not merge).
+	// Resource claims are not supported.
+	// +kubebuilder:validation:Optional
+	Resources *TenantResourceRequirements `json:"resources,omitempty"`
+}
+
+// TenantPayloadProcessingConfig defines scaling and resource configuration for payload-processing pods.
 type TenantPayloadProcessingConfig struct {
 	// Replicas overrides the payload-processing Deployment replica count.
 	// When Autoscaling is enabled, this value sets the HPA minReplicas floor.
@@ -146,6 +167,25 @@ type TenantPayloadProcessingConfig struct {
 	// When enabled, an HPA is created targeting the payload-processing Deployment.
 	// +kubebuilder:validation:Optional
 	Autoscaling *TenantAutoscalingConfig `json:"autoscaling,omitempty"`
+
+	// Resources overrides the resource requests and limits for the payload-processing container.
+	// When set, replaces the entire resource block (full replacement, not merge).
+	// When autoscaling is enabled, both requests.cpu and requests.memory must be specified.
+	// Resource claims are not supported.
+	// +kubebuilder:validation:Optional
+	Resources *TenantResourceRequirements `json:"resources,omitempty"`
+}
+
+// TenantResourceRequirements defines CPU and memory requests and limits for a container.
+// Only requests and limits are supported; resource claims are not accepted.
+type TenantResourceRequirements struct {
+	// Limits defines the maximum amount of compute resources allowed.
+	// +optional
+	Limits corev1.ResourceList `json:"limits,omitempty"`
+
+	// Requests defines the minimum amount of compute resources required.
+	// +optional
+	Requests corev1.ResourceList `json:"requests,omitempty"`
 }
 
 // TenantAutoscalingConfig defines HPA autoscaling parameters for payload-processing.

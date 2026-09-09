@@ -29,7 +29,7 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
-    _wait_reconcile,
+    kubectl_curl,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -1107,19 +1107,86 @@ def deployment_log_snapshot(
     *,
     namespace: str = GATEWAY_NAMESPACE,
     since: str = "30s",
+    tail: int = 500,
 ) -> str:
-    result = _oc_run(
-        ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
+    """Return recent logs for a payload-processing Deployment.
+
+    Uses --since first; when that window is empty (common right after traffic),
+    falls back to --tail so ext_proc activity is not missed.
+    """
+    args = [
+        "logs",
+        f"deployment/{deployment_name}",
+        "-n",
+        namespace,
+        f"--since={since}",
+        f"--tail={tail}",
+    ]
+    result = _oc_run(args, timeout=120)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        if err:
+            log.warning(
+                "Failed to read logs for deployment/%s in %s: %s",
+                deployment_name,
+                namespace,
+                err[:300],
+            )
+        return ""
+    text = result.stdout or ""
+    if text.strip():
+        return text
+    # Some oc/kubectl versions return empty stdout for --since when the window
+    # has no new lines; retry with tail only.
+    fallback = _oc_run(
+        [
+            "logs",
+            f"deployment/{deployment_name}",
+            "-n",
+            namespace,
+            f"--tail={tail}",
+        ],
         timeout=120,
     )
-    if result.returncode != 0:
+    if fallback.returncode != 0:
         return ""
-    return result.stdout or ""
+    return fallback.stdout or ""
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:
-    markers = ("x-request-id", "handlers/server.go", "processing request headers")
-    return any(marker in log_text for marker in markers)
+    markers = (
+        "x-request-id",
+        "handlers/server.go",
+        "processing request headers",
+        "ext_proc",
+        "ExternalProcessor",
+    )
+    lowered = log_text.lower()
+    return any(marker.lower() in lowered for marker in markers)
+
+
+def wait_for_ipp_log_activity(
+    deployment_name: str,
+    *,
+    namespace: str = GATEWAY_NAMESPACE,
+    expect_activity: bool = True,
+    timeout: int = 90,
+    poll_interval: int = 3,
+) -> str:
+    """Poll deployment logs until ext_proc activity appears or stays quiet."""
+    deadline = time.time() + timeout
+    last_logs = ""
+    while time.time() < deadline:
+        last_logs = deployment_log_snapshot(
+            deployment_name,
+            namespace=namespace,
+            since="2m",
+        )
+        active = ipp_logs_show_recent_activity(last_logs)
+        if active == expect_activity:
+            return last_logs
+        time.sleep(poll_interval)
+    return last_logs
 
 
 def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:
@@ -1337,35 +1404,62 @@ def search_api_keys_at(
     )
 
 
-def validate_api_key_at(base_url: str, api_key: str) -> requests.Response:
-    return requests.post(
-        f"{base_url}/internal/v1/api-keys/validate",
-        json={"key": api_key},
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
+class _InternalResponse:
+    """Minimal response wrapper for kubectl curl results (internal endpoints)."""
+
+    def __init__(self, status_code: int, body: str):
+        self.status_code = status_code
+        self.text = body
+        self.content = body.encode()
+
+    def json(self):
+        return json.loads(self.text)
+
+
+def _kubectl_curl_post(
+    url: str, *, headers: dict = None, json_body: dict = None,
+) -> _InternalResponse:
+    """POST to an in-cluster URL via kubectl exec (for internal endpoints)."""
+    status_code, body = kubectl_curl(
+        url, method="POST", headers=headers, json_body=json_body,
+    )
+    return _InternalResponse(status_code, body)
+
+
+def tenant_internal_url(tenant_name: str) -> str:
+    """Return the in-cluster Service URL for a tenant's maas-api."""
+    service_name = per_tenant_resource_name("maas-api", tenant_name)
+    port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
+    return f"https://{service_name}.{INFRA_NAMESPACE}.svc.cluster.local:{port}"
+
+
+def validate_api_key_at(service_url: str, api_key: str) -> _InternalResponse:
+    """Validate an API key via the internal endpoint (in-cluster call)."""
+    return _kubectl_curl_post(
+        f"{service_url}/internal/v1/api-keys/validate",
+        json_body={"key": api_key},
     )
 
 
 def select_subscription_at(
-    base_url: str,
+    service_url: str,
     api_key: str,
     username: str,
     groups: list[str],
     *,
     requested_subscription: Optional[str] = None,
     requested_model: Optional[str] = None,
-) -> requests.Response:
+) -> _InternalResponse:
+    """Select a subscription via the internal endpoint (in-cluster call)."""
     payload: dict[str, Any] = {"username": username, "groups": groups}
     if requested_subscription:
         payload["requestedSubscription"] = requested_subscription
     if requested_model:
         payload["requestedModel"] = requested_model
-    return requests.post(
-        f"{base_url}/internal/v1/subscriptions/select",
+    return _kubectl_curl_post(
+        f"{service_url}/internal/v1/subscriptions/select",
         headers={"Authorization": f"Bearer {api_key}"},
-        json=payload,
-        timeout=TIMEOUT,
-        verify=TLS_VERIFY,
+        json_body=payload,
     )
 
 

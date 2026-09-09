@@ -1812,6 +1812,42 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayAuthPolicySpec_DenyAPIKeyManagement(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	rule := nestedMapRequired(t, obj,
+		"spec", "defaults", "rules", "authorization", "deny-api-key-management")
+	when, ok := rule["when"].([]any)
+	if !ok || len(when) != 1 {
+		t.Fatalf("deny-api-key-management when missing or invalid: %#v", rule["when"])
+	}
+	condition, ok := when[0].(map[string]any)
+	if !ok {
+		t.Fatalf("deny-api-key-management when[0] is not a map: %T", when[0])
+	}
+	predicate, ok := condition["predicate"].(string)
+	if !ok || !strings.Contains(predicate, `request.path == "/maas-api/v1/api-keys"`) ||
+		!strings.Contains(predicate, `request.path.startsWith("/maas-api/v1/api-keys/")`) {
+		t.Fatalf("deny-api-key-management path predicate is incomplete: %q", predicate)
+	}
+	if !strings.Contains(predicate, "sk-oai-") {
+		t.Fatalf("deny-api-key-management must be scoped to API keys: %q", predicate)
+	}
+
+	patterns, found, err := unstructured.NestedSlice(obj.Object,
+		"spec", "defaults", "rules", "authorization", "deny-api-key-management", "patternMatching", "patterns")
+	if err != nil || !found {
+		t.Fatalf("deny-api-key-management patterns missing: found=%v err=%v", found, err)
+	}
+	if len(patterns) != 1 {
+		t.Fatalf("deny-api-key-management patterns length = %d, want 1", len(patterns))
+	}
+	deny, ok := patterns[0].(map[string]any)
+	if !ok || deny["predicate"] != "false" {
+		t.Fatalf("deny-api-key-management must fail authorization: %#v", patterns[0])
+	}
+}
+
 func TestBuildGatewayAuthPolicySpec_OIDCAuth(t *testing.T) {
 	oidc := &oidcConfig{
 		IssuerURL: "https://keycloak.example.com/realms/test",

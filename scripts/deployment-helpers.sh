@@ -228,6 +228,25 @@ resolve_authorino_namespace() {
   resolve_policy_engine_namespace "$@"
 }
 
+# wait_for_gateway_programmed polls until a Gateway reaches Programmed=True.
+wait_for_gateway_programmed() {
+  local gateway_name="${1:?gateway name required}"
+  local gateway_ns="${2:-openshift-ingress}"
+  local timeout="${3:-600}"
+
+  echo "Waiting for Gateway ${gateway_ns}/${gateway_name} to be Programmed=True (timeout: ${timeout}s)..."
+
+  if oc wait "gateway/${gateway_name}" -n "${gateway_ns}" --for=condition=Programmed --timeout="${timeout}s"; then
+    echo "✅ Gateway ${gateway_ns}/${gateway_name} is Programmed"
+    return 0
+  fi
+
+  echo "❌ ERROR: Gateway ${gateway_ns}/${gateway_name} did not reach Programmed=True within ${timeout}s"
+  oc get "gateway/${gateway_name}" -n "${gateway_ns}" -o wide || true
+  oc describe "gateway/${gateway_name}" -n "${gateway_ns}" || true
+  return 1
+}
+
 # ==========================================
 # Logging Functions
 # ==========================================

@@ -9,7 +9,8 @@
 #            fields remain on auth identity FILTER_STATE
 #            (wasm.kuadrant.auth.identity.*).
 # Model:     Composite filter wraps json_to_metadata, executing only on
-#            inference paths (suffix match: /v1/chat/completions, /v1/completions).
+#            inference paths (suffix match: /v1/chat/completions,
+#            /v1/completions, /v1/embeddings).
 #            Extracts "model" from request body (covers 429),
 #            then overwrites from response body on 200 (authoritative).
 # Tokens:    json_to_metadata extracts usage.{total,prompt,completion}_tokens
@@ -168,7 +169,9 @@ spec:
   # Matches OpenAI + MaaS conventions:
   #   - /<ns>/<model>/v1/chat/completions  (path-based routing, current)
   #   - /<ns>/<model>/v1/completions       (legacy)
+  #   - /<ns>/<model>/v1/embeddings        (embedding models)
   #   - /v1/chat/completions               (body-based routing, future)
+  #   - /v1/embeddings                     (body-based routing, embeddings)
   #
   # request_rules  — extracts "model" from the JSON request body.
   # response_rules — extracts token counts and authoritative model from the
@@ -224,6 +227,14 @@ spec:
                             header_name: ":path"
                         value_match:
                           suffix: "/v1/completions"
+                    - single_predicate:
+                        input:
+                          name: request-headers
+                          typed_config:
+                            "@type": type.googleapis.com/envoy.type.matcher.v3.HttpRequestHeaderMatchInput
+                            header_name: ":path"
+                        value_match:
+                          suffix: "/v1/embeddings"
                 on_match:
                   action:
                     name: run-json-to-metadata
@@ -350,7 +361,8 @@ spec:
                 local path = request_handle:headers():get(":path")
                 if path
                    and (string.find(path, "/v1/chat/completions", 1, true)
-                     or string.find(path, "/v1/completions", 1, true))
+                     or string.find(path, "/v1/completions", 1, true)
+                     or string.find(path, "/v1/embeddings", 1, true))
                 then
                   request_handle:streamInfo():dynamicMetadata():set(
                     MD_NS, "is_completions", "true")
@@ -421,7 +433,8 @@ spec:
                   expression: >-
                     request.method == 'POST'
                     && (request.path.endsWith('/v1/chat/completions')
-                        || request.path.endsWith('/v1/completions'))
+                        || request.path.endsWith('/v1/completions')
+                        || request.path.endsWith('/v1/embeddings'))
             typed_config:
               "@type": type.googleapis.com/envoy.extensions.access_loggers.open_telemetry.v3.OpenTelemetryAccessLogConfig
               common_config:

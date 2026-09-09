@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import copy
 import json
 import os
 import shutil
@@ -6,7 +9,7 @@ import time
 
 import pytest
 
-from test_helper import _ns
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _apply_cr, _ns
 
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
@@ -112,6 +115,95 @@ def _wait_tenant_ready(timeout=180, interval=5):
     return None
 
 
+_MAAS_API_OVERRIDE_REPLICAS = 2
+_MAAS_API_OVERRIDE_REQUESTS = {"memory": "320Mi", "cpu": "150m"}
+_MAAS_API_OVERRIDE_LIMITS = {"memory": "768Mi", "cpu": "750m"}
+
+
+def _maas_api_deployment(namespace: str) -> dict | None:
+    try:
+        return _oc_json(["get", "deployment", "maas-api", "-n", namespace, "-o", "json"])
+    except subprocess.CalledProcessError as exc:
+        if _oc_not_found(exc):
+            return None
+        raise
+
+
+def _maas_api_container_resources(namespace: str) -> dict | None:
+    deployment = _maas_api_deployment(namespace)
+    if deployment is None:
+        return None
+    containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []
+    for container in containers:
+        if container.get("name") == "maas-api":
+            return container.get("resources") or {}
+    return {}
+
+
+def _maas_api_replica_count(namespace: str) -> int | None:
+    deployment = _maas_api_deployment(namespace)
+    if deployment is None:
+        return None
+    replicas = deployment.get("spec", {}).get("replicas")
+    if replicas is None:
+        return None
+    return int(replicas)
+
+
+def _resources_match(resources: dict, expected_requests: dict, expected_limits: dict) -> bool:
+    requests = resources.get("requests") or {}
+    limits = resources.get("limits") or {}
+    return all(requests.get(key) == value for key, value in expected_requests.items()) and all(
+        limits.get(key) == value for key, value in expected_limits.items()
+    )
+
+
+def _wait_maas_api_resources(
+    namespace: str,
+    expected_requests: dict,
+    expected_limits: dict,
+    *,
+    timeout: int = 180,
+    interval: int = 5,
+) -> dict | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resources = _maas_api_container_resources(namespace)
+        if resources is not None and _resources_match(resources, expected_requests, expected_limits):
+            return resources
+        time.sleep(interval)
+    return None
+
+
+def _wait_maas_api_replicas(
+    namespace: str,
+    expected_replicas: int,
+    *,
+    timeout: int = 180,
+    interval: int = 5,
+) -> int | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        replicas = _maas_api_replica_count(namespace)
+        if replicas == expected_replicas:
+            return replicas
+        time.sleep(interval)
+    return None
+
+
+def _restore_tenant_spec(baseline: dict, original_spec: dict) -> None:
+    restore_doc = {
+        "apiVersion": baseline["apiVersion"],
+        "kind": baseline["kind"],
+        "metadata": {
+            "name": baseline["metadata"]["name"],
+            "namespace": baseline["metadata"]["namespace"],
+        },
+        "spec": original_spec,
+    }
+    _apply_cr(restore_doc)
+
+
 class TestTenantLifecycle:
     def test_tenant_ready_and_phase_healthy(self):
         st = _wait_tenant_ready()
@@ -122,13 +214,25 @@ class TestTenantLifecycle:
             f"Expected phase Active or Degraded when reconciled, got {phase!r}"
         )
 
+    @pytest.mark.serial
     def test_payload_processing_deployed_with_active_tenant(self):
-        """Default-tenant MaasTenantConfig should reconcile legacy unsuffixed IPP Deployments."""
+        """Active MaasTenantConfig should reconcile tenant platform workloads.
+
+        Verifies payload-processing exists and that spec.maasApi replicas/resources
+        overrides are applied to the default maas-api Deployment (then restored).
+        """
         st = _wait_tenant_ready()
         assert st is not None, "MaasTenantConfig not Ready; skip workload checks."
         phase = st.get("phase")
-        if phase != "Active":
-            pytest.skip("Tenant not Active (e.g. Degraded); payload-processing not asserted")
+        if phase not in ("Active", "Degraded"):
+            pytest.skip(f"Tenant phase {phase!r}; workload checks require Active or Degraded")
+
+        deployments_ready = any(
+            cond.get("type") == "DeploymentsAvailable" and cond.get("status") == "True"
+            for cond in (st.get("conditions") or [])
+        )
+        if not deployments_ready:
+            pytest.skip("Tenant DeploymentsAvailable is not True; skipping workload checks")
 
         result = _oc_run(
             [
@@ -153,6 +257,89 @@ class TestTenantLifecycle:
                 f"{combined.strip()}"
             )
         assert result.stdout.strip(), "payload-processing deployment get succeeded but returned no name"
+
+        maas_api_result = _oc_run(
+            [
+                "get",
+                "deployment",
+                "maas-api",
+                "-n",
+                MAAS_API_DEPLOYMENT_NAMESPACE,
+                "-o",
+                "name",
+            ]
+        )
+        if maas_api_result.returncode != 0:
+            if _oc_output_not_found(maas_api_result):
+                pytest.skip(
+                    f"maas-api deployment not found in namespace {MAAS_API_DEPLOYMENT_NAMESPACE!r}; "
+                    "skipping maasApi override check."
+                )
+            combined = (maas_api_result.stderr or "") + (maas_api_result.stdout or "")
+            pytest.fail(
+                f"`oc get deployment maas-api -n {MAAS_API_DEPLOYMENT_NAMESPACE}` failed: "
+                f"{combined.strip()}"
+            )
+
+        baseline = _tenant_doc()
+        original_spec = copy.deepcopy(baseline.get("spec") or {})
+        patch = {
+            "spec": {
+                "maasApi": {
+                    "replicas": _MAAS_API_OVERRIDE_REPLICAS,
+                    "resources": {
+                        "requests": _MAAS_API_OVERRIDE_REQUESTS,
+                        "limits": _MAAS_API_OVERRIDE_LIMITS,
+                    },
+                }
+            }
+        }
+        patch_result = _oc_run(
+            [
+                "patch",
+                "maastenantconfig",
+                TENANT_NAME,
+                "-n",
+                _ns(),
+                "--type=merge",
+                "-p",
+                json.dumps(patch),
+            ]
+        )
+        if patch_result.returncode != 0:
+            combined = (patch_result.stderr or "") + (patch_result.stdout or "")
+            if "maasApi" in combined or "unknown field" in combined.lower():
+                pytest.skip(
+                    "MaasTenantConfig spec.maasApi not supported by installed CRD/controller; "
+                    f"skipping maasApi override check: {combined.strip()}"
+                )
+            pytest.fail(
+                f"`oc patch maastenantconfig/{TENANT_NAME}` failed: {combined.strip()}"
+            )
+
+        try:
+            matched_replicas = _wait_maas_api_replicas(
+                MAAS_API_DEPLOYMENT_NAMESPACE,
+                _MAAS_API_OVERRIDE_REPLICAS,
+            )
+            assert matched_replicas is not None, (
+                "maas-api Deployment replicas did not match MaasTenantConfig override within timeout; "
+                f"expected replicas={_MAAS_API_OVERRIDE_REPLICAS}, "
+                f"last observed={_maas_api_replica_count(MAAS_API_DEPLOYMENT_NAMESPACE)!r}"
+            )
+
+            matched_resources = _wait_maas_api_resources(
+                MAAS_API_DEPLOYMENT_NAMESPACE,
+                _MAAS_API_OVERRIDE_REQUESTS,
+                _MAAS_API_OVERRIDE_LIMITS,
+            )
+            assert matched_resources is not None, (
+                "maas-api Deployment resources did not match MaasTenantConfig override within timeout; "
+                f"expected requests={_MAAS_API_OVERRIDE_REQUESTS!r} limits={_MAAS_API_OVERRIDE_LIMITS!r}, "
+                f"last observed={_maas_api_container_resources(MAAS_API_DEPLOYMENT_NAMESPACE)!r}"
+            )
+        finally:
+            _restore_tenant_spec(baseline, original_spec)
 
 
 class TestTenantContract:

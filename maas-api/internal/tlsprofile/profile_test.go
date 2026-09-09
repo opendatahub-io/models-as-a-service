@@ -9,6 +9,13 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/tlsprofile"
 )
 
+func TestLookupNamedProfileOld(t *testing.T) {
+	old, ok := tlsprofile.LookupNamedProfile(confv1.TLSProfileOldType)
+	assert.True(t, ok)
+	assert.Equal(t, confv1.TLSProfileOldType, old.Type)
+	assert.Equal(t, confv1.VersionTLS10, old.MinTLSVersion)
+}
+
 func TestDefaultProfile(t *testing.T) {
 	p := tlsprofile.DefaultProfile()
 

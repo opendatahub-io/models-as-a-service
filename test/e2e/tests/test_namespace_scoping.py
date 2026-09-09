@@ -43,7 +43,7 @@ from test_helper import (
     _revoke_api_key,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
-    _wait_reconcile,
+    _wait_for_cr_absent,
 )
 
 log = logging.getLogger(__name__)
@@ -242,7 +242,7 @@ class TestMaaSAPIWatchNamespace:
             log.info(f"✓ Subscription {sub_name} in {ns} is visible to MaaS API")
         finally:
             _delete_cr("MaaSSubscription", sub_name, ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSSubscription", sub_name, ns)
 
     def test_subscription_in_another_namespace_not_visible_to_api(self, api_key):
         """
@@ -264,7 +264,9 @@ class TestMaaSAPIWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile()
+            # Negative test: verify unwatched-ns subscription is NOT visible.
+            # No condition to poll — sleep to allow any stale propagation.
+            time.sleep(8)
 
             r = _call_subscriptions_select(api_key, "e2e-api-user", ["system:authenticated"], requested_subscription=sub_name)
             assert r.status_code == 200, f"subscriptions/select failed: {r.status_code} {r.text}"
@@ -276,7 +278,7 @@ class TestMaaSAPIWatchNamespace:
         finally:
             _delete_cr("MaaSSubscription", sub_name, other_ns)
             _delete_namespace(other_ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSSubscription", sub_name, other_ns)
 
 
 class TestMaaSControllerWatchNamespace:
@@ -317,7 +319,7 @@ class TestMaaSControllerWatchNamespace:
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-watched-auth", ns)
             _delete_cr("MaaSSubscription", "e2e-watched-sub", ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSSubscription", "e2e-watched-sub", ns)
 
     def test_authpolicy_and_subscription_in_another_namespace(self):
         """MaaSAuthPolicy and MaaSSubscription in another namespace should not be reconciled
@@ -349,7 +351,8 @@ class TestMaaSControllerWatchNamespace:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 1, "window": "1m"}]}],
                 },
             })
-            _wait_reconcile(15)
+            # Negative test: verify unwatched-ns CRs are NOT reconciled.
+            time.sleep(15)
 
             auth_name = f"maas-auth-{MODEL_REF}"
             auth_policies = [x.strip() for x in (_get_cr_annotation("authpolicy", auth_name, MODEL_NAMESPACE, "maas.opendatahub.io/auth-policies") or "").split(",") if x.strip()]
@@ -369,7 +372,7 @@ class TestMaaSControllerWatchNamespace:
         finally:
             _delete_cr("MaaSAuthPolicy", "e2e-unwatched-auth", ns)
             _delete_cr("MaaSSubscription", "e2e-unwatched-sub", ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSSubscription", "e2e-unwatched-sub", ns)
             _delete_namespace(ns)
 
 
@@ -420,8 +423,6 @@ class TestModelRef:
                 },
             })
 
-            _wait_reconcile(15)
-
             _wait_for_maas_auth_policy_phase(policy_name, timeout=90)
 
             auth_name = f"maas-auth-{MODEL_REF}"
@@ -450,7 +451,7 @@ class TestModelRef:
             _delete_cr("ExternalModel", "test-backend", other_ns)
             _delete_cr("ExternalModel", "test-backend", MODEL_NAMESPACE)
             _delete_namespace(other_ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSAuthPolicy", policy_name, ns)
 
     def test_subscription_model_ref(self):
         """
@@ -498,7 +499,7 @@ class TestModelRef:
                 },
             })
 
-            _wait_reconcile(15)
+            _wait_for_maas_subscription_phase(sub_name, namespace=ns, timeout=90)
 
             trlp_name = f"maas-trlp-{MODEL_REF}"
             trlp_name_other = f"maas-trlp-{other_model_ref}"
@@ -530,4 +531,4 @@ class TestModelRef:
             _delete_cr("ExternalModel", "test-backend", other_ns)
             _delete_cr("ExternalModel", "test-backend", MODEL_NAMESPACE)
             _delete_namespace(other_ns)
-            _wait_reconcile()
+            _wait_for_cr_absent("MaaSSubscription", sub_name, ns)

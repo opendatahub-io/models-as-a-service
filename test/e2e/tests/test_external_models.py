@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 
 import pytest
 import requests
@@ -426,6 +427,88 @@ requires_ipp = pytest.mark.skipif(
     not _check_ipp_pods_deployed(),
     reason="Payload-processing (IPP) pods not deployed; body routing tests require IPP",
 )
+
+
+@requires_ipp
+class TestLegacyExternalModelMigration:
+    """Verify IPP migration is reflected on the retained legacy CR."""
+
+    def test_migration_sets_legacy_status_and_removes_networking(self):
+        name = f"e2e-legacy-migration-{uuid.uuid4().hex[:8]}"
+        secret_name = f"{name}-api-key"
+        legacy_kind = "externalmodels.maas.opendatahub.io"
+        legacy_resource_name = f"maas-{name}"
+        expected_message = f"Model migrated to inference.opendatahub.io ExternalModel: {name}"
+        deadline = time.monotonic() + 180
+
+        try:
+            _apply_cr({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": secret_name, "namespace": MODEL_NAMESPACE},
+                "type": "Opaque",
+                "stringData": {"api-key": "e2e-test-key"},
+            })
+            # Seed one legacy networking child so this test proves teardown ran,
+            # even if IPP migrates the model before the legacy reconciler has
+            # time to create the full networking set.
+            _apply_cr({
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": legacy_resource_name, "namespace": MODEL_NAMESPACE},
+                "spec": {
+                    "type": "ExternalName",
+                    "externalName": EXTERNAL_ENDPOINT,
+                    "ports": [{"name": "https", "port": 443}],
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "ExternalModel",
+                "metadata": {"name": name, "namespace": MODEL_NAMESPACE},
+                "spec": {
+                    "provider": "openai",
+                    "targetModel": TARGET_MODEL,
+                    "endpoint": EXTERNAL_ENDPOINT,
+                    "credentialRef": {"name": secret_name},
+                },
+            })
+
+            legacy = None
+            inference = None
+            while time.monotonic() < deadline:
+                legacy = _get_cr(legacy_kind, name, MODEL_NAMESPACE)
+                inference = _get_cr(EXTERNAL_MODEL_KIND, name, MODEL_NAMESPACE)
+                if (
+                    legacy
+                    and legacy.get("status", {}).get("phase") == "Migrated"
+                    and inference
+                    and inference.get("status", {}).get("httpRouteName")
+                ):
+                    break
+                time.sleep(2)
+
+            assert inference is not None, "IPP did not create the inference ExternalModel"
+            assert inference.get("status", {}).get("httpRouteName"), (
+                "Migrated inference ExternalModel did not publish status.httpRouteName"
+            )
+            assert legacy is not None, "Legacy ExternalModel was unexpectedly removed"
+            assert legacy.get("status", {}).get("phase") == "Migrated"
+            assert legacy.get("status", {}).get("message") == expected_message
+
+            assert _get_cr("httproute", legacy_resource_name, MODEL_NAMESPACE) is None, (
+                f"Legacy HTTPRoute {legacy_resource_name} was not removed"
+            )
+            assert _get_cr("service", legacy_resource_name, MODEL_NAMESPACE) is None, (
+                f"Legacy Service {legacy_resource_name} was not removed"
+            )
+        finally:
+            # The legacy CR owns the inference resources created by the migration
+            # controller, so deleting it should garbage-collect those children.
+            _delete_cr(legacy_kind, name, MODEL_NAMESPACE)
+            _delete_cr(EXTERNAL_MODEL_KIND, name, MODEL_NAMESPACE)
+            _delete_cr("service", legacy_resource_name, MODEL_NAMESPACE)
+            _delete_cr("secret", secret_name, MODEL_NAMESPACE)
 
 
 @requires_ipp

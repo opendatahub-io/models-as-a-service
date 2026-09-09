@@ -3,10 +3,12 @@ Negative-path and security-oriented E2E tests for MaaS.
 
 Validates that the platform correctly rejects abuse scenarios:
 - Header spoofing: client-supplied X-MaaS identity headers are rejected at the gateway
+- API key delegation: API keys cannot access the API-key management surface
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
 - AuthPolicy removal: access revoked when policy deleted
 - Missing resources: CRs referencing non-existent models
+- Internal endpoint isolation: /internal/* paths not routable through gateway (FIND-004)
 
 Requires:
   - GATEWAY_HOST env var
@@ -65,6 +67,72 @@ pytestmark = pytest.mark.xdist_group("security")
 
 
 # ============================================================================
+# P0: API Key Management Isolation
+# ============================================================================
+
+class TestAPIKeyManagementIsolation:
+    """Verify that inference API keys cannot act as management credentials."""
+
+    def test_api_key_cannot_mint_another_api_key(self):
+        """A valid subscription-bound API key must be denied on POST /v1/api-keys.
+
+        The initial key is minted with a cluster token as a control. The test then
+        presents that valid key to the management endpoint and verifies that the
+        gateway or MaaS API rejects it without returning new key material.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+        parent_key_id = None
+
+        try:
+            parent = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-delegation-parent-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert parent.status_code in (200, 201), (
+                f"Control API key mint failed: {parent.status_code} "
+                f"body_bytes={len(parent.content)}"
+            )
+            parent_body = parent.json()
+            parent_key_id = parent_body.get("id")
+            parent_key = parent_body.get("key", "")
+            assert parent_key.startswith("sk-oai-"), "Control mint did not return an API key"
+
+            # Use the API key, not the cluster token, to attempt delegation.
+            # Do not log the response body: a regression could return a live key.
+            delegated = requests.post(
+                f"{_maas_api_url()}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {parent_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "name": f"e2e-delegation-child-{uuid.uuid4().hex[:8]}",
+                    "subscription": SIMULATOR_SUBSCRIPTION,
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            log.info(
+                "API-key-authenticated key mint -> %s body_bytes=%d",
+                delegated.status_code,
+                len(delegated.content),
+            )
+            assert delegated.status_code in (401, 403), (
+                f"Expected API-key-authenticated mint to be denied, got "
+                f"{delegated.status_code} body_bytes={len(delegated.content)}"
+            )
+            assert "sk-oai-" not in delegated.text, (
+                "Denied delegation response must not contain API key material"
+            )
+        finally:
+            if parent_key_id:
+                _revoke_api_key(oc_token, parent_key_id)
+
+
+# ============================================================================
 # P0: Header Spoofing Tests
 # ============================================================================
 
@@ -77,6 +145,10 @@ class TestHeaderSpoofing:
 
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
+
+    @pytest.fixture(autouse=True)
+    def _ensure_gateway_auth_enforced(self):
+        _wait_for_gateway_auth_enforced()
 
     @pytest.mark.parametrize(
         "forged_header,label",
@@ -645,3 +717,99 @@ class TestWebhookValidation:
                 ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
                 capture_output=True, text=True, timeout=30
             )
+
+
+# ============================================================================
+# P0: Internal Endpoint Isolation (FIND-004)
+# ============================================================================
+
+class TestInternalEndpointIsolation:
+    """Verify internal API endpoints are not reachable through the gateway.
+
+    Internal endpoints (/internal/v1/*) are designed for in-cluster callers
+    (Authorino, CronJob) via the Kubernetes Service directly. The HTTPRoute
+    scopes the /maas-api prefix to /maas-api/v1 only, so /maas-api/internal/*
+    has no matching route and must never reach the internal handlers.
+
+    Security invariant (FIND-004): authenticated requests to /maas-api/internal/*
+    through the gateway must not return a success response.
+    """
+
+    @pytest.mark.parametrize(
+        "path,body",
+        [
+            (
+                "/internal/v1/subscriptions/select",
+                {"groups": ["system:authenticated"], "username": "test"},
+            ),
+            ("/internal/v1/api-keys/cleanup", {}),
+            ("/internal/v1/api-keys/validate", {"key": "sk-oai-test-fake-key"}),
+        ],
+        ids=["subscriptions-select", "api-keys-cleanup", "api-keys-validate"],
+    )
+    def test_internal_endpoint_not_routable(self, path, body):
+        """POST /maas-api/internal/* through gateway must not reach the handler.
+
+        Sends an authenticated request to each internal endpoint via the
+        gateway. With the HTTPRoute scoped to /maas-api/v1, these paths
+        have no matching route and the gateway returns a non-success status
+        (typically 404). The response must not contain handler output.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+
+        url = f"{_maas_api_url()}{path}"
+        headers = {
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        }
+
+        r = requests.post(
+            url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY,
+        )
+
+        log.info(
+            "Internal endpoint %s -> %s body_bytes=%d",
+            path, r.status_code, len(r.content),
+        )
+
+        assert r.status_code == 404, (
+            f"Internal endpoint {path} must not be routable through gateway "
+            f"(expected 404, got {r.status_code}). "
+            f"A 2xx means the handler is exposed; a 401/403 means the path is "
+            f"routed but auth-blocked — both indicate a routing defect. "
+            f"Response: {r.text[:300]}"
+        )
+
+    def test_health_endpoint_accessible(self):
+        """GET /maas-api/health remains accessible through gateway.
+
+        The HTTPRoute includes a dedicated rule for /maas-api/health and
+        the AuthPolicy skips auth for this path, so unauthenticated GET
+        requests must return 200.
+        """
+        url = f"{_maas_api_url()}/health"
+        r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+        log.info("Health endpoint -> %s", r.status_code)
+        assert r.status_code == 200, (
+            f"Health endpoint should return 200, got {r.status_code}: {r.text[:500]}"
+        )
+
+    def test_v1_models_via_maas_api_prefix(self):
+        """GET /maas-api/v1/models remains accessible through gateway.
+
+        Regression check: the HTTPRoute rewrite from /maas-api/v1 to /v1
+        must preserve access to public API endpoints.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+
+        url = f"{_maas_api_url()}/v1/models"
+        headers = {"Authorization": f"Bearer {oc_token}"}
+        r = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
+
+        log.info("/maas-api/v1/models -> %s", r.status_code)
+        assert r.status_code == 200, (
+            f"/maas-api/v1/models should return 200, got {r.status_code}: {r.text[:500]}"
+        )

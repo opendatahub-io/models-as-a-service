@@ -231,7 +231,7 @@ def maas_api_internal_url() -> str:
         return url.rstrip("/")
 
     # Default: cluster-internal service URL
-    # maas-api uses TLS on port 8443 (self-signed cert, use -k/verify=False)
+    # maas-api uses TLS on port 8443 (OpenShift service-serving cert)
     namespace = os.environ.get("MAAS_NAMESPACE", MAAS_API_DEPLOYMENT_NAMESPACE)
     service_name = os.environ.get("MAAS_API_SERVICE_NAME", "maas-api")
     port = os.environ.get("MAAS_API_SERVICE_PORT", "8443")
@@ -349,11 +349,13 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     system:authenticated to satisfy AuthPolicy requirements for model access.
     """
     from multitenancy_helpers import response_summary
+    from test_helper import _request_with_gateway_retry
 
     sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
     key_name = f"e2e-test-inference-key-{_xdist_worker_suffix()}"
     print(f"[api_key] Creating API key for inference tests ({key_name})...")
-    r = requests.post(
+    r = _request_with_gateway_retry(
+        requests.post,
         api_keys_base_url,
         headers=headers,
         json={"name": key_name, "subscription": sim_sub},

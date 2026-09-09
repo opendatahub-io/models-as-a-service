@@ -28,8 +28,8 @@ from test_helper import (
     MODEL_REF,
     _create_test_auth_policy,
     _delete_cr,
+    _wait_for_cr_absent,
     _wait_for_maas_auth_policy_phase,
-    _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
@@ -113,7 +113,7 @@ class TestGatewayAuthPolicyLifecycle:
             )
         finally:
             _delete_cr("maasauthpolicy", policy_name)
-            _wait_reconcile()
+            _wait_for_cr_absent("maasauthpolicy", policy_name)
 
     def test_only_one_gateway_authpolicy_named_maas_gateway_auth(self):
         """6.2: Exactly one maas-gateway-auth exists targeting the default gateway."""

@@ -10,6 +10,7 @@ These tests compose the S1/S10/S11 behavior:
 Requires maas-controller with --enable-tenant-namespace-discovery=true.
 """
 
+import time
 import uuid
 
 import pytest
@@ -56,7 +57,6 @@ from multitenancy_helpers import (
     wait_for_not_found,
     wait_for_status_phase,
 )
-from test_helper import _wait_reconcile
 
 pytestmark = pytest.mark.xdist_group("mt_lifecycle")
 
@@ -207,7 +207,7 @@ class TestMultiTenantIntegration:
             ensure_namespace(case["tenant_ns"])
             apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(first_policy, case["tenant_ns"])
-            _wait_reconcile(10)
+            time.sleep(10)
             first = get_json_or_none("maasauthpolicy", first_policy, case["tenant_ns"])
             assert first is not None
             assert FINALIZER_AUTHPOLICY not in ((first.get("metadata") or {}).get("finalizers") or [])
@@ -216,9 +216,9 @@ class TestMultiTenantIntegration:
             wait_for_finalizer("maasauthpolicy", first_policy, case["tenant_ns"], FINALIZER_AUTHPOLICY)
 
             remove_discovery_labels(case["tenant_ns"])
-            _wait_reconcile(10)
+            time.sleep(10)
             apply_maas_auth_policy(second_policy, case["tenant_ns"])
-            _wait_reconcile(10)
+            time.sleep(10)
             second = get_json_or_none("maasauthpolicy", second_policy, case["tenant_ns"])
             assert second is not None
             assert FINALIZER_AUTHPOLICY not in ((second.get("metadata") or {}).get("finalizers") or [])

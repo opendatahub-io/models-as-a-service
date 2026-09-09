@@ -42,7 +42,14 @@ type Manager struct {
 // gatewayInternalHost, when non-empty, routes all probe TCP connections to this
 // cluster-internal address while preserving the original URL hostname for TLS SNI
 // and the Host header, so gateway routing and Authorino auth work identically.
-func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string, enableHTTP2 bool) (*Manager, error) {
+func NewManager(
+	log *logger.Logger,
+	accessCheckTimeoutSeconds int,
+	gatewayInternalHost string,
+	enableHTTP2 bool,
+	profileMinVersion uint16,
+	profileCipherSuites []uint16,
+) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -51,7 +58,7 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
 	}
 
-	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, enableHTTP2)
+	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, enableHTTP2, profileMinVersion, profileCipherSuites)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build TLS config: %w", err)
 	}
@@ -91,17 +98,18 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 // the default Kubernetes service account CA path. It is a convenience wrapper around
 // BuildClusterTLSConfigFromPath.
 func BuildClusterTLSConfig(log *logger.Logger) (*tls.Config, error) {
-	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, false)
+	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, false, 0, nil)
 }
 
 // BuildClusterTLSConfigFromPath creates a TLS config for cluster-internal communication.
 // It starts with the system root CAs and appends the CA certificate at caPath when present.
+// profileMinVersion and profileCipherSuites come from the cluster TLS security profile when set.
 // This ensures both public CAs and cluster CAs are trusted, supporting endpoints with
 // publicly-trusted certificates as well as cluster-internal services.
 //
 // If caPath does not exist, system root CAs are used alone (development/out-of-cluster mode).
 // If caPath exists but cannot be read or parsed, an error is returned to prevent insecure fallback.
-func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP2 bool) (*tls.Config, error) {
+func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP2 bool, profileMinVersion uint16, profileCipherSuites []uint16) (*tls.Config, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -130,6 +138,12 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP
 	tlsCfg := &tls.Config{
 		RootCAs:    caCertPool,
 		MinVersion: tls.VersionTLS12,
+	}
+	if profileMinVersion > 0 {
+		tlsCfg.MinVersion = profileMinVersion
+	}
+	if len(profileCipherSuites) > 0 {
+		tlsCfg.CipherSuites = profileCipherSuites
 	}
 	if enableHTTP2 {
 		tlsCfg.NextProtos = []string{"h2", "http/1.1"}

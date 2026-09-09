@@ -44,6 +44,7 @@ from multitenancy_helpers import (
     require_tenant_namespace_discovery,
     wait_for_aitenant_cleanup_resources_deleted,
     wait_for_deployment_available,
+    wait_for_ipp_log_activity,
     wait_for_json,
     wait_for_not_found,
     wait_for_per_tenant_ipp_ready,
@@ -56,7 +57,6 @@ from test_helper import (
     _get_cluster_token,
     _maas_api_url,
     _wait_for_gateway_auth_enforced,
-    _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
@@ -323,7 +323,6 @@ class TestPerTenantIPPRouting:
             f"{model_name}-sub",
             gateway_name=case_a["gateway_name"],
         )
-        _wait_reconcile()
         return case_a
 
     def test_default_gateway_hits_default_ipp_only(self, ipp_tenant_cases):
@@ -366,12 +365,14 @@ class TestPerTenantIPPRouting:
             f"{redact_sensitive(response.text[:500])}"
         )
 
-        time.sleep(2)
-        default_logs = deployment_log_snapshot(
-            default_names["processing_deployment"], since="1m"
+        default_logs = wait_for_ipp_log_activity(
+            default_names["processing_deployment"],
+            expect_activity=True,
         )
-        tenant_logs = deployment_log_snapshot(
-            tenant_names["processing_deployment"], since="1m"
+        tenant_logs = wait_for_ipp_log_activity(
+            tenant_names["processing_deployment"],
+            expect_activity=False,
+            timeout=30,
         )
         assert ipp_logs_show_recent_activity(default_logs), (
             "Expected ext_proc activity in default payload-processing logs"
@@ -404,15 +405,19 @@ class TestPerTenantIPPRouting:
             f"{redact_sensitive(response.text[:500])}"
         )
 
-        time.sleep(2)
-        tenant_logs = deployment_log_snapshot(
-            tenant_names["processing_deployment"], since="1m"
+        tenant_logs = wait_for_ipp_log_activity(
+            tenant_names["processing_deployment"],
+            expect_activity=True,
         )
-        default_logs = deployment_log_snapshot(
-            default_names["processing_deployment"], since="1m"
+        default_logs = wait_for_ipp_log_activity(
+            default_names["processing_deployment"],
+            expect_activity=False,
+            timeout=30,
         )
-        other_logs = deployment_log_snapshot(
-            other_names["processing_deployment"], since="1m"
+        other_logs = wait_for_ipp_log_activity(
+            other_names["processing_deployment"],
+            expect_activity=False,
+            timeout=30,
         )
         assert ipp_logs_show_recent_activity(tenant_logs), (
             f"Expected ext_proc activity in {tenant_names['processing_deployment']} logs"

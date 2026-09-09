@@ -4,25 +4,31 @@
 
 ### ODH Monitoring Stack
 
-For metrics to be collected and stored in the ODH monitoring stack, configure DSCI `monitoring.metrics` - see [Platform Setup](../install/platform-setup.md#install-platform-operator).
-
-Verify the status of both `MonitoringStackAvailable` and `MonitoringReady` conditions is `True`:
+Verify the ODH monitoring stack is available by checking the status of both `MonitoringStackAvailable` and `MonitoringReady` conditions is `True`:
 
 ```bash
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="MonitoringReady" or .type=="MonitoringStackAvailable") | {type, status}'
 ```
 
-### ODH Observability Dashboard tabs (Optional)
+See [Observability Prerequisites](../install/prerequisites.md#optional-observability-prerequisites)
 
-For usage dashboard(s) to appear in the ODH observability dashboard, Perses needs to be deployed.
+### Perses
 
-Verify the static of `PersesAvailable` condition is `True`:
+For MaaS dashboards to appear in the ODH console, verify that the status of the `PersesAvailable` condition is `True`:
 
 ```bash
 kubectl get dscinitialization default-dsci -o json | jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
 ```
 
-See [Managing observability (RHOAI 3.4)](https://docs.redhat.com/en/documentation/red_hat_openshift_ai_self-managed/3.4/html/managing_openshift_ai/managing-observability_managing-rhoai).
+### Loki for Access Logs
+
+If you plan to store access logs for logs-based showback or for auditing, ensure LokiStack named `usage` is ready in monitoring namespace configured in DSCI `spec.monitoring.namespace` by verifying that the status of its `Ready` condition is `True`:
+
+```bash
+kubectl get lokistack usage -n <monitoring-namespace> -o json | jq '.status.conditions[] | select(.type=="Ready") | {type, status}'
+```
+
+See [Installing Loki for Access logs](../install/prerequisites.md#loki-for-access-logs)
 
 ## Installation
 
@@ -72,11 +78,15 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
 
 Additionally, a Perses dashboard for metrics-based usage will be added to the ODH observability dashboard, and it would show data when `captureUser` and `captureModelUsage` are turned on.
 
-#### Logs based usage dashboards
+#### Logs-based usage dashboards
 
-We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics based dashboard.
+We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.
 
-In order to enable this feature, you need to turn on `usageLogging` in the `Config`:
+!!! warning "Privacy"
+    `usageLogging` records request identity attributes in access logs.
+    Review GDPR/privacy requirements, retention, and dashboard access before enabling it.
+
+To enable this feature, you need to turn on `usageLogging` in the `Config`:
 
 ```bash
 kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usageLogging":true}}'
@@ -89,42 +99,6 @@ This creates:
 - **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
-
-!!! note "Prerequisites"
-    Requires Loki (Operator) and to configure LokiStack named `usage`, for example:
-
-```yaml
-apiVersion: loki.grafana.com/v1
-kind: LokiStack
-metadata:
-  name: usage
-  namespace: redhat-ods-monitoring
-spec:
-  limits:
-    global:
-      otlp:
-        streamLabels:
-          resourceAttributes:
-            - name: service.name
-            - name: subscription
-            - name: model
-            - name: response_type
-            - name: kubernetes_namespace_name
-  managementState: Managed
-  size: 1x.demo
-  storage:
-    schemas:
-      - effectiveDate: '2024-10-01'
-        version: v13
-    secret:
-      credentialMode: static
-      name: minio-secret
-      type: s3
-  storageClassName: gp3-csi
-  tenants:
-    mode: openshift-logging
-```
-
 
 ### Option 2: Kustomize (Development)
 

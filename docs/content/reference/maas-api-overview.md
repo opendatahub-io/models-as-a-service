@@ -23,7 +23,7 @@ All endpoints except `/health` require authentication via the `Authorization: Be
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/v1/models` | List available LLMs in OpenAI-compatible format. Returns models the authenticated user can access. |
+| GET | `/v1/models` | List available models (chat, embedding, etc.) in OpenAI-compatible format. Returns models the authenticated user can access. |
 
 ### API Keys
 

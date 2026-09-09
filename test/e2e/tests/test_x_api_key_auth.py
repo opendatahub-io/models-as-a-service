@@ -36,7 +36,6 @@ from test_helper import (
     _gateway_url,
     _inference,
     _poll_status,
-    _wait_reconcile,
 )
 
 log = logging.getLogger(__name__)
@@ -167,7 +166,6 @@ def x_api_key_setup(api_key):
     log.info("Setting up x-api-key auth test fixture...")
 
     _apply_cr(IPP_EXTERNAL_MODEL_CR)
-    _wait_reconcile()
     _trigger_reconcile()
 
     try:
@@ -183,7 +181,6 @@ def x_api_key_setup(api_key):
 
     log.info("Cleaning up x-api-key auth test fixture...")
     _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _wait_reconcile()
     _trigger_reconcile()
 
     try:

@@ -5,11 +5,14 @@ import (
 	"context"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"testing"
+	"unicode/utf8"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -80,7 +83,7 @@ func TestLifecycleReconciler_CreatesConfigWhenMissing(t *testing.T) {
 	g.Expect(ok).To(BeTrue())
 	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
@@ -135,7 +138,7 @@ func TestLifecycleReconciler_DoesNotRecreateConfigWhenTeardownRequested(t *testi
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
@@ -191,7 +194,7 @@ func TestLifecycleReconciler_TeardownRequestedDeletesConfigAndMarksCompleted(t *
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, aitenantNS).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, aitenantNS).Build()
 	r := &LifecycleReconciler{
 		Client:            cl,
 		Scheme:            s,
@@ -237,7 +240,7 @@ func TestLifecycleReconciler_MarkTeardownCompletedIsIdempotent(t *testing.T) {
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep).Build()
 	r := &LifecycleReconciler{Client: cl, Scheme: s}
 
 	g.Expect(r.markTeardownCompleted(context.Background(), dep)).To(Succeed())
@@ -275,7 +278,7 @@ func TestLifecycleReconciler_TeardownRequestedWithoutConfigRequestsOrphanCleanup
 		aitenantFinalizer,
 	)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(dep, aitenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithRuntimeObjects(dep, aitenant).Build()
 	r := &LifecycleReconciler{
 		Client:            cl,
 		Scheme:            s,
@@ -324,7 +327,7 @@ func TestLifecycleReconciler_TeardownClearsBootstrapMarkerBeforeAITenantCleanupC
 		aitenantFinalizer,
 	)
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithRuntimeObjects(cfg, aitenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithRuntimeObjects(cfg, aitenant).Build()
 	r := &LifecycleReconciler{Client: cl, Scheme: s}
 
 	res, err := r.handleRequestedTeardown(context.Background(), nil, cfg)
@@ -362,7 +365,7 @@ func TestLifecycleReconciler_NormalReconcileDoesNotSetDeploymentOwnerReference(t
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
@@ -424,7 +427,7 @@ func TestLifecycleReconciler_StripsLegacyDeploymentConfigOwnerReferenceOnNormalR
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
 		Scheme:                s,
@@ -480,7 +483,7 @@ func TestLifecycleReconciler_TeardownStripsLegacyOwnerReferenceBeforeDeletingCon
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg).Build()
 	r := &LifecycleReconciler{
 		Client:         cl,
 		Scheme:         s,
@@ -550,7 +553,7 @@ func TestLifecycleReconciler_LinksDefaultTenantToConfig(t *testing.T) {
 	g.Expect(ok).To(BeTrue())
 	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, tenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, tenant).Build()
 	r := &LifecycleReconciler{
 		Client:                      cl,
 		Scheme:                      s,
@@ -613,7 +616,7 @@ func TestLifecycleReconciler_LinksDefaultAITenantToConfig(t *testing.T) {
 	g.Expect(ok).To(BeTrue())
 	usageLogsPath := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(dep, cfg, aitenant).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(dep, cfg, aitenant).Build()
 	r := &LifecycleReconciler{
 		Client:                cl,
 		Scheme:                s,
@@ -664,7 +667,7 @@ func TestLifecycleReconciler_LimitadorServiceMonitorDefaultInterval(t *testing.T
 		Spec: maasv1alpha1.ConfigSpec{},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
 		Client:              cl,
 		Scheme:              s,
@@ -712,7 +715,7 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 		},
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+	cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 	r := &LifecycleReconciler{
 		Client:              cl,
 		Scheme:              s,
@@ -742,116 +745,6 @@ func TestLifecycleReconciler_LimitadorServiceMonitorCustomInterval(t *testing.T)
 	endpoint, ok := endpoints[0].(map[string]any)
 	g.Expect(ok).To(BeTrue())
 	g.Expect(endpoint["interval"]).To(Equal("1m"))
-}
-
-func TestEnsureUsageLogsEnvoyFilter(t *testing.T) {
-	const gwNS = "openshift-ingress"
-	const monitoringNS = "opendatahub"
-
-	t.Run("disabled by default", func(t *testing.T) {
-		g := NewWithT(t)
-		s := lifecycleTestScheme(t)
-
-		cfg := &maasv1alpha1.Config{
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-		}
-
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-		r := &LifecycleReconciler{
-			Client:              cl,
-			Scheme:              s,
-			GatewayNamespace:    gwNS,
-			MonitoringNamespace: monitoringNS,
-		}
-
-		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		ef := &unstructured.Unstructured{}
-		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		err = cl.Get(context.Background(), client.ObjectKey{
-			Name: envoyFilterName, Namespace: gwNS,
-		}, ef)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "no EnvoyFilter should exist when usageLogging is disabled")
-	})
-
-	t.Run("enabled creates filter", func(t *testing.T) {
-		g := NewWithT(t)
-		s := lifecycleTestScheme(t)
-
-		cfg := &maasv1alpha1.Config{
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
-		}
-
-		// Compute absolute path to the EnvoyFilter manifest from this test file's location.
-		_, testFile, _, _ := goruntime.Caller(0)
-		efManifest := filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs/envoy-otel-access-log.yaml")
-
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
-		r := &LifecycleReconciler{
-			Client:                  cl,
-			Scheme:                  s,
-			GatewayNamespace:        gwNS,
-			MonitoringNamespace:     monitoringNS,
-			EnvoyFilterManifestPath: efManifest,
-		}
-
-		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		ef := &unstructured.Unstructured{}
-		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		g.Expect(cl.Get(context.Background(), client.ObjectKey{
-			Name: envoyFilterName, Namespace: gwNS,
-		}, ef)).To(Succeed(), "EnvoyFilter should exist after enabling usageLogging")
-		g.Expect(ef.GetNamespace()).To(Equal(gwNS))
-
-		configPatches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
-		g.Expect(configPatches).NotTo(BeEmpty())
-		clusterPatch, _ := configPatches[0].(map[string]any)
-		endpoints, _, _ := unstructured.NestedSlice(clusterPatch, "patch", "value", "load_assignment", "endpoints")
-		g.Expect(endpoints).NotTo(BeEmpty())
-		ep0, _ := endpoints[0].(map[string]any)
-		lbEndpoints, _, _ := unstructured.NestedSlice(ep0, "lb_endpoints")
-		g.Expect(lbEndpoints).NotTo(BeEmpty())
-		lbe0, _ := lbEndpoints[0].(map[string]any)
-		addr, _, _ := unstructured.NestedString(lbe0, "endpoint", "address", "socket_address", "address")
-		g.Expect(addr).To(Equal("usage-logs-collector.opendatahub.svc"),
-			"collector address should be patched with MonitoringNamespace")
-	})
-
-	t.Run("deletes existing when disabled", func(t *testing.T) {
-		g := NewWithT(t)
-		s := lifecycleTestScheme(t)
-
-		cfg := &maasv1alpha1.Config{
-			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
-			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(false)},
-		}
-		existingEF := &unstructured.Unstructured{}
-		existingEF.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		existingEF.SetName(envoyFilterName)
-		existingEF.SetNamespace(gwNS)
-
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, existingEF).Build()
-		r := &LifecycleReconciler{
-			Client:              cl,
-			Scheme:              s,
-			GatewayNamespace:    gwNS,
-			MonitoringNamespace: monitoringNS,
-		}
-
-		err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log)
-		g.Expect(err).NotTo(HaveOccurred())
-
-		ef := &unstructured.Unstructured{}
-		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-		err = cl.Get(context.Background(), client.ObjectKey{
-			Name: envoyFilterName, Namespace: gwNS,
-		}, ef)
-		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "EnvoyFilter should be deleted when usageLogging is disabled")
-	})
 }
 
 func TestEnsureUsageLogs(t *testing.T) {
@@ -899,7 +792,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 			Controller: ptr.To(true),
 		}})
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, otelCR, crb).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, otelCR, crb).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -942,7 +835,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 		foreignCRB.SetName("usage-collector-application-logs-write")
 		// No ownership metadata
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, foreignOtelCR, foreignCRB).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, foreignOtelCR, foreignCRB).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -976,7 +869,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,
@@ -1017,7 +910,7 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 		g := NewWithT(t)
 		s := lifecycleTestScheme(t)
 
-		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
 		r := &LifecycleReconciler{
 			Client:              cl,
 			Scheme:              s,
@@ -1032,7 +925,7 @@ func TestEnsureObservability_EmptyMonitoringNamespace(t *testing.T) {
 		g := NewWithT(t)
 		s := lifecycleTestScheme(t)
 
-		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).Build()
 		r := &LifecycleReconciler{
 			Client:              cl,
 			Scheme:              s,
@@ -1288,5 +1181,190 @@ func TestPatchPersesDatasourceURL(t *testing.T) {
 
 		err := patchPersesDatasourceURL(configMap)
 		g.Expect(err).NotTo(HaveOccurred())
+	})
+}
+
+func TestSyncModuleStatus(t *testing.T) {
+	s := lifecycleTestScheme(t)
+	const (
+		depNS          = "opendatahub"
+		aitenantNS     = tenantreconcile.DefaultAITenantNamespace
+		subscriptionNS = "models-as-a-service"
+	)
+
+	makeCfg := func(uid types.UID) *maasv1alpha1.Config {
+		return &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: maasv1alpha1.ConfigInstanceName,
+				UID:  uid,
+			},
+		}
+	}
+	makeAITenant := func(readyStatus metav1.ConditionStatus, msg string) *maasv1alpha1.AITenant {
+		at := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      tenantreconcile.DefaultAITenantName,
+				Namespace: aitenantNS,
+			},
+		}
+		if readyStatus != "" {
+			apimeta.SetStatusCondition(&at.Status.Conditions, metav1.Condition{
+				Type:    maasv1alpha1.AITenantConditionReady,
+				Status:  readyStatus,
+				Reason:  "TestReason",
+				Message: msg,
+			})
+		}
+		return at
+	}
+	makeTenantConfig := func(readyStatus metav1.ConditionStatus, msg string) *maasv1alpha1.MaasTenantConfig {
+		tc := &maasv1alpha1.MaasTenantConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+				Namespace: subscriptionNS,
+			},
+		}
+		if readyStatus != "" {
+			apimeta.SetStatusCondition(&tc.Status.Conditions, metav1.Condition{
+				Type:    tenantreconcile.ReadyConditionType,
+				Status:  readyStatus,
+				Reason:  "TestReason",
+				Message: msg,
+			})
+		}
+		return tc
+	}
+
+	t.Run("Ready=True when both operands are ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-1")
+		at := makeAITenant(metav1.ConditionTrue, "")
+		tc := makeTenantConfig(metav1.ConditionTrue, "")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+	})
+
+	t.Run("Ready=False when AITenant is not ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-2")
+		at := makeAITenant(metav1.ConditionFalse, "gateway not found")
+		tc := makeTenantConfig(metav1.ConditionTrue, "")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Message).To(ContainSubstring("gateway not found"))
+	})
+
+	t.Run("Ready=False when MaasTenantConfig is not ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-3")
+		at := makeAITenant(metav1.ConditionTrue, "")
+		tc := makeTenantConfig(metav1.ConditionFalse, "postgres secret missing")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Message).To(ContainSubstring("postgres secret missing"))
+	})
+
+	t.Run("message truncated when both operand messages are very long", func(t *testing.T) {
+		g := NewWithT(t)
+		longMsg := strings.Repeat("x", 20000)
+		cfg := makeCfg("uid-long")
+		at := makeAITenant(metav1.ConditionFalse, longMsg)
+		tc := makeTenantConfig(metav1.ConditionFalse, longMsg)
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(len(cond.Message)).To(BeNumerically("<=", conditionMessageMaxLen),
+			"condition message must not exceed Kubernetes 32768-char limit")
+	})
+
+	t.Run("truncated message is valid UTF-8 when multibyte rune crosses limit", func(t *testing.T) {
+		g := NewWithT(t)
+		// Build a message whose truncation boundary (conditionMessageMaxLen - len("…"))
+		// falls in the middle of a 3-byte UTF-8 rune (e.g. '€' = 0xE2 0x82 0xAC).
+		// Fill up to just before the boundary with ASCII, then append multibyte runes
+		// so that the leading byte of one rune lands exactly at the cut point.
+		const suffix = "…" // 3 bytes
+		limit := conditionMessageMaxLen - len(suffix)
+		// Place a 3-byte rune (€) straddling position limit-1 / limit / limit+1.
+		base := strings.Repeat("a", limit-1) // limit-1 ASCII bytes
+		msg := base + "€" + strings.Repeat("b", 100)
+		result := truncateConditionMessage(msg)
+		g.Expect(len(result)).To(BeNumerically("<=", conditionMessageMaxLen),
+			"truncated message must not exceed 32768 chars")
+		g.Expect(utf8.ValidString(result)).To(BeTrue(),
+			"truncated message must be valid UTF-8 (no incomplete multibyte leading byte)")
+	})
+
+	t.Run("Ready=False when AITenant not yet created", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-4")
+		tc := makeTenantConfig(metav1.ConditionTrue, "")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, tc).Build()
+		r := &LifecycleReconciler{
+			Client:                      cl,
+			Scheme:                      s,
+			AITenantNamespace:           aitenantNS,
+			TenantSubscriptionNamespace: subscriptionNS,
+		}
+		g.Expect(r.syncModuleStatus(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Message).To(ContainSubstring("not yet created"))
 	})
 }

@@ -176,9 +176,9 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     **Tracking:** [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) proposes the controller change for coexisting token rate limit policies on a shared route.
     
 !!! warning "Token rate limiting and API format"
-    **TokenRateLimitPolicy** enforcement applies only to the **`/v1/chat/completions`** endpoint (OpenAI Chat format). Requests using **`/v1/messages`** (Anthropic Messages API) or **`/v1/responses`** (OpenAI Responses API) are **not** subject to token rate limits.
+    **TokenRateLimitPolicy** enforcement applies to **`/v1/chat/completions`** and **`/v1/embeddings`** endpoints (OpenAI format). Requests using **`/v1/messages`** (Anthropic Messages API) or **`/v1/responses`** (OpenAI Responses API) are **not** subject to token rate limits.
     
-    Limitador counts tokens using the `usage.total_tokens` field in the response body, which is only present in OpenAI Chat Completions responses. Anthropic Messages and OpenAI Responses report usage differently (`input_tokens`/`output_tokens` without `total_tokens`), so the rate limiting integration cannot extract the token count.
+    Limitador counts tokens using the `usage.total_tokens` field in the response body. OpenAI Chat Completions and Embeddings responses both include this field. Embedding requests consume **prompt tokens only** (no completion tokens); these count toward the same subscription token budget as chat completions. Anthropic Messages and OpenAI Responses report usage differently (`input_tokens`/`output_tokens` without `total_tokens`), so the rate limiting integration cannot extract the token count.
     
     Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.
 

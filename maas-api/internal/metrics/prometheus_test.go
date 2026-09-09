@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -173,4 +174,162 @@ func TestDurationHistogramObserved(t *testing.T) {
 		}
 	}
 	assert.True(t, found, "histogram metric not found in registry")
+}
+
+func TestRecordRequest(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRequest(150 * time.Millisecond)
+	r.RecordRequest(250 * time.Millisecond)
+	r.RecordRequest(50 * time.Millisecond)
+
+	assert.InDelta(t, float64(3), gatherMetricValue(t, reg, "maas_requests_total", nil), 0)
+}
+
+func TestRecordRequestHistogram(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRequest(150 * time.Millisecond)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range families {
+		if f.GetName() == "maas_request_duration_seconds" {
+			found = true
+			require.Len(t, f.GetMetric(), 1)
+			assert.Equal(t, uint64(1), f.GetMetric()[0].GetHistogram().GetSampleCount())
+			assert.NotEmpty(t, f.GetMetric()[0].GetHistogram().GetBucket())
+		}
+	}
+	assert.True(t, found, "maas_request_duration_seconds histogram not found")
+}
+
+func TestRequestHistogramBucketsRegisteredAtStartup(t *testing.T) {
+	_, reg := newTestRecorder(t)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	var found bool
+	for _, f := range families {
+		if f.GetName() != "maas_request_duration_seconds" {
+			continue
+		}
+		found = true
+		require.Len(t, f.GetMetric(), 1)
+		assert.Equal(t, uint64(0), f.GetMetric()[0].GetHistogram().GetSampleCount())
+		assert.Len(t, f.GetMetric()[0].GetHistogram().GetBucket(), len(prometheus.DefBuckets))
+	}
+	assert.True(t, found, "histogram buckets must exist at registration before any Observe")
+}
+
+func TestRecordRejection(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRejection("unauthorized")
+	r.RecordRejection("unauthorized")
+	r.RecordRejection("rate-limited")
+	r.RecordRejection("no-capacity")
+	r.RecordRejection("quota-exceeded")
+
+	assert.InDelta(t, float64(2), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "unauthorized"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "rate-limited"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "no-capacity"}), 0)
+	assert.InDelta(t, float64(1), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "quota-exceeded"}), 0)
+}
+
+func TestRecordRejectionIgnoresUnknownReason(t *testing.T) {
+	r, reg := newTestRecorder(t)
+
+	r.RecordRejection("not-a-ticket-reason")
+
+	assert.InDelta(t, float64(0), gatherMetricValue(t, reg, "maas_request_rejections_total",
+		map[string]string{"reason": "rate-limited"}), 0)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+	for _, f := range families {
+		if f.GetName() != "maas_request_rejections_total" {
+			continue
+		}
+		assert.Len(t, f.GetMetric(), 4, "unknown reasons must not create extra series")
+	}
+}
+
+func TestRejectionLabelsPreInitialized(t *testing.T) {
+	_, reg := newTestRecorder(t)
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	var rejectionMetric *struct{}
+	reasons := make(map[string]bool)
+
+	for _, f := range families {
+		if f.GetName() == "maas_request_rejections_total" {
+			rejectionMetric = &struct{}{}
+			for _, m := range f.GetMetric() {
+				for _, lp := range m.GetLabel() {
+					if lp.GetName() == "reason" {
+						reasons[lp.GetValue()] = true
+					}
+				}
+			}
+		}
+	}
+
+	require.NotNil(t, rejectionMetric, "maas_request_rejections_total not found")
+	assert.True(t, reasons["rate-limited"], "rate-limited label not pre-initialized")
+	assert.True(t, reasons["unauthorized"], "unauthorized label not pre-initialized")
+	assert.True(t, reasons["no-capacity"], "no-capacity label not pre-initialized")
+	assert.True(t, reasons["quota-exceeded"], "quota-exceeded label not pre-initialized")
+}
+
+func TestNewMetricsStayUnderCardinalityCeiling(t *testing.T) {
+	r, reg := newTestRecorder(t)
+	r.RecordRequest(10 * time.Millisecond)
+	r.RecordRejection("unauthorized")
+	r.RecordRejection("rate-limited")
+	r.RecordRejection("no-capacity")
+	r.RecordRejection("quota-exceeded")
+
+	families, err := reg.Gather()
+	require.NoError(t, err)
+
+	const ceiling = 20
+	newMetrics := map[string]int{
+		"maas_requests_total":           0,
+		"maas_request_duration_seconds": 0,
+		"maas_request_rejections_total": 0,
+	}
+	for _, f := range families {
+		name := f.GetName()
+		if _, ok := newMetrics[name]; !ok {
+			continue
+		}
+		newMetrics[name] = timeSeriesCount(f)
+	}
+	for name, count := range newMetrics {
+		assert.Positive(t, count, "%s missing from registry", name)
+		assert.LessOrEqual(t, count, ceiling, "%s produced %d time series (ceiling %d)", name, count, ceiling)
+	}
+}
+
+func timeSeriesCount(f *dto.MetricFamily) int {
+	total := 0
+	for _, m := range f.GetMetric() {
+		if f.GetType() == dto.MetricType_HISTOGRAM {
+			// Finite buckets from the proto, plus +Inf, _sum, and _count.
+			total += len(m.GetHistogram().GetBucket()) + 3
+			continue
+		}
+		total++
+	}
+	return total
 }
