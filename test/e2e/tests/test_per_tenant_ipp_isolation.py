@@ -28,7 +28,6 @@ from multitenancy_helpers import (
     _oc_run,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
-    deployment_log_snapshot,
     envoyfilter_grpc_cluster_names,
     envoyfilter_target_gateway,
     get_ipp_deployment_env,
