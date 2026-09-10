@@ -3,6 +3,7 @@ package models
 import (
 	"encoding/json"
 	"net/url"
+	"strings"
 
 	"github.com/openai/openai-go/v2"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -131,7 +132,7 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 			// scheme when TLS is terminated upstream. The API must expose only
 			// the secure gateway base URL, consistent with the httpRouteHostnames
 			// primary path above which constructs "https://<hostname>".
-			if parsed.Scheme == "http" {
+			if strings.EqualFold(parsed.Scheme, "http") {
 				parsed.Scheme = "https"
 			}
 			parsed.Path = ""

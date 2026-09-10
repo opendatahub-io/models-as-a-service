@@ -125,6 +125,38 @@ func TestMaasModelRefToModel_EndpointFallback_ClearsForceQuery(t *testing.T) {
 	}
 }
 
+func TestMaasModelRefToModel_EndpointFallback_UppercaseHTTP(t *testing.T) {
+	u := newMaaSModelRefUnstructured("default", "HTTP://maas.example.com/test-model", true, nil)
+	m := models.MaasModelRefToModel(u)
+	if m == nil {
+		t.Fatal("maasModelRefToModel returned nil")
+	}
+	if m.URL == nil {
+		t.Fatal("URL is nil")
+	}
+	got := m.URL.String()
+	want := "https://maas.example.com"
+	if got != want {
+		t.Errorf("URL = %q, want %q (should upgrade uppercase HTTP to HTTPS)", got, want)
+	}
+}
+
+func TestMaasModelRefToModel_EndpointFallback_MixedCaseHTTP(t *testing.T) {
+	u := newMaaSModelRefUnstructured("default", "Http://maas.example.com/test-model", true, nil)
+	m := models.MaasModelRefToModel(u)
+	if m == nil {
+		t.Fatal("maasModelRefToModel returned nil")
+	}
+	if m.URL == nil {
+		t.Fatal("URL is nil")
+	}
+	got := m.URL.String()
+	want := "https://maas.example.com"
+	if got != want {
+		t.Errorf("URL = %q, want %q (should upgrade mixed-case Http to HTTPS)", got, want)
+	}
+}
+
 func TestMaasModelRefToModel_EmptyEndpoint(t *testing.T) {
 	// When both httpRouteHostnames and status.endpoint are empty, URL should be nil.
 	u := newMaaSModelRefUnstructured("default", "", true, nil)

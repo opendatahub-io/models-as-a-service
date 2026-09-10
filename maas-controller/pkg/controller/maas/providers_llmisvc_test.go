@@ -319,6 +319,8 @@ func TestUpgradeToHTTPS(t *testing.T) {
 		want  string
 	}{
 		{"http URL", "http://example.com/path", "https://example.com/path"},
+		{"HTTP uppercase", "HTTP://example.com/path", "https://example.com/path"},
+		{"Http mixed case", "Http://example.com/path", "https://example.com/path"},
 		{"https URL unchanged", "https://example.com/path", "https://example.com/path"},
 		{"empty string", "", ""},
 		{"non-http scheme", "ftp://example.com", "ftp://example.com"},
