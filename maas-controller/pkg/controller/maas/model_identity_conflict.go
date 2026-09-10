@@ -63,6 +63,9 @@ func (r *MaaSModelRefReconciler) findModelAliasConflicts(ctx context.Context, mo
 		if other.Name == model.Name {
 			continue
 		}
+		if !other.GetDeletionTimestamp().IsZero() {
+			continue
+		}
 		if other.Status.ResolvedModelAlias == model.Status.ResolvedModelAlias {
 			conflicts = append(conflicts, other.Name)
 		}
@@ -123,7 +126,7 @@ func (r *MaaSModelRefReconciler) checkModelIdentityConflict(ctx context.Context,
 	}
 
 	shouldEmitResolvedEvent := curr.Status == metav1.ConditionTrue &&
-		prev != nil && prev.Status == metav1.ConditionFalse
+		prev != nil && prev.Status != metav1.ConditionTrue
 	if shouldEmitResolvedEvent {
 		r.Recorder.Event(model, "Normal", "ModelNameConflictResolved",
 			"Model identity is no longer shared with any other MaaSModelRef in this namespace")
