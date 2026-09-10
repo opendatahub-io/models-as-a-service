@@ -137,6 +137,7 @@ func maasModelRefToModel(u *unstructured.Unstructured) *Model {
 			parsed.Path = ""
 			parsed.RawPath = ""
 			parsed.RawQuery = ""
+			parsed.ForceQuery = false
 			parsed.Fragment = ""
 			urlPtr = (*apis.URL)(parsed)
 		}

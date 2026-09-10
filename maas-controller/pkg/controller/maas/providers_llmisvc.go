@@ -284,8 +284,8 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 // External-facing gateway endpoints must always use HTTPS; this normalizes URLs
 // from status addresses that may report HTTP when TLS is terminated upstream.
 func upgradeToHTTPS(rawURL string) string {
-	if strings.HasPrefix(rawURL, "http://") {
-		return "https://" + strings.TrimPrefix(rawURL, "http://")
+	if after, found := strings.CutPrefix(rawURL, "http://"); found {
+		return "https://" + after
 	}
 	return rawURL
 }
