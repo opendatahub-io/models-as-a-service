@@ -3678,7 +3678,7 @@
 <li>Limitador stores token usage counters (e.g., <code>authorized_hits</code>, <code>authorized_calls</code>, <code>limited_calls</code>) with labels (<code>user</code>, <code>model</code>).</li>
 <li>A ServiceMonitor (or Kuadrant PodMonitor) configures Prometheus to scrape Limitador's <code>/metrics</code> endpoint.</li>
 <li>Prometheus stores the metrics in its time-series database.</li>
-<li>Grafana (or other visualization tools) queries Prometheus to build dashboards for usage, billing, and operational health.</li>
+<li>Perses (ODH/RHOAI observability console) queries Prometheus to build usage dashboards.</li>
 </ol>
 <pre class="mermaid"><code>graph LR
     subgraph RateLimiting["Rate Limiting"]
@@ -3694,16 +3694,16 @@
     end
 
     subgraph Visualization["Visualization"]
-        Grafana[Grafana&lt;br/&gt;Dashboards]
+        Perses[Perses&lt;br/&gt;ODH dashboards]
     end
 
     Limitador --&gt;|"/metrics"| SM
     SM --&gt;|"Scrape"| Prometheus
-    Prometheus --&gt;|"Query"| Grafana
+    Prometheus --&gt;|"Query"| Perses
 
     style Limitador fill:#e65100,stroke:#333,stroke-width:2px,color:#fff
     style Prometheus fill:#1976d2,stroke:#333,stroke-width:2px,color:#fff
-    style Grafana fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
+    style Perses fill:#388e3c,stroke:#333,stroke-width:2px,color:#fff</code></pre>
 <h2 id="component-flows">🔄 Component Flows</h2>
 <h3 id="1-api-key-creation-flow-maas-api">1. API Key Creation Flow (MaaS API)</h3>
 <p>Users create API keys by authenticating with an accepted identity token (OpenShift today, or OIDC when configured on the <code>maas-api</code> route). The MaaS API generates a key, stores only the hash in PostgreSQL, and returns the plaintext once:</p>
@@ -3776,7 +3776,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 10, 2026 21:37:28 UTC">July 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
   </span>
 
     

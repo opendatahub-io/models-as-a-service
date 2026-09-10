@@ -3454,6 +3454,7 @@
 <li><a href="#configure-datasciencecluster">Configure DataScienceCluster</a> — Enable modelsAsAService in your DataScienceCluster</li>
 <li><a href="../model-setup/">Model Setup</a> — Deploy sample models</li>
 <li><a href="../validation/">Validation</a> — Verify the deployment</li>
+<li><a href="../../observability/setup/">Enable Observability</a> — Set up metrics, dashboards, and monitoring (recommended)</li>
 </ol>
 <h2 id="database-setup">Database Setup</h2>
 <p><code>maas-api</code> uses PostgreSQL as its persistence layer for API key metadata: hashed tokens, subscription bindings, expiration dates, and revocation state. The database must be reachable before <code>maas-api</code> starts; the pod will crash-loop until the connection succeeds and the schema migration completes.</p>
@@ -3700,12 +3701,12 @@ see <a href="#odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags
 <h2 id="odhdashboardconfig-feature-flags">OdhDashboardConfig Feature Flags</h2>
 <p>The RHOAI Dashboard uses feature flags in the <code>OdhDashboardConfig</code> resource to control which tabs
 and features are visible in the UI. The operator creates this resource automatically when the
-Dashboard component is deployed, but the following flags may need to be enabled manually.</p>
+Dashboard component is deployed. Enable <code>genAiStudio</code> manually if you need GenAI Studio.</p>
 <p>Patch the <code>OdhDashboardConfig</code> in your applications namespace (typically <code>redhat-ods-applications</code>
 for RHOAI or <code>opendatahub</code> for ODH):</p>
 <div class="highlight"><pre><span></span><code><a id="__codelineno-16-1" name="__codelineno-16-1" href="#__codelineno-16-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>odhdashboardconfig<span class="w"> </span>odh-dashboard-config<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-16-2" name="__codelineno-16-2" href="#__codelineno-16-2"></a><span class="w">  </span>-n<span class="w"> </span>redhat-ods-applications<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;dashboardConfig&quot;:{&quot;genAiStudio&quot;:true,&quot;observabilityDashboard&quot;:true}}}&#39;</span>
+<a id="__codelineno-16-3" name="__codelineno-16-3" href="#__codelineno-16-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;dashboardConfig&quot;:{&quot;genAiStudio&quot;:true}}}&#39;</span>
 </code></pre></div>
 <table>
 <thead>
@@ -3722,7 +3723,7 @@ for RHOAI or <code>opendatahub</code> for ODH):</p>
 <td><code>llamastackoperator</code> set to <code>Managed</code> in DSC</td>
 </tr>
 <tr>
-<td><code>observabilityDashboard: true</code></td>
+<td><code>observabilityDashboard: true</code> (default)</td>
 <td>Shows the <strong>Observability</strong> tab in the Dashboard</td>
 <td>COO, OpenTelemetry Operator installed; DSCI <code>monitoring.metrics</code> configured</td>
 </tr>
@@ -3826,6 +3827,7 @@ defaults if it is deleted, but does not overwrite user changes to existing field
 <li><strong>Deploy models.</strong> See <a href="../model-setup/">Model Setup</a> for sample model deployments.</li>
 <li><strong>Perform validation.</strong> Follow the <a href="../validation/">validation guide</a> to verify that
   MaaS is working correctly.</li>
+<li><strong>Enable observability.</strong> See <a href="../../observability/setup/">Observability Setup</a>.</li>
 </ul>
 
 
@@ -3849,7 +3851,7 @@ defaults if it is deleted, but does not overwrite user changes to existing field
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 4, 2026 18:20:05 UTC">September 4, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
   </span>
 
     

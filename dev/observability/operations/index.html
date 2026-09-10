@@ -2408,17 +2408,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#grafana-datasource-token-rotation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana Datasource Token Rotation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#monitor-servicemonitor-health" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -2437,6 +2426,67 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Cleanup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#persesdashboard-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PersesDashboard ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-managed-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator-managed dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-log-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage-log resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#telemetry-and-servicemonitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telemetry and ServiceMonitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3388,17 +3438,6 @@
       <ul class="md-nav__list">
         
           <li class="md-nav__item">
-  <a href="#grafana-datasource-token-rotation" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Grafana Datasource Token Rotation
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#monitor-servicemonitor-health" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3417,6 +3456,67 @@
       
     </span>
   </a>
+  
+    <nav class="md-nav" aria-label="Cleanup">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#persesdashboard-ownership" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        PersesDashboard ownership
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-managed-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator-managed dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kustomize-dashboards" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kustomize dashboards
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#usage-log-resources" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Usage-log resources
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#telemetry-and-servicemonitors" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Telemetry and ServiceMonitors
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
   
 </li>
         
@@ -3572,21 +3672,6 @@
 <a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="c1"># Counters should reload from Redis, not reset</span>
 </code></pre></div>
 <h2 id="maintenance">Maintenance</h2>
-<h3 id="grafana-datasource-token-rotation">Grafana Datasource Token Rotation</h3>
-<p>Grafana datasource uses ServiceAccount tokens with cluster-configured expiration. Token lifetime varies by cluster (Kubernetes and OpenShift have different defaults). Check your cluster's token expiration:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Check projected serviceAccountToken expiration in Grafana Pod</span>
-<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>pod<span class="w"> </span>-n<span class="w"> </span>&lt;grafana-namespace&gt;<span class="w"> </span>&lt;grafana-pod&gt;<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.spec.volumes[?(@.projected.sources[0].serviceAccountToken)].projected.sources[0].serviceAccountToken.expirationSeconds}&#39;</span>
-<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a>
-<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a><span class="c1"># Or check via TokenRequest API</span>
-<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a>kubectl<span class="w"> </span>create<span class="w"> </span>token<span class="w"> </span>&lt;sa-name&gt;<span class="w"> </span>-n<span class="w"> </span>&lt;grafana-namespace&gt;<span class="w"> </span>--duration<span class="o">=</span>0s<span class="w"> </span><span class="p">|</span><span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>--raw<span class="w"> </span>/api/v1/namespaces/&lt;grafana-namespace&gt;/serviceaccounts/&lt;sa-name&gt;/token<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.expirationTimestamp}&#39;</span>
-<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>
-<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a><span class="c1"># Re-deploy dashboards to rotate token</span>
-<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a>./scripts/observability/install-grafana-dashboards.sh
-</code></pre></div>
-<div class="admonition tip">
-<p class="admonition-title">Production</p>
-<p>Verify your cluster's token lifetime and automate rotation accordingly (e.g., CronJob or external secrets operator) to avoid outages.</p>
-</div>
 <h3 id="monitor-servicemonitor-health">Monitor ServiceMonitor Health</h3>
 <p>The ODH/RHOAI monitoring stack scrapes <code>ServiceMonitor</code> / <code>PodMonitor</code> targets with the
 OpenTelemetry Collector (Target Allocator discovers jobs; the collector scrapes; metrics
@@ -3601,104 +3686,233 @@ preserved as <code>exported_job</code> (for example <code>limitador-limitador</c
 <p>Do not use the <strong>usage-logs</strong> collector (<code>usage-logs-collector</code>) here. That collector
 ingests gateway access logs into Loki. Metrics scraping uses the <strong>monitoring-stack</strong>
 OpenTelemetryCollector in the DSCI monitoring namespace.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace`</span>
-<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="c1"># (e.g. opendatahub or redhat-ods-monitoring).</span>
-<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g. apps.mycluster.example.com).</span>
-<a id="__codelineno-2-4" name="__codelineno-2-4" href="#__codelineno-2-4"></a>
-<a id="__codelineno-2-5" name="__codelineno-2-5" href="#__codelineno-2-5"></a><span class="c1"># 1. Confirm monitors exist (MaaS labels ServiceMonitors with monitoring.opendatahub.io/scrape=true)</span>
-<a id="__codelineno-2-6" name="__codelineno-2-6" href="#__codelineno-2-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor,podmonitor<span class="w"> </span>-A<span class="w"> </span>-l<span class="w"> </span>monitoring.opendatahub.io/scrape<span class="o">=</span><span class="s1">&#39;true&#39;</span>
-<a id="__codelineno-2-7" name="__codelineno-2-7" href="#__codelineno-2-7"></a>
-<a id="__codelineno-2-8" name="__codelineno-2-8" href="#__codelineno-2-8"></a><span class="c1"># 2. Discovery: Target Allocator job list (what should be scraped)</span>
-<a id="__codelineno-2-9" name="__codelineno-2-9" href="#__codelineno-2-9"></a><span class="c1"># The monitoring OpenTelemetryCollector is named data-science-collector, so its</span>
-<a id="__codelineno-2-10" name="__codelineno-2-10" href="#__codelineno-2-10"></a><span class="c1"># Target Allocator Service is data-science-collector-targetallocator.</span>
-<a id="__codelineno-2-11" name="__codelineno-2-11" href="#__codelineno-2-11"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>port-forward<span class="w"> </span>svc/data-science-collector-targetallocator<span class="w"> </span><span class="m">8080</span>:80
-<a id="__codelineno-2-12" name="__codelineno-2-12" href="#__codelineno-2-12"></a><span class="c1"># In another terminal:</span>
-<a id="__codelineno-2-13" name="__codelineno-2-13" href="#__codelineno-2-13"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8080/jobs<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
-<a id="__codelineno-2-14" name="__codelineno-2-14" href="#__codelineno-2-14"></a><span class="c1"># Job IDs look like serviceMonitor/&lt;namespace&gt;/&lt;name&gt;/0 — inspect endpoints:</span>
-<a id="__codelineno-2-15" name="__codelineno-2-15" href="#__codelineno-2-15"></a><span class="c1"># curl -s localhost:8080/jobs/serviceMonitor%2F&lt;namespace&gt;%2F&lt;name&gt;%2F0/targets | jq</span>
-<a id="__codelineno-2-16" name="__codelineno-2-16" href="#__codelineno-2-16"></a><span class="c1"># Look for maas, limitador, authorino, kserve jobs. Missing jobs mean the monitor</span>
-<a id="__codelineno-2-17" name="__codelineno-2-17" href="#__codelineno-2-17"></a><span class="c1"># was not discovered (selector, namespace label, or NetworkPolicy).</span>
-<a id="__codelineno-2-18" name="__codelineno-2-18" href="#__codelineno-2-18"></a>
-<a id="__codelineno-2-19" name="__codelineno-2-19" href="#__codelineno-2-19"></a><span class="c1"># 3. Scrape health: `up` is emitted by the prometheus receiver and stored in Thanos.</span>
-<a id="__codelineno-2-20" name="__codelineno-2-20" href="#__codelineno-2-20"></a><span class="c1"># Match exported_job (original target). job is always data-science-collector-prometheus.</span>
-<a id="__codelineno-2-21" name="__codelineno-2-21" href="#__codelineno-2-21"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-22" name="__codelineno-2-22" href="#__codelineno-2-22"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=up{exported_job=~&quot;.*(maas|limitador|authorino|kserve).*&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-23" name="__codelineno-2-23" href="#__codelineno-2-23"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-24" name="__codelineno-2-24" href="#__codelineno-2-24"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {exported_job: .metric.exported_job, instance: .metric.instance, up: .value[1]}&#39;</span>
-<a id="__codelineno-2-25" name="__codelineno-2-25" href="#__codelineno-2-25"></a><span class="c1"># up==1 is the analogue of a Prometheus target UP. No series usually means the</span>
-<a id="__codelineno-2-26" name="__codelineno-2-26" href="#__codelineno-2-26"></a><span class="c1"># Target Allocator never allocated the job, not that Thanos lost the target.</span>
-<a id="__codelineno-2-27" name="__codelineno-2-27" href="#__codelineno-2-27"></a>
-<a id="__codelineno-2-28" name="__codelineno-2-28" href="#__codelineno-2-28"></a><span class="c1"># 4. If up is 0 or missing, check the monitoring-stack collector logs (exclude usage-logs-collector)</span>
-<a id="__codelineno-2-29" name="__codelineno-2-29" href="#__codelineno-2-29"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-30" name="__codelineno-2-30" href="#__codelineno-2-30"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;app.kubernetes.io/component=opentelemetry-collector,app.kubernetes.io/name!=usage-logs-collector&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-2-31" name="__codelineno-2-31" href="#__codelineno-2-31"></a><span class="w">  </span>--tail<span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-iE<span class="w"> </span><span class="s1">&#39;scrape|error|limitador|authorino|maas&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-1-1" name="__codelineno-1-1" href="#__codelineno-1-1"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace`</span>
+<a id="__codelineno-1-2" name="__codelineno-1-2" href="#__codelineno-1-2"></a><span class="c1"># (e.g. opendatahub or redhat-ods-monitoring).</span>
+<a id="__codelineno-1-3" name="__codelineno-1-3" href="#__codelineno-1-3"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g. apps.mycluster.example.com).</span>
+<a id="__codelineno-1-4" name="__codelineno-1-4" href="#__codelineno-1-4"></a>
+<a id="__codelineno-1-5" name="__codelineno-1-5" href="#__codelineno-1-5"></a><span class="c1"># 1. Confirm monitors exist (MaaS labels ServiceMonitors with monitoring.opendatahub.io/scrape=true)</span>
+<a id="__codelineno-1-6" name="__codelineno-1-6" href="#__codelineno-1-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor,podmonitor<span class="w"> </span>-A<span class="w"> </span>-l<span class="w"> </span>monitoring.opendatahub.io/scrape<span class="o">=</span><span class="s1">&#39;true&#39;</span>
+<a id="__codelineno-1-7" name="__codelineno-1-7" href="#__codelineno-1-7"></a>
+<a id="__codelineno-1-8" name="__codelineno-1-8" href="#__codelineno-1-8"></a><span class="c1"># 2. Discovery: Target Allocator job list (what should be scraped)</span>
+<a id="__codelineno-1-9" name="__codelineno-1-9" href="#__codelineno-1-9"></a><span class="c1"># The monitoring OpenTelemetryCollector is named data-science-collector, so its</span>
+<a id="__codelineno-1-10" name="__codelineno-1-10" href="#__codelineno-1-10"></a><span class="c1"># Target Allocator Service is data-science-collector-targetallocator.</span>
+<a id="__codelineno-1-11" name="__codelineno-1-11" href="#__codelineno-1-11"></a>kubectl<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>port-forward<span class="w"> </span>svc/data-science-collector-targetallocator<span class="w"> </span><span class="m">8080</span>:80
+<a id="__codelineno-1-12" name="__codelineno-1-12" href="#__codelineno-1-12"></a><span class="c1"># In another terminal:</span>
+<a id="__codelineno-1-13" name="__codelineno-1-13" href="#__codelineno-1-13"></a>curl<span class="w"> </span>-s<span class="w"> </span>localhost:8080/jobs<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq
+<a id="__codelineno-1-14" name="__codelineno-1-14" href="#__codelineno-1-14"></a><span class="c1"># Job IDs look like serviceMonitor/&lt;namespace&gt;/&lt;name&gt;/0 — inspect endpoints:</span>
+<a id="__codelineno-1-15" name="__codelineno-1-15" href="#__codelineno-1-15"></a><span class="c1"># curl -s localhost:8080/jobs/serviceMonitor%2F&lt;namespace&gt;%2F&lt;name&gt;%2F0/targets | jq</span>
+<a id="__codelineno-1-16" name="__codelineno-1-16" href="#__codelineno-1-16"></a><span class="c1"># Look for maas, limitador, authorino, kserve jobs. Missing jobs mean the monitor</span>
+<a id="__codelineno-1-17" name="__codelineno-1-17" href="#__codelineno-1-17"></a><span class="c1"># was not discovered (selector, namespace label, or NetworkPolicy).</span>
+<a id="__codelineno-1-18" name="__codelineno-1-18" href="#__codelineno-1-18"></a>
+<a id="__codelineno-1-19" name="__codelineno-1-19" href="#__codelineno-1-19"></a><span class="c1"># 3. Scrape health: `up` is emitted by the prometheus receiver and stored in Thanos.</span>
+<a id="__codelineno-1-20" name="__codelineno-1-20" href="#__codelineno-1-20"></a><span class="c1"># Match exported_job (original target). job is always data-science-collector-prometheus.</span>
+<a id="__codelineno-1-21" name="__codelineno-1-21" href="#__codelineno-1-21"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-22" name="__codelineno-1-22" href="#__codelineno-1-22"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=up{exported_job=~&quot;.*(maas|limitador|authorino|kserve).*&quot;}&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-23" name="__codelineno-1-23" href="#__codelineno-1-23"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-24" name="__codelineno-1-24" href="#__codelineno-1-24"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {exported_job: .metric.exported_job, instance: .metric.instance, up: .value[1]}&#39;</span>
+<a id="__codelineno-1-25" name="__codelineno-1-25" href="#__codelineno-1-25"></a><span class="c1"># up==1 is the analogue of a Prometheus target UP. No series usually means the</span>
+<a id="__codelineno-1-26" name="__codelineno-1-26" href="#__codelineno-1-26"></a><span class="c1"># Target Allocator never allocated the job, not that Thanos lost the target.</span>
+<a id="__codelineno-1-27" name="__codelineno-1-27" href="#__codelineno-1-27"></a>
+<a id="__codelineno-1-28" name="__codelineno-1-28" href="#__codelineno-1-28"></a><span class="c1"># 4. If up is 0 or missing, check the monitoring-stack collector logs (exclude usage-logs-collector)</span>
+<a id="__codelineno-1-29" name="__codelineno-1-29" href="#__codelineno-1-29"></a>kubectl<span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-30" name="__codelineno-1-30" href="#__codelineno-1-30"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;app.kubernetes.io/component=opentelemetry-collector,app.kubernetes.io/name!=usage-logs-collector&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-1-31" name="__codelineno-1-31" href="#__codelineno-1-31"></a><span class="w">  </span>--tail<span class="o">=</span><span class="m">200</span><span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-iE<span class="w"> </span><span class="s1">&#39;scrape|error|limitador|authorino|maas&#39;</span>
 </code></pre></div>
 <h3 id="cleanup">Cleanup</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Remove dashboards</span>
-<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>grafanadashboard<span class="w"> </span>-n<span class="w"> </span>&lt;grafana-namespace&gt;<span class="w"> </span>maas-platform-admin<span class="w"> </span>maas-ai-engineer
-<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a>
-<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a><span class="c1"># Remove ServiceMonitors</span>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>&lt;servicemonitor-name&gt;
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># Remove telemetry</span>
-<a id="__codelineno-3-8" name="__codelineno-3-8" href="#__codelineno-3-8"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>telemetrypolicy<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>maas-telemetry
-<a id="__codelineno-3-9" name="__codelineno-3-9" href="#__codelineno-3-9"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
+<p>How you remove resources depends on how they were applied. <code>./scripts/observability/install-observability.sh</code> applies TelemetryPolicy and Istio Telemetry from <code>deployment/base/observability/</code>, plus these resources when their conditions match:</p>
+<table>
+<thead>
+<tr>
+<th>Resource</th>
+<th>When</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Limitador <code>ServiceMonitor</code> (<code>limitador-metrics</code>)</td>
+<td>Kuadrant is not already scraping Limitador <code>/metrics</code></td>
+</tr>
+<tr>
+<td>Authorino <code>ServiceMonitor</code> (<code>authorino-server-metrics</code>)</td>
+<td>Authorino Service exists and nothing else scrapes <code>/server-metrics</code></td>
+</tr>
+<tr>
+<td>Gateway <code>Service</code> + <code>ServiceMonitor</code> (<code>istio-gateway-metrics</code>)</td>
+<td>Gateway Deployment exists in <code>openshift-ingress</code></td>
+</tr>
+<tr>
+<td>PrometheusRules (<code>authorino-maas-metadata-evaluator-high-failure-rate</code>, <code>authorino-maas-authentication-alerts</code>)</td>
+<td>Authorino Deployment exists (<code>kuadrant-system</code> or <code>rh-connectivity-link</code>)</td>
+</tr>
+</tbody>
+</table>
+<h4 id="persesdashboard-ownership">PersesDashboard ownership</h4>
+<table>
+<thead>
+<tr>
+<th>Deployment mode</th>
+<th>How applied</th>
+<th>Ownership</th>
+<th>Cleanup</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Operator</strong> (recommended)</td>
+<td><code>LifecycleReconciler.ensureUsageDashboard</code> (metrics Usage dashboard). Usage-log dashboards via <code>usageLogging</code> on <code>Config</code>.</td>
+<td>Controller <code>ownerReference</code> on <code>Config</code> (<code>configs.maas.opendatahub.io/default</code>); field manager <code>maas-controller</code>.</td>
+<td>Do not delete the CR by hand — the operator recreates it. See <a href="#operator-managed-dashboards">Operator-managed dashboards</a> below.</td>
+</tr>
+<tr>
+<td><strong>Kustomize</strong> (development)</td>
+<td><code>kustomize build</code> of <code>deployment/components/observability/observability/dashboards/</code> (and optionally <code>usage-logs/</code>).</td>
+<td>Label <code>app.kubernetes.io/managed-by: maas-observability</code> on the metrics Usage dashboard. No <code>Config</code> controller reference.</td>
+<td>Delete <code>dashboard-3-maas-usage-admin</code> by name. For usage-logs, set <code>usageLogging=false</code> when Config exists, wait until <strong>every</strong> overlay object with a Config controller owner is gone, then <code>kubectl delete -k</code>.</td>
+</tr>
+<tr>
+<td><strong><code>install-observability.sh</code></strong></td>
+<td>TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above.</td>
+<td><code>app.kubernetes.io/managed-by: maas-observability</code> on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label.</td>
+<td>Delete the applied objects by name (see <a href="#telemetry-and-servicemonitors">Telemetry and ServiceMonitors</a>). Dashboards are unaffected.</td>
+</tr>
+</tbody>
+</table>
+<p>Identify operator-owned dashboards:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-2-1" name="__codelineno-2-1" href="#__codelineno-2-1"></a>kubectl<span class="w"> </span>get<span class="w"> </span>persesdashboard<span class="w"> </span>-A<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;</span>
+<a id="__codelineno-2-2" name="__codelineno-2-2" href="#__codelineno-2-2"></a><span class="s1">  .items[] | select(.metadata.ownerReferences[]? | .kind==&quot;Config&quot; and .controller==true)</span>
+<a id="__codelineno-2-3" name="__codelineno-2-3" href="#__codelineno-2-3"></a><span class="s1">  | &quot;\(.metadata.namespace)/\(.metadata.name)&quot;&#39;</span>
+</code></pre></div>
+<h4 id="operator-managed-dashboards">Operator-managed dashboards</h4>
+<p>Requires a running <strong>maas-controller</strong> (<code>LifecycleReconciler</code>), a <code>Config</code> instance, a monitoring namespace, and Perses CRDs (<code>PersesAvailable</code>). See <a href="../setup/">Setup</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-3-1" name="__codelineno-3-1" href="#__codelineno-3-1"></a><span class="c1"># Usage-log dashboards (dashboard-4, dashboard-5): operator deletes CRs it owns</span>
+<a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageLogging&quot;:false}}&#39;</span>
+<a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Metrics Usage dashboard (dashboard-3): owned by Config.</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Disabling Tenant telemetry does not remove it.</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># It is garbage-collected when Config is deleted (operator uninstall / teardown).</span>
+</code></pre></div>
+<h4 id="kustomize-dashboards">Kustomize dashboards</h4>
+<p>Delete only the Kustomize-applied metrics Usage dashboard, by name and namespace; if <code>Config</code> is the controller owner, do not delete the CR by hand — see <a href="#operator-managed-dashboards">Operator-managed dashboards</a>.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>persesdashboard<span class="w"> </span>dashboard-3-maas-usage-admin<span class="w"> </span>-n<span class="w"> </span>opendatahub
+</code></pre></div>
+<h4 id="usage-log-resources">Usage-log resources</h4>
+<p>Disable <code>usageLogging</code> when Config exists, wait until <strong>every rendered overlay object</strong> with a Config controller owner is gone, then delete leftovers.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="nb">set</span><span class="w"> </span>-euo<span class="w"> </span>pipefail
+<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>
+<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a><span class="nv">overlay</span><span class="o">=</span>deployment/components/observability/usage-logs
+<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="nv">manifests</span><span class="o">=</span><span class="k">$(</span>mktemp<span class="k">)</span>
+<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="nb">trap</span><span class="w"> </span><span class="s1">&#39;rm -f &quot;$manifests&quot;&#39;</span><span class="w"> </span>EXIT
+<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>kustomize<span class="w"> </span>build<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$overlay</span><span class="s2">&quot;</span><span class="w"> </span>&gt;<span class="s2">&quot;</span><span class="nv">$manifests</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a>
+<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a><span class="k">if</span><span class="w"> </span>kubectl<span class="w"> </span>get<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>-o<span class="w"> </span>name<span class="w"> </span>&gt;/dev/null<span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="w">  </span>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="w">    </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageLogging&quot;:false}}&#39;</span>
+<a id="__codelineno-5-11" name="__codelineno-5-11" href="#__codelineno-5-11"></a><span class="k">fi</span>
+<a id="__codelineno-5-12" name="__codelineno-5-12" href="#__codelineno-5-12"></a>
+<a id="__codelineno-5-13" name="__codelineno-5-13" href="#__codelineno-5-13"></a>owned_usage_log_resources<span class="o">()</span><span class="w"> </span><span class="o">{</span>
+<a id="__codelineno-5-14" name="__codelineno-5-14" href="#__codelineno-5-14"></a><span class="w">  </span>kubectl<span class="w"> </span>get<span class="w"> </span>--ignore-not-found<span class="w"> </span>-f<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$manifests</span><span class="s2">&quot;</span><span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span>-r<span class="w"> </span><span class="s1">&#39;</span>
+<a id="__codelineno-5-15" name="__codelineno-5-15" href="#__codelineno-5-15"></a><span class="s1">    (.items // [.])[]</span>
+<a id="__codelineno-5-16" name="__codelineno-5-16" href="#__codelineno-5-16"></a><span class="s1">    | select(.metadata.name != null)</span>
+<a id="__codelineno-5-17" name="__codelineno-5-17" href="#__codelineno-5-17"></a><span class="s1">    | select([.metadata.ownerReferences[]? | select(.kind==&quot;Config&quot; and .controller==true)] | length &gt; 0)</span>
+<a id="__codelineno-5-18" name="__codelineno-5-18" href="#__codelineno-5-18"></a><span class="s1">    | &quot;\(.kind)/\(.metadata.namespace // &quot;-&quot;)/\(.metadata.name)&quot;&#39;</span>
+<a id="__codelineno-5-19" name="__codelineno-5-19" href="#__codelineno-5-19"></a><span class="o">}</span>
+<a id="__codelineno-5-20" name="__codelineno-5-20" href="#__codelineno-5-20"></a>
+<a id="__codelineno-5-21" name="__codelineno-5-21" href="#__codelineno-5-21"></a><span class="k">for</span><span class="w"> </span>_<span class="w"> </span><span class="k">in</span><span class="w"> </span><span class="k">$(</span>seq<span class="w"> </span><span class="m">1</span><span class="w"> </span><span class="m">30</span><span class="k">)</span><span class="p">;</span><span class="w"> </span><span class="k">do</span>
+<a id="__codelineno-5-22" name="__codelineno-5-22" href="#__codelineno-5-22"></a><span class="w">  </span><span class="nv">left</span><span class="o">=</span><span class="k">$(</span>owned_usage_log_resources<span class="k">)</span>
+<a id="__codelineno-5-23" name="__codelineno-5-23" href="#__codelineno-5-23"></a><span class="w">  </span><span class="o">[</span><span class="w"> </span>-z<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$left</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="k">break</span>
+<a id="__codelineno-5-24" name="__codelineno-5-24" href="#__codelineno-5-24"></a><span class="w">  </span>sleep<span class="w"> </span><span class="m">2</span>
+<a id="__codelineno-5-25" name="__codelineno-5-25" href="#__codelineno-5-25"></a><span class="k">done</span>
+<a id="__codelineno-5-26" name="__codelineno-5-26" href="#__codelineno-5-26"></a><span class="nv">left</span><span class="o">=</span><span class="k">$(</span>owned_usage_log_resources<span class="k">)</span>
+<a id="__codelineno-5-27" name="__codelineno-5-27" href="#__codelineno-5-27"></a><span class="k">if</span><span class="w"> </span><span class="o">[</span><span class="w"> </span>-n<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$left</span><span class="s2">&quot;</span><span class="w"> </span><span class="o">]</span><span class="p">;</span><span class="w"> </span><span class="k">then</span>
+<a id="__codelineno-5-28" name="__codelineno-5-28" href="#__codelineno-5-28"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;operator-owned usage-log resources still present; do not delete -k:&quot;</span>
+<a id="__codelineno-5-29" name="__codelineno-5-29" href="#__codelineno-5-29"></a><span class="w">  </span><span class="nb">echo</span><span class="w"> </span><span class="s2">&quot;</span><span class="nv">$left</span><span class="s2">&quot;</span>
+<a id="__codelineno-5-30" name="__codelineno-5-30" href="#__codelineno-5-30"></a><span class="w">  </span><span class="nb">exit</span><span class="w"> </span><span class="m">1</span>
+<a id="__codelineno-5-31" name="__codelineno-5-31" href="#__codelineno-5-31"></a><span class="k">fi</span>
+<a id="__codelineno-5-32" name="__codelineno-5-32" href="#__codelineno-5-32"></a>
+<a id="__codelineno-5-33" name="__codelineno-5-33" href="#__codelineno-5-33"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>-k<span class="w"> </span><span class="s2">&quot;</span><span class="nv">$overlay</span><span class="s2">&quot;</span>
+</code></pre></div>
+<h4 id="telemetry-and-servicemonitors">Telemetry and ServiceMonitors</h4>
+<p>Kustomize/development cleanup only. Do not run this in operator-managed mode. For operator-managed telemetry, update the tenant configuration and let the Tenant reconciler manage those resources.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Always applied by the script (from deployment/base/observability/)</span>
+<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>telemetrypolicy<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>maas-telemetry
+<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>telemetry<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>latency-per-subscription
+<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
+<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># Conditional: Limitador ServiceMonitor (only if the script deployed it)</span>
+<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span>limitador-metrics<span class="w"> </span>--ignore-not-found
+<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a>
+<a id="__codelineno-6-8" name="__codelineno-6-8" href="#__codelineno-6-8"></a><span class="c1"># Conditional: Authorino /server-metrics ServiceMonitor</span>
+<a id="__codelineno-6-9" name="__codelineno-6-9" href="#__codelineno-6-9"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span>authorino-server-metrics<span class="w"> </span>--ignore-not-found
+<a id="__codelineno-6-10" name="__codelineno-6-10" href="#__codelineno-6-10"></a>
+<a id="__codelineno-6-11" name="__codelineno-6-11" href="#__codelineno-6-11"></a><span class="c1"># Conditional: Istio Gateway metrics</span>
+<a id="__codelineno-6-12" name="__codelineno-6-12" href="#__codelineno-6-12"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>servicemonitor,service<span class="w"> </span>-n<span class="w"> </span>openshift-ingress<span class="w"> </span>istio-gateway-metrics<span class="w"> </span>--ignore-not-found
+<a id="__codelineno-6-13" name="__codelineno-6-13" href="#__codelineno-6-13"></a>
+<a id="__codelineno-6-14" name="__codelineno-6-14" href="#__codelineno-6-14"></a><span class="c1"># Conditional: PrometheusRules (namespace is kuadrant-system or rh-connectivity-link)</span>
+<a id="__codelineno-6-15" name="__codelineno-6-15" href="#__codelineno-6-15"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>prometheusrule<span class="w"> </span>-n<span class="w"> </span>kuadrant-system<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-16" name="__codelineno-6-16" href="#__codelineno-6-16"></a><span class="w">  </span>authorino-maas-metadata-evaluator-high-failure-rate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-17" name="__codelineno-6-17" href="#__codelineno-6-17"></a><span class="w">  </span>authorino-maas-authentication-alerts<span class="w"> </span>--ignore-not-found
+<a id="__codelineno-6-18" name="__codelineno-6-18" href="#__codelineno-6-18"></a>kubectl<span class="w"> </span>delete<span class="w"> </span>prometheusrule<span class="w"> </span>-n<span class="w"> </span>rh-connectivity-link<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-19" name="__codelineno-6-19" href="#__codelineno-6-19"></a><span class="w">  </span>authorino-maas-metadata-evaluator-high-failure-rate<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-6-20" name="__codelineno-6-20" href="#__codelineno-6-20"></a><span class="w">  </span>authorino-maas-authentication-alerts<span class="w"> </span>--ignore-not-found
 </code></pre></div>
 <h3 id="troubleshooting-missing-metrics">Troubleshooting Missing Metrics</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-4-1" name="__codelineno-4-1" href="#__codelineno-4-1"></a><span class="c1"># 1. Verify service exposes metrics</span>
-<a id="__codelineno-4-2" name="__codelineno-4-2" href="#__codelineno-4-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>&lt;pod&gt;<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>localhost:&lt;port&gt;/metrics
-<a id="__codelineno-4-3" name="__codelineno-4-3" href="#__codelineno-4-3"></a>
-<a id="__codelineno-4-4" name="__codelineno-4-4" href="#__codelineno-4-4"></a><span class="c1"># 2. Verify ServiceMonitor exists and labeled with: &quot;monitoring.opendatahub.io/scrape: &#39;true&#39;&quot;</span>
-<a id="__codelineno-4-5" name="__codelineno-4-5" href="#__codelineno-4-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-6" name="__codelineno-4-6" href="#__codelineno-4-6"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;monitoring.opendatahub.io/scrape=true&#39;</span>
-<a id="__codelineno-4-7" name="__codelineno-4-7" href="#__codelineno-4-7"></a>
-<a id="__codelineno-4-8" name="__codelineno-4-8" href="#__codelineno-4-8"></a><span class="c1"># 3. Verify ODH monitoring stack enabled</span>
-<a id="__codelineno-4-9" name="__codelineno-4-9" href="#__codelineno-4-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w">  </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;Degraded&quot; or .type==&quot;MaaSPrerequisitesAvailable&quot;) | {type, status, message}&#39;</span>
-<a id="__codelineno-4-10" name="__codelineno-4-10" href="#__codelineno-4-10"></a>
-<a id="__codelineno-4-11" name="__codelineno-4-11" href="#__codelineno-4-11"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;MonitoringReady&quot; or .type==&quot;MonitoringStackAvailable&quot;) | {type, status}&#39;</span>
-<a id="__codelineno-4-12" name="__codelineno-4-12" href="#__codelineno-4-12"></a>
-<a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="c1"># 4. Confirm the Target Allocator discovered the monitor and `up` is 1</span>
-<a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="c1"># (see Monitor ServiceMonitor Health above). Do not use Thanos /api/v1/targets.</span>
-<a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a>
-<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="c1"># 5. Query stored samples via Thanos (PromQL only — this is not a scrape-target API)</span>
-<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
-<a id="__codelineno-4-18" name="__codelineno-4-18" href="#__codelineno-4-18"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
-<a id="__codelineno-4-19" name="__codelineno-4-19" href="#__codelineno-4-19"></a><span class="c1"># For example: https://data-science-thanos-querier-route-redhat-ods-monitoring.apps.mycluster.example.com/api/v1/query?query=authorized_hits_total</span>
-<a id="__codelineno-4-20" name="__codelineno-4-20" href="#__codelineno-4-20"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-21" name="__codelineno-4-21" href="#__codelineno-4-21"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=&lt;metric_name&gt;&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-4-22" name="__codelineno-4-22" href="#__codelineno-4-22"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># 1. Verify service exposes metrics</span>
+<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span>&lt;pod&gt;<span class="w"> </span>--<span class="w"> </span>curl<span class="w"> </span>localhost:&lt;port&gt;/metrics
+<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a>
+<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># 2. Verify ServiceMonitor exists and labeled with: &quot;monitoring.opendatahub.io/scrape: &#39;true&#39;&quot;</span>
+<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>kubectl<span class="w"> </span>get<span class="w"> </span>servicemonitor<span class="w"> </span>-n<span class="w"> </span>&lt;namespace&gt;<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>-l<span class="w"> </span><span class="s1">&#39;monitoring.opendatahub.io/scrape=true&#39;</span>
+<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a>
+<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="c1"># 3. Verify ODH monitoring stack enabled</span>
+<a id="__codelineno-7-9" name="__codelineno-7-9" href="#__codelineno-7-9"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maastenantconfig<span class="w"> </span>default-tenant<span class="w"> </span>-n<span class="w"> </span>models-as-a-service<span class="w">  </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;Degraded&quot; or .type==&quot;MaaSPrerequisitesAvailable&quot;) | {type, status, message}&#39;</span>
+<a id="__codelineno-7-10" name="__codelineno-7-10" href="#__codelineno-7-10"></a>
+<a id="__codelineno-7-11" name="__codelineno-7-11" href="#__codelineno-7-11"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;MonitoringReady&quot; or .type==&quot;MonitoringStackAvailable&quot;) | {type, status}&#39;</span>
+<a id="__codelineno-7-12" name="__codelineno-7-12" href="#__codelineno-7-12"></a>
+<a id="__codelineno-7-13" name="__codelineno-7-13" href="#__codelineno-7-13"></a><span class="c1"># 4. Confirm the Target Allocator discovered the monitor and `up` is 1</span>
+<a id="__codelineno-7-14" name="__codelineno-7-14" href="#__codelineno-7-14"></a><span class="c1"># (see Monitor ServiceMonitor Health above). Do not use Thanos /api/v1/targets.</span>
+<a id="__codelineno-7-15" name="__codelineno-7-15" href="#__codelineno-7-15"></a>
+<a id="__codelineno-7-16" name="__codelineno-7-16" href="#__codelineno-7-16"></a><span class="c1"># 5. Query stored samples via Thanos (PromQL only — this is not a scrape-target API)</span>
+<a id="__codelineno-7-17" name="__codelineno-7-17" href="#__codelineno-7-17"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
+<a id="__codelineno-7-18" name="__codelineno-7-18" href="#__codelineno-7-18"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
+<a id="__codelineno-7-19" name="__codelineno-7-19" href="#__codelineno-7-19"></a><span class="c1"># For example: https://data-science-thanos-querier-route-redhat-ods-monitoring.apps.mycluster.example.com/api/v1/query?query=authorized_hits_total</span>
+<a id="__codelineno-7-20" name="__codelineno-7-20" href="#__codelineno-7-20"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-21" name="__codelineno-7-21" href="#__codelineno-7-21"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=&lt;metric_name&gt;&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-7-22" name="__codelineno-7-22" href="#__codelineno-7-22"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span>
 </code></pre></div>
 <h3 id="troubleshooting-dashboard-issues">Troubleshooting Dashboard Issues</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-5-1" name="__codelineno-5-1" href="#__codelineno-5-1"></a><span class="c1"># 1. Verify Grafana → Prometheus connection</span>
-<a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a><span class="c1"># In Grafana: Configuration → Data Sources → Test</span>
-<a id="__codelineno-5-3" name="__codelineno-5-3" href="#__codelineno-5-3"></a>
-<a id="__codelineno-5-4" name="__codelineno-5-4" href="#__codelineno-5-4"></a><span class="c1"># 2. Check query syntax</span>
-<a id="__codelineno-5-5" name="__codelineno-5-5" href="#__codelineno-5-5"></a><span class="c1"># Edit panel → View query in Prometheus directly</span>
-<a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a>
-<a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="c1"># 3. Verify time range includes when metrics were generated</span>
-<a id="__codelineno-5-8" name="__codelineno-5-8" href="#__codelineno-5-8"></a>
-<a id="__codelineno-5-9" name="__codelineno-5-9" href="#__codelineno-5-9"></a><span class="c1"># 4. Check for lazily-registered metrics</span>
-<a id="__codelineno-5-10" name="__codelineno-5-10" href="#__codelineno-5-10"></a><span class="c1"># Some metrics appear only after first event (e.g., queue_time after first queued request)</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a><span class="c1"># 1. Confirm Perses is available (ODH/RHOAI observability console)</span>
+<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>dscinitialization<span class="w"> </span>default-dsci<span class="w"> </span>-o<span class="w"> </span>json<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.status.conditions[] | select(.type==&quot;PersesAvailable&quot;) | {type, status}&#39;</span>
+<a id="__codelineno-8-4" name="__codelineno-8-4" href="#__codelineno-8-4"></a>
+<a id="__codelineno-8-5" name="__codelineno-8-5" href="#__codelineno-8-5"></a><span class="c1"># 2. Confirm PersesDashboard CRs exist</span>
+<a id="__codelineno-8-6" name="__codelineno-8-6" href="#__codelineno-8-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>persesdashboard<span class="w"> </span>-A<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>maas
+<a id="__codelineno-8-7" name="__codelineno-8-7" href="#__codelineno-8-7"></a>
+<a id="__codelineno-8-8" name="__codelineno-8-8" href="#__codelineno-8-8"></a><span class="c1"># 3. Run the panel query in Prometheus or Loki directly (see Setup)</span>
+<a id="__codelineno-8-9" name="__codelineno-8-9" href="#__codelineno-8-9"></a>
+<a id="__codelineno-8-10" name="__codelineno-8-10" href="#__codelineno-8-10"></a><span class="c1"># 4. Verify the time range includes when metrics or logs were generated</span>
+<a id="__codelineno-8-11" name="__codelineno-8-11" href="#__codelineno-8-11"></a>
+<a id="__codelineno-8-12" name="__codelineno-8-12" href="#__codelineno-8-12"></a><span class="c1"># 5. Check for lazily-registered metrics</span>
+<a id="__codelineno-8-13" name="__codelineno-8-13" href="#__codelineno-8-13"></a><span class="c1"># Some metrics appear only after first event (e.g., queue_time after first queued request)</span>
 </code></pre></div>
 <h3 id="capacity-planning">Capacity Planning</h3>
 <p><strong>Prometheus storage:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a><span class="c1"># Check storage size</span>
-<a id="__codelineno-6-2" name="__codelineno-6-2" href="#__codelineno-6-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>prometheus-data-science-monitoringstack-0<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-3" name="__codelineno-6-3" href="#__codelineno-6-3"></a><span class="w">  </span>df<span class="w"> </span>-h<span class="w"> </span>/prometheus
-<a id="__codelineno-6-4" name="__codelineno-6-4" href="#__codelineno-6-4"></a>
-<a id="__codelineno-6-5" name="__codelineno-6-5" href="#__codelineno-6-5"></a><span class="c1"># View retention</span>
-<a id="__codelineno-6-6" name="__codelineno-6-6" href="#__codelineno-6-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>monitoringstack<span class="w"> </span>data-science-monitoringstack<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-6-7" name="__codelineno-6-7" href="#__codelineno-6-7"></a><span class="w">  </span>grep<span class="w"> </span>-A<span class="w"> </span><span class="m">5</span><span class="w"> </span>retention
+<div class="highlight"><pre><span></span><code><a id="__codelineno-9-1" name="__codelineno-9-1" href="#__codelineno-9-1"></a><span class="c1"># Check storage size</span>
+<a id="__codelineno-9-2" name="__codelineno-9-2" href="#__codelineno-9-2"></a>kubectl<span class="w"> </span><span class="nb">exec</span><span class="w"> </span>prometheus-data-science-monitoringstack-0<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>--<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-3" name="__codelineno-9-3" href="#__codelineno-9-3"></a><span class="w">  </span>df<span class="w"> </span>-h<span class="w"> </span>/prometheus
+<a id="__codelineno-9-4" name="__codelineno-9-4" href="#__codelineno-9-4"></a>
+<a id="__codelineno-9-5" name="__codelineno-9-5" href="#__codelineno-9-5"></a><span class="c1"># View retention</span>
+<a id="__codelineno-9-6" name="__codelineno-9-6" href="#__codelineno-9-6"></a>kubectl<span class="w"> </span>get<span class="w"> </span>monitoringstack<span class="w"> </span>data-science-monitoringstack<span class="w"> </span>-n<span class="w"> </span>&lt;monitoring-namespace&gt;<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-9-7" name="__codelineno-9-7" href="#__codelineno-9-7"></a><span class="w">  </span>grep<span class="w"> </span>-A<span class="w"> </span><span class="m">5</span><span class="w"> </span>retention
 </code></pre></div>
 <p><strong>Metric cardinality:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a><span class="c1"># Thanos Query has no local TSDB, so /api/v1/status/tsdb is not available.</span>
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a><span class="c1"># Count active series per MaaS metric via PromQL instead.</span>
-<a id="__codelineno-7-3" name="__codelineno-7-3" href="#__codelineno-7-3"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
-<a id="__codelineno-7-4" name="__codelineno-7-4" href="#__codelineno-7-4"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
-<a id="__codelineno-7-5" name="__codelineno-7-5" href="#__codelineno-7-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-6" name="__codelineno-7-6" href="#__codelineno-7-6"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=count by (__name__) ({__name__=~&quot;authorized_hits_total|authorized_calls_total|limited_calls_total&quot;})&#39;</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-7" name="__codelineno-7-7" href="#__codelineno-7-7"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-7-8" name="__codelineno-7-8" href="#__codelineno-7-8"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {metric: .metric.__name__, series: .value[1]}&#39;</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-10-1" name="__codelineno-10-1" href="#__codelineno-10-1"></a><span class="c1"># Thanos Query has no local TSDB, so /api/v1/status/tsdb is not available.</span>
+<a id="__codelineno-10-2" name="__codelineno-10-2" href="#__codelineno-10-2"></a><span class="c1"># Count active series per MaaS metric via PromQL instead.</span>
+<a id="__codelineno-10-3" name="__codelineno-10-3" href="#__codelineno-10-3"></a><span class="c1"># Replace &lt;monitoring-namespace&gt; with DSCI `spec.monitoring.namespace` (e.g., opendatahub)</span>
+<a id="__codelineno-10-4" name="__codelineno-10-4" href="#__codelineno-10-4"></a><span class="c1"># Replace &lt;cluster&gt; with your cluster&#39;s apps domain (e.g., apps.mycluster.example.com)</span>
+<a id="__codelineno-10-5" name="__codelineno-10-5" href="#__codelineno-10-5"></a>curl<span class="w"> </span>-s<span class="w"> </span>-H<span class="w"> </span><span class="s2">&quot;Authorization: Bearer </span><span class="k">$(</span>oc<span class="w"> </span>whoami<span class="w"> </span>-t<span class="k">)</span><span class="s2">&quot;</span><span class="w"> </span>--get<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-6" name="__codelineno-10-6" href="#__codelineno-10-6"></a><span class="w">  </span>--data-urlencode<span class="w"> </span><span class="s1">&#39;query=count by (__name__) ({__name__=~&quot;authorized_hits_total|authorized_calls_total|limited_calls_total&quot;})&#39;</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-7" name="__codelineno-10-7" href="#__codelineno-10-7"></a><span class="w">  </span><span class="s2">&quot;https://data-science-thanos-querier-route-&lt;monitoring-namespace&gt;.&lt;cluster&gt;/api/v1/query&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-10-8" name="__codelineno-10-8" href="#__codelineno-10-8"></a><span class="w">  </span>jq<span class="w"> </span><span class="s1">&#39;.data.result[] | {metric: .metric.__name__, series: .value[1]}&#39;</span>
 </code></pre></div>
 <p>Watch: <code>authorized_hits_total{user!=""}</code>, <code>authorized_calls_total{user!=""}</code>, <code>istio_request_duration_milliseconds_bucket{subscription!=""}</code>.</p>
 <h3 id="regular-maintenance-tasks">Regular Maintenance Tasks</h3>
@@ -3711,11 +3925,6 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 </tr>
 </thead>
 <tbody>
-<tr>
-<td><strong>Token Rotation</strong></td>
-<td>Per cluster token TTL</td>
-<td>Rotate Grafana datasource token before expiration (verify cluster-specific lifetime)</td>
-</tr>
 <tr>
 <td><strong>Storage Check</strong></td>
 <td>Weekly</td>
@@ -3734,7 +3943,7 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 <tr>
 <td><strong>Dashboard Testing</strong></td>
 <td>After deployment</td>
-<td>Verify dashboards load</td>
+<td>Verify Perses dashboards load in the ODH console</td>
 </tr>
 <tr>
 <td><strong>Backup Redis</strong> (HA)</td>
@@ -3767,7 +3976,7 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 <tr>
 <td><strong>Input/output per user</strong></td>
 <td>vLLM doesn't label with <code>user</code></td>
-<td>Total tokens per user via <code>authorized_hits_total{user}</code>; vLLM prompt/gen metrics are per-model only</td>
+<td>Total tokens per user via <code>authorized_hits_total{user!=""}</code>; vLLM prompt/gen metrics are per-model only</td>
 </tr>
 <tr>
 <td><strong>Rate-limited in Istio metrics</strong></td>
@@ -3793,7 +4002,7 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 </table>
 <div class="admonition note">
 <p class="admonition-title">Total vs Split</p>
-<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits_total{user}</code>. Input/output split at gateway requires wasm-shim to send two counter updates.</p>
+<p>Total token consumption per user <strong>is available</strong> via <code>authorized_hits_total{user!=""}</code>. Input/output split at gateway requires wasm-shim to send two counter updates.</p>
 </div>
 <h3 id="available-metrics">Available Metrics</h3>
 <table>
@@ -3876,7 +4085,7 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 2, 2026 11:52:36 UTC">September 2, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
   </span>
 
     

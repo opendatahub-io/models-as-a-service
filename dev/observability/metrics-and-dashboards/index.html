@@ -2429,74 +2429,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#grafana-dashboards" class="md-nav__link">
+  <a href="#perses-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grafana Dashboards
+        Perses Dashboards
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Grafana Dashboards">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#platform-admin-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Platform Admin Dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ai-engineer-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        AI Engineer Dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-dashboards" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Dashboards
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sample-dashboard-json" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sample Dashboard JSON
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3426,74 +3365,13 @@
 </li>
       
         <li class="md-nav__item">
-  <a href="#grafana-dashboards" class="md-nav__link">
+  <a href="#perses-dashboards" class="md-nav__link">
     <span class="md-ellipsis">
       
-        Grafana Dashboards
+        Perses Dashboards
       
     </span>
   </a>
-  
-    <nav class="md-nav" aria-label="Grafana Dashboards">
-      <ul class="md-nav__list">
-        
-          <li class="md-nav__item">
-  <a href="#platform-admin-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Platform Admin Dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#ai-engineer-dashboard" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        AI Engineer Dashboard
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#prerequisites" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Prerequisites
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#deploy-dashboards" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Deploy Dashboards
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#sample-dashboard-json" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Sample Dashboard JSON
-      
-    </span>
-  </a>
-  
-</li>
-        
-      </ul>
-    </nav>
   
 </li>
       
@@ -3831,76 +3709,31 @@
 <a id="__codelineno-5-6" name="__codelineno-5-6" href="#__codelineno-5-6"></a><span class="kr">histogram_quantile</span><span class="o">(</span><span class="mf">0.5</span><span class="p">,</span><span class="w"> </span><span class="k">sum</span><span class="w"> </span><span class="k">by</span><span class="w"> </span><span class="o">(</span><span class="nv">subscription</span><span class="p">,</span><span class="w"> </span><span class="nv">le</span><span class="o">)</span>
 <a id="__codelineno-5-7" name="__codelineno-5-7" href="#__codelineno-5-7"></a><span class="w">  </span><span class="o">(</span><span class="kr">rate</span><span class="o">(</span><span class="nv">istio_request_duration_milliseconds_bucket</span><span class="p">{</span><span class="nl">subscription</span><span class="o">!=</span><span class="p">&quot;&quot;}[</span><span class="s">5m</span><span class="p">]</span><span class="o">)))</span>
 </code></pre></div>
-<h2 id="grafana-dashboards">Grafana Dashboards</h2>
-<p>MaaS includes two dashboards for different personas.</p>
-<h3 id="platform-admin-dashboard">Platform Admin Dashboard</h3>
+<h2 id="perses-dashboards">Perses Dashboards</h2>
+<p>Usage dashboards appear in the ODH/RHOAI observability console. Enable them with operator-managed telemetry (and optionally <code>usageLogging</code>) — see <a href="../setup/">Setup</a>. Operator vs Kustomize ownership and cleanup: <a href="../operations/#cleanup">Operations</a>.</p>
 <table>
 <thead>
 <tr>
-<th>Section</th>
-<th>Metrics</th>
+<th>Dashboard</th>
+<th>When</th>
+<th>Contents</th>
 </tr>
 </thead>
 <tbody>
 <tr>
-<td><strong>Component Health</strong></td>
-<td>Limitador up, Authorino pods, MaaS API pods, Gateway pods, Alerts</td>
+<td><strong>Usage</strong> (<code>dashboard-3-maas-usage-admin</code>)</td>
+<td>Operator (<code>ensureUsageDashboard</code>) or Kustomize dashboards overlay</td>
+<td>Token consumption overview and per-user usage (Prometheus)</td>
 </tr>
 <tr>
-<td><strong>Key Metrics</strong></td>
-<td>Total Tokens, Total Requests, Token Rate, Request Rate, Success Rate, Active Users, P50 Latency, Rate Limit Ratio</td>
+<td><strong>All usage (logs)</strong> (<code>dashboard-4-maas-usage-logs-admin</code>)</td>
+<td><code>usageLogging: true</code></td>
+<td>Admin usage from structured access logs (Loki)</td>
 </tr>
 <tr>
-<td><strong>Auth Evaluation</strong></td>
-<td>Auth Latency (P50/P95/P99), Auth Success/Deny Rate</td>
-</tr>
-<tr>
-<td><strong>Traffic Analysis</strong></td>
-<td>Token/Request Rate by Model, Error Rates (4xx, 5xx, 429), Token/Request by Subscription, P95 Latency</td>
-</tr>
-<tr>
-<td><strong>Model Metrics</strong></td>
-<td>vLLM queue depth, latency, KV cache, token throughput, prompt/gen ratio, queue wait, TTFT, ITL</td>
-</tr>
-<tr>
-<td><strong>Top Users</strong></td>
-<td>By token usage, by declined requests</td>
-</tr>
-<tr>
-<td><strong>Resource Allocation</strong></td>
-<td>CPU/Memory/GPU per model pod</td>
-</tr>
-</tbody>
-</table>
-<p><strong>Template variables:</strong></p>
-<ul>
-<li><code>$datasource</code>: <code>prometheus</code></li>
-<li><code>$maas_namespace</code>: Auto-detected from <code>kube_pod_info{pod=~"maas-api.*"}</code></li>
-<li><code>$kuadrant_namespace</code>: <code>kuadrant-system</code></li>
-<li><code>$gateway_namespace</code>: <code>openshift-ingress</code></li>
-<li><code>$llm_namespace</code>: <code>llm</code></li>
-<li><code>$model</code>: <code>All</code></li>
-</ul>
-<h3 id="ai-engineer-dashboard">AI Engineer Dashboard</h3>
-<table>
-<thead>
-<tr>
-<th>Section</th>
-<th>Metrics</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td><strong>Usage Summary</strong></td>
-<td>My Total Tokens, My Total Requests, Token Rate, Request Rate, Rate Limit Ratio, Success Rate</td>
-</tr>
-<tr>
-<td><strong>Usage Trends</strong></td>
-<td>Token Usage by Model, Usage vs Rate Limited</td>
-</tr>
-<tr>
-<td><strong>Detailed Analysis</strong></td>
-<td>Token Volume by Model, Rate Limited by Subscription</td>
+<td><strong>Usage (logs)</strong> (<code>dashboard-5-maas-usage-logs</code>)</td>
+<td><code>usageLogging: true</code></td>
+<td>User-scoped usage from structured access logs</td>
 </tr>
 </tbody>
 </table>
@@ -3910,34 +3743,8 @@
 </div>
 <div class="admonition info">
 <p class="admonition-title">Tokens vs Requests</p>
-<p><strong>Token consumption</strong> (<code>authorized_hits</code>) for billing/cost. <strong>Request counts</strong> (<code>authorized_calls</code>) for capacity planning. Blue = requests, Green = tokens.</p>
+<p><strong>Token consumption</strong> (<code>authorized_hits</code>) for billing/cost. <strong>Request counts</strong> (<code>authorized_calls</code>) for capacity planning.</p>
 </div>
-<h3 id="prerequisites">Prerequisites</h3>
-<ul>
-<li><strong>Grafana</strong> installed (via observability team, centralized instance, or <a href="https://grafana.github.io/grafana-operator/docs/installation/">Grafana Operator</a>)</li>
-<li>Grafana instance has label <code>app=grafana</code></li>
-<li><strong>Prometheus datasource</strong> configured in Grafana</li>
-</ul>
-<h3 id="deploy-dashboards">Deploy Dashboards</h3>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-6-1" name="__codelineno-6-1" href="#__codelineno-6-1"></a>./scripts/observability/install-grafana-dashboards.sh
-</code></pre></div>
-<p><strong>Behavior:</strong> Discovers Grafana cluster-wide. Deploys to namespace if one instance found. Warns if none or multiple.</p>
-<p><strong>Target specific instance:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-7-1" name="__codelineno-7-1" href="#__codelineno-7-1"></a>./scripts/observability/install-grafana-dashboards.sh<span class="w"> </span>--grafana-namespace<span class="w"> </span>maas-api
-<a id="__codelineno-7-2" name="__codelineno-7-2" href="#__codelineno-7-2"></a>./scripts/observability/install-grafana-dashboards.sh<span class="w"> </span>--grafana-label<span class="w"> </span><span class="nv">app</span><span class="o">=</span>grafana
-</code></pre></div>
-<p><strong>Manual deployment:</strong></p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-8-1" name="__codelineno-8-1" href="#__codelineno-8-1"></a>kustomize<span class="w"> </span>build<span class="w"> </span>deployment/components/observability/grafana<span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-2" name="__codelineno-8-2" href="#__codelineno-8-2"></a><span class="w">  </span>sed<span class="w"> </span><span class="s2">&quot;s/namespace: maas-api/namespace: &lt;your-namespace&gt;/g&quot;</span><span class="w"> </span><span class="p">|</span><span class="w"> </span><span class="se">\</span>
-<a id="__codelineno-8-3" name="__codelineno-8-3" href="#__codelineno-8-3"></a><span class="w">  </span>kubectl<span class="w"> </span>apply<span class="w"> </span>-f<span class="w"> </span>-
-</code></pre></div>
-<h3 id="sample-dashboard-json">Sample Dashboard JSON</h3>
-<p>For manual import: <a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/docs/samples/dashboards/maas-token-metrics-dashboard.json">MaaS Token Metrics Dashboard</a></p>
-<ol>
-<li>Grafana → Dashboards → Import</li>
-<li>Upload JSON or paste content</li>
-<li>Select Prometheus datasource</li>
-</ol>
 
 
 
@@ -3960,7 +3767,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 24, 2026 16:23:16 UTC">July 24, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
   </span>
 
     
