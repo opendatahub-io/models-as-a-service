@@ -42,24 +42,6 @@ kubectl logs -n kuadrant-system deployment/limitador | grep -i redis
 
 ## Maintenance
 
-### Grafana Datasource Token Rotation
-
-Grafana datasource uses ServiceAccount tokens with cluster-configured expiration. Token lifetime varies by cluster (Kubernetes and OpenShift have different defaults). Check your cluster's token expiration:
-
-```bash
-# Check projected serviceAccountToken expiration in Grafana Pod
-kubectl get pod -n <grafana-namespace> <grafana-pod> -o jsonpath='{.spec.volumes[?(@.projected.sources[0].serviceAccountToken)].projected.sources[0].serviceAccountToken.expirationSeconds}'
-
-# Or check via TokenRequest API
-kubectl create token <sa-name> -n <grafana-namespace> --duration=0s | kubectl get --raw /api/v1/namespaces/<grafana-namespace>/serviceaccounts/<sa-name>/token -o jsonpath='{.status.expirationTimestamp}'
-
-# Re-deploy dashboards to rotate token
-./scripts/observability/install-grafana-dashboards.sh
-```
-
-!!! tip "Production"
-    Verify your cluster's token lifetime and automate rotation accordingly (e.g., CronJob or external secrets operator) to avoid outages.
-
 ### Monitor ServiceMonitor Health
 
 The ODH/RHOAI monitoring stack scrapes `ServiceMonitor` / `PodMonitor` targets with the
@@ -114,16 +96,118 @@ kubectl logs -n <monitoring-namespace> \
 
 ### Cleanup
 
+How you remove resources depends on how they were applied. `./scripts/observability/install-observability.sh` applies TelemetryPolicy and Istio Telemetry from `deployment/base/observability/`, plus these resources when their conditions match:
+
+| Resource | When |
+|----------|------|
+| Limitador `ServiceMonitor` (`limitador-metrics`) | Kuadrant is not already scraping Limitador `/metrics` |
+| Authorino `ServiceMonitor` (`authorino-server-metrics`) | Authorino Service exists and nothing else scrapes `/server-metrics` |
+| Gateway `Service` + `ServiceMonitor` (`istio-gateway-metrics`) | Gateway Deployment exists in `openshift-ingress` |
+| PrometheusRules (`authorino-maas-metadata-evaluator-high-failure-rate`, `authorino-maas-authentication-alerts`) | Authorino Deployment exists (`kuadrant-system` or `rh-connectivity-link`) |
+
+#### PersesDashboard ownership
+
+| Deployment mode | How applied | Ownership | Cleanup |
+|-----------------|-------------|-----------|---------|
+| **Operator** (recommended) | `LifecycleReconciler.ensureUsageDashboard` (metrics Usage dashboard). Usage-log dashboards via `usageLogging` on `Config`. | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Do not delete the CR by hand — the operator recreates it. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
+| **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, set `usageLogging=false` when Config exists, wait until **every** overlay object with a Config controller owner is gone, then `kubectl delete -k`. |
+| **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
+
+Identify operator-owned dashboards:
+
 ```bash
-# Remove dashboards
-kubectl delete grafanadashboard -n <grafana-namespace> maas-platform-admin maas-ai-engineer
+kubectl get persesdashboard -A -o json | jq -r '
+  .items[] | select(.metadata.ownerReferences[]? | .kind=="Config" and .controller==true)
+  | "\(.metadata.namespace)/\(.metadata.name)"'
+```
 
-# Remove ServiceMonitors
-kubectl delete servicemonitor -n <namespace> <servicemonitor-name>
+#### Operator-managed dashboards
 
-# Remove telemetry
+Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable`). See [Setup](setup.md).
+
+```bash
+# Usage-log dashboards (dashboard-4, dashboard-5): operator deletes CRs it owns
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"usageLogging":false}}'
+
+# Metrics Usage dashboard (dashboard-3): owned by Config.
+# Disabling Tenant telemetry does not remove it.
+# It is garbage-collected when Config is deleted (operator uninstall / teardown).
+```
+
+#### Kustomize dashboards
+
+Delete only the Kustomize-applied metrics Usage dashboard, by name and namespace; if `Config` is the controller owner, do not delete the CR by hand — see [Operator-managed dashboards](#operator-managed-dashboards).
+
+```bash
+kubectl delete persesdashboard dashboard-3-maas-usage-admin -n opendatahub
+```
+
+#### Usage-log resources
+
+Disable `usageLogging` when Config exists, wait until **every rendered overlay object** with a Config controller owner is gone, then delete leftovers.
+
+```bash
+set -euo pipefail
+
+overlay=deployment/components/observability/usage-logs
+manifests=$(mktemp)
+trap 'rm -f "$manifests"' EXIT
+kustomize build "$overlay" >"$manifests"
+
+if kubectl get configs.maas.opendatahub.io default -o name >/dev/null; then
+  kubectl patch configs.maas.opendatahub.io default --type=merge \
+    -p '{"spec":{"usageLogging":false}}'
+fi
+
+owned_usage_log_resources() {
+  kubectl get --ignore-not-found -f "$manifests" -o json | jq -r '
+    (.items // [.])[]
+    | select(.metadata.name != null)
+    | select([.metadata.ownerReferences[]? | select(.kind=="Config" and .controller==true)] | length > 0)
+    | "\(.kind)/\(.metadata.namespace // "-")/\(.metadata.name)"'
+}
+
+for _ in $(seq 1 30); do
+  left=$(owned_usage_log_resources)
+  [ -z "$left" ] && break
+  sleep 2
+done
+left=$(owned_usage_log_resources)
+if [ -n "$left" ]; then
+  echo "operator-owned usage-log resources still present; do not delete -k:"
+  echo "$left"
+  exit 1
+fi
+
+kubectl delete -k "$overlay"
+```
+
+#### Telemetry and ServiceMonitors
+
+Kustomize/development cleanup only. Do not run this in operator-managed mode. For operator-managed telemetry, update the tenant configuration and let the Tenant reconciler manage those resources.
+
+```bash
+# Always applied by the script (from deployment/base/observability/)
 kubectl delete telemetrypolicy -n openshift-ingress maas-telemetry
 kubectl delete telemetry -n openshift-ingress latency-per-subscription
+
+# Conditional: Limitador ServiceMonitor (only if the script deployed it)
+kubectl delete servicemonitor -n kuadrant-system limitador-metrics --ignore-not-found
+
+# Conditional: Authorino /server-metrics ServiceMonitor
+kubectl delete servicemonitor -n kuadrant-system authorino-server-metrics --ignore-not-found
+
+# Conditional: Istio Gateway metrics
+kubectl delete servicemonitor,service -n openshift-ingress istio-gateway-metrics --ignore-not-found
+
+# Conditional: PrometheusRules (namespace is kuadrant-system or rh-connectivity-link)
+kubectl delete prometheusrule -n kuadrant-system \
+  authorino-maas-metadata-evaluator-high-failure-rate \
+  authorino-maas-authentication-alerts --ignore-not-found
+kubectl delete prometheusrule -n rh-connectivity-link \
+  authorino-maas-metadata-evaluator-high-failure-rate \
+  authorino-maas-authentication-alerts --ignore-not-found
 ```
 
 ### Troubleshooting Missing Metrics
@@ -156,15 +240,18 @@ curl -s -H "Authorization: Bearer $(oc whoami -t)" --get \
 ### Troubleshooting Dashboard Issues
 
 ```bash
-# 1. Verify Grafana → Prometheus connection
-# In Grafana: Configuration → Data Sources → Test
+# 1. Confirm Perses is available (ODH/RHOAI observability console)
+kubectl get dscinitialization default-dsci -o json | \
+  jq '.status.conditions[] | select(.type=="PersesAvailable") | {type, status}'
 
-# 2. Check query syntax
-# Edit panel → View query in Prometheus directly
+# 2. Confirm PersesDashboard CRs exist
+kubectl get persesdashboard -A | grep maas
 
-# 3. Verify time range includes when metrics were generated
+# 3. Run the panel query in Prometheus or Loki directly (see Setup)
 
-# 4. Check for lazily-registered metrics
+# 4. Verify the time range includes when metrics or logs were generated
+
+# 5. Check for lazily-registered metrics
 # Some metrics appear only after first event (e.g., queue_time after first queued request)
 ```
 
@@ -201,11 +288,10 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 
 | Task | Frequency | Action |
 |------|-----------|--------|
-| **Token Rotation** | Per cluster token TTL | Rotate Grafana datasource token before expiration (verify cluster-specific lifetime) |
 | **Storage Check** | Weekly | Monitor Prometheus storage usage |
 | **ServiceMonitor Health** | Daily | Check Target Allocator jobs and `up` series (not Thanos `/api/v1/targets`) |
 | **Cardinality Review** | Monthly | Review high-cardinality metrics |
-| **Dashboard Testing** | After deployment | Verify dashboards load |
+| **Dashboard Testing** | After deployment | Verify Perses dashboards load in the ODH console |
 | **Backup Redis** (HA) | Daily | Backup Redis data |
 
 ## Known Limitations
@@ -216,14 +302,14 @@ Watch: `authorized_hits_total{user!=""}`, `authorized_calls_total{user!=""}`, `i
 |---------|---------|------------|
 | **`model` label on `authorized_calls_total` / `limited_calls_total`** | Kuadrant wasm-shim doesn't pass `responseBodyJSON` context | Use `authorized_hits_total` for per-model breakdown |
 | **Input/output token split** | TokenRateLimitPolicy sends single `hits_addend` | Total tokens via `authorized_hits_total`; response body has `usage.prompt_tokens` and `usage.completion_tokens` but wasm-shim doesn't split |
-| **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user}`; vLLM prompt/gen metrics are per-model only |
+| **Input/output per user** | vLLM doesn't label with `user` | Total tokens per user via `authorized_hits_total{user!=""}`; vLLM prompt/gen metrics are per-model only |
 | **Rate-limited in Istio metrics** | WASM plugin `sendLocalReply()` short-circuits filter chain | Use `limited_calls_total` from Limitador (has correct labels) |
 | **Policy health metrics** | `kuadrant_policies_enforced`, `kuadrant_policies_total` not in RHCL 1.x | `limitador_up` and `datastore_partitioned` available now |
 | **maas-api metrics** | Requires HTTPS scrape + `/metrics` get RBAC | Use ServiceMonitor `maas-api-metrics` with bearer token; grant scrapers `nonResourceURLs: ["/metrics"]` get |
 | **PromQL `_total` suffix** | OTel prometheus receiver stores Limitador counters as `authorized_hits_total` (and the same for `authorized_calls` / `limited_calls`) | Query the `_total` names; Grafana panels that omit `_total` return no data |
 
 !!! note "Total vs Split"
-    Total token consumption per user **is available** via `authorized_hits_total{user}`. Input/output split at gateway requires wasm-shim to send two counter updates.
+    Total token consumption per user **is available** via `authorized_hits_total{user!=""}`. Input/output split at gateway requires wasm-shim to send two counter updates.
 
 ### Available Metrics
 
