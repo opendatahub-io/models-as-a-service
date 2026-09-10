@@ -278,15 +278,14 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 
 // ResolveModelAlias returns the canonical BBR model ID for the referenced LLMInferenceService.
 //
-// It first checks LLMInferenceService.status.addresses[*].models[0].name, which KServe populates
+// It reads from LLMInferenceService.status.addresses[*].models[0].name, which KServe populates
 // as the authoritative canonical ID in the format publishers/{namespace}/models/{model-name}.
-// When that field is not yet populated, it falls back to constructing the alias from
-// spec.model.name (or metadata.name when spec.model.name is unset).
+// KServe is the source of truth for this value; MaaS reads and mirrors it.
 //
 // Return semantics:
 //   - (alias, nil)  — alias resolved; caller should update status.resolvedModelAlias.
-//   - ("", nil)     — LLMISVC found but model name could not be determined; caller must
-//     preserve the existing alias rather than clearing it.
+//   - ("", nil)     — LLMISVC found but addresses not yet populated; caller must preserve
+//     the existing alias rather than clearing it.
 //   - ("", err)     — transient API failure (e.g. API server unreachable); caller must
 //     preserve the existing alias rather than clearing it.
 func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
@@ -300,13 +299,7 @@ func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger,
 			return addr.Models[0].Name, nil
 		}
 	}
-
-	// Fallback: construct the alias from spec.model.name (or metadata.name).
-	modelName := llmisvc.Name
-	if llmisvc.Spec.Model.Name != nil && *llmisvc.Spec.Model.Name != "" {
-		modelName = *llmisvc.Spec.Model.Name
-	}
-	return fmt.Sprintf("publishers/%s/models/%s", model.Namespace, modelName), nil
+	return "", nil
 }
 
 func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {
