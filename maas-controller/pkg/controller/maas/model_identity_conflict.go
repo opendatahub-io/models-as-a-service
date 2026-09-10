@@ -63,6 +63,9 @@ func (r *MaaSModelRefReconciler) findModelAliasConflicts(ctx context.Context, mo
 		if other.Name == model.Name {
 			continue
 		}
+		// Safe to exclude: ModelIdentityUnique is informational — it does not
+		// gate routing or authorization decisions, so a brief window where the
+		// deleting sibling's HTTPRoute is still active has no security impact.
 		if !other.GetDeletionTimestamp().IsZero() {
 			continue
 		}
