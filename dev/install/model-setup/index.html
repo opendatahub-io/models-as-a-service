@@ -3569,7 +3569,6 @@
 <a id="__codelineno-5-2" name="__codelineno-5-2" href="#__codelineno-5-2"></a>kubectl<span class="w"> </span>get<span class="w"> </span>maasmodelref<span class="w"> </span>-n<span class="w"> </span>llm<span class="w"> </span>facebook-opt-125m-simulated<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">&#39;{.status.endpoint}&#39;</span><span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span>
 </code></pre></div>
 <p><strong>Expected output:</strong> <code>status.phase</code> should be <code>Ready</code> and <code>status.endpoint</code> should be a non-empty URL. If either is missing, wait briefly and retry—the controller may still be reconciling (see <a href="#verify-model-deployment">Verify Model Deployment</a> below).</p>
-<p>If your model uses token rate limits (via MaaSSubscription), the model server must be started with <code>--enable-force-include-usage</code> so that usage data is returned in every response. Without this, the gateway cannot count tokens and rate limits will not be enforced for streaming chat completion requests. See <a href="../../configuration-and-management/quota-and-access-configuration/#model-server-must-include-usage-data">Model server must include usage data</a> for details.</p>
 <h3 id="step-3-deploy-the-maassubscription">Step 3: Deploy the MaaSSubscription</h3>
 <p>The MaaSSubscription defines token rate limits (quotas) for groups. It references the MaaSModelRef by name and namespace. This controls how many tokens each group can consume per model.</p>
 <p>Create the <code>models-as-a-service</code> namespace if it does not exist, then apply:</p>
@@ -3701,7 +3700,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 9, 2026 20:27:56 UTC">September 9, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 12:53:56 UTC">September 10, 2026</span>
   </span>
 
     

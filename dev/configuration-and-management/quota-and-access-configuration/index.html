@@ -1704,17 +1704,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#model-server-must-include-usage-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model server must include usage data
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#4-validate-the-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -1780,17 +1769,6 @@
     <span class="md-ellipsis">
       
         Model not appearing in GET /v1/models
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#token-rate-limits-not-enforced-no-429-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Token rate limits not enforced (no 429 errors)
       
     </span>
   </a>
@@ -3420,17 +3398,6 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#model-server-must-include-usage-data" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Model server must include usage data
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
   <a href="#4-validate-the-configuration" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3496,17 +3463,6 @@
     <span class="md-ellipsis">
       
         Model not appearing in GET /v1/models
-      
-    </span>
-  </a>
-  
-</li>
-        
-          <li class="md-nav__item">
-  <a href="#token-rate-limits-not-enforced-no-429-errors" class="md-nav__link">
-    <span class="md-ellipsis">
-      
-        Token rate limits not enforced (no 429 errors)
       
     </span>
   </a>
@@ -3712,17 +3668,6 @@
 <p>Limitador counts tokens using the <code>usage.total_tokens</code> field in the response body. OpenAI Chat Completions and Embeddings responses both include this field. Embedding requests consume <strong>prompt tokens only</strong> (no completion tokens); these count toward the same subscription token budget as chat completions. Anthropic Messages and OpenAI Responses report usage differently (<code>input_tokens</code>/<code>output_tokens</code> without <code>total_tokens</code>), so the rate limiting integration cannot extract the token count.</p>
 <p>Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.</p>
 </div>
-<h3 id="model-server-must-include-usage-data">Model server must include usage data</h3>
-<p>Token rate limiting requires the model server to return <code>usage</code> information in every response. By default, vLLM and llm-d only include usage in non-streaming responses. For streaming (SSE) responses — the default for many chat completion clients — usage data is omitted unless explicitly enabled.</p>
-<p><strong>Start the model server with <code>--enable-force-include-usage</code></strong> to ensure usage data is always returned regardless of whether the client requests it. Without this flag, token rate limits will not be enforced for streaming chat completion requests (the gateway sees 0 tokens consumed).</p>
-<p>Embedding endpoints are unaffected because they always return non-streaming JSON with <code>usage.total_tokens</code>.</p>
-<p>How to enable, depending on your deployment:</p>
-<ul>
-<li><strong>llm-d-inference-sim / vLLM CLI args:</strong> add <code>--enable-force-include-usage</code> to the container <code>args</code></li>
-<li><strong>vLLM via <code>VLLM_ADDITIONAL_ARGS</code>:</strong> add <code>--enable-force-include-usage</code> to the env var value</li>
-<li><strong>vLLM via shell script:</strong> append <code>--enable-force-include-usage</code> to the <code>vllm serve</code> command</li>
-</ul>
-<p>See <a href="https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage">vLLM documentation</a> for details.</p>
 <div class="admonition note">
 <p class="admonition-title">Namespace requirements</p>
 <p>Both <strong>MaaSAuthPolicy</strong> and <strong>MaaSSubscription</strong> must be installed in the <code>models-as-a-service</code> namespace. Each <code>modelRefs</code> entry must specify the <code>namespace</code> where the MaaSModelRef lives (e.g. <code>llm</code>).</p>
@@ -3795,9 +3740,6 @@
 <li>Check MaaSAuthPolicy in <code>models-as-a-service</code> includes the user's groups and references the MaaSModelRef with correct <code>name</code> (e.g. <code>${MODEL_NAME}-ref</code>) and <code>namespace</code></li>
 <li>Ensure MaaSSubscription in <code>models-as-a-service</code> exists for the model and user's groups</li>
 </ul>
-<h3 id="token-rate-limits-not-enforced-no-429-errors">Token rate limits not enforced (no 429 errors)</h3>
-<p><strong>Cause:</strong> The model server is not returning <code>usage.total_tokens</code> in responses. The gateway sees 0 tokens consumed and never triggers the rate limit. This commonly affects streaming chat completion requests.</p>
-<p><strong>Fix:</strong> Start the model server with <code>--enable-force-include-usage</code>. See the warning box above for details on how to enable this for different deployment patterns.</p>
 <h3 id="policies-not-enforced">Policies not enforced</h3>
 <p><strong>Cause:</strong> Kuadrant controller may need to re-sync.</p>
 <p><strong>Fix:</strong></p>
@@ -3833,7 +3775,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 9, 2026 20:27:56 UTC">September 9, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 12:53:56 UTC">September 10, 2026</span>
   </span>
 
     
