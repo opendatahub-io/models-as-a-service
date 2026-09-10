@@ -1451,6 +1451,81 @@ func TestAITenantReconcile_DeletionCompletesWhenTenantNeverProvisioned(t *testin
 	g.Expect(survivingNS.Annotations).To(HaveKeyWithValue(aitenantNameAnnotation, "other-aitenant"))
 }
 
+func TestAITenantReconcile_DeletionBlockedWhenPreviouslyProvisionedButMaasTenantConfigAbsent(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+	ctx := context.Background()
+
+	// Simulate an AITenant that was previously provisioned (namespace is owned
+	// by this AITenant) but whose MaasTenantConfig was deleted externally.
+	// Deletion must NOT complete because API keys may still be active.
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "team-orphaned-keys",
+			Namespace:  tenantreconcile.DefaultAITenantNamespace,
+			Finalizers: []string{aitenantFinalizer},
+		},
+	}
+	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, "models-as-a-service")
+	// The namespace IS owned by this AITenant — evidence it was provisioned.
+	ns := &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: tenantNamespace,
+			Labels: map[string]string{
+				aitenantManagedLabel: "true",
+			},
+			Annotations: map[string]string{
+				aitenantNameAnnotation:      aitenant.Name,
+				aitenantNamespaceAnnotation: aitenant.Namespace,
+			},
+		},
+	}
+	// NOTE: No MaasTenantConfig — simulates external deletion after provisioning.
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, ns).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	g.Expect(cl.Delete(ctx, aitenant)).To(Succeed())
+
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
+	// Reconcile should NOT return a terminal success; it should indicate that
+	// deletion is blocked (either by returning an error or by requeueing).
+	// The error from ensureTenantAPIKeysRevoked surfaces as a status update
+	// and a requeue.
+	if err == nil {
+		// If no error, it must be requeueing (not completing deletion).
+		g.Expect(res.RequeueAfter).To(BeNumerically(">", 0),
+			"deletion must not complete when previously provisioned tenant is missing MaasTenantConfig")
+	}
+
+	// The AITenant must NOT be fully deleted — finalizer must still be present.
+	var remaining maasv1alpha1.AITenant
+	err = cl.Get(ctx, key, &remaining)
+	g.Expect(err).NotTo(HaveOccurred(), "AITenant must still exist")
+	g.Expect(remaining.Finalizers).To(ContainElement(aitenantFinalizer),
+		"finalizer must remain when API key revocation cannot be confirmed")
+
+	// No revocation Job should have been created (the service may not exist).
+	var jobList batcv1.JobList
+	g.Expect(cl.List(ctx, &jobList, client.InNamespace("opendatahub"))).To(Succeed())
+	g.Expect(jobList.Items).To(BeEmpty(),
+		"no revocation Job should be created when MaasTenantConfig is absent")
+
+	// Phase should indicate deletion is blocked.
+	g.Expect(remaining.Status.Phase).To(Equal("Terminating"))
+}
+
 func TestAITenantReconcile_DeletionCleansOwnedResourcesButPreservesNamespaceAndUserObjects(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)

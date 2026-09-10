@@ -1233,10 +1233,9 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		return false, errors.New("app namespace is required to revoke tenant API keys")
 	}
 
-	// If no MaasTenantConfig owned by this AITenant exists, the tenant was
-	// never fully provisioned — no maas-api service is running and no API
-	// keys can exist. Skip the revocation Job to avoid blocking deletion
-	// indefinitely against a non-existent service.
+	// Check whether a MaasTenantConfig owned by this AITenant still exists.
+	// If absent, we must distinguish "never provisioned" (safe to skip) from
+	// "was provisioned but MaasTenantConfig was deleted externally" (not safe).
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 	var tenantConfig maasv1alpha1.MaasTenantConfig
 	configKey := client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.MaasTenantConfigInstanceName}
@@ -1244,7 +1243,26 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		if !isNotFoundError(err) {
 			return false, fmt.Errorf("check MaasTenantConfig for API key revocation: %w", err)
 		}
-		ctrl.LoggerFrom(ctx).Info("skipping API key revocation: MaasTenantConfig not found, tenant was never provisioned",
+		// MaasTenantConfig is absent. Determine whether this AITenant ever
+		// progressed far enough in provisioning to have created one.
+		// The tenant namespace is claimed (ownership annotations set) only
+		// after ensureTenantNamespace succeeds, which is a prerequisite for
+		// ensureTenantConfig. If the namespace is NOT owned by this AITenant,
+		// provisioning never reached the point where API keys could exist.
+		wasProvisioned, err := r.tenantNamespaceOwnedByAITenant(ctx, aitenant, tenantNamespace)
+		if err != nil {
+			return false, fmt.Errorf("check tenant namespace ownership for API key revocation: %w", err)
+		}
+		if wasProvisioned {
+			// The tenant was provisioned (namespace is owned by this AITenant),
+			// so a MaasTenantConfig existed at some point but is now missing.
+			// API keys may still be active. Block deletion so a human can
+			// investigate or so the deletion-timeout can force cleanup.
+			ctrl.LoggerFrom(ctx).Info("blocking API key revocation: MaasTenantConfig absent but tenant namespace is owned by this AITenant; API keys may not have been revoked",
+				"tenantNamespace", tenantNamespace)
+			return false, fmt.Errorf("MaasTenantConfig not found in namespace %q but the tenant was previously provisioned; cannot confirm API keys were revoked", tenantNamespace)
+		}
+		ctrl.LoggerFrom(ctx).Info("skipping API key revocation: MaasTenantConfig not found and tenant was never provisioned",
 			"tenantNamespace", tenantNamespace)
 		return true, nil
 	}
@@ -1302,6 +1320,22 @@ func (r *AITenantReconciler) deleteTenantAPIKeyRevocationJob(ctx context.Context
 		return fmt.Errorf("delete completed API key revocation Job %s/%s: %w", existing.Namespace, existing.Name, err)
 	}
 	return nil
+}
+
+// tenantNamespaceOwnedByAITenant checks whether the tenant namespace exists and
+// is owned by the given AITenant. This is used as durable evidence that the
+// tenant was provisioned far enough to have created a MaasTenantConfig (and
+// therefore potentially API keys). If the namespace does not exist or belongs
+// to a different AITenant, the tenant was never fully provisioned.
+func (r *AITenantReconciler) tenantNamespaceOwnedByAITenant(ctx context.Context, aitenant *maasv1alpha1.AITenant, tenantNamespace string) (bool, error) {
+	var ns corev1.Namespace
+	if err := r.get(ctx, client.ObjectKey{Name: tenantNamespace}, &ns); err != nil {
+		if isNotFoundError(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get tenant namespace %q: %w", tenantNamespace, err)
+	}
+	return ownedByAITenant(&ns, aitenant), nil
 }
 
 func (r *AITenantReconciler) markTenantAPIKeysRevoked(ctx context.Context, aitenant *maasv1alpha1.AITenant) error {
