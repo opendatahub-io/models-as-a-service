@@ -5,7 +5,7 @@
 #
 # This script is idempotent - safe to run multiple times
 #
-# Usage: ./install-observability.sh [--namespace NAMESPACE]
+# Usage: ./install-observability.sh
 # Does not apply PersesDashboard manifests. Operator: LifecycleReconciler.ensureUsageDashboard.
 # Kustomize: deployment/components/observability/observability/dashboards/. See docs/content/observability/setup.md.
 
@@ -19,37 +19,19 @@ for cmd in kubectl kustomize yq; do
     fi
 done
 
-# Parse arguments
-# For RHOAI use --namespace redhat-ods-applications.
-NAMESPACE="${MAAS_API_NAMESPACE:-opendatahub}"
-
 show_help() {
-    echo "Usage: $0 [--namespace NAMESPACE]"
+    echo "Usage: $0"
     echo ""
     echo "Installs monitoring components:"
     echo "  - Deploys TelemetryPolicy and ServiceMonitors"
     echo "  - Configures Istio Gateway metrics"
     echo ""
-    echo "Options:"
-    echo "  -n, --namespace   Target namespace for observability (default: opendatahub)"
-    echo ""
-    echo "Examples:"
-    echo "  $0                    # Install monitoring only"
-    echo "  $0 --namespace my-ns"
-    echo ""
+
     exit 0
 }
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --namespace|-n)
-            if [[ $# -lt 2 || -z "${2:-}" || "${2:-}" == -* ]]; then
-                echo "Error: --namespace requires a non-empty value"
-                exit 1
-            fi
-            NAMESPACE="$2"
-            shift 2
-            ;;
         --help|-h)
             show_help
             ;;
@@ -68,40 +50,11 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$PROJECT_ROOT/scripts/deployment-helpers.sh"
 
 # ==========================================
-# Local Helper Functions
-# ==========================================
-
-# kuadrant_already_scrapes endpoint namespace
-#   Checks if any Kuadrant-provided ServiceMonitor or PodMonitor already scrapes
-#   the given endpoint path. Used to avoid deploying duplicate monitors.
-#   Excludes MaaS-owned monitors (labeled app.kubernetes.io/part-of: maas-observability)
-#   so re-runs of this script don't falsely detect our own monitors.
-#
-# Arguments:
-#   endpoint  - The metrics path to check for (e.g. "/server-metrics", "/metrics")
-#   namespace - The namespace to search in (default: kuadrant-system)
-#
-# Returns:
-#   0 if a Kuadrant-provided monitor already scrapes this endpoint
-#   1 if no existing monitor scrapes it (safe to deploy ours)
-kuadrant_already_scrapes() {
-    local endpoint="$1"
-    local namespace="${2:-kuadrant-system}"
-
-    # Get all monitors, exclude MaaS-owned ones, check for the endpoint path
-    kubectl get servicemonitor,podmonitor -n "$namespace" \
-        -l 'app.kubernetes.io/part-of!=maas-observability' \
-        -o json 2>/dev/null | grep -q "\"${endpoint}\""
-}
-
-# ==========================================
 # Stack Selection
 # ==========================================
 echo "========================================="
 echo "📊 MaaS Observability Stack Installation"
 echo "========================================="
-echo ""
-echo "Target namespace: $NAMESPACE"
 echo ""
 
 echo "1️⃣ Deploying TelemetryPolicy and ServiceMonitors..."
@@ -112,17 +65,6 @@ BASE_OBSERVABILITY_DIR="$PROJECT_ROOT/deployment/base/observability"
 if [ -d "$BASE_OBSERVABILITY_DIR" ]; then
     kustomize build "$BASE_OBSERVABILITY_DIR" | kubectl apply -f -
     echo "   ✅ TelemetryPolicy and Istio Telemetry deployed"
-
-    # Deploy Limitador ServiceMonitor only if Kuadrant doesn't already scrape /metrics from Limitador.
-    # When Kuadrant CR has spec.observability.enable=true, it creates kuadrant-limitador-monitor
-    # which scrapes the same Limitador pod. Deploying both causes duplicate metrics.
-    if kuadrant_already_scrapes "/metrics" kuadrant-system \
-       || kubectl get podmonitor kuadrant-limitador-monitor -n kuadrant-system &>/dev/null; then
-        echo "   ℹ️  Kuadrant already scrapes Limitador /metrics - skipping MaaS ServiceMonitor (no duplicates)"
-    else
-        kubectl apply -f "$BASE_OBSERVABILITY_DIR/limitador-servicemonitor.yaml"
-        echo "   ✅ Limitador ServiceMonitor deployed (Kuadrant PodMonitor not found)"
-    fi
 
     # Deploy Authorino server-metrics ServiceMonitor.
     # The Kuadrant operator's authorino-operator-monitor only scrapes /metrics (controller-runtime).

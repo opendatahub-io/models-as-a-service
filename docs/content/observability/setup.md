@@ -110,7 +110,7 @@ This creates:
 
 ```bash
 # Deploy base telemetry + conditional ServiceMonitors (does not apply Perses dashboards)
-./scripts/observability/install-observability.sh [--namespace NAMESPACE]
+./scripts/observability/install-observability.sh
 ```
 
 **Manual deployment:**
