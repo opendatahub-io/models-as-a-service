@@ -3146,6 +3146,9 @@ func TestAITenantReconcile_DeleteGatewayClaimSkipsSpoofedOwnerRef(t *testing.T) 
 			Namespace:  tenantreconcile.DefaultAITenantNamespace,
 			UID:        "uid-delete-spoof",
 			Finalizers: []string{aitenantFinalizer},
+			Annotations: map[string]string{
+				aitenantAPIKeysRevokedAnnotation: "true",
+			},
 		},
 		Spec: maasv1alpha1.AITenantSpec{
 			Gateway: &maasv1alpha1.AITenantGatewayRef{Name: "del-gw"},
