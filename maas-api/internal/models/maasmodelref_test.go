@@ -11,7 +11,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 )
 
-func newMaaSModelRefUnstructured(namespace, endpoint string, ready bool, hostnames []string) *unstructured.Unstructured {
+func newMaaSModelRefUnstructured(endpoint string, ready bool, hostnames []string) *unstructured.Unstructured {
 	u := &unstructured.Unstructured{}
 	u.SetGroupVersionKind(schema.GroupVersionKind{
 		Group:   "maas.opendatahub.io",
@@ -19,7 +19,7 @@ func newMaaSModelRefUnstructured(namespace, endpoint string, ready bool, hostnam
 		Kind:    "MaaSModelRef",
 	})
 	u.SetName("test-model")
-	u.SetNamespace(namespace)
+	u.SetNamespace("default")
 	u.SetCreationTimestamp(metav1.NewTime(time.Unix(1700000000, 0)))
 	_ = unstructured.SetNestedField(u.Object, endpoint, "status", "endpoint")
 	if ready {
@@ -39,7 +39,7 @@ func newMaaSModelRefUnstructured(namespace, endpoint string, ready bool, hostnam
 func TestMaasModelRefToModel_EndpointFallback_NormalizesToHTTPS(t *testing.T) {
 	// When httpRouteHostnames is empty and status.endpoint uses HTTP,
 	// the URL should be normalized to HTTPS.
-	u := newMaaSModelRefUnstructured("default", "http://maas.example.com/test-model", true, nil)
+	u := newMaaSModelRefUnstructured("http://maas.example.com/test-model", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -57,7 +57,7 @@ func TestMaasModelRefToModel_EndpointFallback_NormalizesToHTTPS(t *testing.T) {
 func TestMaasModelRefToModel_EndpointFallback_StripsPath(t *testing.T) {
 	// When httpRouteHostnames is empty and status.endpoint has a path suffix,
 	// the URL should expose only the base URL (no path).
-	u := newMaaSModelRefUnstructured("default", "https://maas.example.com/test-model", true, nil)
+	u := newMaaSModelRefUnstructured("https://maas.example.com/test-model", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -75,7 +75,7 @@ func TestMaasModelRefToModel_EndpointFallback_StripsPath(t *testing.T) {
 func TestMaasModelRefToModel_HostnamesPreferred(t *testing.T) {
 	// When httpRouteHostnames is present, it should be preferred over status.endpoint
 	// and produce an HTTPS base URL.
-	u := newMaaSModelRefUnstructured("default", "http://internal.svc.local/test-model", true, []string{"maas.example.com"})
+	u := newMaaSModelRefUnstructured("http://internal.svc.local/test-model", true, []string{"maas.example.com"})
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -92,7 +92,7 @@ func TestMaasModelRefToModel_HostnamesPreferred(t *testing.T) {
 
 func TestMaasModelRefToModel_EndpointHTTPS_StripsPath(t *testing.T) {
 	// Even when the endpoint already uses HTTPS, the path should be stripped.
-	u := newMaaSModelRefUnstructured("default", "https://maas.example.com/v1/chat/completions", true, nil)
+	u := newMaaSModelRefUnstructured("https://maas.example.com/v1/chat/completions", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -110,7 +110,7 @@ func TestMaasModelRefToModel_EndpointHTTPS_StripsPath(t *testing.T) {
 func TestMaasModelRefToModel_EndpointFallback_ClearsForceQuery(t *testing.T) {
 	// When status.endpoint ends with '?', url.Parse sets ForceQuery.
 	// The normalization must clear ForceQuery so no trailing '?' appears.
-	u := newMaaSModelRefUnstructured("default", "http://maas.example.com/test-model?", true, nil)
+	u := newMaaSModelRefUnstructured("http://maas.example.com/test-model?", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -126,7 +126,7 @@ func TestMaasModelRefToModel_EndpointFallback_ClearsForceQuery(t *testing.T) {
 }
 
 func TestMaasModelRefToModel_EndpointFallback_UppercaseHTTP(t *testing.T) {
-	u := newMaaSModelRefUnstructured("default", "HTTP://maas.example.com/test-model", true, nil)
+	u := newMaaSModelRefUnstructured("HTTP://maas.example.com/test-model", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -142,7 +142,7 @@ func TestMaasModelRefToModel_EndpointFallback_UppercaseHTTP(t *testing.T) {
 }
 
 func TestMaasModelRefToModel_EndpointFallback_MixedCaseHTTP(t *testing.T) {
-	u := newMaaSModelRefUnstructured("default", "Http://maas.example.com/test-model", true, nil)
+	u := newMaaSModelRefUnstructured("Http://maas.example.com/test-model", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
@@ -159,7 +159,7 @@ func TestMaasModelRefToModel_EndpointFallback_MixedCaseHTTP(t *testing.T) {
 
 func TestMaasModelRefToModel_EmptyEndpoint(t *testing.T) {
 	// When both httpRouteHostnames and status.endpoint are empty, URL should be nil.
-	u := newMaaSModelRefUnstructured("default", "", true, nil)
+	u := newMaaSModelRefUnstructured("", true, nil)
 	m := models.MaasModelRefToModel(u)
 	if m == nil {
 		t.Fatal("maasModelRefToModel returned nil")
