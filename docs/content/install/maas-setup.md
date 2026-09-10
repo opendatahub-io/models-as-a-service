@@ -74,15 +74,15 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
 Create `maas-default-gateway` in `openshift-ingress` **before** enabling `aigateway.modelsAsAService` in your DataScienceCluster.
 
-`scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
+`scripts/deploy.sh` runs this step automatically in **loadbalancer** mode. Run the script yourself when installing via DataScienceCluster first, using **ocproute** mode, or on disconnected clusters.
 
-| Environment | Command |
-|-------------|---------|
-| ROSA, OSD, cloud (default) | `./scripts/setup-gateway.sh` |
-| On-prem, bare-metal, disconnected | `INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
-| Air-gapped (no GitHub fetch) | `DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
+| Deployment Model | Command |
+|---|---|
+| External LoadBalancer (default) | `./scripts/setup-gateway.sh` |
+| OpenShift Route (any cluster) | `INGRESS_MODE=ocproute ./scripts/setup-gateway.sh` |
+| Air-gapped / No GitHub fetch | `DISCONNECTED=true INGRESS_MODE=ocproute ./scripts/setup-gateway.sh` |
 
-Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (route mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
+Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (loadbalancer mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
 
 **Verify:**
 

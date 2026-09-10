@@ -1536,7 +1536,7 @@ apply_kuadrant_cr() {
     fi
   fi
 
-  INGRESS_MODE="${INGRESS_MODE:-route}" \
+  INGRESS_MODE="${INGRESS_MODE:-loadbalancer}" \
   DISCONNECTED="${DISCONNECTED:-false}" \
   CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
   CERT_NAME="${CERT_NAME:-}" \
