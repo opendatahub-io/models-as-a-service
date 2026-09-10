@@ -45,8 +45,7 @@ spec:
             value: "3"
           # Omit --trust-remote-code: vLLM warns it only applies to HF AutoModel paths; no effect for mounted/OCI weights.
           - name: VLLM_ADDITIONAL_ARGS
-            # --enable-force-include-usage required for token rate limiting: https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage
-            value: "--max-model-len 4096 --enable-force-include-usage"
+            value: "--max-model-len 4096"
         resources:
           requests:
             cpu: "3"
