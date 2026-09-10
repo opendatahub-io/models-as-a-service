@@ -87,9 +87,9 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
     This is the positive case - tenant A's token should work for tenant A's endpoint.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "
@@ -135,9 +135,9 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     different data (proving each instance is correctly configured and not
     leaking data from other tenants).
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "
@@ -222,9 +222,9 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
     This validates that the implementation uses instance configuration (GATEWAY_NAME env var)
     rather than hardcoding a specific gateway name.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "
