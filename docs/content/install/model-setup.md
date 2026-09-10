@@ -62,7 +62,7 @@ kubectl get maasmodelref -n llm facebook-opt-125m-simulated -o jsonpath='{.statu
 
 **Expected output:** `status.phase` should be `Ready` and `status.endpoint` should be a non-empty URL. If either is missing, wait briefly and retry—the controller may still be reconciling (see [Verify Model Deployment](#verify-model-deployment) below).
 
-If your model uses token rate limits (via MaaSSubscription), the model server must be started with `--enable-force-include-usage` so that usage data is returned in every response. Without this, the gateway cannot count tokens and rate limits will not be enforced for streaming chat completion requests. See [Model server must include usage data](../configuration-and-management/quota-and-access-configuration.md#model-server-must-include-usage-data) for details.
+If your model uses token rate limits (via MaaSSubscription), the model server must be started with `--enable-force-include-usage` (vLLM / llm-d) or the equivalent server-specific option so that `usage.total_tokens` is returned in every response, including streaming chat completions. Without this, the gateway cannot count tokens and rate limits will not be enforced. See [Model server must include usage data](../configuration-and-management/quota-and-access-configuration.md#model-server-must-include-usage-data) for details.
 
 ### Step 3: Deploy the MaaSSubscription
 

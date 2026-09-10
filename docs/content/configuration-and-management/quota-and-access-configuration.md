@@ -184,19 +184,15 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
 
 ### Model server must include usage data
 
-Token rate limiting requires the model server to return `usage` information in every response. By default, vLLM and llm-d only include usage in non-streaming responses. For streaming (SSE) responses — the default for many chat completion clients — usage data is omitted unless explicitly enabled.
+Token rate limiting requires the model server to return `usage.total_tokens` in every OpenAI-format response, including streaming chat completions. Without this, the gateway sees 0 tokens consumed and rate limits are never triggered. Embedding endpoints are unaffected because they always return non-streaming JSON with `usage.total_tokens`.
 
-**Start the model server with `--enable-force-include-usage`** to ensure usage data is always returned regardless of whether the client requests it. Without this flag, token rate limits will not be enforced for streaming chat completion requests (the gateway sees 0 tokens consumed).
+How to enable this depends on the model server:
 
-Embedding endpoints are unaffected because they always return non-streaming JSON with `usage.total_tokens`.
+**vLLM / llm-d** — start the server with `--enable-force-include-usage`. This can be passed as a container arg, appended to `VLLM_ADDITIONAL_ARGS`, or added to the `vllm serve` command line. See the [vLLM documentation](https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage) for details.
 
-How to enable, depending on your deployment:
+**TGI (Text Generation Inference)** — consult the TGI documentation for the equivalent server option that includes usage data in streaming responses.
 
-- **vLLM CLI args:** add `--enable-force-include-usage` to the container `args`
-- **vLLM via `VLLM_ADDITIONAL_ARGS`:** add `--enable-force-include-usage` to the env var value
-- **vLLM via shell script:** append `--enable-force-include-usage` to the `vllm serve` command
-
-See [vLLM documentation](https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage) for details.
+**Other servers** — ensure the server includes a `usage` object with `total_tokens` in every `/v1/chat/completions` response, including streamed (SSE) responses. The gateway extracts this field for rate limiting regardless of which server produced it.
 
 !!! note "Namespace requirements"
     Both **MaaSAuthPolicy** and **MaaSSubscription** must be installed in the `models-as-a-service` namespace. Each `modelRefs` entry must specify the `namespace` where the MaaSModelRef lives (e.g. `llm`).
