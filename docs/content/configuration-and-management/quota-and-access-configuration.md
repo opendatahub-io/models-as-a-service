@@ -290,7 +290,7 @@ When a user belongs to multiple groups that each have a subscription, the access
 
 **Cause:** The model server is not returning `usage.total_tokens` in responses. The gateway sees 0 tokens consumed and never triggers the rate limit. This commonly affects streaming chat completion requests.
 
-**Fix:** Start the model server with `--enable-force-include-usage`. See [Model server must include usage data](#model-server-must-include-usage-data) for details on how to enable this for different deployment patterns.
+**Fix:** Ensure the model server returns `usage.total_tokens` in every response. For vLLM / llm-d, start with `--enable-force-include-usage`; for other servers, use the equivalent option. See [Model server must include usage data](#model-server-must-include-usage-data) for server-specific instructions.
 
 ### Policies not enforced
 
