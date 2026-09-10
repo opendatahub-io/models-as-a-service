@@ -35,6 +35,8 @@ spec:
         - --mode
         - random
         - --no-mm-encoder-only
+        # Required for token rate limiting: https://docs.vllm.ai/en/stable/cli/serve/#-enable-force-include-usage-no-enable-force-include-usage
+        - --enable-force-include-usage
         - --ssl-certfile
         - /var/run/kserve/tls/tls.crt
         - --ssl-keyfile
