@@ -1233,6 +1233,27 @@ func (r *AITenantReconciler) ensureTenantAPIKeysRevoked(ctx context.Context, ait
 		return false, errors.New("app namespace is required to revoke tenant API keys")
 	}
 
+	// If no MaasTenantConfig owned by this AITenant exists, the tenant was
+	// never fully provisioned — no maas-api service is running and no API
+	// keys can exist. Skip the revocation Job to avoid blocking deletion
+	// indefinitely against a non-existent service.
+	tenantNamespace := r.tenantNamespaceName(aitenant)
+	var tenantConfig maasv1alpha1.MaasTenantConfig
+	configKey := client.ObjectKey{Namespace: tenantNamespace, Name: maasv1alpha1.MaasTenantConfigInstanceName}
+	if err := r.get(ctx, configKey, &tenantConfig); err != nil {
+		if !isNotFoundError(err) {
+			return false, fmt.Errorf("check MaasTenantConfig for API key revocation: %w", err)
+		}
+		ctrl.LoggerFrom(ctx).Info("skipping API key revocation: MaasTenantConfig not found, tenant was never provisioned",
+			"tenantNamespace", tenantNamespace)
+		return true, nil
+	}
+	if !ownedByAITenant(&tenantConfig, aitenant) {
+		ctrl.LoggerFrom(ctx).Info("skipping API key revocation: MaasTenantConfig belongs to another AITenant",
+			"tenantNamespace", tenantNamespace)
+		return true, nil
+	}
+
 	job := tenantAPIKeyRevocationJob(aitenant, r.AppNamespace)
 	var existing batcv1.Job
 	if err := r.get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
