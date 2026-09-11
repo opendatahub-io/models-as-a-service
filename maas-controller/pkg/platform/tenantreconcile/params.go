@@ -1059,6 +1059,11 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster, beforeCluster, afterCluster}
 	wasmSubFilters := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
 
+	if filterPatchCount > len(clusterByIndex) {
+		return fmt.Errorf("EnvoyFilter configPatches: filter patch count %d exceeds cluster-name mapping count %d",
+			filterPatchCount, len(clusterByIndex))
+	}
+
 	switch {
 	case params.PayloadProcessingRouterExtProcFallback:
 		if filterPatchCount != routerFallbackPatchCount {
