@@ -1773,6 +1773,15 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, t
 	}
 	annotations[aitenantNameAnnotation] = aitenant.Name
 	annotations[aitenantNamespaceAnnotation] = aitenant.Namespace
+	payloadProcessingType := ""
+	if aitenantAnnotations := aitenant.GetAnnotations(); aitenantAnnotations != nil {
+		payloadProcessingType = aitenantAnnotations[tenantreconcile.AnnotationPayloadProcessingType]
+	}
+	if payloadProcessingType != "" {
+		annotations[tenantreconcile.AnnotationPayloadProcessingType] = payloadProcessingType
+	} else {
+		delete(annotations, tenantreconcile.AnnotationPayloadProcessingType)
+	}
 	obj.SetAnnotations(annotations)
 }
 
@@ -1791,6 +1800,7 @@ func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, 
 	removeMapValueIfEqual(&annotations, aitenantNameAnnotation, aitenant.Name)
 	removeMapValueIfEqual(&annotations, aitenantNamespaceAnnotation, aitenant.Namespace)
 	removeMapValueIfEqual(&annotations, aitenantCreatedAnnotation, "true")
+	delete(annotations, tenantreconcile.AnnotationPayloadProcessingType)
 	obj.SetAnnotations(annotations)
 }
 

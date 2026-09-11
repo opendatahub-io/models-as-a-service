@@ -8,6 +8,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -210,4 +211,26 @@ func TestCleanupPayloadProcessingHPA(t *testing.T) {
 		err := cleanupPayloadProcessingHPA(context.Background(), nil, params, logr.Discard())
 		require.NoError(t, err)
 	})
+}
+
+func TestIsIPPResource(t *testing.T) {
+	tests := []struct {
+		name     string
+		gvk      schema.GroupVersionKind
+		resName  string
+		expected bool
+	}{
+		{name: "payload-processing deployment", gvk: GVKDeployment, resName: PayloadProcessingName, expected: true},
+		{name: "payload-pre-processing deployment", gvk: GVKDeployment, resName: PayloadPreProcessingName, expected: true},
+		{name: "payload-processing envoy filter", gvk: GVKEnvoyFilter, resName: PayloadProcessingName, expected: true},
+		{name: "payload-processing plugins configmap", gvk: GVKConfigMap, resName: PayloadProcessingPluginsConfigMapName, expected: true},
+		{name: "maas-api deployment", gvk: GVKDeployment, resName: baseMaaSAPIDeploymentName, expected: false},
+		{name: "gateway default deny policy", gvk: GVKTokenRateLimitPolicy, resName: baseGatewayTokenRateLimitDefaultDenyPolicyName, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isIPPResource(tt.gvk, tt.resName))
+		})
+	}
 }

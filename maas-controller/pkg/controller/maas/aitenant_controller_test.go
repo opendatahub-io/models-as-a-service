@@ -45,6 +45,38 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+func TestApplyAITenantMetadata_PropagatesPayloadProcessingTypeAnnotation(t *testing.T) {
+	g := NewWithT(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "praxis-team",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
+			},
+		},
+	}
+	config := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis-team",
+		},
+	}
+
+	applyAITenantMetadata(config, aitenant, config.Namespace)
+
+	g.Expect(config.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingType,
+		tenantreconcile.PayloadProcessingTypePraxis,
+	))
+
+	aitenant.Annotations = nil
+	applyAITenantMetadata(config, aitenant, config.Namespace)
+	_, ok := config.Annotations[tenantreconcile.AnnotationPayloadProcessingType]
+	g.Expect(ok).To(BeFalse())
+}
+
 func existingAITenantGateway(name string) *gatewayapiv1.Gateway {
 	return &gatewayapiv1.Gateway{
 		TypeMeta: metav1.TypeMeta{
