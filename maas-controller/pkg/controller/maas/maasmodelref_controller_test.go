@@ -28,6 +28,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -58,6 +59,15 @@ var (
 type fakeHandler struct {
 	endpoint string
 	ready    bool
+}
+
+type aliasByBackendHandler struct {
+	fakeHandler
+	aliases map[string]string
+}
+
+func (h *aliasByBackendHandler) ResolveModelAlias(_ context.Context, _ logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
+	return h.aliases[model.Spec.ModelRef.Name], nil
 }
 
 func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
@@ -698,6 +708,57 @@ func TestMaaSModelRefReconciler_DuplicateReconciliation(t *testing.T) {
 		t.Errorf("redundant status update: ResourceVersion changed from %s to %s; "+
 			"second reconcile should skip the status write when nothing changed",
 			rvAfterFirst, rvAfterSecond)
+	}
+}
+
+// TestMaaSModelRefReconciler_StatusConflictIsReturned verifies that a status
+// conflict reaches controller-runtime so the request is retried, and that a
+// subsequent reconcile persists the desired status.
+func TestMaaSModelRefReconciler_StatusConflictIsReturned(t *testing.T) {
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "status-conflict", Namespace: "default"},
+	}
+	statusUpdates := 0
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(model).
+		WithStatusSubresource(model).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResourceName string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if subResourceName == "status" {
+					statusUpdates++
+					if statusUpdates == 1 {
+						return apierrors.NewConflict(
+							schema.GroupResource{Group: maasv1alpha1.GroupVersion.Group, Resource: "maasmodelrefs"},
+							obj.GetName(),
+							errors.New("simulated concurrent status update"),
+						)
+					}
+				}
+				return cl.SubResource(subResourceName).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+
+	if _, err := r.Reconcile(context.Background(), req); !apierrors.IsConflict(err) {
+		t.Fatalf("first Reconcile error = %v, want conflict", err)
+	}
+	if _, err := r.Reconcile(context.Background(), req); err != nil {
+		t.Fatalf("second Reconcile: %v", err)
+	}
+
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(context.Background(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get after retry: %v", err)
+	}
+	if got.Status.Phase != "Invalid" {
+		t.Fatalf("Phase after retry = %q, want Invalid", got.Status.Phase)
+	}
+	if statusUpdates != 2 {
+		t.Fatalf("status updates = %d, want 2", statusUpdates)
 	}
 }
 
@@ -1702,4 +1763,79 @@ func TestEnqueueSiblingsWithAlias(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestAliasChangeReconcilesOldAndNewCollisionSiblings(t *testing.T) {
+	const (
+		testKind = "_test_alias_change_kind"
+		aliasA   = "publishers/default/models/a"
+		aliasB   = "publishers/default/models/b"
+		ns       = "default"
+	)
+
+	aliases := map[string]string{"backend-a": aliasB, "backend-b": aliasA, "backend-c": aliasB}
+	backendHandlerFactories[testKind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &aliasByBackendHandler{
+			fakeHandler: fakeHandler{endpoint: "https://model.example.com", ready: true},
+			aliases:     aliases,
+		}
+	}
+	defer delete(backendHandlerFactories, testKind)
+
+	newModel := func(name, backend, alias string) *maasv1alpha1.MaaSModelRef {
+		return &maasv1alpha1.MaaSModelRef{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Finalizers: []string{maasModelFinalizer}},
+			Spec: maasv1alpha1.MaaSModelSpec{
+				ModelRef: maasv1alpha1.ModelReference{Kind: testKind, Name: backend},
+			},
+			Status: maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: alias},
+		}
+	}
+	modelA := newModel("model-a", "backend-a", aliasA)
+	modelB := newModel("model-b", "backend-b", aliasA)
+	modelC := newModel("model-c", "backend-c", aliasB)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB, modelC).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme}
+	ctx := context.Background()
+
+	// Reconcile the changed model first. Its backend now reports aliasB, so it
+	// immediately detects the collision with model-c.
+	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: client.ObjectKeyFromObject(modelA)}); err != nil {
+		t.Fatalf("reconcile changed model: %v", err)
+	}
+	var changed maasv1alpha1.MaaSModelRef
+	if err := c.Get(ctx, client.ObjectKeyFromObject(modelA), &changed); err != nil {
+		t.Fatalf("get changed model: %v", err)
+	}
+
+	q := &fakeQueue{}
+	r.enqueueSiblingsWithAlias(ctx, &changed, q, aliasA)
+	if len(q.items) != 2 {
+		t.Fatalf("enqueued siblings = %v, want model-b and model-c", q.items)
+	}
+	for _, req := range q.items {
+		if _, err := r.Reconcile(ctx, req); err != nil {
+			t.Fatalf("reconcile sibling %s: %v", req.Name, err)
+		}
+	}
+
+	assertIdentityStatus := func(name string, want metav1.ConditionStatus) {
+		t.Helper()
+		var model maasv1alpha1.MaaSModelRef
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, &model); err != nil {
+			t.Fatalf("get %s: %v", name, err)
+		}
+		condition := apimeta.FindStatusCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+		if condition == nil || condition.Status != want {
+			t.Fatalf("%s identity condition = %#v, want status %s", name, condition, want)
+		}
+	}
+	assertIdentityStatus("model-a", metav1.ConditionFalse)
+	assertIdentityStatus("model-b", metav1.ConditionTrue)
+	assertIdentityStatus("model-c", metav1.ConditionFalse)
 }

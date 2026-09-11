@@ -149,8 +149,7 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	// No finalizer needed — there are no generated resources to clean up.
 	if reflect.DeepEqual(model.Spec, maasv1alpha1.MaaSModelSpec{}) {
 		statusSnapshot := model.Status.DeepCopy()
-		r.updateStatus(ctx, model, "Invalid", "spec is required", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, model, "Invalid", "spec is required", statusSnapshot)
 	}
 
 	// Add finalizer if not present
@@ -167,30 +166,26 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	handler := GetBackendHandler(kind, r)
 	if handler == nil {
 		log.Error(nil, "unknown modelRef kind", "kind", kind)
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind), statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, model, "Failed", fmt.Sprintf("unknown kind: %s", kind), statusSnapshot)
 	}
 
 	if err := handler.ReconcileRoute(ctx, log, model); err != nil {
 		if errors.Is(err, ErrKindNotImplemented) {
-			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 		}
 		if errors.Is(err, ErrHTTPRouteNotFound) {
 			// HTTPRoute doesn't exist yet - this is normal during startup.
 			// Set status to Pending (not Failed). The HTTPRoute watch will trigger reconciliation when the route is created.
 			model.Status.Endpoint = ""
-			r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, r.updateStatus(ctx, model, "Pending", "Waiting for HTTPRoute to be created", statusSnapshot)
 		}
 		if errors.Is(err, ErrTenantResolutionPending) {
 			model.Status.Endpoint = ""
-			r.updateStatus(ctx, model, "Pending", "Waiting for tenant resolution: "+err.Error(), statusSnapshot)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, r.updateStatus(ctx, model, "Pending", "Waiting for tenant resolution: "+err.Error(), statusSnapshot)
 		}
 		log.Error(err, "failed to reconcile HTTPRoute")
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		statusErr := r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to reconcile HTTPRoute: %v", err), statusSnapshot)
+		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 
 	endpoint, runtimeReady, err := handler.Status(ctx, log, model)
@@ -198,14 +193,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		if errors.Is(err, ErrKindNotImplemented) {
 			model.Status.Endpoint = ""
 			model.Status.Phase = "Failed"
-			r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
-			return ctrl.Result{}, nil
+			return ctrl.Result{}, r.updateStatusWithReason(ctx, model, "Failed", fmt.Sprintf("kind not implemented: %s", kind), "Unsupported", statusSnapshot)
 		}
 		log.Error(err, "failed to update model status")
 		model.Status.Endpoint = ""
 		model.Status.Phase = "Failed"
-		r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		statusErr := r.updateStatus(ctx, model, "Failed", fmt.Sprintf("Failed to update model status: %v", err), statusSnapshot)
+		return ctrl.Result{}, errors.Join(err, statusErr)
 	}
 	if model.Spec.EndpointOverride != "" {
 		model.Status.Endpoint = model.Spec.EndpointOverride
@@ -232,8 +226,7 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 	if phase != "Ready" {
 		model.Status.Endpoint = ""
 	}
-	r.updateStatus(ctx, model, phase, message, statusSnapshot)
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.updateStatus(ctx, model, phase, message, statusSnapshot)
 }
 
 // checkGovernanceAttached returns true if there is at least one active
@@ -391,12 +384,12 @@ func (r *MaaSModelRefReconciler) deleteGeneratedPoliciesByLabel(ctx context.Cont
 	return nil
 }
 
-func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string, statusSnapshot *maasv1alpha1.MaaSModelStatus) {
-	r.updateStatusWithReason(ctx, model, phase, message, "", statusSnapshot)
+func (r *MaaSModelRefReconciler) updateStatus(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message string, statusSnapshot *maasv1alpha1.MaaSModelStatus) error {
+	return r.updateStatusWithReason(ctx, model, phase, message, "", statusSnapshot)
 }
 
 // updateStatusWithReason sets Phase and Ready condition; when phase is "Failed", reason overrides the default "ReconcileFailed" (e.g. "Unsupported" for unimplemented kinds).
-func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string, statusSnapshot *maasv1alpha1.MaaSModelStatus) {
+func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, model *maasv1alpha1.MaaSModelRef, phase, message, reason string, statusSnapshot *maasv1alpha1.MaaSModelStatus) error {
 	model.Status.Phase = phase
 
 	status := metav1.ConditionTrue
@@ -423,14 +416,13 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 	})
 
 	if equality.Semantic.DeepEqual(*statusSnapshot, model.Status) {
-		return
+		return nil
 	}
 
 	if err := r.Status().Update(ctx, model); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
-		log.Error(err, "failed to update MaaSModelRef status", "name", model.Name)
-		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
+		return fmt.Errorf("update MaaSModelRef %s/%s status: %w", model.Namespace, model.Name, err)
 	}
+	return nil
 }
 
 // llmisvcReadyChangedPredicate passes Create/Delete events and Update events
