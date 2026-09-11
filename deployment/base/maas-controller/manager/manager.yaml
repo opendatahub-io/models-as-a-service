@@ -41,6 +41,7 @@ spec:
           - --enable-tenant-namespace-discovery
           - --metadata-cache-ttl=60
           - --authz-cache-ttl=60
+          - --log-format=otel-json
         env:
           - name: CONTROLLER_NAMESPACE
             valueFrom:

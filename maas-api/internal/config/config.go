@@ -50,6 +50,7 @@ type Config struct {
 	TLS     TLSConfig
 
 	DebugMode bool
+	LogFormat logger.Format
 
 	// DBConnectionURL is the PostgreSQL connection URL.
 	// Format: postgresql://user:password@host:port/database
@@ -119,6 +120,7 @@ func Load() *Config {
 	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
 	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
 	discoveryEnableHTTP2, _ := env.GetBool("DISCOVERY_ENABLE_HTTP2", false)
+	logFormat := logger.Format(env.GetString("LOG_FORMAT", string(logger.FormatZap)))
 	otelInsecure, _ := env.GetBool("OTEL_EXPORTER_OTLP_INSECURE", false)
 	otelSampleRate := 1.0
 	if rateStr := env.GetString("OTEL_TRACES_SAMPLE_RATE", ""); rateStr != "" {
@@ -148,6 +150,7 @@ func Load() *Config {
 		Secure:                    secure,
 		TLS:                       loadTLSConfig(),
 		DebugMode:                 debugMode,
+		LogFormat:                 logFormat,
 		DBConnectionURL:           "", // Loaded from K8s secret via LoadDatabaseURL()
 		APIKeyMaxExpirationDays:   maxExpirationDays,
 		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
@@ -185,6 +188,14 @@ func (c *Config) bindFlags(fs *flag.FlagSet) {
 	fs.StringVar(&c.deprecatedHTTPPort, "port", c.deprecatedHTTPPort, "DEPRECATED: use --address with --secure=false")
 
 	fs.BoolVar(&c.DebugMode, "debug", c.DebugMode, "Enable debug mode")
+	fs.Func("log-format", "Log output format (one of 'zap' or 'otel-json').", func(value string) error {
+		format, err := logger.ParseFormat(value)
+		if err != nil {
+			return err
+		}
+		c.LogFormat = format
+		return nil
+	})
 	fs.BoolVar(&c.MetricsSecure, "metrics-secure", c.MetricsSecure,
 		"Serve metrics via HTTPS with authentication and authorization (default: true)")
 	fs.StringVar(&c.MetricsCertDir, "metrics-cert-dir", c.MetricsCertDir,
@@ -199,6 +210,12 @@ func (c *Config) Validate() error {
 	if err := c.handleDeprecatedFlags(); err != nil {
 		return err
 	}
+
+	logFormat, err := logger.ParseFormat(string(c.LogFormat))
+	if err != nil {
+		return err
+	}
+	c.LogFormat = logFormat
 
 	// Validate required fields
 	if c.DBConnectionURL == "" {

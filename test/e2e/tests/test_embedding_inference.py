@@ -43,20 +43,116 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_token_rate_limit_policy,
-    embeddings,
 )
 
 log = logging.getLogger(__name__)
+
+pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worker_embedding_context(request):
+    """Route parallel embedding tests through the worker-owned model and API."""
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        ensure_worker_models,
+        serial_only_selection,
+    )
+
+    if serial_only_selection(request):
+        yield
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    ensure_worker_models(context, (context.embedding_model_ref,))
+    original_values = {
+        name: globals()[name]
+        for name in (
+            "EMBEDDING_MODEL_NAME",
+            "EMBEDDING_MODEL_PATH",
+            "EMBEDDING_MODEL_REF",
+            "EMBEDDING_MODEL_CANONICAL_ID",
+            "MODEL_NAMESPACE",
+        )
+    }
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+
+    model_name = f"e2e/{context.embedding_model_ref}"
+    globals().update(
+        {
+            "EMBEDDING_MODEL_NAME": model_name,
+            "EMBEDDING_MODEL_PATH": (
+                f"/{context.model_namespace}/{context.embedding_model_ref}"
+            ),
+            "EMBEDDING_MODEL_REF": context.embedding_model_ref,
+            "EMBEDDING_MODEL_CANONICAL_ID": (
+                f"publishers/{context.model_namespace}/models/{model_name}"
+            ),
+            "MODEL_NAMESPACE": context.model_namespace,
+        }
+    )
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+    try:
+        with activate_worker_tenant(context):
+            yield
+    finally:
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
 
 
 class TestEmbeddingPathRouting:
     """Path-based and BBR embedding inference (read-only, uses existing fixtures)."""
 
-    pytestmark = pytest.mark.xdist_group("api_keys")
-
-    def test_embedding_path_based_200(self, model_v1: str, api_key_headers: dict, model_name: str):
+    def test_embedding_path_based_200(self):
         """POST /{ns}/{model}/v1/embeddings returns valid embedding response."""
-        r = embeddings("The quick brown fox", model_v1, api_key_headers, model_name=model_name)
+        auth_policy_name = "e2e-embedding-path-auth"
+        subscription_name = "e2e-embedding-path-sub"
+        try:
+            _create_test_auth_policy(
+                name=auth_policy_name,
+                model_refs=[EMBEDDING_MODEL_REF],
+                groups=["system:authenticated"],
+            )
+            _create_test_subscription(
+                name=subscription_name,
+                model_refs=[EMBEDDING_MODEL_REF],
+                groups=["system:authenticated"],
+                token_limit=1000,
+                window="1m",
+            )
+            _wait_for_maas_auth_policy_phase(
+                auth_policy_name, timeout=90, require_auth_policies=False
+            )
+            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
+
+            oc_token = _get_cluster_token()
+            api_key = _create_api_key(
+                oc_token,
+                name=f"e2e-emb-path-{uuid.uuid4().hex[:8]}",
+                subscription=subscription_name,
+            )
+            r = _embedding_inference(
+                api_key,
+                path=EMBEDDING_MODEL_PATH,
+                model_name=EMBEDDING_MODEL_NAME,
+            )
+        finally:
+            _delete_cr("maassubscription", subscription_name)
+            _delete_cr("maasauthpolicy", auth_policy_name)
         log.info(f"[embedding] POST /v1/embeddings -> {r.status_code}")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
         data = r.json()
@@ -127,7 +223,7 @@ class TestEmbeddingGovernance:
     Uses the dedicated e2e-embedding-simulated fixture for isolation.
     """
 
-    pytestmark = [pytest.mark.serial, pytest.mark.xdist_group("api_keys")]
+    pytestmark = pytest.mark.serial
 
     def test_embedding_default_deny_403(self):
         """Embedding model with no auth policy or subscription gets 403."""

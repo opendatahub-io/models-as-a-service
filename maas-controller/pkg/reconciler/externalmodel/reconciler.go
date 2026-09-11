@@ -19,12 +19,12 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -115,7 +115,8 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 
 // Reconcile handles create/update/delete of ExternalModel CRs.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log.FromContext(ctx).Info("Reconciling ExternalModel", "namespace", req.Namespace, "name", req.Name)
+	ctx = oteljson.IntoContext(ctx)
+	oteljson.FromContext(ctx).Info("Reconciling ExternalModel", "namespace", req.Namespace, "name", req.Name)
 
 	extModel := &maasv1alpha1.ExternalModel{}
 	if err := r.Get(ctx, req.NamespacedName, extModel); err != nil {
@@ -135,7 +136,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 	if superseded, err := r.isSupersededByInference(ctx, req.NamespacedName); err != nil {
 		return ctrl.Result{}, err
 	} else if superseded {
-		log.FromContext(ctx).Info("inference ExternalModel exists, tearing down legacy networking",
+		oteljson.FromContext(ctx).Info("inference ExternalModel exists, tearing down legacy networking",
 			"name", req.Name, "namespace", req.Namespace)
 		if _, err := r.teardownLegacyChildren(ctx, extModel); err != nil {
 			return ctrl.Result{}, err
@@ -148,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("invalid ExternalModel annotations: %w", err)
 	}
 
-	logger := r.Log.WithValues("externalmodel", req.NamespacedName)
+	logger := oteljson.FromContext(ctx).WithValues("externalmodel", req.NamespacedName)
 	logger.Info("Reconciling ExternalModel",
 		"provider", extModel.Spec.Provider,
 		"endpoint", extModel.Spec.Endpoint,
@@ -368,7 +369,7 @@ func (r *Reconciler) isSupersededByInference(ctx context.Context, key types.Name
 // ServiceEntry, DestinationRule, HTTPRoute) that were created by this reconciler
 // for the given ExternalModel, then returns a no-requeue result.
 func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv1alpha1.ExternalModel) (ctrl.Result, error) {
-	logger := log.FromContext(ctx)
+	logger := oteljson.FromContext(ctx)
 	resourceName := modelnaming.ExternalModelResourceName(extModel.Name)
 	ns := extModel.Namespace
 

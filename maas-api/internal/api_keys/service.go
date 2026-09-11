@@ -88,15 +88,15 @@ func NewServiceWithLogger(store MetadataStore, cfg *config.Config, sub Subscript
 // CreateAPIKeyResponse is returned when creating an API key.
 // Per Feature Refinement "Keys Shown Only Once": plaintext key is ONLY returned at creation time.
 type CreateAPIKeyResponse struct {
-	Key          string  `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
-	KeyPrefix    string  `json:"keyPrefix"` // Display prefix for UI
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Subscription string  `json:"subscription"` // MaaSSubscription name bound to this key
-	CreatedAt    string  `json:"createdAt"`
-	ExpiresAt    *string `json:"expiresAt,omitempty"` // RFC3339 timestamp
-	Ephemeral    bool    `json:"ephemeral"`           // Short-lived programmatic key
-	Labels       map[string]string `json:"labels,omitempty"` // Structured key-value pairs for API key metadata
+	Key          string            `json:"key"`       // Plaintext key - SHOWN ONCE, NEVER STORED
+	KeyPrefix    string            `json:"keyPrefix"` // Display prefix for UI
+	ID           string            `json:"id"`
+	Name         string            `json:"name"`
+	Subscription string            `json:"subscription"` // MaaSSubscription name bound to this key
+	CreatedAt    string            `json:"createdAt"`
+	ExpiresAt    *string           `json:"expiresAt,omitempty"` // RFC3339 timestamp
+	Ephemeral    bool              `json:"ephemeral"`           // Short-lived programmatic key
+	Labels       map[string]string `json:"labels,omitempty"`    // Structured key-value pairs for API key metadata
 }
 
 // CreateAPIKey creates a new API key (sk-oai-* format).
@@ -171,7 +171,7 @@ func (s *Service) CreateAPIKey(
 		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
 	}
 	if selectErr != nil {
-		s.logger.Warn("Subscription selection failed when creating API key",
+		s.logger.WithContext(ctx).Warn("Subscription selection failed when creating API key",
 			"user", logger.RedactValue(username),
 			"requestedSubscription", requestedSubscription,
 			"error", selectErr,
@@ -191,7 +191,7 @@ func (s *Service) CreateAPIKey(
 		return nil, fmt.Errorf("failed to store API key: %w", err)
 	}
 
-	s.logger.Info("Created API key", "user", logger.RedactValue(username), "groups", userGroups, "id", keyID, "ephemeral", ephemeral)
+	s.logger.WithContext(ctx).Info("Created API key", "user", logger.RedactValue(username), "groups", userGroups, "id", keyID, "ephemeral", ephemeral)
 
 	// Return plaintext to user - THIS IS THE ONLY TIME IT'S AVAILABLE
 	formatted := expiresAt.Format(time.RFC3339)
@@ -268,7 +268,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 			// Recover from panics to prevent crashing the entire process
 			defer func() {
 				if r := recover(); r != nil {
-					s.logger.Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
+					s.logger.WithContext(ctx).Error("Panic in UpdateLastUsed goroutine", "panic", r, "key_id", metadata.ID)
 				}
 			}()
 
@@ -282,7 +282,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 				// if this goroutine was delayed by the scheduler after its context expired.
 				s.clearDebounceSlot(metadata.ID, slot)
 				// Log warning but don't fail validation - this is best-effort tracking
-				s.logger.Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
+				s.logger.WithContext(ctx).Warn("Failed to update last_used_at", "key_id", metadata.ID, "error", err)
 			}
 		}()
 	}
@@ -299,7 +299,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	// This prevents legacy keys, bad migrations, or manual writes with empty subscription
 	// from bypassing the "subscription bound at mint" access control invariant
 	if strings.TrimSpace(metadata.Subscription) == "" {
-		s.logger.Warn("API key missing bound subscription", "key_id", metadata.ID)
+		s.logger.WithContext(ctx).Warn("API key missing bound subscription", "key_id", metadata.ID)
 		return &ValidationResult{
 			Valid:  false,
 			Reason: "key has no subscription bound",
@@ -310,7 +310,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	// Database should always return valid UUIDs, but verify to prevent malformed IDs
 	// from being used in cache keys or authorization decisions
 	if _, err := uuid.Parse(metadata.ID); err != nil {
-		s.logger.Error("API key has invalid UUID format", "key_id", metadata.ID, "error", err)
+		s.logger.WithContext(ctx).Error("API key has invalid UUID format", "key_id", metadata.ID, "error", err)
 		return nil, fmt.Errorf("database integrity error: invalid key ID format: %w", err)
 	}
 
@@ -450,6 +450,6 @@ func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
 	if err != nil {
 		return 0, fmt.Errorf("cleanup failed: %w", err)
 	}
-	s.logger.Info("Ephemeral key cleanup completed", "deletedCount", count)
+	s.logger.WithContext(ctx).Info("Ephemeral key cleanup completed", "deletedCount", count)
 	return count, nil
 }

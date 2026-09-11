@@ -103,6 +103,7 @@ nav:
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md
+    - OTel JSON stdout: observability/otel-json-stdout.md
     - Metrics & Dashboards: observability/metrics-and-dashboards.md
     - Operations: observability/operations.md
   - User Guide:

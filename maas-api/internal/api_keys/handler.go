@@ -58,7 +58,19 @@ type MetricsRecorder interface {
 	RecordRejection(reason string)
 }
 
+func (h *Handler) withContext(c *gin.Context) *Handler {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.logger = requestLogger
+	} else {
+		requestHandler.logger = h.logger.WithContext(c.Request.Context())
+	}
+	return &requestHandler
+}
+
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.JSON(http.StatusOK, gin.H{
 		"max_expiration_days":      h.service.GetMaxExpirationDays(),
 		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
@@ -137,6 +149,8 @@ func (h *Handler) recordTokenMint(tenant, result string) {
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
 	tokenID := c.Param("id")
 	if tokenID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID required"})
@@ -203,6 +217,8 @@ type CreateAPIKeyRequest struct {
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
 	// API keys are inference credentials, not credentials for minting more API keys.
 	// Reject them here, even if the gateway has already authenticated the key, so a
 	// subscription-scoped key cannot recover the broader permissions of the user and
@@ -390,6 +406,8 @@ type ValidateAPIKeyRequest struct {
 // This endpoint is called by Authorino via HTTP external auth callback
 // Per Feature Refinement "Gateway Integration (Inference Flow)".
 func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
+	h = h.withContext(c)
+
 	var req ValidateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
@@ -432,6 +450,8 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
 // Revokes a specific API key by changing its status to 'revoked'.
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})
@@ -503,6 +523,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 // When no user context is present (ExtractUserInfoOptional did not set one),
 // an empty list is returned gracefully.
 func (h *Handler) SearchAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
@@ -655,6 +677,8 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 // Deletes expired ephemeral API keys. Called by CronJob.
 // Access is restricted at the network level via NetworkPolicy.
 func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	count, err := h.service.CleanupExpiredEphemeral(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to cleanup expired ephemeral keys", "error", err)
@@ -671,6 +695,8 @@ func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
 // RevokeTenantAPIKeys handles DELETE /internal/v1/tenants/:tenant/api-keys.
 // Revokes all active API keys for this maas-api instance's tenant.
 func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	tenant := strings.TrimSpace(c.Param("tenant"))
 	count, err := h.service.RevokeTenantAPIKeys(c.Request.Context(), tenant)
 	if err != nil {
@@ -698,6 +724,8 @@ func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
 // Supports dryRun=true to preview how many keys would be revoked without mutating.
 // Subscription-scoped revocation is admin-only.
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	var req BulkRevokeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
