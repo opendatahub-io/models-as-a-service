@@ -69,7 +69,7 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
             grpc_service:
@@ -129,7 +129,7 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
             grpc_service:
@@ -189,7 +189,7 @@ spec:
               request_header_mode: "SEND"
               response_header_mode: "SEND"
               request_body_mode: "FULL_DUPLEX_STREAMED"
-              response_body_mode: "FULL_DUPLEX_STREAMED"
+              response_body_mode: "NONE"
               request_trailer_mode: "SEND"
               response_trailer_mode: "SEND"
             grpc_service:
