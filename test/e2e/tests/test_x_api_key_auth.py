@@ -146,6 +146,7 @@ pytestmark = [
         reason=f"IPP ExternalModel CRD ({IPP_EXTERNAL_MODEL_CRD}) not installed",
     ),
     pytest.mark.xdist_group("api_keys"),
+    pytest.mark.serial,
 ]
 
 

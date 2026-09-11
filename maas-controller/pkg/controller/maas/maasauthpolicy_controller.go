@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -92,6 +93,10 @@ type MaaSAuthPolicyReconciler struct {
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
+
+	// ippGatewaySyncQueue retries default-gateway x-api-key sync when an IPP ExternalModel
+	// event cannot be applied inline (transient API errors or empty MaaSAuthPolicy list).
+	ippGatewaySyncQueue workqueue.TypedRateLimitingInterface[struct{}]
 }
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
@@ -1375,34 +1380,40 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	}
 	existingFound := err == nil
 
-	// For tenant-specific gateways, fetch the Gateway so we can set an
-	// OwnerReference. This ensures Kubernetes garbage collection automatically
-	// deletes the AuthPolicy when the Gateway is deleted (e.g., via AITenant
-	// cascade deletion), preventing orphaned gateway-scoped AuthPolicies.
+	// Fetch the Gateway so we can set an OwnerReference and delete stale managed
+	// AuthPolicies when the Gateway no longer exists. Tenant gateways must exist
+	// before creating an AuthPolicy; the default gateway may be reconciled before
+	// the Gateway CR is created (OwnerReference is added once it appears).
 	var gateway *gatewayapiv1.Gateway
-	if isTenantGateway {
-		gateway = &gatewayapiv1.Gateway{}
-		gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
-		if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
-			if apierrors.IsNotFound(gwErr) {
-				// Gateway is gone. If a managed tenant AuthPolicy still exists,
-				// delete it to prevent orphaned resources.
-				if existingFound && isManaged(existing) {
+	gateway = &gatewayapiv1.Gateway{}
+	gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
+	if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
+		if apierrors.IsNotFound(gwErr) {
+			if existingFound && isManaged(existing) {
+				// Tenant gateways: always clean up orphaned AuthPolicies when the Gateway is gone.
+				// Default gateway: only clean up if the AuthPolicy was previously linked to a
+				// Gateway via OwnerReference (orphan from a deleted Gateway). During initial
+				// install the Gateway CR may not exist yet; in that case we must not delete the
+				// AuthPolicy we are about to create or update.
+				if isTenantGateway || hasGatewayOwnerReference(existing) {
 					if delErr := r.Delete(ctx, existing); delErr != nil {
-						return false, fmt.Errorf("failed to delete stale tenant gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
+						return false, fmt.Errorf("failed to delete stale gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
 					}
-					log.Info("deleted stale tenant gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
+					log.Info("deleted stale gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
+					existingFound = false
 				}
-				// Nothing to create or update without a Gateway.
+			}
+			if isTenantGateway {
 				return false, nil
 			}
+			gateway = nil
+		} else {
 			return false, fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, gwErr)
 		}
 	}
 
 	if !existingFound {
-		// Set OwnerReference on the new AuthPolicy for tenant gateways.
-		if isTenantGateway {
+		if gateway != nil {
 			setGatewayOwnerReference(gateway, gwPolicy)
 		}
 		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
@@ -1424,9 +1435,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 		return false, fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
 	}
-	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
-	// (handles upgrade from pre-ownerref versions).
-	if isTenantGateway {
+	// Ensure OwnerReferences are set on existing gateway AuthPolicies when the
+	// Gateway exists (handles upgrade from pre-ownerref versions).
+	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
 	if specMatchesDesired(spec, currentSpec) {
@@ -2003,6 +2014,14 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// deleting a CR with apiFormat=messages re-runs discoverXAPIKeyNeeded and
 	// adds/removes the x-api-key identity source from the gateway AuthPolicy.
 	// The CRD may not be installed, so the watch is conditional.
+	r.ippGatewaySyncQueue = workqueue.NewTypedRateLimitingQueueWithConfig(
+		workqueue.DefaultTypedControllerRateLimiter[struct{}](),
+		workqueue.TypedRateLimitingQueueConfig[struct{}]{Name: "ipp-gateway-x-api-key-sync"},
+	)
+	if err := mgr.Add(manager.RunnableFunc(r.runIPPGatewaySyncWorker)); err != nil {
+		return fmt.Errorf("failed to register IPP gateway sync worker: %w", err)
+	}
+
 	const ippExternalModelCRD = "externalmodels.inference.opendatahub.io"
 	if crdExists(context.Background(), mgr.GetAPIReader(), ippExternalModelCRD) {
 		ippExternalModel := &unstructured.Unstructured{}
@@ -2133,6 +2152,59 @@ func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Co
 	return requests
 }
 
+func isRetryableAPIError(err error) bool {
+	return apierrors.IsTooManyRequests(err) ||
+		apierrors.IsTimeout(err) ||
+		apierrors.IsServerTimeout(err) ||
+		apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsConflict(err)
+}
+
+func (r *MaaSAuthPolicyReconciler) scheduleDefaultGatewayXAPIKeySync() {
+	if r.ippGatewaySyncQueue != nil {
+		r.ippGatewaySyncQueue.AddRateLimited(struct{}{})
+	}
+}
+
+func (r *MaaSAuthPolicyReconciler) runIPPGatewaySyncWorker(ctx context.Context) error {
+	log := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("worker", "ipp-gateway-sync")
+	go func() {
+		<-ctx.Done()
+		r.ippGatewaySyncQueue.ShutDown()
+	}()
+	for {
+		item, shutdown := r.ippGatewaySyncQueue.Get()
+		if shutdown {
+			return nil
+		}
+		func() {
+			defer r.ippGatewaySyncQueue.Done(item)
+			if err := r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, log); err != nil {
+				log.Error(err, "failed to sync default gateway AuthPolicy for IPP ExternalModel change")
+				r.ippGatewaySyncQueue.AddRateLimited(item)
+				return
+			}
+			r.ippGatewaySyncQueue.Forget(item)
+		}()
+	}
+}
+
+func (r *MaaSAuthPolicyReconciler) enqueueMaaSAuthPoliciesInNamespace(ctx context.Context, namespace string) []reconcile.Request {
+	if namespace == "" {
+		return nil
+	}
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList, client.InNamespace(namespace)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for IPP ExternalModel fallback enqueue", "namespace", namespace)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, p := range policyList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return requests
+}
+
 // syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery updates the default gateway AuthPolicy
 // so authentication rules reflect current IPP ExternalModel-driven x-api-key discovery.
 func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx context.Context, log logr.Logger) error {
@@ -2155,13 +2227,22 @@ func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscove
 func (r *MaaSAuthPolicyReconciler) mapIPPExternalModelToMaaSAuthPolicies(ctx context.Context, _ client.Object) []reconcile.Request {
 	log := ctrl.LoggerFrom(ctx)
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
-	if err := r.List(ctx, policyList); err != nil {
-		log.Error(err, "failed to list MaaSAuthPolicy resources for IPP ExternalModel change")
-		return nil
+	listErr := retry.OnError(retry.DefaultBackoff, isRetryableAPIError, func() error {
+		policyList.Items = nil
+		return r.List(ctx, policyList)
+	})
+	if listErr != nil {
+		log.Error(listErr, "failed to list MaaSAuthPolicy resources for IPP ExternalModel change")
+		r.scheduleDefaultGatewayXAPIKeySync()
+		return r.enqueueMaaSAuthPoliciesInNamespace(ctx, r.TenantNamespace)
 	}
 	if len(policyList.Items) == 0 {
-		if err := r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, log); err != nil {
-			log.Error(err, "failed to sync default gateway AuthPolicy for IPP ExternalModel change")
+		syncErr := retry.OnError(retry.DefaultBackoff, func(err error) bool { return err != nil }, func() error {
+			return r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, log)
+		})
+		if syncErr != nil {
+			log.Error(syncErr, "failed to sync default gateway AuthPolicy for IPP ExternalModel change")
+			r.scheduleDefaultGatewayXAPIKeySync()
 		}
 		return nil
 	}
@@ -2273,6 +2354,15 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 		}
 	}
 	return requests
+}
+
+func hasGatewayOwnerReference(obj metav1.Object) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind == "Gateway" && ref.APIVersion == gatewayapiv1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // setGatewayOwnerReference sets an OwnerReference on the dependent object pointing to

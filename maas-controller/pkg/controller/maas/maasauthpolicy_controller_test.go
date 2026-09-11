@@ -30,6 +30,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -2723,14 +2724,29 @@ func TestMapIPPExternalModelToMaaSAuthPolicies(t *testing.T) {
 			"spec": baseSpec,
 		}}
 		gwPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		gateway := &gatewayapiv1.Gateway{
+			TypeMeta: metav1.TypeMeta{
+				APIVersion: gatewayapiv1.GroupVersion.String(),
+				Kind:       "Gateway",
+			},
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "maas-default-gateway",
+				Namespace: gatewayNS,
+				UID:       "ipp-sync-gw-uid",
+			},
+		}
 
 		c := fake.NewClientBuilder().
 			WithScheme(scheme).
 			WithRESTMapper(testRESTMapper()).
-			WithObjects(extModel, gwPolicy).
+			WithObjects(extModel, gwPolicy, gateway).
 			Build()
 		r.Client = c
 		r.Scheme = scheme
+		r.ippGatewaySyncQueue = workqueue.NewTypedRateLimitingQueueWithConfig(
+			workqueue.DefaultTypedControllerRateLimiter[struct{}](),
+			workqueue.TypedRateLimitingQueueConfig[struct{}]{Name: "ipp-gateway-x-api-key-sync-test"},
+		)
 
 		reqs := r.mapIPPExternalModelToMaaSAuthPolicies(context.Background(), extModel)
 		if len(reqs) != 0 {
@@ -2911,10 +2927,10 @@ func TestMaaSAuthPolicyReconciler_TenantGateway_OwnerReference(t *testing.T) {
 	}
 }
 
-// TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference verifies that the controller
-// does NOT set an OwnerReference on the default gateway AuthPolicy. The default gateway
-// lifecycle is managed independently and should not be subject to cascade deletion.
-func TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference(t *testing.T) {
+// TestMaaSAuthPolicyReconciler_DefaultGateway_OwnerReference verifies that the controller
+// sets an OwnerReference on the default gateway AuthPolicy so stale policies are garbage
+// collected when the Gateway is replaced or deleted.
+func TestMaaSAuthPolicyReconciler_DefaultGateway_OwnerReference(t *testing.T) {
 	const (
 		modelName      = "llm"
 		namespace      = "default"
@@ -2928,11 +2944,22 @@ func TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference(t *testing.T) 
 	route := newHTTPRoute(httpRouteName, namespace)
 	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
 		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+	gateway := &gatewayapiv1.Gateway{
+		TypeMeta: metav1.TypeMeta{
+			APIVersion: gatewayapiv1.GroupVersion.String(),
+			Kind:       "Gateway",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      gatewayName,
+			Namespace: gatewayNS,
+			UID:       "default-gw-uid-12345",
+		},
+	}
 
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, maasPolicy).
+		WithObjects(model, route, maasPolicy, gateway).
 		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
@@ -2949,17 +2976,18 @@ func TestMaaSAuthPolicyReconciler_DefaultGateway_NoOwnerReference(t *testing.T) 
 		t.Fatalf("Reconcile: unexpected error: %v", err)
 	}
 
-	// Verify the default gateway AuthPolicy exists
 	ap := &unstructured.Unstructured{}
 	ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 	if err := c.Get(context.Background(), types.NamespacedName{Name: maasGatewayAuthPolicyName, Namespace: gatewayNS}, ap); err != nil {
 		t.Fatalf("Get default gateway AuthPolicy: %v", err)
 	}
 
-	// Default gateway AuthPolicy must NOT have OwnerReferences
 	ownerRefs := ap.GetOwnerReferences()
-	if len(ownerRefs) != 0 {
-		t.Errorf("default gateway AuthPolicy should have no OwnerReferences, got %d: %v", len(ownerRefs), ownerRefs)
+	if len(ownerRefs) != 1 {
+		t.Fatalf("default gateway AuthPolicy should have 1 OwnerReference, got %d: %v", len(ownerRefs), ownerRefs)
+	}
+	if ownerRefs[0].Name != gatewayName || ownerRefs[0].UID != gateway.UID {
+		t.Errorf("OwnerReference = %#v, want Gateway %s uid %s", ownerRefs[0], gatewayName, gateway.UID)
 	}
 }
 
