@@ -130,6 +130,7 @@ func tenantAssociationIndexer(obj client.Object) []string {
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	log := oteljson.FromContext(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 
 	model := &maasv1alpha1.MaaSModelRef{}

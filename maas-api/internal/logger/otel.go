@@ -2,7 +2,11 @@ package logger
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"os"
+	"strings"
+	"time"
 
 	"go.opentelemetry.io/otel/trace"
 	"go.uber.org/zap"
@@ -10,6 +14,28 @@ import (
 )
 
 const defaultServiceName = "maas-api"
+
+// Format selects the log output format.
+type Format string
+
+const (
+	// FormatZap preserves the existing zap output.
+	FormatZap Format = "zap"
+	// FormatOTelJSON emits logs using the OpenTelemetry Logs Data Model.
+	FormatOTelJSON Format = "otel-json"
+)
+
+// ParseFormat validates a log format. The empty value preserves legacy output.
+func ParseFormat(value string) (Format, error) {
+	switch Format(value) {
+	case "", FormatZap:
+		return FormatZap, nil
+	case FormatOTelJSON:
+		return FormatOTelJSON, nil
+	default:
+		return "", fmt.Errorf("unsupported log format %q", value)
+	}
+}
 
 // EncoderConfig returns a zap encoder config that emits OTel Logs Data Model
 // field names on stdout JSON records.
@@ -23,10 +49,15 @@ func EncoderConfig() zapcore.EncoderConfig {
 		StacktraceKey:  "stacktrace",
 		LineEnding:     zapcore.DefaultLineEnding,
 		EncodeLevel:    EncodeSeverityText,
-		EncodeTime:     zapcore.RFC3339NanoTimeEncoder,
+		EncodeTime:     EncodeTime,
 		EncodeDuration: zapcore.MillisDurationEncoder,
 		EncodeCaller:   zapcore.ShortCallerEncoder,
 	}
+}
+
+// EncodeTime emits RFC 3339 timestamps in UTC.
+func EncodeTime(value time.Time, enc zapcore.PrimitiveArrayEncoder) {
+	enc.AppendString(value.UTC().Format(time.RFC3339Nano))
 }
 
 // EncodeSeverityText maps zap levels to OTel severity_text values.
@@ -40,9 +71,9 @@ func SeverityText(l zapcore.Level) string {
 	case l >= zapcore.FatalLevel:
 		return "FATAL"
 	case l >= zapcore.PanicLevel:
-		return "ERROR3"
+		return "PANIC"
 	case l >= zapcore.DPanicLevel:
-		return "ERROR2"
+		return "DPANIC"
 	case l >= zapcore.ErrorLevel:
 		return "ERROR"
 	case l >= zapcore.WarnLevel:
@@ -74,10 +105,21 @@ func SeverityNumber(l zapcore.Level) int {
 	}
 }
 
-// ServiceName returns OTEL_SERVICE_NAME or fallback.
+// ServiceName follows the OTel SDK environment precedence or returns fallback.
 func ServiceName(fallback string) string {
-	if name := os.Getenv("OTEL_SERVICE_NAME"); name != "" {
-		return name
+	if value := os.Getenv("OTEL_SERVICE_NAME"); value != "" {
+		return value
+	}
+	for item := range strings.SplitSeq(os.Getenv("OTEL_RESOURCE_ATTRIBUTES"), ",") {
+		key, value, ok := strings.Cut(item, "=")
+		if !ok {
+			continue
+		}
+		decodedKey, keyErr := url.PathUnescape(strings.TrimSpace(key))
+		decodedValue, valueErr := url.PathUnescape(strings.TrimSpace(value))
+		if keyErr == nil && valueErr == nil && decodedKey == "service.name" && decodedValue != "" {
+			return decodedValue
+		}
 	}
 	return fallback
 }
@@ -96,7 +138,7 @@ func (c *otelCore) With(fields []zapcore.Field) zapcore.Core { //nolint:ireturn 
 }
 
 func (c *otelCore) Check(ent zapcore.Entry, ce *zapcore.CheckedEntry) *zapcore.CheckedEntry {
-	if c.Enabled(ent.Level) {
+	if c.Core.Check(ent, nil) != nil {
 		return ce.AddCore(ent, c)
 	}
 	return ce

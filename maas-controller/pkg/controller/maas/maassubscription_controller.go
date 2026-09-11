@@ -343,6 +343,7 @@ func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses 
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	log := oteljson.FromContext(ctx).WithValues("MaaSSubscription", req.NamespacedName)
 
 	subscription := &maasv1alpha1.MaaSSubscription{}
@@ -1175,7 +1176,7 @@ func (r *MaaSSubscriptionReconciler) mapAITenantToMaaSSubscriptions(ctx context.
 	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.DefaultTenantNamespace)
 	subList := &maasv1alpha1.MaaSSubscriptionList{}
 	if err := r.List(ctx, subList, client.InNamespace(tenantNamespace)); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription resources for AITenant change",
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSSubscription resources for AITenant change",
 			"tenantNamespace", tenantNamespace,
 			"aitenant", obj.GetNamespace()+"/"+obj.GetName())
 		return nil
@@ -1229,7 +1230,7 @@ func (r *MaaSSubscriptionReconciler) mapNamespaceToMaaSSubscriptions(ctx context
 	}
 	subList := &maasv1alpha1.MaaSSubscriptionList{}
 	if err := r.List(ctx, subList, client.InNamespace(ns)); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSSubscription for namespace label change", "namespace", ns)
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSSubscription for namespace label change", "namespace", ns)
 		return nil
 	}
 	requests := make([]reconcile.Request, len(subList.Items))

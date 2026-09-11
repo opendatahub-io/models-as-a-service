@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -32,13 +33,51 @@ func Development() *Logger {
 // It supports different log levels (DEBUG, INFO, WARN, ERROR) and structured output.
 // Prefer using Production() or Development() for better readability.
 func New(debug bool) *Logger {
+	return NewWithFormat(debug, FormatZap)
+}
+
+// NewWithFormat creates a logger using the selected output format.
+func NewWithFormat(debug bool, format Format) *Logger {
 	var baseLogger *zap.Logger
-	if debug {
-		config := zap.NewDevelopmentConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	if format == FormatOTelJSON {
+		level := zapcore.InfoLevel
+		if debug {
+			level = zapcore.DebugLevel
+		}
+		enc := zapcore.NewJSONEncoder(EncoderConfig())
+		core := zapcore.NewCore(enc, zapcore.AddSync(os.Stdout), level)
+		if !debug {
+			core = zapcore.NewSamplerWithOptions(core, time.Second, 100, 100)
+		}
+		core = WrapCore(core)
+		baseLogger = zap.New(core,
+			zap.AddCaller(),
+			zap.AddCallerSkip(1),
+			zap.AddStacktrace(zapcore.ErrorLevel),
+			zap.Fields(zap.String("service.name", ServiceName(defaultServiceName))),
+			zap.ErrorOutput(zapcore.AddSync(os.Stderr)),
+		).Named(defaultServiceName)
+	} else {
+		var config zap.Config
+		if debug {
+			config = zap.NewDevelopmentConfig()
+			config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+			config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		} else {
+			config = zap.NewProductionConfig()
+			config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+			config.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
+		}
+
+		config.EncoderConfig.TimeKey = "timestamp"
+		config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		config.EncoderConfig.MessageKey = "message"
+		config.EncoderConfig.LevelKey = "level"
+		config.EncoderConfig.CallerKey = "caller"
+		config.EncoderConfig.StacktraceKey = "stacktrace"
 		config.OutputPaths = []string{"stdout"}
 		config.ErrorOutputPaths = []string{"stderr"}
+
 		var err error
 		baseLogger, err = config.Build(
 			zap.AddCaller(),
@@ -48,16 +87,6 @@ func New(debug bool) *Logger {
 		if err != nil {
 			baseLogger = zap.NewExample()
 		}
-	} else {
-		enc := zapcore.NewJSONEncoder(EncoderConfig())
-		core := WrapCore(zapcore.NewCore(enc, zapcore.AddSync(os.Stdout), zapcore.InfoLevel))
-		baseLogger = zap.New(core,
-			zap.AddCaller(),
-			zap.AddCallerSkip(1),
-			zap.AddStacktrace(zapcore.ErrorLevel),
-			zap.Fields(zap.String("service.name", ServiceName(defaultServiceName))),
-			zap.ErrorOutput(zapcore.AddSync(os.Stderr)),
-		)
 	}
 
 	level := zapcore.InfoLevel
@@ -75,7 +104,11 @@ func New(debug bool) *Logger {
 // Checks DEBUG_MODE environment variable to determine log level.
 func NewFromEnv() *Logger {
 	debug := os.Getenv("DEBUG_MODE") == "true" || os.Getenv("DEBUG_MODE") == "1"
-	return New(debug)
+	format, err := ParseFormat(os.Getenv("LOG_FORMAT"))
+	if err != nil {
+		format = FormatZap
+	}
+	return NewWithFormat(debug, format)
 }
 
 // WithFields returns a logger with additional structured fields.

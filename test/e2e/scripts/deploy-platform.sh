@@ -22,13 +22,13 @@ INSECURE_HTTP="${INSECURE_HTTP:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 SKIP_AUTH_CHECK="${SKIP_AUTH_CHECK:-true}"
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
-export INGRESS_MODE="${INGRESS_MODE:-clusterip}"
+export INGRESS_MODE="${INGRESS_MODE:-ocproute}"
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "${POLICY_ENGINE}")}"
 export AUTHORINO_NAMESPACE
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
-    echo "Gateway ingress mode for deploy.sh: ${INGRESS_MODE}"
+    echo "Gateway ingress mode for deploy.sh: ${INGRESS_MODE} (loadbalancer | ocproute)"
     [[ -n "${MAAS_API_IMAGE:-}" ]] && echo "Using custom MaaS API image: ${MAAS_API_IMAGE}"
     [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]] && echo "Using custom MaaS controller image: ${MAAS_CONTROLLER_IMAGE}"
     [[ -n "${OPERATOR_CATALOG:-}" ]] && echo "Using ODH catalog: ${OPERATOR_CATALOG}"

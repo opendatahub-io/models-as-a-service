@@ -471,6 +471,7 @@ func subscriptionGatewayCacheKeySelector() string {
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
 
 func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	log := oteljson.FromContext(ctx).WithValues("MaaSAuthPolicy", req.NamespacedName)
 
 	policy := &maasv1alpha1.MaaSAuthPolicy{}
@@ -2037,7 +2038,7 @@ func (r *MaaSAuthPolicyReconciler) mapAITenantToMaaSAuthPolicies(ctx context.Con
 	tenantNamespace := tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace)
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(tenantNamespace)); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for AITenant change",
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSAuthPolicy resources for AITenant change",
 			"tenantNamespace", tenantNamespace,
 			"aitenant", obj.GetNamespace()+"/"+obj.GetName())
 		return nil
@@ -2057,7 +2058,7 @@ func (r *MaaSAuthPolicyReconciler) mapAITenantToMaaSAuthPolicies(ctx context.Con
 func (r *MaaSAuthPolicyReconciler) mapTenantToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(obj.GetNamespace())); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change",
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSAuthPolicy resources for Tenant change",
 			"tenantNamespace", obj.GetNamespace())
 		return nil
 	}
@@ -2084,7 +2085,7 @@ func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Co
 	}
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(ns)); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy for namespace label change", "namespace", ns)
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSAuthPolicy for namespace label change", "namespace", ns)
 		return nil
 	}
 	requests := make([]reconcile.Request, len(policyList.Items))

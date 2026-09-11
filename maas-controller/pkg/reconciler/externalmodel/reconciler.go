@@ -115,6 +115,7 @@ func getTLSInfo(extModel *maasv1alpha1.ExternalModel) (tls bool, port int32, err
 
 // Reconcile handles create/update/delete of ExternalModel CRs.
 func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	oteljson.FromContext(ctx).Info("Reconciling ExternalModel", "namespace", req.Namespace, "name", req.Name)
 
 	extModel := &maasv1alpha1.ExternalModel{}
@@ -148,7 +149,7 @@ func (r *Reconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Resu
 		return ctrl.Result{}, fmt.Errorf("invalid ExternalModel annotations: %w", err)
 	}
 
-	logger := r.Log.WithValues("externalmodel", req.NamespacedName)
+	logger := oteljson.FromContext(ctx).WithValues("externalmodel", req.NamespacedName)
 	logger.Info("Reconciling ExternalModel",
 		"provider", extModel.Spec.Provider,
 		"endpoint", extModel.Spec.Endpoint,

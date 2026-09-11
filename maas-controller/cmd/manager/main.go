@@ -980,6 +980,7 @@ func main() {
 	var observabilityManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
+	var logFormat oteljson.Format
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
@@ -1010,6 +1011,7 @@ func main() {
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
+	oteljson.BindFlags(flag.CommandLine, &logFormat)
 	flag.Parse()
 
 	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
@@ -1056,7 +1058,9 @@ func main() {
 	// Derive infrastructure namespace if needed
 	infraNamespace = resolveInfraNamespace(infraNamespace, controllerNamespace)
 
-	oteljson.Apply(&opts, "maas-controller")
+	if logFormat == oteljson.FormatOTelJSON {
+		oteljson.Apply(&opts, "maas-controller")
+	}
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	cfg := ctrl.GetConfigOrDie()
