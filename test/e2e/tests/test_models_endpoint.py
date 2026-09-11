@@ -70,7 +70,110 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("models")
+pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worker_models_context(request):
+    """Route parallel model tests through the explicit worker context.
+
+    The serial pass intentionally retains the default deployment.
+    """
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        ensure_worker_models,
+        serial_only_selection,
+    )
+
+    if serial_only_selection(request):
+        yield
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    ensure_worker_models(
+        context,
+        (
+            context.distinct_model_ref,
+            context.distinct_model_2_ref,
+        ),
+    )
+    original_values = {
+        name: globals()[name]
+        for name in (
+            "MODEL_NAMESPACE",
+            "MODEL_REF",
+            "MODEL_NAME",
+            "MODEL_CANONICAL_ID",
+            "DISTINCT_MODEL_REF",
+            "DISTINCT_MODEL_2_REF",
+            "DISTINCT_MODEL_ID",
+            "DISTINCT_MODEL_2_ID",
+            "UNCONFIGURED_MODEL_REF",
+            "UNCONFIGURED_MODEL_PATH",
+        )
+    }
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+    original_get_auth = globals()["_get_auth_policies_for_model"]
+    original_get_subscriptions = globals()["_get_subscriptions_for_model"]
+
+    globals().update(
+        {
+            "MODEL_NAMESPACE": context.model_namespace,
+            "MODEL_REF": context.model_ref,
+            "MODEL_NAME": f"e2e/{context.model_ref}",
+            "MODEL_CANONICAL_ID": (
+                f"publishers/{context.model_namespace}/models/e2e/{context.model_ref}"
+            ),
+            "DISTINCT_MODEL_REF": context.distinct_model_ref,
+            "DISTINCT_MODEL_2_REF": context.distinct_model_2_ref,
+            "DISTINCT_MODEL_ID": (
+                f"publishers/{context.model_namespace}/models/e2e/{context.distinct_model_ref}"
+            ),
+            "DISTINCT_MODEL_2_ID": (
+                f"publishers/{context.model_namespace}/models/e2e/{context.distinct_model_2_ref}"
+            ),
+            "UNCONFIGURED_MODEL_REF": context.unconfigured_model_ref,
+            "UNCONFIGURED_MODEL_PATH": (
+                f"/{context.model_namespace}/{context.unconfigured_model_ref}"
+            ),
+        }
+    )
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    def get_auth_policies(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_get_auth(*args, **kwargs)
+
+    def get_subscriptions(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_get_subscriptions(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+    globals()["_get_auth_policies_for_model"] = get_auth_policies
+    globals()["_get_subscriptions_for_model"] = get_subscriptions
+
+    try:
+        with activate_worker_tenant(context):
+            yield
+    finally:
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
+        globals()["_get_auth_policies_for_model"] = original_get_auth
+        globals()["_get_subscriptions_for_model"] = original_get_subscriptions
 
 # Kuadrant gateway propagation can lag behind MaaS CR readiness.
 # MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
