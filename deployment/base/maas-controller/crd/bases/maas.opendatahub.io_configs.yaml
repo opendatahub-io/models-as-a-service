@@ -82,6 +82,8 @@ spec:
                   The Ready condition aggregates status from the default AITenant and MaasTenantConfig
                   so that the platform operator (DSC) can report configuration issues without watching
                   MaaS operands directly.
+                  The TenantsHealthy condition aggregates the Ready state of all AITenant CRs into a
+                  three-state model (Healthy/Degraded/Blocked) per ADR ODH-ADR-MS-0003.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
