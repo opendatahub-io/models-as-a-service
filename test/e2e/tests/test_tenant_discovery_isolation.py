@@ -6,61 +6,21 @@ and does not leak data from other tenants. With system:authenticated authorizati
 any authenticated user can call any tenant's endpoint, but each endpoint must
 return only its own tenant's data.
 
-These tests use kubectl run with curl to access internal Service URLs.
+These tests use kubectl exec with curl to access internal Service URLs.
 """
 
-import logging
-import pytest
-import subprocess
 import json
+import logging
 import os
 
-from conftest import TLS_VERIFY
-from test_helper import E2E_CURL_IMAGE, E2E_CURL_POD_NAMESPACE, MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token
+import pytest
+
+from conftest import TLS_VERIFY  # noqa: F401 - used by conftest integration
+from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token, kubectl_curl as _kubectl_curl
 
 log = logging.getLogger(__name__)
 
 pytestmark = pytest.mark.xdist_group("mt_lifecycle")
-
-
-def _kubectl_curl(url: str, headers: dict = None, namespace: str = None) -> tuple[int, str]:
-    """Execute curl from inside cluster. Returns (status_code, response_body)"""
-    namespace = namespace or os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-    curl_args = ["-sk", "-m", "10"]
-    if headers:
-        for key, value in headers.items():
-            curl_args.extend(["-H", f"{key}: {value}"])
-    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
-
-    cmd = [
-        "kubectl", "run", f"test-curl-{os.getpid()}-{id(url)}",
-        "--rm", "-i", "--restart=Never",
-        f"--image={E2E_CURL_IMAGE}",
-        "-n", namespace,
-        "--", "curl"
-    ] + curl_args
-
-    try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
-        output = result.stdout
-        if "HTTP_CODE:" in output:
-            body, code_line = output.rsplit("HTTP_CODE:", 1)
-            # Extract just the numeric status code (kubectl deletion message may be appended)
-            import re
-            match = re.search(r'(\d{3})', code_line)
-            if match:
-                return int(match.group(1)), body.strip()
-            else:
-                log.error(f"Could not parse HTTP code from: {code_line}")
-                return 0, body.strip()
-        # No HTTP_CODE in output - kubectl run likely failed
-        log.error(f"kubectl run failed (returncode={result.returncode})")
-        log.error(f"stdout: {output[:500]}")
-        log.error(f"stderr: {result.stderr[:500]}")
-        return 0, output
-    except Exception as e:
-        log.error(f"kubectl curl failed: {e}")
-        return 0, str(e)
 
 
 @pytest.fixture
@@ -127,9 +87,9 @@ def test_tenant_discovery_same_tenant_access(tenant_service_urls, tenant_tokens)
 
     This is the positive case - tenant A's token should work for tenant A's endpoint.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "
@@ -175,9 +135,9 @@ def test_tenant_discovery_cross_tenant_isolation(tenant_service_urls, tenant_tok
     different data (proving each instance is correctly configured and not
     leaking data from other tenants).
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "
@@ -262,9 +222,9 @@ def test_tenant_discovery_each_tenant_returns_own_gateway(tenant_service_urls, t
     This validates that the implementation uses instance configuration (GATEWAY_NAME env var)
     rather than hardcoding a specific gateway name.
     """
-    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode
-    ingress_mode = os.environ.get("INGRESS_MODE", "clusterip")
-    if ingress_mode == "clusterip":
+    # Skip test when Gateway is deployed in unsupported ClusterIP + Route mode (ocproute)
+    ingress_mode = os.environ.get("INGRESS_MODE", "loadbalancer")
+    if ingress_mode == "ocproute":
         pytest.skip(
             "Skipping when Gateway uses ClusterIP + OpenShift Route (unsupported configuration). "
             "This mixes incompatible routing paradigms. "

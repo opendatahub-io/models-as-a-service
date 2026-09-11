@@ -113,6 +113,68 @@ func TestAITenantValidator_ValidateCreate(t *testing.T) {
 			wantErr:     true,
 			errContains: "AITenant infrastructure namespace is not configured",
 		},
+		{
+			name: "allow payloadProcessing type praxis",
+			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+				AITenantNamespace: "ai-tenants",
+				GatewayNamespace:  "openshift-ingress",
+			},
+			aitenant: &maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "team-a",
+					Namespace: "ai-tenants",
+				},
+				Spec: maasv1alpha1.AITenantSpec{
+					PayloadProcessing: &maasv1alpha1.AITenantPayloadProcessing{
+						Type: maasv1alpha1.PayloadProcessingBackendPraxis,
+					},
+				},
+			},
+			wantErr: false,
+		},
+		{
+			name: "reject payloadProcessing type ipp",
+			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+				AITenantNamespace: "ai-tenants",
+				GatewayNamespace:  "openshift-ingress",
+			},
+			aitenant: &maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "team-a",
+					Namespace: "ai-tenants",
+				},
+				Spec: maasv1alpha1.AITenantSpec{
+					PayloadProcessing: &maasv1alpha1.AITenantPayloadProcessing{
+						Type: maasv1alpha1.PayloadProcessingBackendIPP,
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: `spec.payloadProcessing.type must be "praxis"`,
+		},
+		{
+			name: "reject unknown payloadProcessing type",
+			validator: &AITenantValidator{
+				Client:            fake.NewClientBuilder().WithScheme(scheme).Build(),
+				AITenantNamespace: "ai-tenants",
+				GatewayNamespace:  "openshift-ingress",
+			},
+			aitenant: &maasv1alpha1.AITenant{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "team-a",
+					Namespace: "ai-tenants",
+				},
+				Spec: maasv1alpha1.AITenantSpec{
+					PayloadProcessing: &maasv1alpha1.AITenantPayloadProcessing{
+						Type: "custom",
+					},
+				},
+			},
+			wantErr:     true,
+			errContains: `spec.payloadProcessing.type must be "praxis"`,
+		},
 	}
 
 	for _, tt := range tests {

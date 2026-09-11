@@ -104,6 +104,22 @@ spec:
                 - clientId
                 - issuerUrl
                 type: object
+              payloadProcessing:
+                description: |-
+                  PayloadProcessing selects which controller owns per-tenant Envoy ext_proc
+                  payload processing. Omit the field or leave type unset for IPP (maas-controller).
+                  Set type to "praxis" to opt in to ai-gateway-controller. Future per-tenant
+                  payload-processing settings can live under this object.
+                properties:
+                  type:
+                    description: |-
+                      Type selects the payload processing backend. Omit or leave unset for IPP
+                      (maas-controller). Set to "praxis" to opt in to ai-gateway-controller.
+                      IPP is not a stored enum value; controllers treat absence as IPP.
+                    enum:
+                    - praxis
+                    type: string
+                type: object
               rbac:
                 description: |-
                   RBAC is retained only for compatibility with existing AITenant manifests.
