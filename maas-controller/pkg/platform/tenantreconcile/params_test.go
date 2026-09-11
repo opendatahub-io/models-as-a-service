@@ -1,9 +1,11 @@
 package tenantreconcile
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -11,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
@@ -562,6 +565,75 @@ func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, "payload-pre-processing-redteam")
 	assert.Equal(t, "payload-pre-processing-redteam", requireDeploymentSelectorLabel(t, payloadBeforeDeployment, LabelTenantInstance))
+}
+
+func TestBuildPlatformParams_SkipIPPForPraxis(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "praxis-team",
+			},
+		},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{
+			Namespace: "openshift-ingress",
+			Name:      "praxis-gateway",
+		},
+		SkipIPP: true,
+		Source:  "aitenant",
+	}
+
+	got, err := BuildPlatformParams(tenant, platformContext, "ai-tenant-praxis", "controller-ns", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	assert.True(t, got.SkipIPP)
+}
+
+func TestPostRender_SkipIPPForPraxisTenant(t *testing.T) {
+	rendered := renderOverlayResources(t, "ai-tenant-praxis")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "praxis-team",
+			},
+		},
+	}
+	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
+		AppNamespace:                 "ai-tenant-praxis",
+		ControllerNamespace:          "controller-ns",
+		GatewayNamespace:             "openshift-ingress",
+		GatewayName:                  "praxis-gateway",
+		ClusterAudience:              "openshift-custom",
+		TenantIdentifier:             "praxis-team",
+		SubscriptionNamespace:        "ai-tenant-praxis",
+		MaaSAPIImage:                 "quay.io/example/maas-api:test",
+		PayloadProcessingImage:       "quay.io/example/payload:test",
+		MaaSAPIKeyCleanupImage:       "quay.io/example/cleanup:test",
+		APIKeyMaxExpirationDays:      "45",
+		SkipIPP:                      true,
+		PayloadProcessingAutoscaling: true,
+	}
+
+	resources, err := PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
+	require.NoError(t, err)
+
+	requireResource(t, resources, GVKDeployment, "maas-api-praxis-team")
+	requireResource(t, resources, GVKHTTPRoute, "maas-api-route-praxis-team")
+
+	for _, r := range resources {
+		if isIPPResource(r.GroupVersionKind(), r.GetName()) {
+			t.Fatalf("unexpected IPP resource in praxis output: %s/%s", r.GetKind(), r.GetName())
+		}
+		if r.GroupVersionKind() == GVKHPA && strings.HasPrefix(r.GetName(), PayloadProcessingName) {
+			t.Fatalf("unexpected payload-processing HPA in praxis output: %s", r.GetName())
+		}
+	}
 }
 
 func TestRenderKustomizeRemapsServiceMonitorServerName(t *testing.T) {

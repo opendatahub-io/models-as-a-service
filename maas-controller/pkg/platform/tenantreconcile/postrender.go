@@ -24,6 +24,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	for i := range resources {
 		resource := &resources[i]
 
+		if params.SkipIPP && isIPPResource(resource.GroupVersionKind(), resource.GetName()) {
+			log.V(1).Info("Skipping IPP resource for praxis tenant",
+				"kind", resource.GetKind(), "name", resource.GetName(), "namespace", resource.GetNamespace())
+			continue
+		}
+
 		annotations := resource.GetAnnotations()
 		if annotations != nil && annotations[AnnotationManaged] == "false" {
 			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",
@@ -68,8 +74,10 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
-	if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
-		return nil, err
+	if !params.SkipIPP {
+		if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
+			return nil, err
+		}
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
