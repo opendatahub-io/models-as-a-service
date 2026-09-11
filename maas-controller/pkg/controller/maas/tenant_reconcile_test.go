@@ -965,6 +965,43 @@ func TestTenantReconcile_TeardownRequestedStillHandlesDeletion(t *testing.T) {
 	g.Expect(updated.Finalizers).NotTo(ContainElement(tenantFinalizer), "deletion cleanup should run during teardown")
 }
 
+func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const tenantNS = "broken-tenant-ns"
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:                          cl,
+		Scheme:                          s,
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     testTenantGatewayName,
+		GatewayNamespace:                testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
+	})
+	g.Expect(err).To(MatchError(ContainSubstring("tenant-name is missing")))
+}
+
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 	tests := []struct {
 		name             string

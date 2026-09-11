@@ -112,12 +112,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Handle deletion before the teardown guard: finalizer cleanup must proceed even while
+	// Handle deletion before tenant identifier validation and the teardown guard:
+	// finalizer cleanup must proceed even when TenantIdentifierFor would fail or while
 	// LifecycleReconciler is tearing down MaaS (AITenant deletion waits on MaasTenantConfig).
 	if !tenant.DeletionTimestamp.IsZero() {
 		return r.handleDeletion(ctx, log, &tenant)
@@ -136,6 +132,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 			log.Info("skipping MaasTenantConfig reconciliation during MaaS teardown", "deploymentNamespace", depNS)
 			return ctrl.Result{}, nil
 		}
+	}
+
+	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if usesCleanupFinalizer {
