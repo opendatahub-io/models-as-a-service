@@ -74,3 +74,12 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
+    # Rule 5: Top-level /health for tools (e.g. GuideLLM) that probe the root health path
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /health
+      backendRefs:
+        - name: maas-api
+          port: 8443
+          weight: 100
