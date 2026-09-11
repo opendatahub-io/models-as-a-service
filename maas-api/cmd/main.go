@@ -65,7 +65,7 @@ func serve() error {
 	cfg := config.Load()
 	flag.Parse()
 
-	log := logger.New(cfg.DebugMode)
+	log := logger.NewWithFormat(cfg.DebugMode, cfg.LogFormat)
 	defer func() {
 		if err := log.Sync(); err != nil {
 			// Can't use logger if sync failed
@@ -104,7 +104,7 @@ func serve() error {
 	// Initialize OTEL tracing (noop if endpoint not configured)
 	tracingShutdown, err := tracing.InitTracer(
 		ctx, cfg.OTELEndpoint, cfg.OTELInsecure, cfg.OTELSampleRate,
-		"maas-api", cfg.Namespace,
+		logger.ServiceName("maas-api"), cfg.Namespace,
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize tracing: %w", err)

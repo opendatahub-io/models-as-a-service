@@ -67,13 +67,15 @@ func ParseGroupsHeader(header string) ([]string, error) {
 // ExtractUserInfo extracts user information from headers set by the auth policy.
 func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		requestLogger := h.logger.WithContext(c.Request.Context())
+
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
 
 		// Validate required headers exist and are not empty
 		// Missing headers indicate a configuration issue with the auth policy (internal error)
 		if username == "" {
-			h.logger.Error("Missing or empty username header",
+			requestLogger.Error("Missing or empty username header",
 				"header", constant.HeaderUsername,
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -86,7 +88,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		}
 
 		if groupHeader == "" {
-			h.logger.Error("Missing group header",
+			requestLogger.Error("Missing group header",
 				"header", constant.HeaderGroup,
 				"username", logger.RedactValue(username),
 			)
@@ -103,7 +105,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 		// Parsing errors also indicate configuration issues
 		groups, err := ParseGroupsHeader(groupHeader)
 		if err != nil {
-			h.logger.Error("Failed to parse group header",
+			requestLogger.Error("Failed to parse group header",
 				"header", constant.HeaderGroup,
 				"header_value", groupHeader,
 				"error", err,
@@ -125,7 +127,7 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 			Tenant:   h.tenantName,
 		}
 
-		h.logger.Debug("Extracted user info from headers",
+		requestLogger.Debug("Extracted user info from headers",
 			"username", logger.RedactValue(username),
 			"groups", groups,
 		)
@@ -143,20 +145,22 @@ func (h *Handler) ExtractUserInfo() gin.HandlerFunc {
 // so that real configuration errors are surfaced.
 func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		requestLogger := h.logger.WithContext(c.Request.Context())
+
 		username := strings.TrimSpace(c.GetHeader(constant.HeaderUsername))
 		groupHeader := c.GetHeader(constant.HeaderGroup)
 
 		// When both identity headers are absent, continue without user context.
 		// This allows the handler to return a graceful response (e.g. empty list).
 		if username == "" && groupHeader == "" {
-			h.logger.Debug("Auth identity headers not present, continuing without user context")
+			requestLogger.Debug("Auth identity headers not present, continuing without user context")
 			c.Next()
 			return
 		}
 
 		// If only one header is present, that is a partial / broken auth config.
 		if username == "" {
-			h.logger.Error("Missing or empty username header while group header is present",
+			requestLogger.Error("Missing or empty username header while group header is present",
 				"header", constant.HeaderUsername,
 			)
 			c.JSON(http.StatusInternalServerError, gin.H{
@@ -169,7 +173,7 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 		}
 
 		if groupHeader == "" {
-			h.logger.Error("Missing group header while username header is present",
+			requestLogger.Error("Missing group header while username header is present",
 				"header", constant.HeaderGroup,
 				"username", logger.RedactValue(username),
 			)
@@ -185,7 +189,7 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 		// Parse groups — malformed headers are still an error.
 		groups, err := ParseGroupsHeader(groupHeader)
 		if err != nil {
-			h.logger.Error("Failed to parse group header",
+			requestLogger.Error("Failed to parse group header",
 				"header", constant.HeaderGroup,
 				"header_value", groupHeader,
 				"error", err,
@@ -205,7 +209,7 @@ func (h *Handler) ExtractUserInfoOptional() gin.HandlerFunc {
 			Tenant:   h.tenantName,
 		}
 
-		h.logger.Debug("Extracted user info from headers",
+		requestLogger.Debug("Extracted user info from headers",
 			"username", logger.RedactValue(username),
 			"groups", groups,
 		)

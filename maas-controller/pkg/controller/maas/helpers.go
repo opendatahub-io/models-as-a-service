@@ -10,13 +10,13 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -151,7 +151,7 @@ func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamesp
 func isTenantNamespace(ctx context.Context, c client.Reader, ns, defaultTenantNamespace string, discoveryEnabled bool) bool {
 	ok, err := tenantNamespaceAllowed(ctx, c, ns, defaultTenantNamespace, discoveryEnabled)
 	if err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to check tenant namespace; treating namespace as non-tenant", "namespace", ns)
+		oteljson.FromContext(ctx).Error(err, "failed to check tenant namespace; treating namespace as non-tenant", "namespace", ns)
 		return false
 	}
 	return ok
@@ -167,7 +167,7 @@ func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTen
 	var namespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: ns}, &namespace); err != nil {
 		if apierrors.IsNotFound(err) {
-			ctrl.LoggerFrom(ctx).V(1).Info("namespace not found while checking tenant discovery label", "namespace", ns)
+			oteljson.FromContext(ctx).V(1).Info("namespace not found while checking tenant discovery label", "namespace", ns)
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to read namespace %s for tenant discovery: %w", ns, err)

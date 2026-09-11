@@ -279,6 +279,7 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `DEBUG_MODE` | `false` | Enable debug logging. Set to `true` or `1`. |
+| `LOG_FORMAT` | `zap` | Log output format: `zap` or OpenTelemetry JSON (`otel-json`). |
 | `NAMESPACE` | `maas-api` | Namespace where maas-api is deployed. |
 | `GATEWAY_NAME` | `maas-default-gateway` | Name of the Gateway resource used for model routing. |
 | `GATEWAY_NAMESPACE` | `openshift-ingress` | Namespace of the Gateway resource. |
@@ -304,6 +305,7 @@ Most environment variables have corresponding CLI flags. When both are provided,
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|
 | `--debug` | `DEBUG_MODE` | `false` | Enable debug mode. |
+| `--log-format` | `LOG_FORMAT` | `zap` | Log output format: `zap` or `otel-json`. |
 | `--namespace` | `NAMESPACE` | `maas-api` | Namespace of the MaaS instance. |
 | `--name` | `INSTANCE_NAME` | Value of `--gateway-name` | Name of the MaaS instance. |
 | `--gateway-name` | `GATEWAY_NAME` | `maas-default-gateway` | Name of the Gateway resource. |

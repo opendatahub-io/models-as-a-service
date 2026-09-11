@@ -12,6 +12,7 @@ import (
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -20,6 +21,16 @@ import (
 // MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
 type MetricsRecorder interface {
 	RecordRejection(reason string)
+}
+
+func (h *ModelsHandler) withContext(c *gin.Context) *ModelsHandler {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.logger = requestLogger
+	} else {
+		requestHandler.logger = h.logger.WithContext(c.Request.Context())
+	}
+	return &requestHandler
 }
 
 // ModelsHandler handles model-related endpoints.
@@ -361,6 +372,8 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
+	h = h.withContext(c)
+
 	// When no user identity was extracted by the ExtractUserInfoOptional
 	// middleware, return an empty model list.  This covers the case where no
 	// LLMInferenceService is deployed (Authorino has no auth policy and does
