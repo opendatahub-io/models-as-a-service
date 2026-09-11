@@ -22,12 +22,14 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -1591,6 +1593,84 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	}
 	if cond.Reason != "UniqueIdentity" {
 		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	}
+
+	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
+}
+
+// TestCheckModelIdentityConflict_DeletingConflictIgnored verifies that a sibling
+// with DeletionTimestamp set is not counted as a conflict.
+func TestCheckModelIdentityConflict_DeletingConflictIgnored(t *testing.T) {
+	const sharedAlias = "publishers/default/models/shared-model"
+
+	modelA := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: sharedAlias},
+	}
+	setModelIdentityCondition(modelA, []string{"model-b"})
+
+	now := metav1.NewTime(time.Now())
+	modelB := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "model-b", Namespace: "default",
+			DeletionTimestamp: &now,
+			Finalizers:        []string{"maas.opendatahub.io/model-cleanup"},
+		},
+		Status: maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: sharedAlias},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(modelA, modelB).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		Build()
+	recorder := record.NewFakeRecorder(1)
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
+
+	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected True (deleting sibling should be ignored), got %v", cond.Status)
+	}
+	if cond.Reason != "UniqueIdentity" {
+		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	}
+
+	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
+}
+
+// TestCheckModelIdentityConflict_ResolvedFromUnknown verifies that the resolved
+// event is emitted when transitioning from Unknown (e.g. ConflictCheckFailed)
+// to True.
+func TestCheckModelIdentityConflict_ResolvedFromUnknown(t *testing.T) {
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "model-a", Namespace: "default", Generation: 1},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: "publishers/default/models/shared-model"},
+	}
+	apimeta.SetStatusCondition(&model.Status.Conditions, metav1.Condition{
+		Type:               ConditionModelIdentityUnique,
+		Status:             metav1.ConditionUnknown,
+		Reason:             "ConflictCheckFailed",
+		Message:            "transient error",
+		ObservedGeneration: model.GetGeneration(),
+	})
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model).Build()
+	recorder := record.NewFakeRecorder(1)
+	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
+
+	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
+
+	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
+	if cond == nil {
+		t.Fatal("ModelIdentityUnique condition not set")
+	}
+	if cond.Status != metav1.ConditionTrue {
+		t.Errorf("expected True, got %v", cond.Status)
 	}
 
 	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
