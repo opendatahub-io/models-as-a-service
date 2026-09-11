@@ -34,6 +34,8 @@ spec:
         - name: METRICS_SECURE
           value: "false"
         # METRICS_CERT_DIR defaults in Go (DefaultMetricsCertDir); set explicitly in overlays/tls.
+        - name: CLEANUP_INTERVAL_MINUTES
+          value: "15"
         resources:
           requests:
             memory: "128Mi"

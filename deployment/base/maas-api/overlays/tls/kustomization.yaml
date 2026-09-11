@@ -16,8 +16,6 @@ patches:
   - path: deployment-patch.yaml
   - path: service-patch.yaml
   - path: servicemonitor-patch.yaml
-  - path: cronjob-cleanup-patch.yaml
-  - path: networkpolicy-cleanup-patch.yaml
   - target:
       group: gateway.networking.k8s.io
       version: v1
