@@ -107,17 +107,64 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 	}
 }
 
-// TestValidate covers Config.Validate:
-// required fields (DBConnectionURL),
+// validateTestCase describes one Config.Validate scenario. When expectError is
+// empty the config must validate successfully.
+type validateTestCase struct {
+	name                  string
+	cfg                   Config
+	expectError           string
+	expectCleanupInterval int
+}
+
+// runValidateTests executes the shared Config.Validate assertions for each case.
+func runValidateTests(t *testing.T, tests []validateTestCase) {
+	t.Helper()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Clear TLS_MIN_VERSION to avoid interference from host environment.
+			t.Setenv("TLS_MIN_VERSION", "")
+			os.Unsetenv("TLS_MIN_VERSION")
+
+			err := tt.cfg.Validate()
+
+			if tt.expectError != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.expectError)
+				}
+				if !strings.Contains(err.Error(), tt.expectError) {
+					t.Errorf("expected error containing %q, got %q", tt.expectError, err.Error())
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			// Verify default address assignment for valid configs.
+			if tt.cfg.Secure {
+				if tt.cfg.Address != DefaultSecureAddr {
+					t.Errorf("expected Address %q for secure config, got %q", DefaultSecureAddr, tt.cfg.Address)
+				}
+			} else {
+				if tt.cfg.Address != DefaultInsecureAddr {
+					t.Errorf("expected Address %q for insecure config, got %q", DefaultInsecureAddr, tt.cfg.Address)
+				}
+			}
+
+			if tt.expectCleanupInterval != 0 && tt.cfg.CleanupIntervalMinutes != tt.expectCleanupInterval {
+				t.Errorf("expected CleanupIntervalMinutes %d, got %d", tt.expectCleanupInterval, tt.cfg.CleanupIntervalMinutes)
+			}
+		})
+	}
+}
+
+// TestValidate covers Config.Validate required fields (DBConnectionURL),
 // TLS consistency (secure without certs, cert without key),
-// APIKeyMaxExpirationDays bounds,
 // and default address assignment.
 func TestValidate(t *testing.T) {
-	tests := []struct {
-		name        string
-		cfg         Config
-		expectError string
-	}{
+	runValidateTests(t, []validateTestCase{
 		{
 			name: "missing DBConnectionURL returns error",
 			cfg: Config{
@@ -177,6 +224,12 @@ func TestValidate(t *testing.T) {
 				TenantName:                "test-tenant",
 			},
 		},
+	})
+}
+
+// TestValidateAPIKeyMaxExpirationDays covers the APIKeyMaxExpirationDays bounds.
+func TestValidateAPIKeyMaxExpirationDays(t *testing.T) {
+	runValidateTests(t, []validateTestCase{
 		{
 			name: "APIKeyMaxExpirationDays valid minimum value",
 			cfg: Config{
@@ -230,6 +283,69 @@ func TestValidate(t *testing.T) {
 			},
 			expectError: "must be at least 1",
 		},
+	})
+}
+
+// TestValidateCleanupInterval covers the expired API key cleanup interval defaulting.
+func TestValidateCleanupInterval(t *testing.T) {
+	runValidateTests(t, []validateTestCase{
+		{
+			name: "CleanupIntervalMinutes negative value, disables cleanup",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    -10,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: -10,
+		},
+		{
+			name: "CleanupIntervalMinutes 0, set to default 15mins",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    0,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 15,
+		},
+		{
+			name: "CleanupIntervalMinutes not set, set to default too",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 15,
+		},
+		{
+			name: "CleanupIntervalMinutes positive value, use value",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				CleanupIntervalMinutes:    20,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectCleanupInterval: 20,
+		},
+	})
+}
+
+// TestValidateMetrics covers the metrics port bounds and secure metrics cert dir.
+func TestValidateMetrics(t *testing.T) {
+	runValidateTests(t, []validateTestCase{
 		{
 			name: "MetricsPort zero returns error",
 			cfg: Config{
@@ -313,42 +429,7 @@ func TestValidate(t *testing.T) {
 				TenantName:                "test-tenant",
 			},
 		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// Clear TLS_MIN_VERSION to avoid interference from host environment.
-			t.Setenv("TLS_MIN_VERSION", "")
-			os.Unsetenv("TLS_MIN_VERSION")
-
-			err := tt.cfg.Validate()
-
-			if tt.expectError != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q, got nil", tt.expectError)
-				}
-				if !strings.Contains(err.Error(), tt.expectError) {
-					t.Errorf("expected error containing %q, got %q", tt.expectError, err.Error())
-				}
-				return
-			}
-
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			// Verify default address assignment for valid configs.
-			if tt.cfg.Secure {
-				if tt.cfg.Address != DefaultSecureAddr {
-					t.Errorf("expected Address %q for secure config, got %q", DefaultSecureAddr, tt.cfg.Address)
-				}
-			} else {
-				if tt.cfg.Address != DefaultInsecureAddr {
-					t.Errorf("expected Address %q for insecure config, got %q", DefaultInsecureAddr, tt.cfg.Address)
-				}
-			}
-		})
-	}
+	})
 }
 
 func TestHandleDeprecatedFlags(t *testing.T) {
