@@ -219,6 +219,7 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha2.LLMInfer
 	}
 	// For unfiltered (legacy single-gateway) deployments, prefer base URLs (model-routing style)
 	// over path-based URLs so status.endpoint is consistent with the BBR gateway entry-point.
+	// All returned URLs are upgraded to HTTPS — external-facing endpoints must use a secure scheme.
 	var fallbackURL string
 	for _, addr := range llmisvc.Status.Addresses {
 		if addr.URL == nil {
@@ -226,7 +227,7 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha2.LLMInfer
 		}
 		// Prefer base URLs (path "" or "/") — these are model-routing endpoints.
 		if addr.URL.Path == "" || addr.URL.Path == "/" {
-			return addr.URL.String()
+			return upgradeToHTTPS(addr.URL.String())
 		}
 		if fallbackURL == "" {
 			fallbackURL = addr.URL.String()
@@ -235,14 +236,14 @@ func (h *llmisvcHandler) getEndpointFromLLMISvc(llmisvc *kservev1alpha2.LLMInfer
 	// Check Status.URL as a base-URL candidate.
 	if llmisvc.Status.URL != nil {
 		if llmisvc.Status.URL.Path == "" || llmisvc.Status.URL.Path == "/" {
-			return llmisvc.Status.URL.String()
+			return upgradeToHTTPS(llmisvc.Status.URL.String())
 		}
 	}
 	if fallbackURL != "" {
-		return fallbackURL
+		return upgradeToHTTPS(fallbackURL)
 	}
 	if llmisvc.Status.URL != nil {
-		return llmisvc.Status.URL.String()
+		return upgradeToHTTPS(llmisvc.Status.URL.String())
 	}
 	return ""
 }
@@ -271,9 +272,22 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 		}
 	}
 	if len(urls) > 0 {
-		return urls[0]
+		// The external-facing gateway endpoint must use HTTPS. If the status
+		// only contains an HTTP URL (e.g. TLS termination happens upstream),
+		// upgrade the scheme so consumers always see a secure endpoint.
+		return upgradeToHTTPS(urls[0])
 	}
 	return ""
+}
+
+// upgradeToHTTPS replaces the scheme of a URL string with "https" if it uses "http".
+// External-facing gateway endpoints must always use HTTPS; this normalizes URLs
+// from status addresses that may report HTTP when TLS is terminated upstream.
+func upgradeToHTTPS(rawURL string) string {
+	if len(rawURL) >= 7 && strings.EqualFold(rawURL[:7], "http://") {
+		return "https://" + rawURL[7:]
+	}
+	return rawURL
 }
 
 // ResolveModelAlias returns the canonical BBR model ID for the referenced LLMInferenceService.
