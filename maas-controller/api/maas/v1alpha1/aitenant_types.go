@@ -26,13 +26,6 @@ const (
 
 	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
 	AITenantConditionReady = "Ready"
-
-	// PayloadProcessingBackendIPP is the effective backend when spec.payloadProcessing
-	// is absent, empty, or type is omitted. IPP is not a stored enum value.
-	PayloadProcessingBackendIPP = "ipp"
-
-	// PayloadProcessingBackendPraxis is the only admissible non-empty payloadProcessing.type value.
-	PayloadProcessingBackendPraxis = "praxis"
 )
 
 // +kubebuilder:object:root=true
@@ -48,6 +41,9 @@ const (
 // AITenant bootstraps one tenant slice: a tenant namespace, an existing
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
 // and tenant-admin Roles.
+//
+// Praxis tenants (ai-gateway-controller owns payload processing) opt out of
+// maas-controller IPP via metadata.annotations["maas.opendatahub.io/payload-processing-type"]="praxis".
 //
 // The AITenant name is used as a suffix for per-tenant maas-api resources
 // (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -80,32 +76,6 @@ type AITenantSpec struct {
 	// controller-created tenant-admin Roles instead.
 	// +kubebuilder:validation:Optional
 	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
-
-	// PayloadProcessing selects which controller owns per-tenant Envoy ext_proc
-	// payload processing. Omit the field or leave type unset for IPP (maas-controller).
-	// Set type to "praxis" to opt in to ai-gateway-controller. Future per-tenant
-	// payload-processing settings can live under this object.
-	// +kubebuilder:validation:Optional
-	PayloadProcessing *AITenantPayloadProcessing `json:"payloadProcessing,omitempty"`
-}
-
-// AITenantPayloadProcessing configures per-tenant Envoy ext_proc payload processing.
-type AITenantPayloadProcessing struct {
-	// Type selects the payload processing backend. Omit or leave unset for IPP
-	// (maas-controller). Set to "praxis" to opt in to ai-gateway-controller.
-	// IPP is not a stored enum value; controllers treat absence as IPP.
-	// +kubebuilder:validation:Optional
-	// +kubebuilder:validation:Enum=praxis
-	Type string `json:"type,omitempty"`
-}
-
-// EffectivePayloadProcessingBackend returns the resolved payload processing backend
-// for an AITenant spec. Absent or empty payloadProcessing means IPP.
-func EffectivePayloadProcessingBackend(spec AITenantSpec) string {
-	if spec.PayloadProcessing == nil || spec.PayloadProcessing.Type == "" {
-		return PayloadProcessingBackendIPP
-	}
-	return spec.PayloadProcessing.Type
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.

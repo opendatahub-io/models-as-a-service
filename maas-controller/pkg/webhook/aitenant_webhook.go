@@ -75,10 +75,6 @@ func (v *AITenantValidator) ValidateCreate(ctx context.Context, obj runtime.Obje
 		return nil, err
 	}
 
-	if err := validatePayloadProcessing(aitenant.Spec); err != nil {
-		return nil, err
-	}
-
 	return nil, nil
 }
 
@@ -111,10 +107,6 @@ func (v *AITenantValidator) ValidateUpdate(ctx context.Context, oldObj, newObj r
 	// Even if the gateway reference hasn't changed, we want to reject updates
 	// to AITenants that have duplicate gateway assignments.
 	if err := v.validateGatewayUniqueness(ctx, newAITenant, oldAITenant); err != nil {
-		return nil, err
-	}
-
-	if err := validatePayloadProcessing(newAITenant.Spec); err != nil {
 		return nil, err
 	}
 
@@ -173,18 +165,5 @@ func (v *AITenantValidator) validateGatewayUniqueness(ctx context.Context, aiten
 		}
 	}
 
-	return nil
-}
-
-func validatePayloadProcessing(spec maasv1alpha1.AITenantSpec) error {
-	if spec.PayloadProcessing == nil || spec.PayloadProcessing.Type == "" {
-		return nil
-	}
-	if spec.PayloadProcessing.Type != maasv1alpha1.PayloadProcessingBackendPraxis {
-		return fmt.Errorf(
-			`spec.payloadProcessing.type must be %q when set; omit payloadProcessing or leave type unset for IPP (legacy default)`,
-			maasv1alpha1.PayloadProcessingBackendPraxis,
-		)
-	}
 	return nil
 }

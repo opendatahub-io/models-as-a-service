@@ -298,7 +298,7 @@ class TestExternalModelAuth:
         url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {
             "Content-Type": "application/json",
-            "Authorization": "Bearer INVALID-KEY-12345",
+            "Authorization": "Bearer sk-oai-invalid-key-12345",
         }
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 

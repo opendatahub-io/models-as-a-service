@@ -266,6 +266,26 @@ func UsageLogsEnvoyFilterName(tenantID string) string {
 	return resourceNameForTenant(baseUsageLogsEnvoyFilterName, tenantID)
 }
 
+// isIPPResource reports whether a kustomize base resource belongs to the IPP stack.
+func isIPPResource(gvk schema.GroupVersionKind, name string) bool {
+	switch {
+	case (gvk == GVKDeployment || gvk == GVKService || gvk == GVKDestinationRule) &&
+		(name == PayloadProcessingName || name == PayloadPreProcessingName):
+		return true
+	case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
+		return true
+	case gvk == GVKServiceAccount && name == PayloadProcessingName:
+		return true
+	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
+		return true
+	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
+		return true
+	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
+		return true
+	}
+	return false
+}
+
 // TenantIdentifierFor extracts the tenant identifier from a tenant config object.
 //
 // Returns:

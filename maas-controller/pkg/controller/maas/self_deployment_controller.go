@@ -44,6 +44,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -151,6 +152,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 		}
 		if cfg != nil {
 			if err := r.syncModuleStatus(ctx, cfg); err != nil {
+				return ctrl.Result{}, err
+			}
+			if err := r.syncTenantsHealth(ctx, cfg); err != nil {
 				return ctrl.Result{}, err
 			}
 		}
@@ -743,6 +747,14 @@ func patchTenancyProxyImage(res *unstructured.Unstructured) error {
 	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
+// Tenant health aggregation reasons (ADR ODH-ADR-MS-0003 three-state model).
+const (
+	tenantsHealthyReason  = "AllTenantsHealthy"
+	tenantsDegradedReason = "TenantsDegraded"
+	tenantsBlockedReason  = "TenantsBlocked"
+	tenantsNoneReason     = "NoTenantsFound"
+)
+
 // conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
 // schema (maxLength: 32768). Messages that exceed this limit are truncated on a valid UTF-8
 // rune boundary and suffixed with "…" so the stored value is always within spec.
@@ -858,6 +870,87 @@ func (r *LifecycleReconciler) syncModuleStatus(ctx context.Context, cfg *maasv1a
 	return nil
 }
 
+// syncTenantsHealth aggregates the Ready condition from all AITenant CRs across the cluster
+// into a TenantsHealthy condition on Config.Status using the ADR ODH-ADR-MS-0003 three-state
+// model so that the platform operator (ai-gateway-operator / DSC) can observe per-tenant
+// health without listing MaaS operands directly.
+func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1alpha1.Config) error {
+	if cfg == nil || cfg.UID == "" {
+		return nil
+	}
+
+	var allTenants maasv1alpha1.AITenantList
+	if err := r.List(ctx, &allTenants, client.InNamespace(r.AITenantNamespace)); err != nil {
+		return fmt.Errorf("list AITenants for tenant health aggregation: %w", err)
+	}
+
+	base := cfg.DeepCopy()
+
+	if len(allTenants.Items) == 0 {
+		apimeta.SetStatusCondition(&cfg.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionTrue,
+			Reason:             tenantsNoneReason,
+			Message:            "no AITenant resources found",
+			ObservedGeneration: cfg.Generation,
+		})
+		if err := r.Status().Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+			return fmt.Errorf("patch Config TenantsHealthy status: %w", err)
+		}
+		return nil
+	}
+
+	var unhealthy []string
+	total := len(allTenants.Items)
+	for i := range allTenants.Items {
+		at := &allTenants.Items[i]
+		if !apimeta.IsStatusConditionTrue(at.Status.Conditions, maasv1alpha1.AITenantConditionReady) {
+			unhealthy = append(unhealthy, at.Namespace+"/"+at.Name)
+		}
+	}
+
+	var cond metav1.Condition
+	switch {
+	case len(unhealthy) == 0:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionTrue,
+			Reason:             tenantsHealthyReason,
+			Message:            fmt.Sprintf("all %d tenant(s) healthy", total),
+			ObservedGeneration: cfg.Generation,
+		}
+	case len(unhealthy) == total:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionFalse,
+			Reason:             tenantsBlockedReason,
+			Message:            truncateConditionMessage(fmt.Sprintf("all %d tenant(s) unhealthy: %s", total, formatTenantList(unhealthy, 5))),
+			ObservedGeneration: cfg.Generation,
+		}
+	default:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionFalse,
+			Reason:             tenantsDegradedReason,
+			Message:            truncateConditionMessage(fmt.Sprintf("%d of %d tenant(s) unhealthy: %s", len(unhealthy), total, formatTenantList(unhealthy, 5))),
+			ObservedGeneration: cfg.Generation,
+		}
+	}
+
+	apimeta.SetStatusCondition(&cfg.Status.Conditions, cond)
+	if err := r.Status().Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch Config TenantsHealthy status: %w", err)
+	}
+	return nil
+}
+
+func formatTenantList(tenants []string, maxItems int) string {
+	if len(tenants) <= maxItems {
+		return strings.Join(tenants, ", ")
+	}
+	return strings.Join(tenants[:maxItems], ", ") + fmt.Sprintf(" (and %d more)", len(tenants)-maxItems)
+}
+
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -872,12 +965,10 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.MaasTenantConfigInstanceName
 	})
-	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
-		if r.AITenantNamespace == "" {
-			return false
-		}
-		return o.GetNamespace() == r.AITenantNamespace && o.GetName() == tenantreconcile.DefaultAITenantName
-	})
+	// Watch all AITenants so that both the default tenant link
+	// (ensureDefaultAITenantReferencesConfig) and the cross-tenant health
+	// aggregation (syncTenantsHealth) stay current.
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
 		Watches(
@@ -908,7 +999,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      r.DeploymentName,
 				}}}
 			}),
-			builder.WithPredicates(defaultAITenant),
+			builder.WithPredicates(aitenantReadyChanged()),
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
@@ -962,6 +1053,33 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			})),
 		).
 		Complete(r)
+}
+
+// aitenantReadyChanged admits an AITenant event only when the Ready condition
+// status changes or generation changes. Create, Delete, and Generic events pass
+// by default so that adding or removing a tenant re-runs health aggregation.
+func aitenantReadyChanged() predicate.Predicate {
+	readyStatus := func(o client.Object) metav1.ConditionStatus {
+		at, ok := o.(*maasv1alpha1.AITenant)
+		if !ok {
+			return metav1.ConditionUnknown
+		}
+		if cond := apimeta.FindStatusCondition(at.Status.Conditions, maasv1alpha1.AITenantConditionReady); cond != nil {
+			return cond.Status
+		}
+		return metav1.ConditionUnknown
+	}
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			if readyStatus(e.ObjectOld) != readyStatus(e.ObjectNew) {
+				return true
+			}
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+		},
+	}
 }
 
 // crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups

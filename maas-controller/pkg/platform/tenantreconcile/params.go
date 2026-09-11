@@ -61,6 +61,10 @@ type PlatformParams struct {
 	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
 	PayloadProcessingRouterExtProcFallback bool
 
+	// SkipIPP is true when the tenant uses the praxis payload-processing dataplane
+	// and maas-controller should not render or apply IPP resources.
+	SkipIPP bool
+
 	// PayloadProcessingResources overrides resource requests/limits for the payload-processing container.
 	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
 	PayloadProcessingResources *corev1.ResourceRequirements
@@ -91,6 +95,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
+		SkipIPP:                 platformContext.SkipIPP,
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)

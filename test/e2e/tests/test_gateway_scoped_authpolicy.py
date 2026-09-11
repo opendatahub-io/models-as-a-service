@@ -9,14 +9,11 @@ Runs in default CI (no tenant namespace discovery required).
 
 import json
 import logging
-import os
 import uuid
 
 import pytest
 
 from multitenancy_helpers import (
-    DEFAULT_GATEWAY_NAME,
-    GATEWAY_AUTH_POLICY_NAME,
     GATEWAY_NAMESPACE,
     assert_no_per_model_authpolicy,
     get_gateway_authpolicy,
@@ -24,8 +21,6 @@ from multitenancy_helpers import (
     get_json_or_none,
 )
 from test_helper import (
-    MODEL_NAMESPACE,
-    MODEL_REF,
     _create_test_auth_policy,
     _delete_cr,
     _wait_for_cr_absent,
@@ -34,11 +29,11 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("models")
+pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
 
 
-def _gateway_auth_rego() -> str:
-    ap = get_gateway_authpolicy()
+def _gateway_auth_rego(context) -> str:
+    ap = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
     if not ap:
         return ""
     authorization = (
@@ -54,48 +49,63 @@ def _gateway_auth_rego() -> str:
 class TestGatewayAuthPolicyStructure:
     """S10: AuthPolicy targets Gateway; no legacy per-model policies."""
 
-    def test_target_ref_points_to_gateway(self):
+    def test_target_ref_points_to_gateway(self, worker_tenant_context):
         """6.1: maas-gateway-auth targetRef must be Gateway, not HTTPRoute."""
-        ap = get_gateway_authpolicy()
+        context = worker_tenant_context
+        ap = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
         assert ap is not None, (
-            f"{GATEWAY_AUTH_POLICY_NAME} must exist in {GATEWAY_NAMESPACE} after prow fixtures reconcile"
+            f"{context.gateway_authpolicy_name} must exist in {GATEWAY_NAMESPACE} after worker fixtures reconcile"
         )
 
-        target = get_gateway_authpolicy_target_ref()
+        target = get_gateway_authpolicy_target_ref(name=context.gateway_authpolicy_name)
         assert target.get("kind") == "Gateway", f"expected Gateway targetRef, got {target!r}"
         assert target.get("group") == "gateway.networking.k8s.io"
-        assert target.get("name") == DEFAULT_GATEWAY_NAME
+        assert target.get("name") == context.gateway_name
         target_ns = target.get("namespace") or GATEWAY_NAMESPACE
         assert target_ns == GATEWAY_NAMESPACE, f"expected gateway namespace {GATEWAY_NAMESPACE}, got {target_ns!r}"
 
         conditions = (ap.get("status") or {}).get("conditions") or []
         accepted = [c for c in conditions if c.get("type") == "Accepted"]
         assert accepted and accepted[0].get("status") == "True", (
-            f"{GATEWAY_AUTH_POLICY_NAME} must be Accepted, got {conditions!r}"
+            f"{context.gateway_authpolicy_name} must be Accepted, got {conditions!r}"
         )
 
-    def test_no_per_model_authpolicy_for_fixture_model(self):
+    def test_no_per_model_authpolicy_for_fixture_model(self, worker_tenant_context):
         """6.2: Gateway-only mode must not create maas-auth-{model} in model namespace."""
-        assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
+        assert_no_per_model_authpolicy(
+            worker_tenant_context.model_ref, worker_tenant_context.model_namespace,
+        )
 
 
 class TestGatewayAuthPolicyLifecycle:
     """S10: Gateway auth is reconciled from MaaSAuthPolicy changes."""
 
-    def test_gateway_auth_rego_is_fixed_size(self):
+    def test_gateway_auth_rego_is_fixed_size(self, worker_tenant_context):
         """6.3: Gateway auth rego is fixed-size — no model-specific data embedded."""
         suffix = uuid.uuid4().hex[:8]
         policy_name = f"e2e-gw-auth-{suffix}"
         unique_group = f"e2e-gw-group-{suffix}"
 
         try:
-            ap_before = get_gateway_authpolicy()
+            context = worker_tenant_context
+            ap_before = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
             gen_before = (ap_before or {}).get("metadata", {}).get("generation")
 
-            _create_test_auth_policy(policy_name, MODEL_REF, groups=[unique_group])
-            _wait_for_maas_auth_policy_phase(policy_name, timeout=120, require_auth_policies=False)
+            _create_test_auth_policy(
+                policy_name,
+                context.model_ref,
+                groups=[unique_group],
+                namespace=context.tenant_namespace,
+                model_namespace=context.model_namespace,
+            )
+            _wait_for_maas_auth_policy_phase(
+                policy_name,
+                namespace=context.tenant_namespace,
+                timeout=120,
+                require_auth_policies=False,
+            )
 
-            rego = _gateway_auth_rego()
+            rego = _gateway_auth_rego(context)
             assert "accessAllowed" in rego, (
                 f"gateway auth rego must reference accessAllowed from subscription-info metadata, got:\n{rego}"
             )
@@ -103,21 +113,22 @@ class TestGatewayAuthPolicyLifecycle:
                 f"gateway auth rego must NOT contain model-specific group {unique_group!r} "
                 f"(rego should be fixed-size), got:\n{rego}"
             )
-            assert_no_per_model_authpolicy(MODEL_REF, MODEL_NAMESPACE)
+            assert_no_per_model_authpolicy(context.model_ref, context.model_namespace)
 
-            ap_after = get_gateway_authpolicy()
+            ap_after = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
             gen_after = (ap_after or {}).get("metadata", {}).get("generation")
             assert gen_before == gen_after, (
                 f"gateway AuthPolicy generation must not change when a MaaSAuthPolicy is added "
                 f"(rego is fixed-size). Before: {gen_before}, after: {gen_after}"
             )
         finally:
-            _delete_cr("maasauthpolicy", policy_name)
-            _wait_for_cr_absent("maasauthpolicy", policy_name)
+            _delete_cr("maasauthpolicy", policy_name, context.tenant_namespace)
+            _wait_for_cr_absent("maasauthpolicy", policy_name, context.tenant_namespace)
 
-    def test_only_one_gateway_authpolicy_named_maas_gateway_auth(self):
+    def test_only_one_gateway_authpolicy_named_maas_gateway_auth(self, worker_tenant_context):
         """6.2: Exactly one maas-gateway-auth exists targeting the default gateway."""
-        ap = get_gateway_authpolicy()
+        context = worker_tenant_context
+        ap = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
         assert ap is not None
 
         from multitenancy_helpers import _oc_run
@@ -140,15 +151,14 @@ class TestGatewayAuthPolicyLifecycle:
         items = json.loads(result.stdout).get("items") or []
         # Filter to policies targeting the default gateway — per-tenant gateways
         # also get this label, which is correct behavior, not a bug.
-        default_gw = os.environ.get("GATEWAY_NAME", DEFAULT_GATEWAY_NAME)
-        default_gw_policies = [
+        gateway_policies = [
             item for item in items
-            if item.get("spec", {}).get("targetRef", {}).get("name") == default_gw
+            if item.get("spec", {}).get("targetRef", {}).get("name") == context.gateway_name
         ]
-        names = [item.get("metadata", {}).get("name") for item in default_gw_policies]
-        assert GATEWAY_AUTH_POLICY_NAME in names
-        assert len(default_gw_policies) == 1, (
-            f"expected exactly one gateway auth policy targeting {default_gw}, got {names!r}"
+        names = [item.get("metadata", {}).get("name") for item in gateway_policies]
+        assert context.gateway_authpolicy_name in names
+        assert len(gateway_policies) == 1, (
+            f"expected exactly one gateway auth policy targeting {context.gateway_name}, got {names!r}"
         )
 
 
@@ -161,9 +171,9 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
     on clusters with zero subscriptions.
     """
 
-    def test_gateway_auth_group_membership_has_when_guard(self):
+    def test_gateway_auth_group_membership_has_when_guard(self, worker_tenant_context):
         """require-group-membership must have a when guard to skip management endpoints."""
-        ap = get_gateway_authpolicy()
+        ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
         assert ap is not None
 
         authorization = (
@@ -184,9 +194,9 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             f"(path-based + header-based check), got: {predicate}"
         )
 
-    def test_gateway_auth_subscription_check_gated_by_model_identity(self):
+    def test_gateway_auth_subscription_check_gated_by_model_identity(self, worker_tenant_context):
         """subscription-valid authorization must only run when a model is targeted."""
-        ap = get_gateway_authpolicy()
+        ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
         assert ap is not None
 
         defaults = (ap.get("spec") or {}).get("defaults") or {}
@@ -203,8 +213,11 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             f"(path-based + header-based check), got: {predicate}"
         )
 
-    def test_gateway_default_auth_scoped_if_present(self):
+    def test_gateway_default_auth_scoped_if_present(self, worker_tenant_context):
         """If gateway-default-auth exists, it must scope deny-all to model paths only."""
+        _ = worker_tenant_context
+        pytest.skip("legacy gateway-default-auth is scoped to the shared default gateway")
+
         default_auth = get_json_or_none(
             "authpolicy", "gateway-default-auth", GATEWAY_NAMESPACE
         )

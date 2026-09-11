@@ -887,7 +887,14 @@ def _get_subscriptions_for_model(model_ref, namespace=None, model_namespace=None
 # CR Creation Helpers
 # ---------------------------------------------------------------------------
 
-def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespace=None):
+def _create_test_auth_policy(
+    name,
+    model_refs,
+    users=None,
+    groups=None,
+    namespace=None,
+    model_namespace=MODEL_NAMESPACE,
+):
     """Create a MaaSAuthPolicy CR for testing.
 
     Args:
@@ -896,12 +903,13 @@ def _create_test_auth_policy(name, model_refs, users=None, groups=None, namespac
         users: List of user principals (e.g., ["system:serviceaccount:ns:sa"])
         groups: List of group names (e.g., ["system:authenticated"])
         namespace: Namespace for the auth policy (defaults to _ns())
+        model_namespace: Namespace containing the referenced MaaSModelRefs
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
         model_refs = [model_refs]
 
-    model_refs_formatted = [{"name": ref, "namespace": MODEL_NAMESPACE} for ref in model_refs]
+    model_refs_formatted = [{"name": ref, "namespace": model_namespace} for ref in model_refs]
     groups_formatted = [{"name": g} for g in (groups or [])]
 
     log.info("Creating MaaSAuthPolicy: %s", name)
@@ -928,6 +936,7 @@ def _create_test_subscription(
     window="1m",
     namespace=None,
     priority=None,
+    model_namespace=MODEL_NAMESPACE,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -940,6 +949,7 @@ def _create_test_subscription(
         window: Rate limit window (default: "1m")
         namespace: Namespace for the subscription (defaults to _ns())
         priority: Optional spec.priority (higher wins for default API key binding)
+        model_namespace: Namespace containing the referenced MaaSModelRefs
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -955,7 +965,7 @@ def _create_test_subscription(
         "modelRefs": [
             {
                 "name": ref,
-                "namespace": MODEL_NAMESPACE,
+                "namespace": model_namespace,
                 "tokenRateLimits": [{"limit": token_limit, "window": window}],
             }
             for ref in model_refs
@@ -1786,7 +1796,7 @@ def _create_llmis(
     })
 
 
-def _create_maas_model_ref(name: str, namespace: str, llmis_name: str):
+def _create_maas_model_ref(name: str, namespace: str, llmis_name: str, *, tenant_ref: Optional[str] = None):
     """Create a MaaSModelRef pointing to an LLMInferenceService.
 
     Args:
@@ -1794,6 +1804,15 @@ def _create_maas_model_ref(name: str, namespace: str, llmis_name: str):
         namespace: Namespace to create MaaSModelRef in
         llmis_name: LLMInferenceService name to reference
     """
+    spec = {
+        "modelRef": {
+            "kind": "LLMInferenceService",
+            "name": llmis_name,
+        }
+    }
+    if tenant_ref:
+        spec["tenantRef"] = tenant_ref
+
     _apply_cr({
         "apiVersion": "maas.opendatahub.io/v1alpha1",
         "kind": "MaaSModelRef",
@@ -1801,10 +1820,5 @@ def _create_maas_model_ref(name: str, namespace: str, llmis_name: str):
             "name": name,
             "namespace": namespace,
         },
-        "spec": {
-            "modelRef": {
-                "kind": "LLMInferenceService",
-                "name": llmis_name,
-            }
-        },
+        "spec": spec,
     })

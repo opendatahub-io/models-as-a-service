@@ -82,14 +82,16 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 
-	wasmPresent, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
-	if err != nil {
-		return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
-	}
-	params.PayloadProcessingRouterExtProcFallback = !wasmPresent
-	if params.PayloadProcessingRouterExtProcFallback {
-		log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
-			"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+	if !params.SkipIPP {
+		wasmPresent, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
+		}
+		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+		if params.PayloadProcessingRouterExtProcFallback {
+			log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
+				"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+		}
 	}
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
@@ -106,8 +108,10 @@ func RunPlatform(
 	// disabled, the HPA must be deleted first so it cannot reset spec.replicas
 	// between the apply and the next reconciliation. SSA only creates/updates
 	// resources in the rendered set; it does NOT delete absent resources.
-	if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
-		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+	if !params.SkipIPP {
+		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
+			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+		}
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
@@ -129,12 +133,14 @@ func RunPlatform(
 	if !ready {
 		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
 	}
-	ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
-	}
-	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+	if !params.SkipIPP {
+		ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
+		}
+		if !ready {
+			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+		}
 	}
 	return &RunResult{Warnings: params.Warnings}, nil
 }

@@ -1,5 +1,6 @@
 [tool.pytest.ini_options]
 markers = [
+    "worker_tenant: test requires explicitly provisioned per-worker MaaS state",
     "serial: cluster-wide mutations; excluded from parallel pass 1 (see prow two-phase pytest)",
     "slow: long-running test (may wait for token expiry)",
     "xdist_group(name): pytest-xdist group marker for parallel test groups",

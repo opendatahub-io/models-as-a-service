@@ -1368,3 +1368,155 @@ func TestSyncModuleStatus(t *testing.T) {
 		g.Expect(cond.Message).To(ContainSubstring("not yet created"))
 	})
 }
+
+func TestSyncTenantsHealth(t *testing.T) {
+	s := lifecycleTestScheme(t)
+
+	makeCfg := func(uid types.UID) *maasv1alpha1.Config {
+		return &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: maasv1alpha1.ConfigInstanceName,
+				UID:  uid,
+			},
+		}
+	}
+	makeAITenantInNS := func(name, ns string, readyStatus metav1.ConditionStatus) *maasv1alpha1.AITenant {
+		at := &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+			},
+		}
+		if readyStatus != "" {
+			apimeta.SetStatusCondition(&at.Status.Conditions, metav1.Condition{
+				Type:    maasv1alpha1.AITenantConditionReady,
+				Status:  readyStatus,
+				Reason:  "TestReason",
+				Message: "test",
+			})
+		}
+		return at
+	}
+
+	t.Run("TenantsHealthy=True with NoTenantsFound when no AITenants exist", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-none")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		g.Expect(cond.Reason).To(Equal("NoTenantsFound"))
+	})
+
+	t.Run("TenantsHealthy=True when all tenants are ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-healthy")
+		at1 := makeAITenantInNS("default", "ns-a", metav1.ConditionTrue)
+		at2 := makeAITenantInNS("team-b", "ns-b", metav1.ConditionTrue)
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at1, at2).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
+		g.Expect(cond.Reason).To(Equal("AllTenantsHealthy"))
+		g.Expect(cond.Message).To(ContainSubstring("2 tenant(s) healthy"))
+	})
+
+	t.Run("Degraded when some tenants are not ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-degraded")
+		at1 := makeAITenantInNS("default", "ns-a", metav1.ConditionTrue)
+		at2 := makeAITenantInNS("team-b", "ns-b", metav1.ConditionFalse)
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at1, at2).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("TenantsDegraded"))
+		g.Expect(cond.Message).To(ContainSubstring("1 of 2"))
+		g.Expect(cond.Message).To(ContainSubstring("ns-b/team-b"))
+	})
+
+	t.Run("Blocked when all tenants are not ready", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-blocked")
+		at1 := makeAITenantInNS("default", "ns-a", metav1.ConditionFalse)
+		at2 := makeAITenantInNS("team-b", "ns-b", metav1.ConditionFalse)
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at1, at2).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("TenantsBlocked"))
+		g.Expect(cond.Message).To(ContainSubstring("all 2"))
+	})
+
+	t.Run("tenant without Ready condition counts as unhealthy", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := makeCfg("uid-no-cond")
+		at := makeAITenantInNS("default", "ns-a", "")
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg, at).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
+		g.Expect(cond).NotTo(BeNil())
+		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
+		g.Expect(cond.Reason).To(Equal("TenantsBlocked"))
+	})
+
+	t.Run("nil Config is a no-op", func(t *testing.T) {
+		g := NewWithT(t)
+		cl := fake.NewClientBuilder().WithScheme(s).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), nil)).To(Succeed())
+	})
+
+	t.Run("Config without UID is a no-op", func(t *testing.T) {
+		g := NewWithT(t)
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName},
+		}
+		cl := fake.NewClientBuilder().WithScheme(s).
+			WithStatusSubresource(&maasv1alpha1.Config{}).
+			WithObjects(cfg).Build()
+		r := &LifecycleReconciler{Client: cl, Scheme: s}
+		g.Expect(r.syncTenantsHealth(context.Background(), cfg)).To(Succeed())
+		var updated maasv1alpha1.Config
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &updated)).To(Succeed())
+		g.Expect(updated.Status.Conditions).To(BeEmpty())
+	})
+}
+
+func TestFormatTenantList(t *testing.T) {
+	g := NewWithT(t)
+
+	g.Expect(formatTenantList([]string{"ns/a"}, 5)).To(Equal("ns/a"))
+	g.Expect(formatTenantList([]string{"ns/a", "ns/b", "ns/c"}, 5)).To(Equal("ns/a, ns/b, ns/c"))
+	g.Expect(formatTenantList([]string{"ns/a", "ns/b", "ns/c"}, 2)).To(Equal("ns/a, ns/b (and 1 more)"))
+	g.Expect(formatTenantList([]string{"a", "b", "c", "d", "e", "f"}, 3)).To(Equal("a, b, c (and 3 more)"))
+}
