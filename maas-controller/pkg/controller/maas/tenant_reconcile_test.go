@@ -900,6 +900,71 @@ func TestTenantReconcile_TeardownRequestedSkipsReconciliation(t *testing.T) {
 	g.Expect(updated.Status.Conditions).To(BeEmpty(), "should not set any status conditions during teardown")
 }
 
+func TestTenantReconcile_TeardownRequestedStillHandlesDeletion(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const controllerNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	now := metav1.NewTime(time.Now())
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: controllerNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(dep, tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:              cl,
+		Scheme:              s,
+		ControllerNamespace: controllerNS,
+		TenantNamespace:     tenantNS,
+		AppNamespace:        tenantNS,
+		GatewayName:         testTenantGatewayName,
+		GatewayNamespace:    testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	err = cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: tenantNS}, &updated)
+	if apierrors.IsNotFound(err) {
+		return
+	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(updated.Finalizers).NotTo(ContainElement(tenantFinalizer), "deletion cleanup should run during teardown")
+}
+
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 	tests := []struct {
 		name             string
