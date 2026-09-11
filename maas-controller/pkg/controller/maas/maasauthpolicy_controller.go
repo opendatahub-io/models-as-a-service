@@ -391,7 +391,7 @@ const (
 		`? auth.metadata.apiKeyValidation.groups ` +
 		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
 
-	safeGroupNamePattern = `^[A-Za-z0-9:._/-]+$`
+	safeGroupNamePattern = `^[A-Za-z0-9:._/ -]+$`
 	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
 
 	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key

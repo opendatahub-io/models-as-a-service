@@ -18,10 +18,10 @@ import (
 )
 
 // validGroupNamePattern matches Kubernetes/OpenShift group names.
-// Allows alphanumerics, colons (for system: prefixes), dots, underscores, and hyphens.
+// Allows alphanumerics, colons (for system: prefixes), dots, underscores, hyphens, and spaces.
 // Rejects control characters, quotes, backslashes, and other unsafe characters
 // that could break JSON encoding in AuthPolicy CEL expressions (CWE-116/CWE-74 mitigation).
-var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._-]+$`)
+var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._ -]+$`)
 
 var (
 	ErrTenantRequired = errors.New("tenant is required")
@@ -116,7 +116,7 @@ func (s *Service) CreateAPIKey(
 	// functions, so we reject any characters outside the safe allowlist on write.
 	for _, group := range userGroups {
 		if !validGroupNamePattern.MatchString(group) {
-			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, and hyphens are allowed)", group)
+			return nil, fmt.Errorf("group name %q contains invalid characters (only alphanumerics, colons, dots, underscores, hyphens, and spaces are allowed)", group)
 		}
 	}
 
