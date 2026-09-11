@@ -50,6 +50,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -104,7 +105,8 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,resourceNames=nonroot-v2,verbs=use
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
+	ctx = oteljson.IntoContext(ctx)
+	log := oteljson.FromContext(ctx).WithName("self-deployment").WithValues("deployment", req.NamespacedName)
 
 	var dep appsv1.Deployment
 	if err := r.Get(ctx, req.NamespacedName, &dep); err != nil {
@@ -176,7 +178,7 @@ func (r *LifecycleReconciler) ensureDefaultAITenantReferencesConfig(ctx context.
 	if r.Scheme == nil {
 		return nil, nil
 	}
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
@@ -337,7 +339,7 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	if r.Scheme == nil {
 		return nil, nil
 	}
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
@@ -532,7 +534,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 				// installed by COO which may not be present yet). Skip so the rest of the
 				// platform manifests are applied and Tenant reconcile does not fail.
 				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+				oteljson.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
 				continue

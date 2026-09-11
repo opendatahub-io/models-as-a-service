@@ -694,6 +694,60 @@ def wait_for_httproute_accepted(
     return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_llmisvc_backend_ready(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+) -> dict:
+    """Wait until an LLMInferenceService, route, and serving workload are ready."""
+    llmisvc = wait_for_status_condition(
+        "llminferenceservice",
+        name,
+        namespace,
+        condition_type="Ready",
+        timeout=timeout,
+    )
+
+    wait_for_llmisvc_route_ready(
+        name,
+        namespace,
+        gateway_name,
+        gateway_namespace,
+        timeout=timeout,
+    )
+    wait_for_deployment_available(f"{name}-kserve", namespace=namespace, timeout=timeout)
+    return llmisvc
+
+
+def wait_for_llmisvc_route_ready(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+) -> dict:
+    """Wait until an LLMInferenceService's HTTPRoute is accepted and resolved."""
+    route_name = f"{name}-kserve-route"
+
+    def _route_ready(obj: dict) -> bool:
+        for parent in (obj.get("status") or {}).get("parents") or []:
+            parent_ref = parent.get("parentRef") or {}
+            parent_namespace = parent_ref.get("namespace") or gateway_namespace
+            if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
+                continue
+            conditions = parent.get("conditions") or []
+            condition_statuses = {condition.get("type"): condition.get("status") for condition in conditions}
+            if condition_statuses.get("Accepted") == "True" and condition_statuses.get("ResolvedRefs") == "True":
+                return True
+        return False
+
+    return wait_for_json("httproute", route_name, namespace, predicate=_route_ready, timeout=timeout)
+
+
 def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> None:
     service_name = f"{gateway_name}-{AITENANT_GATEWAY_CLASS_NAME}"
     route_name = f"{gateway_name}-route"
@@ -902,8 +956,8 @@ def provision_tenant_model(
     from test_helper import _create_llmis, _create_maas_model_ref
 
     _create_llmis(model_name, tenant_namespace, gateway_name, GATEWAY_NAMESPACE)
-    wait_for_httproute_accepted(
-        f"{model_name}-kserve-route",
+    wait_for_llmisvc_backend_ready(
+        model_name,
         tenant_namespace,
         gateway_name,
         timeout=ready_timeout,

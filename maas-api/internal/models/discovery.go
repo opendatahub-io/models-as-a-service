@@ -162,12 +162,13 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP
 //     provider API key is injected by IPP, not carried in the user token.
 //   - "llmisvc" / "LLMInferenceService" / "" (default): included directly if Ready;
 //     BBR clusters share a single gateway base URL so per-model probing is not meaningful.
-func (m *Manager) FilterModelsByAccess(_ context.Context, models []Model, _ string, _ string) []Model {
+func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, _ string, _ string) []Model {
 	if len(models) == 0 {
 		return models
 	}
 
-	m.logger.Debug("FilterModelsByAccess: filtering models by readiness", "count", len(models))
+	log := m.logger.WithContext(ctx)
+	log.Debug("FilterModelsByAccess: filtering models by readiness", "count", len(models))
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null.
 	out := make([]Model, 0, len(models))
 	for _, model := range models {
@@ -176,24 +177,24 @@ func (m *Manager) FilterModelsByAccess(_ context.Context, models []Model, _ stri
 			// ExternalModel endpoints require the provider API key injected by IPP;
 			// probing is not possible with the user's MaaS token.
 			if model.Ready {
-				m.logger.Debug("FilterModelsByAccess: including ExternalModel (no probe)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: including ExternalModel (no probe)", "id", model.ID)
 				out = append(out, model)
 			} else {
-				m.logger.Debug("FilterModelsByAccess: skipping ExternalModel (not ready)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: skipping ExternalModel (not ready)", "id", model.ID)
 			}
 		case kindLLMISvc, kindLLMISvcAlternate, "":
 			// Both kindLLMISvc ("llmisvc") and kindLLMISvcAlternate ("LLMInferenceService") are
 			// valid values for MaaSModelRef spec.modelRef.kind; empty defaults to kindLLMISvc.
 			if model.Ready {
-				m.logger.Debug("FilterModelsByAccess: including LLMInferenceService (no probe)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: including LLMInferenceService (no probe)", "id", model.ID)
 				out = append(out, model)
 			} else {
-				m.logger.Debug("FilterModelsByAccess: skipping LLMInferenceService (not ready)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: skipping LLMInferenceService (not ready)", "id", model.ID)
 			}
 		default:
-			m.logger.Debug("FilterModelsByAccess: skipping model with unknown kind", "id", model.ID, "kind", model.Kind)
+			log.Debug("FilterModelsByAccess: skipping model with unknown kind", "id", model.ID, "kind", model.Kind)
 		}
 	}
-	m.logger.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
+	log.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
 	return out
 }

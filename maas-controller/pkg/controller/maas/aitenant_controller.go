@@ -52,6 +52,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -125,6 +126,7 @@ type AITenantReconciler struct {
 
 // Reconcile drives AITenant bootstrap lifecycle.
 func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	var aitenant maasv1alpha1.AITenant
 	if err := r.Get(ctx, req.NamespacedName, &aitenant); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -226,7 +228,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 	}
 
 	if err := r.ensureInfraNamespaceGatewayLabels(ctx, gw); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "infra namespace gateway label reconciliation failed, continuing")
+		oteljson.FromContext(ctx).Error(err, "infra namespace gateway label reconciliation failed, continuing")
 		apimeta.SetStatusCondition(&aitenant.Status.Conditions, metav1.Condition{
 			Type:               tenantreconcile.ConditionTypeDegraded,
 			Status:             metav1.ConditionTrue,
@@ -575,7 +577,7 @@ func (r *AITenantReconciler) ensureInfraNamespaceGatewayLabels(ctx context.Conte
 		return fmt.Errorf("patch labels on infra namespace %s: %w", r.AppNamespace, err)
 	}
 
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	log.Info("applied gateway namespace-selector labels to infrastructure namespace",
 		"infraNamespace", r.AppNamespace, "gateway", gw.Name,
 		"applied", desiredLabels, "removed", staleKeys)
@@ -611,7 +613,7 @@ func (r *AITenantReconciler) cleanupGatewayLabelsOnDelete(ctx context.Context, a
 		return fmt.Errorf("read infra namespace %s: %w", r.AppNamespace, err)
 	}
 
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 
 	ownership, err := parseOwnershipAnnotation(infraNs.Annotations[gatewayLabelsAnnotation])
 	if err != nil {
@@ -676,7 +678,7 @@ func (r *AITenantReconciler) cleanupGatewayLabelsOnDelete(ctx context.Context, a
 func (r *AITenantReconciler) enqueueAITenantForGateway(ctx context.Context, obj client.Object) []reconcile.Request {
 	var list maasv1alpha1.AITenantList
 	if err := r.APIReader.List(ctx, &list, client.InNamespace(r.aitenantNamespace())); err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to list AITenants for gateway mapper")
+		oteljson.FromContext(ctx).Error(err, "failed to list AITenants for gateway mapper")
 		return nil
 	}
 
@@ -1053,13 +1055,13 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if err := r.deleteTenantAPIKeyRevocationJob(ctx, aitenant); err != nil {
 		// The AITenant is already unblocked. The Job TTL is a fallback for this
 		// narrow failure window, so report the error without making deletion fail.
-		ctrl.LoggerFrom(ctx).Error(err, "failed to delete completed API key revocation Job")
+		oteljson.FromContext(ctx).Error(err, "failed to delete completed API key revocation Job")
 	}
 	return ctrl.Result{}, nil
 }
 
 func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	msg := fmt.Sprintf("Deletion timeout (%s) reached; cleanup finalizer removed without successful cleanup — API keys may still exist", r.DeletionTimeout)
 	log.Info("AITenant deletion timeout reached, forcing finalizer removal",
 		"deletionTimestamp", aitenant.DeletionTimestamp.Time,
