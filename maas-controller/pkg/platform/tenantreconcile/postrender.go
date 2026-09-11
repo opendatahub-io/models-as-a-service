@@ -234,7 +234,7 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
 	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? ` +
+		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/ -]+$')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
 		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
