@@ -3,3 +3,4 @@ kind: Kustomization
 
 resources:
   - maas-webhook-certificate.yaml
+  - maas-controller-metrics-certificate.yaml

@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/propagation"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
@@ -115,6 +116,27 @@ func TestMiddleware_SpanStatusOnServerError(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, "Error", spans[0].Status.Code.String())
+}
+
+func TestMiddleware_ContinuesIncomingTraceparent(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	exporter := setupTracingTest(t)
+	previous := otel.GetTextMapPropagator()
+	otel.SetTextMapPropagator(propagation.TraceContext{})
+	t.Cleanup(func() { otel.SetTextMapPropagator(previous) })
+
+	router := gin.New()
+	router.Use(tracing.NewMiddleware("default-tenant", "", "", ""))
+	router.GET("/v1/models", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/models", nil)
+	req.Header.Set("Traceparent", "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+	router.ServeHTTP(httptest.NewRecorder(), req)
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", spans[0].SpanContext.TraceID().String())
+	assert.Equal(t, "00f067aa0ba902b7", spans[0].Parent.SpanID().String())
 }
 
 // TestMiddleware_NoopWhenNoProvider verifies that the middleware produces

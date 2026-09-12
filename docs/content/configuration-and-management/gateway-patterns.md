@@ -14,7 +14,7 @@ and troubleshooting guidance for common failure modes.
 
 | Pattern | Environment | One-line purpose |
 |---------|-------------|-----------------|
-| [ClusterIP + Route re-encrypt](#clusterip-gateway-with-openshift-route-re-encrypt) | Dev / Lab / Production | ClusterIP Gateway Service fronted by an OpenShift Route with re-encrypt TLS; no external LoadBalancer required |
+| [ClusterIP + Route re-encrypt](#clusterip-gateway-with-openshift-route-re-encrypt) (ocproute mode) | Dev / Lab / Production | ClusterIP Gateway Service fronted by an OpenShift Route with re-encrypt TLS; no external LoadBalancer required |
 
 ## Environment matrix
 

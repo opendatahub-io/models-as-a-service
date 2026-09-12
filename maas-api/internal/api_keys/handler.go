@@ -29,6 +29,7 @@ const (
 // Regular expressions to match invalid control characters in key name and label values.
 var invalidKeyNameCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
 var invalidLabelCharsPattern = regexp.MustCompile(`[\x00-\x1F\x7F]`)
+
 // Kubernetes-style label keys: optional DNS prefix + name
 // https://kubernetes.io/docs/concepts/overview/working-with-objects/labels/#syntax-and-character-set
 // Prefix: DNS subdomain (alphanumeric, dots, hyphens) ending with /
@@ -57,7 +58,19 @@ type MetricsRecorder interface {
 	RecordRejection(reason string)
 }
 
+func (h *Handler) withContext(c *gin.Context) *Handler {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.logger = requestLogger
+	} else {
+		requestHandler.logger = h.logger.WithContext(c.Request.Context())
+	}
+	return &requestHandler
+}
+
 func (h *Handler) GetAPIKeyConfig(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.JSON(http.StatusOK, gin.H{
 		"max_expiration_days":      h.service.GetMaxExpirationDays(),
 		"ephemeral_max_expiration": constant.DefaultEphemeralKeyMaxExpiration.String(),
@@ -136,6 +149,8 @@ func (h *Handler) recordTokenMint(tenant, result string) {
 }
 
 func (h *Handler) GetAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
 	tokenID := c.Param("id")
 	if tokenID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Token ID required"})
@@ -202,6 +217,18 @@ type CreateAPIKeyRequest struct {
 // Per "Keys Shown Only Once": key is returned ONCE at creation and never again.
 // Users can only create keys for themselves - the key inherits the user's groups.
 func (h *Handler) CreateAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
+	// API keys are inference credentials, not credentials for minting more API keys.
+	// Reject them here, even if the gateway has already authenticated the key, so a
+	// subscription-scoped key cannot recover the broader permissions of the user and
+	// groups stored in its metadata or extend its own lifetime through a child key.
+	if isAPIKeyBearer(c.GetHeader("Authorization")) {
+		h.recordTokenMint(h.service.GetTenantName(), "rejected")
+		c.JSON(http.StatusForbidden, gin.H{"error": "API keys cannot create API keys"})
+		return
+	}
+
 	var req CreateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
@@ -321,48 +348,53 @@ func (h *Handler) CreateAPIKey(c *gin.Context) {
 	c.JSON(http.StatusCreated, result)
 }
 
+func isAPIKeyBearer(authorization string) bool {
+	scheme, credential, found := strings.Cut(strings.TrimSpace(authorization), " ")
+	return found && strings.EqualFold(scheme, "Bearer") && strings.HasPrefix(credential, KeyPrefix)
+}
+
 // validateLabels validates the labels map for security and size constraints.
 // Labels are user-defined key-value pairs for organizing and filtering API keys.
 func validateLabels(labels map[string]string) error {
-    if labels == nil {
-        return nil
-    }
-    
-    // Limit number of label entries (prevent abuse)
-    if len(labels) > constant.MaxLabelsEntries {
-        return fmt.Errorf("labels cannot exceed %d key-value pairs", constant.MaxLabelsEntries)
-    }
-    
-    // Validate each key-value pair
-    for key, value := range labels {
-        // Key validation
-        if len(key) == 0 {
-            return errors.New("label keys cannot be empty")
-        }
-        if len(key) > constant.MaxLabelKeyLength {
-            return fmt.Errorf("label key '%s' exceeds %d characters", key, constant.MaxLabelKeyLength)
-        }
-        // Only allow alphanumerics, underscores, hyphens, dots (similar to K8s labels). 
+	if labels == nil {
+		return nil
+	}
+
+	// Limit number of label entries (prevent abuse)
+	if len(labels) > constant.MaxLabelsEntries {
+		return fmt.Errorf("labels cannot exceed %d key-value pairs", constant.MaxLabelsEntries)
+	}
+
+	// Validate each key-value pair
+	for key, value := range labels {
+		// Key validation
+		if len(key) == 0 {
+			return errors.New("label keys cannot be empty")
+		}
+		if len(key) > constant.MaxLabelKeyLength {
+			return fmt.Errorf("label key '%s' exceeds %d characters", key, constant.MaxLabelKeyLength)
+		}
+		// Only allow alphanumerics, underscores, hyphens, dots (similar to K8s labels).
 		// Use a package-level variable for comparison to avoid recomputing the regex every iteration of the loop.
-        if !validLabelKeyPattern.MatchString(key) {
-            return fmt.Errorf("label key '%s' contains invalid characters (only alphanumerics, dots, underscores, hyphens allowed)", key)
-        }
-        
-        // Value validation
+		if !validLabelKeyPattern.MatchString(key) {
+			return fmt.Errorf("label key '%s' contains invalid characters (only alphanumerics, dots, underscores, hyphens allowed)", key)
+		}
+
+		// Value validation
 		if len(value) == 0 {
 			return fmt.Errorf("label value for key '%s' cannot be empty", key)
 		}
-        if len(value) > constant.MaxLabelValueLength {
-            return fmt.Errorf("label value for key '%s' exceeds %d characters", key, constant.MaxLabelValueLength)
-        }
+		if len(value) > constant.MaxLabelValueLength {
+			return fmt.Errorf("label value for key '%s' exceeds %d characters", key, constant.MaxLabelValueLength)
+		}
 
-        // Reject control characters in values
+		// Reject control characters in values
 		if invalidLabelCharsPattern.MatchString(value) {
-            return fmt.Errorf("label value for key '%s' contains invalid control characters", key)
-        }
-    }
-    
-    return nil
+			return fmt.Errorf("label value for key '%s' contains invalid control characters", key)
+		}
+	}
+
+	return nil
 }
 
 // ValidateAPIKeyRequest is the request body for validating an API key.
@@ -374,6 +406,8 @@ type ValidateAPIKeyRequest struct {
 // This endpoint is called by Authorino via HTTP external auth callback
 // Per Feature Refinement "Gateway Integration (Inference Flow)".
 func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
+	h = h.withContext(c)
+
 	var req ValidateAPIKeyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "key is required"})
@@ -416,6 +450,8 @@ func (h *Handler) ValidateAPIKeyHandler(c *gin.Context) {
 // RevokeAPIKey handles DELETE /v1/api-keys/:id
 // Revokes a specific API key by changing its status to 'revoked'.
 func (h *Handler) RevokeAPIKey(c *gin.Context) {
+	h = h.withContext(c)
+
 	keyID := c.Param("id")
 	if keyID == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "API key ID required"})
@@ -487,6 +523,8 @@ func (h *Handler) RevokeAPIKey(c *gin.Context) {
 // When no user context is present (ExtractUserInfoOptional did not set one),
 // an empty list is returned gracefully.
 func (h *Handler) SearchAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
@@ -639,6 +677,8 @@ func (h *Handler) SearchAPIKeys(c *gin.Context) {
 // Deletes expired ephemeral API keys. Called by CronJob.
 // Access is restricted at the network level via NetworkPolicy.
 func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	count, err := h.service.CleanupExpiredEphemeral(c.Request.Context())
 	if err != nil {
 		h.logger.Error("Failed to cleanup expired ephemeral keys", "error", err)
@@ -655,6 +695,8 @@ func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
 // RevokeTenantAPIKeys handles DELETE /internal/v1/tenants/:tenant/api-keys.
 // Revokes all active API keys for this maas-api instance's tenant.
 func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	tenant := strings.TrimSpace(c.Param("tenant"))
 	count, err := h.service.RevokeTenantAPIKeys(c.Request.Context(), tenant)
 	if err != nil {
@@ -682,6 +724,8 @@ func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
 // Supports dryRun=true to preview how many keys would be revoked without mutating.
 // Subscription-scoped revocation is admin-only.
 func (h *Handler) BulkRevokeAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
 	var req BulkRevokeRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})

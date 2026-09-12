@@ -50,6 +50,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 )
 
 // MaaSModelRefReconciler reconciles a MaaSModelRef object
@@ -129,7 +130,8 @@ func tenantAssociationIndexer(obj client.Object) []string {
 
 // Reconcile is part of the main kubernetes reconciliation loop
 func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := logr.FromContextOrDiscard(ctx).WithValues("MaaSModelRef", req.NamespacedName)
+	ctx = oteljson.IntoContext(ctx)
+	log := oteljson.FromContext(ctx).WithValues("MaaSModelRef", req.NamespacedName)
 
 	model := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, req.NamespacedName, model); err != nil {
@@ -427,7 +429,7 @@ func (r *MaaSModelRefReconciler) updateStatusWithReason(ctx context.Context, mod
 	}
 
 	if err := r.Status().Update(ctx, model); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
+		log := oteljson.FromContext(ctx)
 		log.Error(err, "failed to update MaaSModelRef status", "name", model.Name)
 		// Intentionally do not return the error so we do not re-queue on status update conflict/failure.
 	}
@@ -693,7 +695,7 @@ func (r *MaaSModelRefReconciler) enqueueSiblingsWithAlias(ctx context.Context, c
 	}
 	var siblings maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &siblings, client.InNamespace(changed.Namespace)); err != nil {
-		logr.FromContextOrDiscard(ctx).Error(err, "failed to list sibling MaaSModelRefs", "namespace", changed.Namespace)
+		oteljson.FromContext(ctx).Error(err, "failed to list sibling MaaSModelRefs", "namespace", changed.Namespace)
 		return
 	}
 	for _, m := range siblings.Items {
@@ -765,7 +767,7 @@ func (r *MaaSModelRefReconciler) mapAITenantToMaaSModelRefs(ctx context.Context,
 	if !ok {
 		return nil
 	}
-	log := logr.FromContextOrDiscard(ctx)
+	log := oteljson.FromContext(ctx)
 
 	seen := make(map[types.NamespacedName]struct{})
 	var requests []reconcile.Request
@@ -807,7 +809,7 @@ func (r *MaaSModelRefReconciler) mapLLMISvcToMaaSModelRefs(ctx context.Context, 
 	// via registerWatchWhenCRDAppears when KServe CRD appears after startup).
 	var models maasv1alpha1.MaaSModelRefList
 	if err := r.List(ctx, &models, client.MatchingFields{modelRefNameIndex: obj.GetName()}); err != nil {
-		logr.FromContextOrDiscard(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", obj.GetName())
+		oteljson.FromContext(ctx).Error(err, "failed to list MaaSModels by modelRef.name index", "llmisvcName", obj.GetName())
 		return nil
 	}
 	var requests []reconcile.Request

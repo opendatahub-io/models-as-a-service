@@ -24,6 +24,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	for i := range resources {
 		resource := &resources[i]
 
+		if params.SkipIPP && isIPPResource(resource.GroupVersionKind(), resource.GetName()) {
+			log.V(1).Info("Skipping IPP resource for praxis tenant",
+				"kind", resource.GetKind(), "name", resource.GetName(), "namespace", resource.GetNamespace())
+			continue
+		}
+
 		annotations := resource.GetAnnotations()
 		if annotations != nil && annotations[AnnotationManaged] == "false" {
 			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",
@@ -68,8 +74,10 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
 	}
-	if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
-		return nil, err
+	if !params.SkipIPP {
+		if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
+			return nil, err
+		}
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
@@ -226,7 +234,7 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
 	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? ` +
+		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/ -]+$')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
 		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +

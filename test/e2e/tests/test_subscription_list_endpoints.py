@@ -50,7 +50,70 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("api_keys")
+pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worker_subscription_list_context(request):
+    """Bind subscription-list tests to worker-owned MaaS resources."""
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        ensure_worker_models,
+        serial_only_selection,
+    )
+
+    if serial_only_selection(request):
+        yield
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    ensure_worker_models(
+        context,
+        (context.distinct_model_ref, context.distinct_model_2_ref),
+    )
+    original_values = {
+        name: globals()[name]
+        for name in (
+            "MODEL_NAMESPACE",
+            "MODEL_REF",
+            "DISTINCT_MODEL_REF",
+            "DISTINCT_MODEL_2_REF",
+            "SIMULATOR_SUBSCRIPTION",
+        )
+    }
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+
+    globals().update(
+        {
+            "MODEL_NAMESPACE": context.model_namespace,
+            "MODEL_REF": context.model_ref,
+            "DISTINCT_MODEL_REF": context.distinct_model_ref,
+            "DISTINCT_MODEL_2_REF": context.distinct_model_2_ref,
+            "SIMULATOR_SUBSCRIPTION": context.subscription_name,
+        }
+    )
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+
+    try:
+        with activate_worker_tenant(context):
+            yield
+    finally:
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
 
 
 def _validate_subscription_info_schema(sub):
@@ -231,7 +294,7 @@ class TestListSubscriptions:
                 "spec": {
                     "modelRef": {
                         "kind": "LLMInferenceService",
-                        "name": "e2e-distinct-simulated",
+                        "name": DISTINCT_MODEL_REF,
                     }
                 },
             })
@@ -493,6 +556,7 @@ class TestSubscriptionModelAccessFiltering:
                 sa_user,
                 sa_groups,
                 namespace=maas_ns,
+                model_namespace=MODEL_NAMESPACE,
             )
             assert not authorizing_policies, (
                 f"Policies {authorizing_policies} authorize '{sa_user}' for "

@@ -38,6 +38,7 @@ import (
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -71,7 +72,7 @@ func managementState(ann map[string]string) string {
 }
 
 func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 
 	var tenant maasv1alpha1.MaasTenantConfig
 	if err := r.Get(ctx, req.NamespacedName, &tenant); err != nil {
@@ -112,14 +113,31 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	// Handle deletion before tenant identifier validation and the teardown guard:
+	// finalizer cleanup must proceed even when TenantIdentifierFor would fail or while
+	// LifecycleReconciler is tearing down MaaS (AITenant deletion waits on MaasTenantConfig).
+	if !tenant.DeletionTimestamp.IsZero() {
+		return r.handleDeletion(ctx, log, &tenant)
+	}
+
+	// Skip reconciliation during MaaS teardown to avoid blocking on gateway dependencies.
+	// When teardown is requested, LifecycleReconciler orchestrates cleanup independently.
+	// Try both controller namespace and app namespace (for deployments in operator infra namespace).
+	for _, depNS := range []string{r.ControllerNamespace, r.AppNamespace} {
+		if depNS == "" {
+			continue
+		}
+		var dep appsv1.Deployment
+		depKey := client.ObjectKey{Name: "maas-controller", Namespace: depNS}
+		if err := r.Get(ctx, depKey, &dep); err == nil && TeardownRequestedOnDeployment(&dep) {
+			log.Info("skipping MaasTenantConfig reconciliation during MaaS teardown", "deploymentNamespace", depNS)
+			return ctrl.Result{}, nil
+		}
+	}
+
 	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
 	if err != nil {
 		return ctrl.Result{}, err
-	}
-
-	// Handle deletion
-	if !tenant.DeletionTimestamp.IsZero() {
-		return r.handleDeletion(ctx, log, &tenant)
 	}
 
 	if usesCleanupFinalizer {
@@ -139,6 +157,11 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Surface the infrastructure namespace so operators know where maas-db-config lives.
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
+
+	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
+		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 
 	// Handle management states
 	if result, err := r.handleManagementState(ctx, log, &tenant); result != nil {
@@ -169,8 +192,13 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
+	usageLogsWarning, err := r.ensureUsageLogsEnvoyFilter(ctx, log, &tenant, platformContext, mcfg)
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
 	// Aggregate all warnings and set Degraded condition once
-	r.aggregateWarningsAndSetDegraded(&tenant, prereqReport, runRes)
+	r.aggregateWarningsAndSetDegraded(&tenant, prereqReport, runRes, usageLogsWarning)
 
 	// Cleanup legacy resources
 	r.attemptLegacyCleanup(ctx, log)
@@ -366,31 +394,45 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	tenant *maasv1alpha1.MaasTenantConfig,
 	prereqReport tenantreconcile.PrerequisiteReport,
 	runRes *tenantreconcile.RunResult,
+	usageLogsWarning string,
 ) {
 	var allWarnings []string
 	hasPrereqWarnings := len(prereqReport.Warnings) > 0
-	hasReplicaWarnings := runRes != nil && len(runRes.Warnings) > 0
+	hasPlatformWarnings := runRes != nil && len(runRes.Warnings) > 0
+	hasUsageLogsWarning := usageLogsWarning != ""
 
-	// Collect prerequisite warnings
 	if hasPrereqWarnings {
 		allWarnings = append(allWarnings, prereqReport.Warnings...)
 	}
-
-	// Collect replica warnings
-	if hasReplicaWarnings {
+	if hasPlatformWarnings {
 		allWarnings = append(allWarnings, runRes.Warnings...)
 	}
+	if hasUsageLogsWarning {
+		allWarnings = append(allWarnings, usageLogsWarning)
+	}
 
-	// Set Degraded condition once with all aggregated warnings
 	if len(allWarnings) > 0 {
+		warningKinds := 0
+		if hasPrereqWarnings {
+			warningKinds++
+		}
+		if hasPlatformWarnings {
+			warningKinds++
+		}
+		if hasUsageLogsWarning {
+			warningKinds++
+		}
+
 		var reason string
 		switch {
-		case hasPrereqWarnings && hasReplicaWarnings:
+		case warningKinds > 1:
 			reason = "MultipleWarnings"
 		case hasPrereqWarnings:
 			reason = "PrerequisitesWarning"
-		case hasReplicaWarnings:
+		case hasPlatformWarnings:
 			reason = "InvalidReplicaAnnotation"
+		default:
+			reason = "UsageLoggingNotProvided"
 		}
 		setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue,
 			reason, strings.Join(allWarnings, "; "))
@@ -698,6 +740,11 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 		{
 			gvk:       tenantreconcile.GVKEnvoyFilter,
 			name:      tenantreconcile.PayloadProcessingEnvoyFilterName(tenantID),
+			namespace: gatewayNs,
+		},
+		{
+			gvk:       tenantreconcile.GVKEnvoyFilter,
+			name:      tenantreconcile.UsageLogsEnvoyFilterName(tenantID),
 			namespace: gatewayNs,
 		},
 		{
