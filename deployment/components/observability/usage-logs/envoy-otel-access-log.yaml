@@ -2,12 +2,14 @@
 #
 # Emits structured usage logs for inference requests via OTel Access Log Service.
 #
-# Identity:  user_id, subscription, and groups from X-MaaS-Username /
-#            X-MaaS-Subscription / X-MaaS-Group (still present on Limitador
-#            429 local replies) or from header_to_metadata captured before
-#            payload-processing ext_proc strips the headers. Other identity
-#            fields remain on auth identity FILTER_STATE
-#            (wasm.kuadrant.auth.identity.*).
+# Identity:  subscription and groups from X-MaaS-Subscription / X-MaaS-Group
+#            (still present on Limitador 429 local replies) or from
+#            header_to_metadata captured before payload-processing ext_proc
+#            strips the headers. Other identity fields remain on auth identity
+#            FILTER_STATE (wasm.kuadrant.auth.identity.*).
+#            user_id (X-MaaS-Username) is NOT captured by default; it is
+#            injected at runtime by the tenant reconciler when
+#            MaasTenantConfig.spec.telemetry.metrics.captureUser is true.
 # Model:     Composite filter wraps json_to_metadata, executing only on
 #            inference paths (suffix match: /v1/chat/completions,
 #            /v1/completions, /v1/embeddings).
@@ -111,11 +113,6 @@ spec:
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
           request_rules:
-          - header: X-MaaS-Username
-            on_header_present:
-              metadata_namespace: envoy.filters.http.header_to_metadata
-              key: user_id
-              type: STRING
           - header: X-MaaS-Subscription
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
@@ -144,11 +141,6 @@ spec:
         typed_config:
           "@type": type.googleapis.com/envoy.extensions.filters.http.header_to_metadata.v3.Config
           request_rules:
-          - header: X-MaaS-Username
-            on_header_present:
-              metadata_namespace: envoy.filters.http.header_to_metadata
-              key: user_id
-              type: STRING
           - header: X-MaaS-Subscription
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
@@ -458,9 +450,7 @@ spec:
                 # Prefer metadata captured by header_to_metadata after auth.
                 # Fall back to request headers when metadata namespace is unavailable
                 # (e.g., Limitador 429 before header_to_metadata runs).
-                - key: user_id
-                  value:
-                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["user_id"] : request.headers["x-maas-username"])%'
+                # user_id is injected here by the tenant reconciler when captureUser=true.
                 - key: subscription
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription"] : request.headers["x-maas-subscription"])%'
