@@ -22,6 +22,7 @@ var (
 		"Set-Cookie",
 		"X-MaaS-Username",
 		"X-MaaS-Group",
+		"X-MaaS-Gateway-Auth",
 	}
 
 	// hmacKey is a per-process random key used to prevent rainbow table attacks

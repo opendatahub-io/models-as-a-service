@@ -146,6 +146,10 @@ class TestHeaderSpoofing:
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
 
+    @pytest.fixture(autouse=True)
+    def _ensure_gateway_auth_enforced(self):
+        _wait_for_gateway_auth_enforced()
+
     @pytest.mark.parametrize(
         "forged_header,label",
         [

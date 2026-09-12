@@ -1511,7 +1511,8 @@ class TestModelsEndpoint:
                 assert isinstance(model["id"], str), f"'id' must be string, got {type(model['id'])}"
                 assert isinstance(model["object"], str), f"'object' must be string"
                 assert model["object"] == "model", f"'object' must be 'model', got {model['object']}"
-                assert isinstance(model["created"], int), f"'created' must be integer"
+                assert isinstance(model["created"], (int, float)), f"'created' must be numeric"
+                assert float(model["created"]).is_integer(), f"'created' must be an integer timestamp"
                 assert isinstance(model["owned_by"], str), f"'owned_by' must be string"
                 assert isinstance(model["ready"], bool), f"'ready' must be boolean"
 
