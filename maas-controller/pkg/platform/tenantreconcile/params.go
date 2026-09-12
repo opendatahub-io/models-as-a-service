@@ -1081,6 +1081,9 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 				return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
 			}
 
+			if i >= len(clusterByIndex) {
+				return fmt.Errorf("EnvoyFilter configPatches[%d]: cluster index %d out of range (len=%d)", i, i, len(clusterByIndex))
+			}
 			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
 			if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
 				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
