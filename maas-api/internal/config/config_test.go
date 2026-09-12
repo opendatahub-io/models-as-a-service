@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 const testGatewayName = "my-gateway"
@@ -50,6 +52,16 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 			},
 		},
 		{
+			name:    "LOG_FORMAT selects OTel JSON logging",
+			envVars: map[string]string{"LOG_FORMAT": "otel-json"},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.LogFormat != logger.FormatOTelJSON {
+					t.Errorf("expected OTel JSON log format, got %q", cfg.LogFormat)
+				}
+			},
+		},
+		{
 			name:    "metrics secure defaults",
 			envVars: map[string]string{},
 			check: func(t *testing.T, cfg *Config) {
@@ -79,7 +91,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 
 	// All env vars that Load() reads, to be cleared before each subtest.
 	allEnvVars := []string{
-		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
+		"DEBUG_MODE", "LOG_FORMAT", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
 		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
 		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
@@ -140,6 +152,19 @@ func TestValidate(t *testing.T) {
 				TLS:             TLSConfig{Cert: "/cert.pem"},
 			},
 			expectError: "--tls-cert and --tls-key must both be provided together",
+		},
+		{
+			name: "invalid log format returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				LogFormat:                 "unknown",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectError: "unsupported log format",
 		},
 		{
 			name: "valid insecure config sets default address :8080",

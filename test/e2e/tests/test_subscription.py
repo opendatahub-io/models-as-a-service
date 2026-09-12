@@ -51,6 +51,7 @@ import uuid
 
 import pytest
 import requests
+import test_helper
 
 from test_helper import (
     MODEL_NAME,
@@ -100,7 +101,117 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("api_keys")
+pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worker_subscription_context(request):
+    """Point non-serial subscription tests at worker-owned tenant resources."""
+    from worker_tenant_fixtures import activate_worker_tenant, serial_only_selection
+
+    if serial_only_selection(request):
+        yield
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    names = (
+        "MODEL_NAME", "MODEL_NAMESPACE", "MODEL_PATH", "MODEL_REF",
+        "PREMIUM_MODEL_PATH", "PREMIUM_MODEL_REF", "SIMULATOR_ACCESS_POLICY",
+        "SIMULATOR_SUBSCRIPTION", "TRLP_TEST_MODEL_REF", "TRLP_TEST_MODEL_PATH",
+        "TRLP_TEST_MODEL_ID", "DISTINCT_MODEL_REF", "UNCONFIGURED_MODEL_PATH",
+        "UNCONFIGURED_MODEL_REF", "AUTH_POLICY_NAME", "TRLP_NAME",
+    )
+    original_values = {name: globals()[name] for name in names}
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+    original_gateway_wait = globals()["_wait_for_gateway_auth_enforced"]
+    helper_names = (
+        "MODEL_NAME", "MODEL_NAMESPACE", "MODEL_PATH", "MODEL_REF", "PREMIUM_MODEL_NAME",
+        "PREMIUM_MODEL_PATH", "PREMIUM_MODEL_REF", "SIMULATOR_ACCESS_POLICY",
+        "SIMULATOR_SUBSCRIPTION", "TRLP_TEST_MODEL_REF", "TRLP_TEST_MODEL_PATH",
+        "TRLP_TEST_MODEL_ID", "DISTINCT_MODEL_REF", "UNCONFIGURED_MODEL_PATH",
+        "UNCONFIGURED_MODEL_REF", "GATEWAY_AUTH_POLICY_NAME",
+    )
+    original_helper_values = {name: getattr(test_helper, name) for name in helper_names}
+
+    model_name = f"e2e/{context.model_ref}"
+    trlp_model_name = f"e2e/{context.distinct_model_2_ref}"
+    globals().update(
+        {
+            "MODEL_NAME": model_name,
+            "MODEL_NAMESPACE": context.model_namespace,
+            "MODEL_PATH": f"/{context.model_namespace}/{context.model_ref}",
+            "MODEL_REF": context.model_ref,
+            "PREMIUM_MODEL_PATH": (
+                f"/{context.model_namespace}/{context.premium_model_ref}"
+            ),
+            "PREMIUM_MODEL_REF": context.premium_model_ref,
+            "SIMULATOR_ACCESS_POLICY": context.policy_name,
+            "SIMULATOR_SUBSCRIPTION": context.subscription_name,
+            "TRLP_TEST_MODEL_REF": context.distinct_model_2_ref,
+            "TRLP_TEST_MODEL_PATH": (
+                f"/{context.model_namespace}/{context.distinct_model_2_ref}"
+            ),
+            "TRLP_TEST_MODEL_ID": trlp_model_name,
+            "DISTINCT_MODEL_REF": context.distinct_model_ref,
+            "UNCONFIGURED_MODEL_PATH": (
+                f"/{context.model_namespace}/{context.unconfigured_model_ref}"
+            ),
+            "UNCONFIGURED_MODEL_REF": context.unconfigured_model_ref,
+            "AUTH_POLICY_NAME": f"maas-auth-{context.model_ref}",
+            "TRLP_NAME": f"maas-trlp-{context.model_ref}",
+        }
+    )
+    helper_updates = {
+        "MODEL_NAME": model_name,
+        "MODEL_NAMESPACE": context.model_namespace,
+        "MODEL_PATH": f"/{context.model_namespace}/{context.model_ref}",
+        "MODEL_REF": context.model_ref,
+        "PREMIUM_MODEL_NAME": f"e2e/{context.premium_model_ref}",
+        "PREMIUM_MODEL_PATH": f"/{context.model_namespace}/{context.premium_model_ref}",
+        "PREMIUM_MODEL_REF": context.premium_model_ref,
+        "SIMULATOR_ACCESS_POLICY": context.policy_name,
+        "SIMULATOR_SUBSCRIPTION": context.subscription_name,
+        "TRLP_TEST_MODEL_REF": context.distinct_model_2_ref,
+        "TRLP_TEST_MODEL_PATH": f"/{context.model_namespace}/{context.distinct_model_2_ref}",
+        "TRLP_TEST_MODEL_ID": trlp_model_name,
+        "DISTINCT_MODEL_REF": context.distinct_model_ref,
+        "UNCONFIGURED_MODEL_PATH": f"/{context.model_namespace}/{context.unconfigured_model_ref}",
+        "UNCONFIGURED_MODEL_REF": context.unconfigured_model_ref,
+        "GATEWAY_AUTH_POLICY_NAME": context.gateway_authpolicy_name,
+    }
+    for name, value in helper_updates.items():
+        setattr(test_helper, name, value)
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    def wait_for_gateway_auth(*args, **kwargs):
+        kwargs.setdefault("name", context.gateway_authpolicy_name)
+        return original_gateway_wait(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+    globals()["_wait_for_gateway_auth_enforced"] = wait_for_gateway_auth
+    _default_api_key_cache.clear()
+    try:
+        with activate_worker_tenant(context):
+            yield
+    finally:
+        _default_api_key_cache.clear()
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
+        globals()["_wait_for_gateway_auth_enforced"] = original_gateway_wait
+        for name, value in original_helper_values.items():
+            setattr(test_helper, name, value)
 
 
 # Generated resource names (for TestManagedAnnotation)
@@ -956,6 +1067,7 @@ class TestCascadeDeletion:
             # subscription cache has caught up, preventing flaky failures in subsequent tests.
             _wait_for_token_rate_limit_policy(MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90)
 
+    @pytest.mark.serial
     def test_unconfigured_model_denied_by_gateway_auth(self):
         """New model with no MaaSAuthPolicy/MaaSSubscription -> gateway default auth denies (403)."""
         # Precondition: unconfigured model fixture is deployed
@@ -1761,6 +1873,22 @@ class TestStatusReporting:
     - Per-item status (modelRefStatuses, tokenRateLimitStatuses, authPolicies)
     - Ready/Reason fields on per-item statuses
     """
+
+    @pytest.fixture(scope="class", autouse=True)
+    def _worker_status_models(self, request):
+        """Provision the optional models used by status-reporting tests."""
+        from worker_tenant_fixtures import ensure_worker_models, serial_only_selection
+
+        if serial_only_selection(request):
+            yield
+            return
+
+        context = request.getfixturevalue("worker_tenant_context")
+        ensure_worker_models(
+            context,
+            (context.distinct_model_ref, context.distinct_model_2_ref),
+        )
+        yield
 
     def test_subscription_active_status_with_valid_model(self):
         """

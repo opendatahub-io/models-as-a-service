@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -841,14 +842,175 @@ func TestTenantReconcile_NotFoundIsNoOp(t *testing.T) {
 	g.Expect(res).To(Equal(ctrl.Result{}))
 }
 
+func TestTenantReconcile_TeardownRequestedSkipsReconciliation(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const controllerNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: controllerNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(dep, tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:              cl,
+		Scheme:              s,
+		ControllerNamespace: controllerNS,
+		TenantNamespace:     tenantNS,
+		AppNamespace:        tenantNS,
+		GatewayName:         testTenantGatewayName,
+		GatewayNamespace:    testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred(), "should return immediately without error during teardown")
+	g.Expect(res).To(Equal(ctrl.Result{}), "should return empty result (no requeue)")
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: tenantNS}, &updated)).To(Succeed())
+	g.Expect(updated.Status.Conditions).To(BeEmpty(), "should not set any status conditions during teardown")
+}
+
+func TestTenantReconcile_TeardownRequestedStillHandlesDeletion(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const controllerNS = "opendatahub"
+	const tenantNS = "models-as-a-service"
+	now := metav1.NewTime(time.Now())
+
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "maas-controller",
+			Namespace: controllerNS,
+			Annotations: map[string]string{
+				TeardownRequestedAnnotation: "true",
+			},
+		},
+		Spec: appsv1.DeploymentSpec{
+			Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "maas-controller"}},
+			Template: corev1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "maas-controller"}},
+				Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "manager", Image: "test"}}},
+			},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:         tenantNS,
+			DeletionTimestamp: &now,
+			Finalizers:        []string{tenantFinalizer},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(dep, tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:              cl,
+		Scheme:              s,
+		ControllerNamespace: controllerNS,
+		TenantNamespace:     tenantNS,
+		AppNamespace:        tenantNS,
+		GatewayName:         testTenantGatewayName,
+		GatewayNamespace:    testTenantGatewayNamespace,
+	}
+
+	res, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
+	})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	err = cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: tenantNS}, &updated)
+	if apierrors.IsNotFound(err) {
+		return
+	}
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(updated.Finalizers).NotTo(ContainElement(tenantFinalizer), "deletion cleanup should run during teardown")
+}
+
+func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testing.T) {
+	g := NewWithT(t)
+	s := tenantTestScheme(t)
+
+	const tenantNS = "broken-tenant-ns"
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNS,
+			Labels: map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+			},
+		},
+	}
+
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(tenant).
+		Build()
+
+	r := &TenantReconciler{
+		Client:                          cl,
+		Scheme:                          s,
+		TenantNamespace:                 "models-as-a-service",
+		TenantNamespaceDiscoveryEnabled: true,
+		GatewayName:                     testTenantGatewayName,
+		GatewayNamespace:                testTenantGatewayNamespace,
+	}
+
+	_, err := r.Reconcile(context.Background(), ctrl.Request{
+		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
+	})
+	g.Expect(err).To(MatchError(ContainSubstring("tenant-name is missing")))
+}
+
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 	tests := []struct {
-		name            string
-		prereqWarnings  []string
-		replicaWarnings []string
-		wantReason      string
-		wantStatus      metav1.ConditionStatus
-		wantMessage     string
+		name             string
+		prereqWarnings   []string
+		replicaWarnings  []string
+		usageLogsWarning string
+		wantReason       string
+		wantStatus       metav1.ConditionStatus
+		wantMessage      string
 	}{
 		{
 			name:            "no warnings",
@@ -906,6 +1068,21 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 			wantStatus:      metav1.ConditionTrue,
 			wantMessage:     "DSCI monitoring stack not available; Perses not available; invalid replica annotation on maas-api; invalid replica annotation on payload-processing",
 		},
+		{
+			name:             "usage logging warning only",
+			usageLogsWarning: "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			wantReason:       "UsageLoggingNotProvided",
+			wantStatus:       metav1.ConditionTrue,
+			wantMessage:      "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+		},
+		{
+			name:             "usage logging warning with prerequisite warning",
+			prereqWarnings:   []string{"DSCI monitoring stack not available"},
+			usageLogsWarning: "Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+			wantReason:       "MultipleWarnings",
+			wantStatus:       metav1.ConditionTrue,
+			wantMessage:      "DSCI monitoring stack not available; Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
+		},
 	}
 
 	for _, tt := range tests {
@@ -937,7 +1114,7 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 				Scheme: s,
 			}
 
-			r.aggregateWarningsAndSetDegraded(tenant, prereqReport, runRes)
+			r.aggregateWarningsAndSetDegraded(tenant, prereqReport, runRes, tt.usageLogsWarning)
 
 			degradedCond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
 			g.Expect(degradedCond).NotTo(BeNil(), "Degraded condition should be set")

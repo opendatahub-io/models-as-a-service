@@ -27,6 +27,8 @@ spec:
               fieldPath: metadata.namespace
         - name: SECURE
           value: "false"
+        - name: LOG_FORMAT
+          value: "otel-json"
         - name: MAAS_SUBSCRIPTION_NAMESPACE
           value: "models-as-a-service"
         - name: METRICS_PORT

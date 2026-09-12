@@ -17,6 +17,14 @@ const (
 	// AnnotationAITenantNamespace identifies the namespace of the owning AITenant.
 	AnnotationAITenantNamespace = "maas.opendatahub.io/aitenant-namespace"
 
+	// AnnotationPayloadProcessingType selects the tenant payload-processing dataplane.
+	// Value "praxis" skips IPP reconciliation in maas-controller; absent or other values mean IPP.
+	AnnotationPayloadProcessingType = "maas.opendatahub.io/payload-processing-type"
+
+	// PayloadProcessingTypePraxis is the annotation value that opts a tenant into the
+	// ai-gateway-controller praxis dataplane and skips maas-controller IPP resources.
+	PayloadProcessingTypePraxis = "praxis"
+
 	tenantNamespacePrefix = "ai-tenant-"
 )
 
@@ -26,6 +34,7 @@ const (
 type PlatformContext struct {
 	GatewayRef   maasv1alpha1.TenantGatewayRef
 	ExternalOIDC *maasv1alpha1.TenantExternalOIDCConfig
+	SkipIPP      bool
 	Source       string
 }
 
@@ -36,7 +45,10 @@ type PlatformContext struct {
 // use Tenant.spec values for migration compatibility.
 func ResolvePlatformContext(ctx context.Context, c client.Reader, tenant client.Object, fallbackGatewayRef maasv1alpha1.TenantGatewayRef) (PlatformContext, error) {
 	if tenant == nil {
-		return PlatformContext{GatewayRef: fallbackGatewayRef, Source: "default"}, nil
+		return PlatformContext{
+			GatewayRef: fallbackGatewayRef,
+			Source:     "default",
+		}, nil
 	}
 
 	if isAITenantManagedTenantConfig(tenant) {
@@ -94,8 +106,19 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 	return PlatformContext{
 		GatewayRef:   ref,
 		ExternalOIDC: aitenant.Spec.OIDC.DeepCopy(),
+		SkipIPP:      resolveSkipIPP(tenant, aitenant),
 		Source:       "aitenant",
 	}, nil
+}
+
+func resolveSkipIPP(tenant client.Object, aitenant maasv1alpha1.AITenant) bool {
+	if v := annotationValue(tenant, AnnotationPayloadProcessingType); v != "" {
+		return v == PayloadProcessingTypePraxis
+	}
+	if v := annotationValue(&aitenant, AnnotationPayloadProcessingType); v != "" {
+		return v == PayloadProcessingTypePraxis
+	}
+	return false
 }
 
 func isAITenantManagedTenantConfig(tenant client.Object) bool {

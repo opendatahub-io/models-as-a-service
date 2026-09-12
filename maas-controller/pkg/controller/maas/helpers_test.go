@@ -31,6 +31,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 func TestDeletionTimestampSet(t *testing.T) {
@@ -90,6 +91,81 @@ func TestDeletionTimestampSet(t *testing.T) {
 			got := deletionTimestampSet(e)
 			if got != tt.expected {
 				t.Errorf("deletionTimestampSet() = %v, want %v", got, tt.expected)
+			}
+		})
+	}
+}
+
+func TestPayloadProcessingTypeAnnotationChanged(t *testing.T) {
+	annotationKey := tenantreconcile.AnnotationPayloadProcessingType
+	aitenant := func(annotations map[string]string) *maasv1alpha1.AITenant {
+		return &maasv1alpha1.AITenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:        "team-a",
+				Namespace:   tenantreconcile.DefaultAITenantNamespace,
+				Annotations: annotations,
+			},
+		}
+	}
+
+	tests := []struct {
+		name     string
+		oldObj   client.Object
+		newObj   client.Object
+		expected bool
+	}{
+		{
+			name:     "add praxis annotation",
+			oldObj:   aitenant(nil),
+			newObj:   aitenant(map[string]string{annotationKey: tenantreconcile.PayloadProcessingTypePraxis}),
+			expected: true,
+		},
+		{
+			name: "remove praxis annotation",
+			oldObj: aitenant(map[string]string{
+				annotationKey: tenantreconcile.PayloadProcessingTypePraxis,
+			}),
+			newObj:   aitenant(nil),
+			expected: true,
+		},
+		{
+			name: "change praxis to unknown value",
+			oldObj: aitenant(map[string]string{
+				annotationKey: tenantreconcile.PayloadProcessingTypePraxis,
+			}),
+			newObj: aitenant(map[string]string{
+				annotationKey: "legacy",
+			}),
+			expected: true,
+		},
+		{
+			name: "ignore unrelated annotation changes",
+			oldObj: aitenant(map[string]string{
+				annotationKey:           tenantreconcile.PayloadProcessingTypePraxis,
+				"example.com/unrelated": "old",
+			}),
+			newObj: aitenant(map[string]string{
+				annotationKey:           tenantreconcile.PayloadProcessingTypePraxis,
+				"example.com/unrelated": "new",
+			}),
+			expected: false,
+		},
+		{
+			name:     "ignore spec-only generation bump with stable annotation",
+			oldObj:   aitenant(map[string]string{annotationKey: tenantreconcile.PayloadProcessingTypePraxis}),
+			newObj:   aitenant(map[string]string{annotationKey: tenantreconcile.PayloadProcessingTypePraxis}),
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := payloadProcessingTypeAnnotationChanged(event.UpdateEvent{
+				ObjectOld: tt.oldObj,
+				ObjectNew: tt.newObj,
+			})
+			if got != tt.expected {
+				t.Errorf("payloadProcessingTypeAnnotationChanged() = %v, want %v", got, tt.expected)
 			}
 		})
 	}

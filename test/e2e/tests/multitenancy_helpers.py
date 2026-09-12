@@ -18,7 +18,6 @@ MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT"
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
-    E2E_CURL_POD_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
     GATEWAY_PROPAGATION_RETRIES,
     MAAS_API_DEPLOYMENT_NAMESPACE,
@@ -30,6 +29,7 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
+    kubectl_curl,
 )
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
@@ -694,6 +694,60 @@ def wait_for_httproute_accepted(
     return wait_for_json("httproute", route_name, namespace, predicate=_predicate, timeout=timeout, interval=interval)
 
 
+def wait_for_llmisvc_backend_ready(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+) -> dict:
+    """Wait until an LLMInferenceService, route, and serving workload are ready."""
+    llmisvc = wait_for_status_condition(
+        "llminferenceservice",
+        name,
+        namespace,
+        condition_type="Ready",
+        timeout=timeout,
+    )
+
+    wait_for_llmisvc_route_ready(
+        name,
+        namespace,
+        gateway_name,
+        gateway_namespace,
+        timeout=timeout,
+    )
+    wait_for_deployment_available(f"{name}-kserve", namespace=namespace, timeout=timeout)
+    return llmisvc
+
+
+def wait_for_llmisvc_route_ready(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str = GATEWAY_NAMESPACE,
+    *,
+    timeout: int = 180,
+) -> dict:
+    """Wait until an LLMInferenceService's HTTPRoute is accepted and resolved."""
+    route_name = f"{name}-kserve-route"
+
+    def _route_ready(obj: dict) -> bool:
+        for parent in (obj.get("status") or {}).get("parents") or []:
+            parent_ref = parent.get("parentRef") or {}
+            parent_namespace = parent_ref.get("namespace") or gateway_namespace
+            if parent_ref.get("name") != gateway_name or parent_namespace != gateway_namespace:
+                continue
+            conditions = parent.get("conditions") or []
+            condition_statuses = {condition.get("type"): condition.get("status") for condition in conditions}
+            if condition_statuses.get("Accepted") == "True" and condition_statuses.get("ResolvedRefs") == "True":
+                return True
+        return False
+
+    return wait_for_json("httproute", route_name, namespace, predicate=_route_ready, timeout=timeout)
+
+
 def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> None:
     service_name = f"{gateway_name}-{AITENANT_GATEWAY_CLASS_NAME}"
     route_name = f"{gateway_name}-route"
@@ -902,8 +956,8 @@ def provision_tenant_model(
     from test_helper import _create_llmis, _create_maas_model_ref
 
     _create_llmis(model_name, tenant_namespace, gateway_name, GATEWAY_NAMESPACE)
-    wait_for_httproute_accepted(
-        f"{model_name}-kserve-route",
+    wait_for_llmisvc_backend_ready(
+        model_name,
         tenant_namespace,
         gateway_name,
         timeout=ready_timeout,
@@ -1352,36 +1406,11 @@ class _InternalResponse:
 def _kubectl_curl_post(
     url: str, *, headers: dict = None, json_body: dict = None,
 ) -> _InternalResponse:
-    """POST to an in-cluster URL via kubectl run (for internal endpoints)."""
-    curl_args = ["-sk", "-m", "10", "-X", "POST"]
-    if headers:
-        for key, value in headers.items():
-            curl_args.extend(["-H", f"{key}: {value}"])
-    if json_body is not None:
-        curl_args.extend([
-            "-H", "Content-Type: application/json",
-            "-d", json.dumps(json_body),
-        ])
-    curl_args.extend(["-w", "\\nHTTP_CODE:%{http_code}", url])
-
-    pod_name = f"mt-curl-{os.getpid()}-{uuid.uuid4().hex[:6]}"
-    namespace = os.environ.get("E2E_CURL_POD_NAMESPACE", E2E_CURL_POD_NAMESPACE)
-    cmd = [
-        "kubectl", "run", pod_name,
-        "--rm", "-i", "--restart=Never",
-        "--image=curlimages/curl:latest",
-        "-n", namespace,
-        "--", "curl",
-    ] + curl_args
-
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    output = result.stdout
-    if "HTTP_CODE:" in output:
-        body, code_line = output.rsplit("HTTP_CODE:", 1)
-        match = re.search(r"(\d{3})", code_line)
-        if match:
-            return _InternalResponse(int(match.group(1)), body.strip())
-    return _InternalResponse(0, output)
+    """POST to an in-cluster URL via kubectl exec (for internal endpoints)."""
+    status_code, body = kubectl_curl(
+        url, method="POST", headers=headers, json_body=json_body,
+    )
+    return _InternalResponse(status_code, body)
 
 
 def tenant_internal_url(tenant_name: str) -> str:

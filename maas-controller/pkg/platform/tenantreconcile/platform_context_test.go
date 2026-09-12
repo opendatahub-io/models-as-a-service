@@ -75,6 +75,99 @@ func TestResolvePlatformContext_AITenantManagedTenantUsesAITenant(t *testing.T) 
 	assert.Equal(t, "https://issuer.example.com/realms/redteam", got.ExternalOIDC.IssuerURL)
 	assert.Equal(t, "redteam-client", got.ExternalOIDC.ClientID)
 	assert.Equal(t, "aitenant", got.Source)
+	assert.False(t, got.SkipIPP)
+}
+
+func TestResolvePlatformContext_AITenantAnnotationSkipsIPP(t *testing.T) {
+	scheme := platformContextTestScheme(t)
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "redteam",
+				LabelTenantNamespace:   "ai-tenant-redteam",
+			},
+			Annotations: map[string]string{
+				AnnotationAITenantName:      "redteam",
+				AnnotationAITenantNamespace: DefaultAITenantNamespace,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "redteam",
+			Namespace: DefaultAITenantNamespace,
+			Annotations: map[string]string{
+				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
+			},
+		},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "redteam-gateway",
+			},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, aitenant).Build()
+
+	got, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
+	require.NoError(t, err)
+	assert.True(t, got.SkipIPP)
+}
+
+func TestResolvePlatformContext_TenantConfigAnnotationOverridesAITenant(t *testing.T) {
+	scheme := platformContextTestScheme(t)
+	tenant := &maasv1alpha1.Tenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.TenantInstanceName,
+			Namespace: "ai-tenant-redteam",
+			Labels: map[string]string{
+				LabelManagedByAITenant: "true",
+				LabelTenantName:        "redteam",
+				LabelTenantNamespace:   "ai-tenant-redteam",
+			},
+			Annotations: map[string]string{
+				AnnotationAITenantName:          "redteam",
+				AnnotationAITenantNamespace:     DefaultAITenantNamespace,
+				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
+			},
+		},
+	}
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{Name: "redteam", Namespace: DefaultAITenantNamespace},
+		Status: maasv1alpha1.AITenantStatus{
+			GatewayRef: maasv1alpha1.TenantGatewayRef{
+				Namespace: "openshift-ingress",
+				Name:      "redteam-gateway",
+			},
+		},
+	}
+	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, aitenant).Build()
+
+	got, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
+	require.NoError(t, err)
+	assert.True(t, got.SkipIPP)
+}
+
+func TestResolveSkipIPP_UnknownTenantAnnotationIgnoresAITenant(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationPayloadProcessingType: "unknown",
+			},
+		},
+	}
+	aitenant := maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
+			},
+		},
+	}
+
+	assert.False(t, resolveSkipIPP(tenant, aitenant))
 }
 
 func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {
@@ -102,6 +195,7 @@ func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {
 	require.NotNil(t, got.ExternalOIDC)
 	assert.Equal(t, "default-client", got.ExternalOIDC.ClientID)
 	assert.Equal(t, "legacy-tenant-spec", got.Source)
+	assert.False(t, got.SkipIPP)
 }
 
 func TestResolvePlatformContext_AITenantStatusGatewayRequired(t *testing.T) {

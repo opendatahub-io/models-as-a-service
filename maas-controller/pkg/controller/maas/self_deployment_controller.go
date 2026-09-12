@@ -38,18 +38,19 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -57,9 +58,6 @@ import (
 // teardown when ODH removed MaaS. It is no longer set; this constant remains so reconciles
 // can strip it from older installs.
 const CleanupFinalizer = "maas.opendatahub.io/cleanup"
-
-// envoyFilterManifestPath is the absolute path to the EnvoyFilter manifest inside the container.
-const envoyFilterManifestPath = "/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml"
 
 // usageLogsCollectorName is the OpenTelemetryCollector resource for gateway usage logs.
 const usageLogsCollectorName = "usage-logs"
@@ -69,9 +67,6 @@ const usageLogsTenancyProxyDeploymentName = "usage-logs-tenancy-proxy"
 
 // usageLogsTenancyProxyContainerName is the proxy container in the tenancy proxy Deployment.
 const usageLogsTenancyProxyContainerName = "proxy"
-
-// envoyFilterName is the name of the usage-logs EnvoyFilter resource.
-const envoyFilterName = "maas-model-access-logs"
 
 // LifecycleReconciler watches the maas-controller Deployment. It is the sole creator of the
 // cluster-scoped Config/default anchor when the Deployment exists and is not terminating (so
@@ -93,7 +88,6 @@ type LifecycleReconciler struct {
 	GatewayNamespace            string
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
-	EnvoyFilterManifestPath     string
 	UsageLogsManifestPath       string
 }
 
@@ -104,7 +98,6 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;update;patch
 //+kubebuilder:rbac:groups=perses.dev,resources=persesdashboards;persesdatasources,verbs=get;list;watch;create;patch;delete
-//+kubebuilder:rbac:groups=networking.istio.io,resources=envoyfilters,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=opentelemetry.io,resources=opentelemetrycollectors,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings;rolebindings,verbs=get;list;watch;create;patch;delete
 //+kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=create;get
@@ -112,7 +105,8 @@ type LifecycleReconciler struct {
 //+kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,resourceNames=nonroot-v2,verbs=use
 
 func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	log := ctrl.Log.WithName("self-deployment").WithValues("deployment", req.NamespacedName)
+	ctx = oteljson.IntoContext(ctx)
+	log := oteljson.FromContext(ctx).WithName("self-deployment").WithValues("deployment", req.NamespacedName)
 
 	var dep appsv1.Deployment
 	if err := r.Get(ctx, req.NamespacedName, &dep); err != nil {
@@ -160,6 +154,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			if err := r.syncModuleStatus(ctx, cfg); err != nil {
 				return ctrl.Result{}, err
 			}
+			if err := r.syncTenantsHealth(ctx, cfg); err != nil {
+				return ctrl.Result{}, err
+			}
 		}
 		return ctrl.Result{}, nil
 	}
@@ -181,7 +178,7 @@ func (r *LifecycleReconciler) ensureDefaultAITenantReferencesConfig(ctx context.
 	if r.Scheme == nil {
 		return nil, nil
 	}
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
@@ -342,7 +339,7 @@ func (r *LifecycleReconciler) ensureTenantReferencesConfig(ctx context.Context) 
 	if r.Scheme == nil {
 		return nil, nil
 	}
-	log := ctrl.LoggerFrom(ctx)
+	log := oteljson.FromContext(ctx)
 	cfgKey := client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}
 	var cfg maasv1alpha1.Config
 	if err := r.Get(ctx, cfgKey, &cfg); err != nil {
@@ -426,9 +423,6 @@ func (r *LifecycleReconciler) ensureObservability(ctx context.Context, log logr.
 		return err
 	}
 	if err := r.ensureUsageDashboard(ctx, log); err != nil {
-		return err
-	}
-	if err := r.ensureUsageLogsEnvoyFilter(ctx, log); err != nil {
 		return err
 	}
 	if err := r.ensureUsageLogs(ctx, log); err != nil {
@@ -540,7 +534,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 				// installed by COO which may not be present yet). Skip so the rest of the
 				// platform manifests are applied and Tenant reconcile does not fail.
 				// The CRD watch will re-trigger reconcile once the CRDs appear.
-				ctrl.LoggerFrom(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
+				oteljson.FromContext(ctx).Info("skipping resource: optional CRD not yet registered, will apply once installed",
 					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
 					"name", res.GetName(), "namespace", res.GetNamespace())
 				continue
@@ -753,143 +747,13 @@ func patchTenancyProxyImage(res *unstructured.Unstructured) error {
 	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
-// ensureUsageLogsEnvoyFilter deploys or removes the OTel usage logs EnvoyFilter based on
-// the Config's usageLogging feature gate. The EnvoyFilter emits structured per-request
-// usage logs (token counts, identity, model) to an OTel Collector via gRPC Access Log Service.
-func (r *LifecycleReconciler) ensureUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger) error {
-	var cfg maasv1alpha1.Config
-	if err := r.Get(ctx, client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &cfg); err != nil {
-		if apierrors.IsNotFound(err) {
-			return r.deleteEnvoyFilterIfExists(ctx, log)
-		}
-		return err
-	}
-
-	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		return r.deleteEnvoyFilterIfExists(ctx, log)
-	}
-
-	return r.applyUsageLogsEnvoyFilter(ctx, log, &cfg)
-}
-
-func (r *LifecycleReconciler) deleteEnvoyFilterIfExists(ctx context.Context, log logr.Logger) error {
-	ef := &unstructured.Unstructured{}
-	ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
-	ef.SetName(envoyFilterName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := r.Delete(ctx, ef); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return nil
-		}
-		return fmt.Errorf("failed to delete usage-logs EnvoyFilter: %w", err)
-	}
-	log.Info("deleted usage-logs EnvoyFilter (usageLogging disabled)")
-	return nil
-}
-
-func (r *LifecycleReconciler) applyUsageLogsEnvoyFilter(ctx context.Context, log logr.Logger, cfg *maasv1alpha1.Config) error {
-	manifestPath := r.EnvoyFilterManifestPath
-	if manifestPath == "" {
-		manifestPath = envoyFilterManifestPath
-	}
-	raw, err := os.ReadFile(manifestPath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			log.Info("EnvoyFilter manifest not found, skipping", "path", manifestPath)
-			return nil
-		}
-		return fmt.Errorf("read EnvoyFilter manifest %s: %w", manifestPath, err)
-	}
-
-	ef := &unstructured.Unstructured{}
-	dec := yaml.NewDecodingSerializer(unstructured.UnstructuredJSONScheme)
-	_, _, err = dec.Decode(raw, nil, ef)
-	if err != nil {
-		return fmt.Errorf("decode EnvoyFilter manifest: %w", err)
-	}
-
-	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
-	if err := patchClusterAddress(ef, collectorAddress); err != nil {
-		return fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
-	}
-
-	ef.SetName(envoyFilterName)
-	ef.SetNamespace(r.GatewayNamespace)
-
-	if err := controllerutil.SetOwnerReference(cfg, ef, r.Scheme); err != nil {
-		return fmt.Errorf("set owner reference on EnvoyFilter: %w", err)
-	}
-
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
-		if apimeta.IsNoMatchError(err) {
-			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
-			return nil
-		}
-		return fmt.Errorf("apply usage-logs EnvoyFilter: %w", err)
-	}
-
-	log.V(1).Info("applied usage-logs EnvoyFilter", "namespace", r.GatewayNamespace, "collector", collectorAddress)
-	return nil
-}
-
-// patchClusterAddress sets the collector address in the CLUSTER configPatch
-// (configPatches[0].patch.value.load_assignment.endpoints[0].lb_endpoints[0].endpoint.address.socket_address.address).
-// Manual traversal is needed because unstructured.SetNestedField cannot handle
-// numeric slice indices — we must extract each []any level explicitly.
-func patchClusterAddress(ef *unstructured.Unstructured, address string) error {
-	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
-	if err != nil {
-		return fmt.Errorf("read configPatches: %w", err)
-	}
-	if !found || len(configPatches) == 0 {
-		return errors.New("configPatches not found or empty")
-	}
-
-	patch, ok := configPatches[0].(map[string]any)
-	if !ok {
-		return errors.New("configPatches[0] is not an object")
-	}
-
-	addrPath := []string{
-		"patch", "value", "load_assignment", "endpoints", "0",
-		"lb_endpoints", "0", "endpoint", "address", "socket_address", "address",
-	}
-
-	// unstructured.SetNestedField doesn't traverse numeric slice indices,
-	// so we walk manually to the socket_address map.
-	endpoints, found, err := unstructured.NestedSlice(patch, "patch", "value", "load_assignment", "endpoints")
-	if err != nil || !found || len(endpoints) == 0 {
-		return fmt.Errorf("load_assignment.endpoints not found (path: %v): %w", addrPath, err)
-	}
-	ep0, ok := endpoints[0].(map[string]any)
-	if !ok {
-		return errors.New("endpoints[0] is not an object")
-	}
-	lbEndpoints, found, err := unstructured.NestedSlice(ep0, "lb_endpoints")
-	if err != nil || !found || len(lbEndpoints) == 0 {
-		return fmt.Errorf("lb_endpoints not found: %w", err)
-	}
-	lbe0, ok := lbEndpoints[0].(map[string]any)
-	if !ok {
-		return errors.New("lb_endpoints[0] is not an object")
-	}
-
-	if err := unstructured.SetNestedField(lbe0, address,
-		"endpoint", "address", "socket_address", "address"); err != nil {
-		return fmt.Errorf("set socket_address.address: %w", err)
-	}
-
-	lbEndpoints[0] = lbe0
-	ep0["lb_endpoints"] = lbEndpoints
-	endpoints[0] = ep0
-	if err := unstructured.SetNestedSlice(patch, endpoints,
-		"patch", "value", "load_assignment", "endpoints"); err != nil {
-		return fmt.Errorf("write back endpoints: %w", err)
-	}
-	configPatches[0] = patch
-	return unstructured.SetNestedSlice(ef.Object, configPatches, "spec", "configPatches")
-}
+// Tenant health aggregation reasons (ADR ODH-ADR-MS-0003 three-state model).
+const (
+	tenantsHealthyReason  = "AllTenantsHealthy"
+	tenantsDegradedReason = "TenantsDegraded"
+	tenantsBlockedReason  = "TenantsBlocked"
+	tenantsNoneReason     = "NoTenantsFound"
+)
 
 // conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
 // schema (maxLength: 32768). Messages that exceed this limit are truncated on a valid UTF-8
@@ -1006,6 +870,87 @@ func (r *LifecycleReconciler) syncModuleStatus(ctx context.Context, cfg *maasv1a
 	return nil
 }
 
+// syncTenantsHealth aggregates the Ready condition from all AITenant CRs across the cluster
+// into a TenantsHealthy condition on Config.Status using the ADR ODH-ADR-MS-0003 three-state
+// model so that the platform operator (ai-gateway-operator / DSC) can observe per-tenant
+// health without listing MaaS operands directly.
+func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1alpha1.Config) error {
+	if cfg == nil || cfg.UID == "" {
+		return nil
+	}
+
+	var allTenants maasv1alpha1.AITenantList
+	if err := r.List(ctx, &allTenants, client.InNamespace(r.AITenantNamespace)); err != nil {
+		return fmt.Errorf("list AITenants for tenant health aggregation: %w", err)
+	}
+
+	base := cfg.DeepCopy()
+
+	if len(allTenants.Items) == 0 {
+		apimeta.SetStatusCondition(&cfg.Status.Conditions, metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionTrue,
+			Reason:             tenantsNoneReason,
+			Message:            "no AITenant resources found",
+			ObservedGeneration: cfg.Generation,
+		})
+		if err := r.Status().Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+			return fmt.Errorf("patch Config TenantsHealthy status: %w", err)
+		}
+		return nil
+	}
+
+	var unhealthy []string
+	total := len(allTenants.Items)
+	for i := range allTenants.Items {
+		at := &allTenants.Items[i]
+		if !apimeta.IsStatusConditionTrue(at.Status.Conditions, maasv1alpha1.AITenantConditionReady) {
+			unhealthy = append(unhealthy, at.Namespace+"/"+at.Name)
+		}
+	}
+
+	var cond metav1.Condition
+	switch {
+	case len(unhealthy) == 0:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionTrue,
+			Reason:             tenantsHealthyReason,
+			Message:            fmt.Sprintf("all %d tenant(s) healthy", total),
+			ObservedGeneration: cfg.Generation,
+		}
+	case len(unhealthy) == total:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionFalse,
+			Reason:             tenantsBlockedReason,
+			Message:            truncateConditionMessage(fmt.Sprintf("all %d tenant(s) unhealthy: %s", total, formatTenantList(unhealthy, 5))),
+			ObservedGeneration: cfg.Generation,
+		}
+	default:
+		cond = metav1.Condition{
+			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
+			Status:             metav1.ConditionFalse,
+			Reason:             tenantsDegradedReason,
+			Message:            truncateConditionMessage(fmt.Sprintf("%d of %d tenant(s) unhealthy: %s", len(unhealthy), total, formatTenantList(unhealthy, 5))),
+			ObservedGeneration: cfg.Generation,
+		}
+	}
+
+	apimeta.SetStatusCondition(&cfg.Status.Conditions, cond)
+	if err := r.Status().Patch(ctx, cfg, client.MergeFrom(base)); err != nil {
+		return fmt.Errorf("patch Config TenantsHealthy status: %w", err)
+	}
+	return nil
+}
+
+func formatTenantList(tenants []string, maxItems int) string {
+	if len(tenants) <= maxItems {
+		return strings.Join(tenants, ", ")
+	}
+	return strings.Join(tenants[:maxItems], ", ") + fmt.Sprintf(" (and %d more)", len(tenants)-maxItems)
+}
+
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
@@ -1020,12 +965,10 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		}
 		return o.GetNamespace() == r.TenantSubscriptionNamespace && o.GetName() == maasv1alpha1.MaasTenantConfigInstanceName
 	})
-	defaultAITenant := predicate.NewPredicateFuncs(func(o client.Object) bool {
-		if r.AITenantNamespace == "" {
-			return false
-		}
-		return o.GetNamespace() == r.AITenantNamespace && o.GetName() == tenantreconcile.DefaultAITenantName
-	})
+	// Watch all AITenants so that both the default tenant link
+	// (ensureDefaultAITenantReferencesConfig) and the cross-tenant health
+	// aggregation (syncTenantsHealth) stay current.
+
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&appsv1.Deployment{}, builder.WithPredicates(selfOnly)).
 		Watches(
@@ -1056,7 +999,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      r.DeploymentName,
 				}}}
 			}),
-			builder.WithPredicates(defaultAITenant),
+			builder.WithPredicates(aitenantReadyChanged()),
 		).
 		// Re-reconcile when optional operator CRDs (e.g. Perses from COO) are installed
 		// so that resources previously skipped due to missing CRDs are applied immediately.
@@ -1110,6 +1053,33 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			})),
 		).
 		Complete(r)
+}
+
+// aitenantReadyChanged admits an AITenant event only when the Ready condition
+// status changes or generation changes. Create, Delete, and Generic events pass
+// by default so that adding or removing a tenant re-runs health aggregation.
+func aitenantReadyChanged() predicate.Predicate {
+	readyStatus := func(o client.Object) metav1.ConditionStatus {
+		at, ok := o.(*maasv1alpha1.AITenant)
+		if !ok {
+			return metav1.ConditionUnknown
+		}
+		if cond := apimeta.FindStatusCondition(at.Status.Conditions, maasv1alpha1.AITenantConditionReady); cond != nil {
+			return cond.Status
+		}
+		return metav1.ConditionUnknown
+	}
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if e.ObjectOld == nil || e.ObjectNew == nil {
+				return false
+			}
+			if readyStatus(e.ObjectOld) != readyStatus(e.ObjectNew) {
+				return true
+			}
+			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
+		},
+	}
 }
 
 // crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups

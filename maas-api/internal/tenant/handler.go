@@ -15,6 +15,7 @@ import (
 	"k8s.io/client-go/dynamic"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 )
 
 const (
@@ -67,6 +68,14 @@ type GatewayMetadata struct {
 // GetTenantInfo returns tenant name and gateway connection metadata.
 // GET /v1/tenants.
 func (h *Handler) GetTenantInfo(c *gin.Context) {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.log = requestLogger
+	} else {
+		requestHandler.log = h.log.WithContext(c.Request.Context())
+	}
+	h = &requestHandler
+
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 10*time.Second)
 	defer cancel()
 

@@ -39,6 +39,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/source"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -81,6 +82,9 @@ type TenantReconciler struct {
 	MetadataCacheTTL int64
 	// MonitoringNamespace is the namespace where the platform monitoring stack is deployed.
 	MonitoringNamespace string
+	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests
+	// (--usage-logs-manifest-path). The EnvoyFilter YAML is resolved from this path at reconcile time.
+	UsageLogsManifestPath string
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -140,6 +144,7 @@ type TenantReconciler struct {
 // Reconcile drives the MaasTenantConfig platform lifecycle. ODH deploys maas-controller; the controller
 // owns the full deploy pipeline via the MaasTenantConfig CR (no standalone ModelsAsService instance CR exists).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	ctx = oteljson.IntoContext(ctx)
 	result, err := r.reconcile(ctx, req)
 	if apierrors.IsConflict(err) && isMaasTenantConfigConflict(err, req) {
 		// Stale-cache conflict on the MaasTenantConfig itself: the in-memory object's
@@ -147,7 +152,7 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// Get and Status.Update). Requeue without surfacing an error so controller-runtime
 		// doesn't log "Reconciler error" or apply exponential back-off; the next reconcile
 		// will re-read a fresh copy. Conflicts on child resources are propagated unchanged.
-		ctrl.LoggerFrom(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
+		oteljson.FromContext(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
 		return ctrl.Result{Requeue: true}, nil
 	}
 	return result, err
@@ -183,6 +188,30 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 		Namespace: tenantreconcile.TenantNamespaceForAITenant(aitenant.Name, r.TenantNamespace),
 	}}}
+}
+
+// mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
+// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
+func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
+	if !r.TenantNamespaceDiscoveryEnabled {
+		return []reconcile.Request{{NamespacedName: types.NamespacedName{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: r.TenantNamespace,
+		}}}
+	}
+
+	var tenantList maasv1alpha1.MaasTenantConfigList
+	if err := r.List(ctx, &tenantList); err != nil {
+		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for Config change mapping")
+		return nil
+	}
+	requests := make([]reconcile.Request, 0, len(tenantList.Items))
+	for i := range tenantList.Items {
+		requests = append(requests, reconcile.Request{
+			NamespacedName: client.ObjectKeyFromObject(&tenantList.Items[i]),
+		})
+	}
+	return requests
 }
 
 // crdLabeledForMaaSComponent matches CRDs labeled app.opendatahub.io/modelsasservice=true.
@@ -229,12 +258,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&maasv1alpha1.MaasTenantConfig{}).
 		Watches(
 			&maasv1alpha1.Config{},
-			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
-				return []reconcile.Request{{NamespacedName: types.NamespacedName{
-					Namespace: r.TenantNamespace,
-					Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-				}}}
-			}),
+			handler.EnqueueRequestsFromMapFunc(r.mapConfigToMaasTenantConfigs),
 			builder.WithPredicates(configResourceDefault()),
 		).
 		Watches(

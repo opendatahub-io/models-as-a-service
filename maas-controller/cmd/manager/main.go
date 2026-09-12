@@ -60,6 +60,7 @@ import (
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/reconciler/externalmodel"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/webhook"
@@ -979,6 +980,7 @@ func main() {
 	var observabilityManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
+	var logFormat oteljson.Format
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
 	flag.BoolVar(&secureMetrics, "metrics-secure", true,
@@ -1009,6 +1011,7 @@ func main() {
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
+	oteljson.BindFlags(flag.CommandLine, &logFormat)
 	flag.Parse()
 
 	maxConcurrentReconciles = clampConcurrentReconciles(maxConcurrentReconciles)
@@ -1055,6 +1058,9 @@ func main() {
 	// Derive infrastructure namespace if needed
 	infraNamespace = resolveInfraNamespace(infraNamespace, controllerNamespace)
 
+	if logFormat == oteljson.FormatOTelJSON {
+		oteljson.Apply(&opts, "maas-controller")
+	}
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	cfg := ctrl.GetConfigOrDie()
@@ -1271,7 +1277,7 @@ func main() {
 	}
 	setupLog.Info("Tenant platform kustomize path", "path", manifestPath)
 
-	if err := (&maas.TenantReconciler{
+	tenantReconciler := &maas.TenantReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
 		ManifestPath:                    manifestPath,
@@ -1284,7 +1290,9 @@ func main() {
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		MetadataCacheTTL:                metadataCacheTTL,
 		MonitoringNamespace:             monitoringNamespace,
-	}).SetupWithManager(mgr); err != nil {
+		UsageLogsManifestPath:           usageLogsManifestPath,
+	}
+	if err := tenantReconciler.SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "MaasTenantConfig")
 		os.Exit(1)
 	}
