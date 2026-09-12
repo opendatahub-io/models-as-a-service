@@ -490,6 +490,9 @@ spec:
                 - key: model
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
+                - key: upstream_host
+                  value:
+                    string_value: '%UPSTREAM_HOST%'
               resource_attributes:
                 values:
                 - key: service.name

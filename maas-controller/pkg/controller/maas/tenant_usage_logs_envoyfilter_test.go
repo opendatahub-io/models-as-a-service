@@ -83,6 +83,51 @@ func newUsageLogsReconciler(t *testing.T, s *runtime.Scheme, cl client.Client, m
 	return r
 }
 
+// usageLogsServiceNamespace reads the OTel service.namespace resource attribute out of the
+// applied EnvoyFilter.
+func usageLogsServiceNamespace(g *WithT, ef *unstructured.Unstructured) string {
+	g.THelper()
+	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(found).To(BeTrue())
+
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+		g.Expect(err).NotTo(HaveOccurred())
+		if !found {
+			continue
+		}
+		for _, entry := range accessLog {
+			logEntry, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "resource_attributes", "values")
+			g.Expect(err).NotTo(HaveOccurred())
+			if !found {
+				continue
+			}
+			for _, v := range values {
+				attr, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				if k, _, _ := unstructured.NestedString(attr, "key"); k != "service.namespace" {
+					continue
+				}
+				s, _, _ := unstructured.NestedString(attr, "value", "string_value")
+				return s
+			}
+		}
+	}
+	g.Expect(false).To(BeTrue(), "service.namespace resource attribute not found in EnvoyFilter")
+	return ""
+}
+
 func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
 	return tenantreconcile.PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{Name: tenantreconcile.DefaultAITenantName, Namespace: usageLogsTestGatewayNS},
@@ -230,6 +275,8 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantNamespace, usageLogsTestAITenantNS))
+
+		g.Expect(usageLogsServiceNamespace(g, ef)).To(Equal(usageLogsTestDefaultTenant))
 	})
 
 	t.Run("enabled creates per-tenant filter for named tenant", func(t *testing.T) {
@@ -254,6 +301,10 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName("redteam"), Namespace: usageLogsTestGatewayNS}, ef)).
 			To(Succeed())
+
+		// service.namespace tracks the per-tenant workload namespace, not the gateway
+		// namespace baked into the manifest nor the AITenant infra namespace.
+		g.Expect(usageLogsServiceNamespace(g, ef)).To(Equal("ai-tenant-redteam"))
 	})
 
 	t.Run("deletes existing when disabled", func(t *testing.T) {
