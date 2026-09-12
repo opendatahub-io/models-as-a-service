@@ -743,8 +743,9 @@ class TestOIDCHeaderInjection:
     """Verify the gateway rejects client-supplied X-MaaS identity headers.
 
     Authorino injects X-MaaS-Username / X-MaaS-Group after auth. Clients must
-    not be able to supply those headers themselves (deny-client-identity-headers).
-    X-MaaS-Subscription spoofing is covered separately (overwrite/ignore).
+    not be able to supply those headers or X-MaaS-KeyName themselves
+    (deny-client-identity-headers). X-MaaS-Subscription spoofing is covered
+    separately (overwrite/ignore).
     """
 
     def test_injected_username_header_rejected(self, maas_api_base_url: str):
@@ -820,6 +821,43 @@ class TestOIDCHeaderInjection:
             f"got {response.status_code} body_bytes={len(response.content)}"
         )
         log.info("X-MaaS-Group injection correctly denied by gateway")
+
+    def test_injected_keyname_header_rejected(self, maas_api_base_url: str):
+        """Client-supplied X-MaaS-KeyName is rejected by the gateway.
+
+        Mint an API key as alice_lead, then call /v1/models with a spoofed
+        X-MaaS-KeyName header. deny-client-identity-headers must deny so the
+        value cannot poison usage-log attribution.
+        """
+        token = _request_oidc_token(username="alice_lead", password="letmein")
+        api_key = _create_oidc_api_key(maas_api_base_url, token)["key"]
+
+        # Unspoofed control: same credential must succeed before the deny check.
+        control = requests.get(
+            f"{maas_api_base_url}/v1/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert control.status_code == 200, (
+            f"Control /v1/models without forged headers failed: "
+            f"{control.status_code} body_bytes={len(control.content)}"
+        )
+
+        response = requests.get(
+            f"{maas_api_base_url}/v1/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "X-MaaS-KeyName": "forged-prod-key",
+            },
+            timeout=30,
+            verify=TLS_VERIFY,
+        )
+        assert response.status_code in (401, 403), (
+            f"Expected 401/403 (injected header denied), "
+            f"got {response.status_code} body_bytes={len(response.content)}"
+        )
+        log.info("X-MaaS-KeyName injection correctly denied by gateway")
 
     def test_injected_subscription_header_ignored(self, maas_api_base_url: str):
         """Client-supplied X-MaaS-Subscription must not let a user access another subscription.
