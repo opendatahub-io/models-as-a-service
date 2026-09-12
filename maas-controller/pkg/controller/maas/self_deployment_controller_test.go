@@ -1411,7 +1411,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		g.Expect(cond.Reason).To(Equal("NoTenantsFound"))
+		g.Expect(cond.Reason).To(Equal(string(tenantsHealthReasonNoTenantsFound)))
 	})
 
 	t.Run("TenantsHealthy=True when all tenants are ready", func(t *testing.T) {
@@ -1429,7 +1429,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionTrue))
-		g.Expect(cond.Reason).To(Equal("AllTenantsHealthy"))
+		g.Expect(cond.Reason).To(Equal(string(tenantsHealthReasonAllTenantsHealthy)))
 		g.Expect(cond.Message).To(ContainSubstring("2 tenant(s) healthy"))
 	})
 
@@ -1448,7 +1448,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		g.Expect(cond.Reason).To(Equal("TenantsDegraded"))
+		g.Expect(cond.Reason).To(Equal(string(tenantsHealthReasonTenantsDegraded)))
 		g.Expect(cond.Message).To(ContainSubstring("1 of 2"))
 		g.Expect(cond.Message).To(ContainSubstring("ns-b/team-b"))
 	})
@@ -1468,7 +1468,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		g.Expect(cond.Reason).To(Equal("TenantsBlocked"))
+		g.Expect(cond.Reason).To(Equal(string(tenantsHealthReasonTenantsBlocked)))
 		g.Expect(cond.Message).To(ContainSubstring("all 2"))
 	})
 
@@ -1486,7 +1486,7 @@ func TestSyncTenantsHealth(t *testing.T) {
 		cond := apimeta.FindStatusCondition(updated.Status.Conditions, maasv1alpha1.ConfigConditionTenantsHealthy)
 		g.Expect(cond).NotTo(BeNil())
 		g.Expect(cond.Status).To(Equal(metav1.ConditionFalse))
-		g.Expect(cond.Reason).To(Equal("TenantsBlocked"))
+		g.Expect(cond.Reason).To(Equal(string(tenantsHealthReasonTenantsBlocked)))
 	})
 
 	t.Run("nil Config is a no-op", func(t *testing.T) {

@@ -747,12 +747,15 @@ func patchTenancyProxyImage(res *unstructured.Unstructured) error {
 	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
+// tenantsHealthReason enumerates reasons used for ConfigConditionTenantsHealthy.
+type tenantsHealthReason string
+
 // Tenant health aggregation reasons (ADR ODH-ADR-MS-0003 three-state model).
 const (
-	tenantsHealthyReason  = "AllTenantsHealthy"
-	tenantsDegradedReason = "TenantsDegraded"
-	tenantsBlockedReason  = "TenantsBlocked"
-	tenantsNoneReason     = "NoTenantsFound"
+	tenantsHealthReasonAllTenantsHealthy tenantsHealthReason = "AllTenantsHealthy"
+	tenantsHealthReasonTenantsDegraded   tenantsHealthReason = "TenantsDegraded"
+	tenantsHealthReasonTenantsBlocked    tenantsHealthReason = "TenantsBlocked"
+	tenantsHealthReasonNoTenantsFound    tenantsHealthReason = "NoTenantsFound"
 )
 
 // conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
@@ -890,7 +893,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		apimeta.SetStatusCondition(&cfg.Status.Conditions, metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionTrue,
-			Reason:             tenantsNoneReason,
+			Reason:             string(tenantsHealthReasonNoTenantsFound),
 			Message:            "no AITenant resources found",
 			ObservedGeneration: cfg.Generation,
 		})
@@ -915,7 +918,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionTrue,
-			Reason:             tenantsHealthyReason,
+			Reason:             string(tenantsHealthReasonAllTenantsHealthy),
 			Message:            fmt.Sprintf("all %d tenant(s) healthy", total),
 			ObservedGeneration: cfg.Generation,
 		}
@@ -923,7 +926,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionFalse,
-			Reason:             tenantsBlockedReason,
+			Reason:             string(tenantsHealthReasonTenantsBlocked),
 			Message:            truncateConditionMessage(fmt.Sprintf("all %d tenant(s) unhealthy: %s", total, formatTenantList(unhealthy, 5))),
 			ObservedGeneration: cfg.Generation,
 		}
@@ -931,7 +934,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionFalse,
-			Reason:             tenantsDegradedReason,
+			Reason:             string(tenantsHealthReasonTenantsDegraded),
 			Message:            truncateConditionMessage(fmt.Sprintf("%d of %d tenant(s) unhealthy: %s", len(unhealthy), total, formatTenantList(unhealthy, 5))),
 			ObservedGeneration: cfg.Generation,
 		}
