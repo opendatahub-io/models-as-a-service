@@ -5,6 +5,10 @@ ARG TARGETPLATFORM
 
 FROM --platform=$BUILDPLATFORM registry.access.redhat.com/ubi9/go-toolset:$GOLANG_VERSION AS builder
 ARG CGO_ENABLED=1
+# strictfipsruntime requires cgo; the builder image has no cross-compiler, so
+# cross-arch builds (e.g. arm64 host -> amd64 image) must disable both:
+#   docker build --build-arg CGO_ENABLED=0 --build-arg GOEXPERIMENT=""
+ARG GOEXPERIMENT=strictfipsruntime
 ARG TARGETOS
 ARG TARGETARCH
 
@@ -15,7 +19,7 @@ COPY . .
 
 USER root
 
-RUN CGO_ENABLED=${CGO_ENABLED} GOEXPERIMENT=strictfipsruntime GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -trimpath -ldflags="-s -w" -o maas-api ./cmd/
+RUN CGO_ENABLED=${CGO_ENABLED} GOEXPERIMENT=${GOEXPERIMENT} GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH:-amd64} go build -a -trimpath -ldflags="-s -w" -o maas-api ./cmd/
 
 FROM --platform=$TARGETPLATFORM registry.access.redhat.com/ubi9/ubi-minimal:latest
 
