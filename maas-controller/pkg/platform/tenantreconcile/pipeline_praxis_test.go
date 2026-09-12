@@ -2,6 +2,7 @@ package tenantreconcile
 
 import (
 	"context"
+	"encoding/json"
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
@@ -149,7 +150,7 @@ func TestRunPlatform_PraxisSkipsIPPApply(t *testing.T) {
 
 	var applied []appliedResource
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName),
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName),
 	}, &applied)
 
 	result, err := RunPlatform(
@@ -197,26 +198,10 @@ func TestRunPlatform_PraxisCleansUpLegacyIPPResources(t *testing.T) {
 	gateway := &gwapiv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
 	}
-	legacyDeployment := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "apps/v1",
-			"kind":       "Deployment",
-			"metadata": map[string]any{
-				"name":      PayloadProcessingDeploymentName(tenantName),
-				"namespace": gwNS,
-			},
-		},
-	}
-	legacyEnvoyFilter := &unstructured.Unstructured{
-		Object: map[string]any{
-			"apiVersion": "networking.istio.io/v1alpha3",
-			"kind":       "EnvoyFilter",
-			"metadata": map[string]any{
-				"name":      PayloadProcessingEnvoyFilterName(tenantName),
-				"namespace": gwNS,
-			},
-		},
-	}
+	legacyDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+	setConfigControllerOwnerRef(legacyDeployment, mcfg.UID)
+	legacyEnvoyFilter := unstructuredIPPObject(GVKEnvoyFilter, gwNS, PayloadProcessingEnvoyFilterName(tenantName), nil)
+	setConfigControllerOwnerRef(legacyEnvoyFilter, mcfg.UID)
 	platformContext := PlatformContext{
 		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
 		SkipIPP:    true,
@@ -224,7 +209,7 @@ func TestRunPlatform_PraxisCleansUpLegacyIPPResources(t *testing.T) {
 	}
 
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName), legacyDeployment, legacyEnvoyFilter,
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), legacyDeployment, legacyEnvoyFilter,
 	).Build()
 
 	result, err := RunPlatform(
@@ -261,6 +246,107 @@ func TestRunPlatform_PraxisCleansUpLegacyIPPResources(t *testing.T) {
 	ef.SetGroupVersionKind(GVKEnvoyFilter)
 	err = cl.Get(context.Background(), efKey, ef)
 	require.True(t, apierrors.IsNotFound(err))
+
+	gotTenant := &maasv1alpha1.MaasTenantConfig{}
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, gotTenant))
+	assert.Equal(t, "true", gotTenant.Annotations[AnnotationIPPMigrationCleanupComplete])
+}
+
+func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	praxisDeployment := praxisOwnedDeployment(gwNS, PayloadProcessingDeploymentName(tenantName))
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), praxisDeployment,
+	).Build()
+
+	_, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+
+	depKey := types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingDeploymentName(tenantName)}
+	got := &appsv1.Deployment{}
+	require.NoError(t, cl.Get(context.Background(), depKey, got), "praxis-owned deployment should survive migration cleanup")
+}
+
+func TestRunPlatform_PraxisSkipsCleanupAfterMigrationComplete(t *testing.T) {
+	const (
+		tenantName = "praxis-team"
+		appNs      = "ai-tenant-praxis-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "praxis-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = "true"
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	legacyDeployment := unstructuredIPPObject(GVKDeployment, gwNS, PayloadProcessingDeploymentName(tenantName), nil)
+	setConfigControllerOwnerRef(legacyDeployment, mcfg.UID)
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		SkipIPP:    true,
+		Source:     "aitenant",
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), legacyDeployment,
+	).Build()
+
+	_, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+
+	depKey := types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingDeploymentName(tenantName)}
+	dep := &unstructured.Unstructured{}
+	dep.SetGroupVersionKind(GVKDeployment)
+	require.NoError(t, cl.Get(context.Background(), depKey, dep))
 }
 
 func TestRunPlatform_LegacyTenantAppliesIPPResources(t *testing.T) {
@@ -376,6 +462,30 @@ func unstructuredIPPObject(gvk schema.GroupVersionKind, namespace, name string, 
 	return obj
 }
 
+func praxisOwnedDeployment(namespace, name string) *appsv1.Deployment {
+	fieldV1, err := json.Marshal(map[string]any{
+		"f:metadata": map[string]any{
+			"f:name": map[string]any{},
+		},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			ManagedFields: []metav1.ManagedFieldsEntry{{
+				Manager:    aiGatewayControllerFieldOwner,
+				Operation:  metav1.ManagedFieldsOperationApply,
+				APIVersion: "apps/v1",
+				FieldsType: "FieldsV1",
+				FieldsV1:   &metav1.FieldsV1{Raw: fieldV1},
+			}},
+		},
+	}
+}
+
 func TestIPPResourcesForTenant_DefaultTenantUsesLegacyNames(t *testing.T) {
 	params := PlatformParams{
 		GatewayNamespace: "openshift-ingress",
@@ -425,9 +535,14 @@ func TestCleanupIPPResources_DeletesManagedResources(t *testing.T) {
 		unstructuredIPPObject(GVKEnvoyFilter, gwNS, PayloadProcessingEnvoyFilterName(tenantID), nil),
 		unstructuredIPPObject(GVKService, gwNS, PayloadProcessingServiceName(tenantID), nil),
 	}
+	for i := range seed {
+		if obj, ok := seed[i].(*unstructured.Unstructured); ok {
+			setConfigControllerOwnerRef(obj, types.UID("cfg-uid"))
+		}
+	}
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...).Build()
 
-	err := cleanupIPPResources(context.Background(), cl, params, logr.Discard())
+	err := cleanupIPPResources(context.Background(), cl, params, types.UID("cfg-uid"), logr.Discard())
 	require.NoError(t, err)
 
 	for _, ref := range []ippResourceRef{
@@ -463,7 +578,30 @@ func TestCleanupIPPResources_SkipsUnmanagedResources(t *testing.T) {
 	)
 	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deployment).Build()
 
-	err := cleanupIPPResources(context.Background(), cl, params, logr.Discard())
+	err := cleanupIPPResources(context.Background(), cl, params, types.UID("cfg-uid"), logr.Discard())
+	require.NoError(t, err)
+
+	got := &unstructured.Unstructured{}
+	got.SetGroupVersionKind(GVKDeployment)
+	key := types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingDeploymentName(tenantID)}
+	require.NoError(t, cl.Get(context.Background(), key, got))
+}
+
+func TestCleanupIPPResources_SkipsPraxisOwnedResources(t *testing.T) {
+	const (
+		tenantID = "praxis-team"
+		gwNS     = "openshift-ingress"
+	)
+	params := PlatformParams{
+		GatewayNamespace: gwNS,
+		TenantIdentifier: tenantID,
+	}
+	scheme := praxisTestScheme(t)
+
+	deployment := praxisOwnedDeployment(gwNS, PayloadProcessingDeploymentName(tenantID))
+	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(deployment).Build()
+
+	err := cleanupIPPResources(context.Background(), cl, params, types.UID("cfg-uid"), logr.Discard())
 	require.NoError(t, err)
 
 	got := &unstructured.Unstructured{}

@@ -11,6 +11,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -106,14 +107,25 @@ func RunPlatform(
 	}
 
 	// SSA only creates/updates resources in the rendered set; it does NOT delete
-	// absent resources. Explicit cleanup is required when operands drop out of
-	// the rendered set (praxis SkipIPP) or when autoscaling is disabled (HPA).
+	// absent resources. When SkipIPP is true (praxis), run a one-shot, ownership-
+	// gated cleanup of legacy maas-controller IPP operands, then stop touching
+	// payload-processing names — ai-gateway-controller owns them for praxis tenants.
 	if params.SkipIPP {
-		if err := cleanupIPPResources(ctx, c, params, log); err != nil {
-			return nil, fmt.Errorf("cleanup IPP resources: %w", err)
+		if !isIPPMigrationCleanupComplete(tenant) {
+			if err := cleanupIPPResources(ctx, c, params, mcfg.UID, log); err != nil {
+				return nil, fmt.Errorf("cleanup IPP resources: %w", err)
+			}
+			if err := markIPPMigrationCleanupComplete(ctx, c, tenant); err != nil {
+				return nil, fmt.Errorf("mark IPP migration cleanup complete: %w", err)
+			}
 		}
-	} else if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
-		return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+	} else {
+		if err := clearIPPMigrationCleanupComplete(ctx, c, tenant); err != nil {
+			return nil, fmt.Errorf("clear IPP migration cleanup marker: %w", err)
+		}
+		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
+			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+		}
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
@@ -305,6 +317,121 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 	return true, "", nil
 }
 
+const aiGatewayControllerFieldOwner = "ai-gateway-controller"
+
+func isIPPMigrationCleanupComplete(tenant client.Object) bool {
+	annotations := tenant.GetAnnotations()
+	return annotations != nil && annotations[AnnotationIPPMigrationCleanupComplete] == "true"
+}
+
+func markIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
+	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
+		annotations[AnnotationIPPMigrationCleanupComplete] = "true"
+	})
+}
+
+func clearIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
+	if !isIPPMigrationCleanupComplete(tenant) {
+		return nil
+	}
+	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
+		delete(annotations, AnnotationIPPMigrationCleanupComplete)
+	})
+}
+
+func patchTenantAnnotations(ctx context.Context, c client.Client, tenant client.Object, mutate func(map[string]string)) error {
+	key := client.ObjectKeyFromObject(tenant)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, ok := tenant.DeepCopyObject().(client.Object)
+		if !ok {
+			return fmt.Errorf("expected client.Object copy, got %T", tenant.DeepCopyObject())
+		}
+		if err := c.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		base, ok := latest.DeepCopyObject().(client.Object)
+		if !ok {
+			return fmt.Errorf("expected client.Object copy, got %T", latest.DeepCopyObject())
+		}
+		annotations := latest.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		mutate(annotations)
+		latest.SetAnnotations(annotations)
+		return c.Patch(ctx, latest, client.MergeFrom(base))
+	})
+}
+
+func hasSSAFieldManager(obj *unstructured.Unstructured, manager string) bool {
+	managedFields, found, err := unstructured.NestedSlice(obj.Object, "metadata", "managedFields")
+	if err != nil || !found {
+		return false
+	}
+	for _, entry := range managedFields {
+		field, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mgr, _ := field["manager"].(string); mgr == manager {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UID) bool {
+	if configUID == "" {
+		return false
+	}
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind != "Config" || ref.UID != configUID {
+			continue
+		}
+		if ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+// isMaaSOwnedIPPResource reports whether obj is legacy IPP applied by maas-controller
+// and safe to delete during the one-shot IPP→praxis migration cleanup. Resources owned
+// by ai-gateway-controller (praxis) or with opendatahub.io/managed=false are excluded.
+func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {
+	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
+		return false
+	}
+	if hasSSAFieldManager(obj, aiGatewayControllerFieldOwner) {
+		return false
+	}
+	if hasConfigControllerOwner(obj, configUID) {
+		return true
+	}
+	if hasSSAFieldManager(obj, ssaFieldOwner) {
+		return true
+	}
+	labels := obj.GetLabels()
+	if labels != nil && labels[LabelTenantName] != "" {
+		return true
+	}
+	return false
+}
+
+func setConfigControllerOwnerRef(obj *unstructured.Unstructured, configUID types.UID) {
+	if configUID == "" {
+		return
+	}
+	controller := true
+	obj.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: "maas.opendatahub.io/v1alpha1",
+		Kind:       "Config",
+		Name:       maasv1alpha1.ConfigInstanceName,
+		UID:        configUID,
+		Controller: &controller,
+	}})
+}
+
 type ippResourceRef struct {
 	gvk       schema.GroupVersionKind
 	namespace string
@@ -333,29 +460,23 @@ func ippResourcesForTenant(params PlatformParams) []ippResourceRef {
 	}
 }
 
-// cleanupIPPResources removes tenant IPP operands when the tenant opts into the praxis
-// dataplane. Supports IPP→praxis migration: resources created before SkipIPP was set
-// would otherwise linger because PostRender filters them out of the apply set.
-func cleanupIPPResources(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+// cleanupIPPResources removes legacy maas-controller IPP operands during the one-shot
+// IPP→praxis migration. Only maas-owned resources are deleted; praxis operands applied
+// by ai-gateway-controller at the same names are left intact.
+func cleanupIPPResources(ctx context.Context, c client.Client, params PlatformParams, configUID types.UID, log logr.Logger) error {
 	for _, ref := range ippResourcesForTenant(params) {
-		if err := deleteIPPResourceIfManaged(ctx, c, ref, log); err != nil {
+		if err := deleteIPPResourceIfManaged(ctx, c, ref, configUID, log); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippResourceRef, log logr.Logger) error {
+func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippResourceRef, configUID types.UID, log logr.Logger) error {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(ref.gvk)
 	obj.SetName(ref.name)
 	obj.SetNamespace(ref.namespace)
-
-	if isLiveResourceUnmanaged(ctx, c, obj) {
-		log.V(1).Info("Skipping IPP cleanup for opendatahub.io/managed=false resource",
-			"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
-		return nil
-	}
 
 	key := client.ObjectKeyFromObject(obj)
 	if err := c.Get(ctx, key, obj); err != nil {
@@ -365,7 +486,13 @@ func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippRes
 		return fmt.Errorf("get %s %s/%s: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
 	}
 
-	log.Info("Deleting IPP resource for praxis tenant",
+	if !isMaaSOwnedIPPResource(obj, configUID) {
+		log.V(1).Info("Skipping IPP cleanup for resource not owned by maas-controller",
+			"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
+		return nil
+	}
+
+	log.Info("Deleting legacy IPP resource during praxis migration",
 		"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
 	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete %s %s/%s: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
