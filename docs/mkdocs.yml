@@ -100,6 +100,7 @@ nav:
       - Authorino Caching: configuration-and-management/authorino-caching.md
       - External OIDC: advanced-administration/external-oidc.md
       - Controller Performance Tuning: advanced-administration/controller-performance-tuning.md
+      - Gateway Resource Tuning: advanced-administration/gateway-resource-tuning.md
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md
