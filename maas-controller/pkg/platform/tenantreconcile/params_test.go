@@ -43,6 +43,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
+		assert.Equal(t, tenant.GetNamespace(), got.ModelNamespace)
 		assert.Equal(t, "opendatahub", got.ControllerNamespace)
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
@@ -80,6 +81,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
+		assert.Equal(t, tenant.GetNamespace(), got.ModelNamespace)
 		assert.Equal(t, "gateway-ns", got.GatewayNamespace)
 		assert.Equal(t, "gateway-name", got.GatewayName)
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
