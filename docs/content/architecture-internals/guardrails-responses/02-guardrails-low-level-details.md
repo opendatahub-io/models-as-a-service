@@ -6,11 +6,7 @@
 | Authors | Pierangelo Di Pilato, Christina Xu, Marius Ion Danciu |
 
 This document defines guardrail attachment semantics, NeMo integration and compilation. It also owns the shared
-AuthPolicy-to-Praxis contract, combined Responses/guardrails YAML, reconciliation rules and acceptance matrix for this
-companion set.
-
-This topic document copies the relevant sections of the main proposal for focused review. The main document is retained
-in full as the consolidated reference; these documents do not record separate design approval.
+AuthPolicy-to-Praxis contract, combined Responses/guardrails YAML, reconciliation lifecycle for this companion set.
 
 Read alongside:
 
@@ -26,15 +22,14 @@ In this document:
 - [Reference authorization, discovery and model applicability](#reference-authorization-discovery-and-model-applicability)
 - [Attachment selection and composition](#attachment-selection-and-composition)
 - [API validation and compatibility contract](#api-validation-and-compatibility-contract)
-- [Resolution algorithm and worked edge cases](#resolution-algorithm-and-worked-edge-cases)
+- [Resolution algorithm](#resolution-algorithm)
 - [Model identity and conditional execution](#model-identity-and-conditional-execution)
 - [Mapping to the NeMo API](#mapping-to-the-nemo-api)
 - [Materializing MaaS configuration in Praxis](#materializing-maas-configuration-in-praxis)
 - [TrustyAI integration and deployment topology](#trustyai-integration-and-deployment-topology)
-- [Reconciliation, rollout and acceptance criteria](#reconciliation-rollout-and-acceptance-criteria)
-- [Acceptance matrix](#acceptance-matrix)
+- [Reconciliation and runtime lifecycle](#reconciliation-and-runtime-lifecycle)
 - [Alternatives for delivering MaaS governance to AI Gateway](#alternatives-for-delivering-maas-governance-to-ai-gateway)
-- [References and reviews](#references-and-reviews)
+- [Reviews](#reviews)
 
 ## Reusable guardrail resources and attachments
 
@@ -359,11 +354,11 @@ destination still requires authorization, capability validation and acknowledgme
 which checks run.
 
 Do not add placeholder production defaults for timeout, retention, request bytes or loop count merely by copying example
-values. Before generating CRDs, choose bounded platform defaults and maxima through load testing. Tenant settings may
-reduce limits; raising platform maxima requires platform authority. The concrete `5s` and `168h`
+values. Before generating CRDs, choose bounded platform defaults and maxima through capacity planning. Tenant settings
+may reduce limits; raising platform maxima requires platform authority. The concrete `5s` and `168h`
 values in this document are examples of explicit settings.
 
-## Resolution algorithm and worked edge cases
+## Resolution algorithm
 
 Resolve from a consistent snapshot of admitted resources, validated tenant membership and current AI Gateway-accepted
 provider bindings. MaaS resolves its attachments; it does not resolve NeMo credentials or consumer permission.
@@ -390,17 +385,6 @@ resolve(tenant, maasTenantConfig, model, selectedSubscription, snapshot):
 
 Absent local attachment lists normalize to empty lists. Authorization happens before selection. Reject unresolved
 references, unknown check names and unsupported selected checks; never drop them or switch to a weaker subscription.
-
-| Scenario                                                       | Result                                                                             |
-|----------------------------------------------------------------|------------------------------------------------------------------------------------|
-| Tenant attaches a baseline; Model has `guardrails: []`         | Tenant checks still execute                                                        |
-| Attachment omits `checks` or supplies `checks: []`             | All current checks execute; later additions apply after validated activation       |
-| Attachment selects one check from a multi-check policy         | Only that check is contributed by this attachment                                  |
-| Two scopes select the same check                               | Execute once per applicable phase, preserve both origins                           |
-| One scope selects all checks; another selects a subset         | All checks remain selected                                                         |
-| Subscription A attaches checks; request selects Subscription B | A contributes nothing to this request                                              |
-| An explicitly selected check is deleted or renamed             | Attachment becomes unresolved; affected requests fail closed                       |
-| Policy or namespace is recreated with the same name            | Revalidate UID, tenant membership and binding; old authorization does not transfer |
 
 ### Deterministic check ordering
 
@@ -470,19 +454,6 @@ stored-object operations follow
 the [ownership and stored-model lookup rules](02-responses-low-level-details.md#request-processing-and-responses-ownership);
 they must not infer a model from an absent payload.
 
-Concrete acceptance scenarios:
-
-| Scenario                                                           | Required result                                                                              |
-|--------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| Same endpoint path, payload model A versus model B                 | Each request executes the plan for its authorized model; neither receives the other's checks |
-| Same model, selected subscription A versus B                       | Subscription and model-entry selections follow the selected subscription                     |
-| Model has no guardrail attachments; subscription requires a policy | The subscription policy still executes automatically; publisher opt-in is unnecessary        |
-| Route identifies model A; body identifies model B                  | Reject before NeMo and inference                                                             |
-| Caller forges a model or plan header                               | Trusted classification/authorization overwrites it; it cannot select a weaker plan           |
-| Translator maps a public alias to its approved provider model name | Preserve canonical UID and policy; do not treat the wire-name change as a new authorization  |
-| Retry/tool step changes to another logical model                   | Reauthorize and resolve that model's policy, or reject before calling it                     |
-| Unknown or colliding model alias                                   | Reject without falling through to a default backend                                          |
-
 ## Mapping to the NeMo API
 
 Use `POST /v1/guardrail/checks` as an independent evaluation callout. Keep inference routing, credentials, token
@@ -541,7 +512,7 @@ are committed. Never return NeMo internal errors, config paths or prompt content
 No standard replacement-message field is established by this check response schema.
 `guardrails_data.output_data` is an arbitrary map, not a redaction contract. The current Praxis NeMo mapper produces
 pass/block/error, and its generic Redact branch forwards unchanged. Redaction therefore requires a separately specified
-and tested adapter, including checks after transformation; it is outside the initial API.
+adapter, including checks after transformation; it is outside the initial API.
 
 Use dedicated service credentials and verified TLS for callouts. Do not forward MaaS API keys to NeMo. Allow approved
 internal service addresses explicitly without turning off egress protection globally. Disallow a NeMo self-check model
@@ -550,8 +521,8 @@ route that recursively invokes the same gateway guardrails.
 NVIDIA's [versioned checks example](https://docs.nvidia.com/nemo/microservices/25.12.0/guardrails/checks.html)
 uses the same v1 endpoint and config selector. Its
 [newer checks documentation](https://docs.nvidia.com/nemo-platform/documentation/guardrail-models/core-concepts/running-checks)
-uses a different, workspace-scoped API path. Pin and test the supplied v1 contract; do not infer compatibility from the
-product name alone.
+uses a different, workspace-scoped API path. Use the supplied v1 contract; do not infer compatibility from the product
+name alone.
 
 ## Materializing MaaS configuration in Praxis
 
@@ -618,6 +589,23 @@ infrastructure. The existing worked routing/model-adapter placeholders represent
 not a reason for the guardrail compiler to traverse MaaS policy resources. Standalone Praxis supplies the same
 authorization and catalog contracts with its own transport. Alternative handoffs are discussed in
 [governance handoff alternatives](#alternatives-for-delivering-maas-governance-to-ai-gateway).
+
+### Compiler inputs and outputs
+
+| Input                                               | Final materialization                                                                                            |
+|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
+| Tenant backend/Gateway selection                    | Target runtime deployment and mounts; initially pre/post ExtProc and EnvoyFilter, later standalone listeners     |
+| Model/provider resolution                           | Bounded model extraction and authorized routing/credentials; Envoy mutations/routes or standalone Praxis routing |
+| Selected-subscription contract                      | Trusted-context Praxis filter settings for allowed tenant/model/subscription tuples                              |
+| Five attachment locations and reference permissions | MaaS resolves additive selections; AI Gateway configures the tenant catalog independently                        |
+| `AIGuardrail.spec.provider.nemo.ref`                | Discovered checks endpoint, dedicated credentials/CA mounts and resolved provider identity                       |
+| Policy check `configId`, `model`, `phases`          | NeMo filter parameters and phase-specific execution                                                              |
+| Responses enablement/storage                        | Store, validation, rehydration and protocol filters; DB Secret/CA mounts, migration/retention lifecycle          |
+| Optional agentic capability                         | Supported Praxis iterative subpipeline, per-boundary checks and explicit subrequest bindings/limits              |
+| Resource/config/permission revisions                | Generation encoded in runtime configuration and deployment status; stale-generation rejection                    |
+
+Connection URLs and credentials use private Secret mounts. `RENDER_*` values in the example are compiler placeholders.
+Pre-auth classification failure must reject authorization; it cannot select a default model or bypass its guardrails.
 
 ### Relationship to MaaSAuthPolicy and the generated gateway AuthPolicy
 
@@ -1019,12 +1007,12 @@ The compiler must account for three execution constraints that directly affect t
 - ExtProc forwarding uses Envoy routing; standalone Praxis owns its transport. Internal agentic subrequests require
   transport and terminal-result support for the selected host.
 
-Validate generated configuration against the deployed runtime, using the source references below for existing parser and
-branch syntax. A standalone example does not establish ExtProc compatibility.
+Validate generated configuration against the deployed runtime, including its parser and branch-chain syntax. A
+standalone example does not establish ExtProc compatibility.
 
 ### Deployment targets and standalone evolution
 
-Keep policy resolution independent of the execution host. Tenant enablement, database binding, additive check guardrail
+Keep policy resolution independent of the execution host. Tenant enablement, database binding, additive guardrail
 composition, reference permissions, authorized model/subscription selection, Responses ownership, retention and usage
 semantics are shared. The compiler lowers that resolved contract through a target-specific backend; an ExtProc wire
 protocol or Envoy resource must not become part of the public guardrail/storage API. Target selection belongs to
@@ -1039,13 +1027,12 @@ introduce a public field for selecting the host.
 | Policy and state                  | Compiled checks, ownership, store and iterative execution in Praxis                             | Same semantic contract and database binding, lowered for the standalone lifecycle                                                                                       |
 | Local responses and output gating | ExtProc adapter supplies immediate/local results, suppresses Envoy forwarding and gates release | Praxis terminates stored-object/tool operations directly and gates its own HTTP/SSE output                                                                              |
 | Rollout and ingress               | Activate matching processors and Envoy routes; drain gRPC/request streams                       | Activate Praxis listener/routing generation and ingress cutover; drain HTTP/SSE streams                                                                                 |
-| Validation                        | ExtProc parser plus Envoy/ExtProc protocol tests                                                | Standalone parser plus real listener/upstream tests                                                                                                                     |
 
-The consolidated example uses the initial ExtProc target. They are not universal configuration files that can be handed
-unchanged to a standalone binary. Standalone lowering supplies its own listener/transport envelope and validates hook
-ordering, branching, scoped body filters and terminal-result behavior against that runtime. Existing standalone agentic
-examples demonstrate building blocks, not a completed MaaS gateway replacement. In particular, authentication must
-precede body pre-read/callouts, not merely appear first in a header-filter list.
+The consolidated example targets ExtProc; standalone needs its own configuration envelope. Standalone lowering supplies
+its own listener/transport envelope and validates hook ordering, branching, scoped body filters and terminal-result
+behavior against that runtime. Existing standalone agentic examples demonstrate building blocks, not a completed MaaS
+gateway replacement. In particular, authentication must precede body pre-read/callouts, not merely appear first in a
+header-filter list.
 
 Replacing Envoy requires evidence for TLS/client authentication as applicable, route/model binding, authentication and
 quota enforcement, timeouts/cancellation, retries without duplicate inference or charging, body limits, streaming
@@ -1054,39 +1041,18 @@ verified; track missing integration explicitly. ExtProc adapter gaps do not auto
 implementation, and standalone support does not establish ExtProc support. Reject unsupported compositions for the
 selected target; never switch hosts automatically to work around an unsupported feature.
 
-Migration is an explicit platform rollout: compile and test the standalone generation against the same policies and
+Migration is an explicit platform rollout: compile and validate the standalone generation against the same policies and
 storage/ownership schema, prepare its network and auth/quota integration, cut over new admissions once, and drain the
 old Envoy/ExtProc path. Fence incompatible generations and prevent duplicate execution or an unprotected alternate
 route. Retain response IDs and ownership across the transition; changing the host alone must not relocate the database
 or reset retention. State schema compatibility and rollback remain prerequisites even if both targets use Praxis.
-
-### Compiler inputs and outputs
-
-| Input                                               | Final materialization                                                                                            |
-|-----------------------------------------------------|------------------------------------------------------------------------------------------------------------------|
-| Tenant backend/Gateway selection                    | Target runtime deployment and mounts; initially pre/post ExtProc and EnvoyFilter, later standalone listeners     |
-| Model/provider resolution                           | Bounded model extraction and authorized routing/credentials; Envoy mutations/routes or standalone Praxis routing |
-| Selected-subscription contract                      | Trusted-context Praxis filter settings for allowed tenant/model/subscription tuples                              |
-| Four attachment locations and reference permissions | MaaS resolves selection precedence; AI Gateway configures the tenant catalog independently                       |
-| `AIGuardrail.spec.provider.nemo.ref`                | Discovered checks endpoint, dedicated credentials/CA mounts and resolved provider identity                       |
-| Policy check `configId`, `model`, `phases`          | NeMo filter parameters and phase-specific execution                                                              |
-| Responses enablement/storage                        | Store, validation, rehydration and protocol filters; DB Secret/CA mounts, migration/retention lifecycle          |
-| Optional agentic capability                         | Supported Praxis iterative subpipeline, per-boundary checks and explicit subrequest bindings/limits              |
-| Resource/config/permission revisions                | Generation encoded in runtime configuration and deployment status; stale-generation rejection                    |
-
-Connection URLs and credentials are rendered through a Secret/private volume, never public ConfigMaps or configuration
-dumps. `RENDER_*` values below are compiler placeholders. Examples omit existing listener/TLS setup and deployment
-boilerplate to show the added request flows.
-
-Required pre-auth classification must fail closed, or authorization must reject missing/untrusted model identity. A
-classifier outage must never select a default model or bypass its guardrails.
 
 ### Compilation alternatives: existing configuration first
 
 Compile MaaS policy into **existing Praxis configuration**, using conditional filters or separately selected pipelines.
 The public MaaS APIs and additive selection semantics are independent of this deployment choice.
 
-| Approach                         | Compilation strategy                                                                                                                          | Tradeoff and acceptance condition                                                                                                                               |
+| Approach                         | Compilation strategy                                                                                                                          | Tradeoff and runtime constraint                                                                                                                                 |
 |----------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | A: existing conditional filters  | Sort tenant-local checks deterministically; emit main-pipeline filters with existing `conditions` matching verified binding-selection headers | Reuses current syntax; prove context provenance, missing-context rejection and condition behavior across all hooks in the selected runtime                      |
 | B: separately selected pipelines | Route an authorized plan to a dedicated configured runtime, or an explicitly selected standalone listener/chain                               | Avoids shared-pipeline scope fields; increases resources/configuration and needs trusted dispatch. ExtProc top-level chain names alone do not select a pipeline |
@@ -1163,28 +1129,6 @@ different endpoints select configurations.
 The [future override example](04-guardrails-future-expansion.md#five-scope-policy-resolution-five-scopes-two-nemo-servers-and-subscription-specific-overrides)
 preserves the deferred required/default variant.
 
-### Validation, publication and runtime evidence
-
-Validate generated configuration against the existing Praxis/Praxis AI schemas and the selected host's configuration
-envelope. For ExtProc, this includes `pre-extproc.yaml` and `extproc.yaml`; standalone uses its listener/transport
-configuration. Validate existing fields against their schemas and reject the explicitly proposed provider fields until
-implemented. Parser, rendering and runtime tests establish different properties; none may silently omit unsupported
-checks or treat an accepted configuration as proof of isolation.
-
-Compiler tests need AITenant/AIGuardrail fixtures, deterministic catalog ordering and generated Praxis YAML for
-supported cases and explicit rejection for unresolved provider requirements, including expected failure for unsupported
-agentic/output compositions. Runtime tests must additionally use real Envoy ExtProc messages for that deployment target:
-verify phase order, model and subscription scoping, local responses, branch/rejoin execution, body limits, failure
-modes, response commitment and no duplicate inference forwarding. Confirm NeMo receives the chosen config/model/phase
-and that no check/store/tool call occurs pre-auth.
-
-Scope gating and branch placement require special verification. ExtProc builds its own lifecycle around Praxis, whereas
-standalone examples may perform body pre-read before header hooks. Do not assume either execution schedule applies to
-the other. Likewise, the ExtProc adapter already has body-length mutation and buffering logic; prove output
-blocking/framing against that code rather than treating the standalone Praxis truncation behavior as the complete
-ExtProc behavior. Pin the generation to each stream, publish sanitized acknowledgment, and activate only after the
-compiler and transport-level tests establish the intended contract.
-
 ## TrustyAI integration and deployment topology
 
 Multiple controllers may observe a CR; the ownership rule is one writer per managed resource/field. TrustyAI remains the
@@ -1223,20 +1167,9 @@ TrustyAI/config revision signals and invalidate dependent plans; where no reliab
 versioned config resources operationally and document that limitation. Do not claim that a local policy digest detects
 every remote change.
 
-## Reconciliation, rollout and acceptance criteria
+## Reconciliation and runtime lifecycle
 
 ### Controller integration and ownership handoff
-
-| Component                                 | Owns                                                                                                                                                                                                                        | Must not own                                                                                                                       |
-|-------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------|
-| ODH/RHOAI and AI Gateway operators        | Install compatible controller/runtime versions and parent RBAC                                                                                                                                                              | Per-request guardrail decisions                                                                                                    |
-| `maas-controller`                         | MaaS API/governance integration, auth/quota policies, model/subscription attachment validation/status and canonical composition rules                                                                                       | Writes to AITenant/AIGuardrail status, tenant infrastructure, generated Praxis configuration or TrustyAI workloads                 |
-| `maas-api`                                | Request authorization and capability/guardrail selection from accepted configuration                                                                                                                                        | A parallel guardrail/Responses execution engine                                                                                    |
-| `ai-gateway-controller`                   | Reconcile AITenant bootstrap/capabilities/baseline and AIGuardrail status; discover tenant-local AIGuardrails; compile deterministic Praxis filters; deploy the runtime and network integration; report applied generations | Independent MaaS attachment authorization or merge semantics, NeMo configuration authoring or writes to MaaS-owned status/policies |
-| `praxis-extproc`                          | Execute compiled Praxis filters, translate mutations/rejections/local results to ExtProc, hold request state                                                                                                                | Kubernetes policy discovery or CR merging at request time                                                                          |
-| Standalone Praxis (future target)         | Execute the same compiled policy and Responses contract; own listeners, upstream transport and auth/quota integration                                                                                                       | Kubernetes policy discovery or CR merging at request time                                                                          |
-| TrustyAI operator                         | NeMo runtime, config loading and supported discovery/readiness contract                                                                                                                                                     | MaaS inheritance and subscription selection                                                                                        |
-| Envoy/Gateway controller (initial target) | Network routing and transport; call pre/post ExtProc in the correct order                                                                                                                                                   | Reinterpret MaaS guardrail precedence                                                                                              |
 
 AI Gateway reconciles AITenant and the tenant-local AIGuardrail catalog independently of MaaS. MaaS owns attachment
 selection and authorization; its resource status is not a gateway compilation input. The compiler requires only accepted
@@ -1315,60 +1248,30 @@ MaaS.
 
 ### Generation activation and runtime rollout
 
-Tenant activation follows: bootstrap tenant/Gateway context; resolve model/provider, policy and reference permissions;
-compile a bounded complete generation; validate the configuration for the selected target; render workloads, private
-config and mounts; start new replicas; verify their generation and dependencies; activate matching ingress/routing
-configuration (Envoy attachments for ExtProc, Praxis listeners/routes for standalone); then drain the old generation.
+1. Resolve tenant identity, provider bindings and permissions. Validate API shape, references and selected capabilities;
+   unresolved resources make affected operations unavailable rather than removing checks.
+2. Compile one complete immutable Praxis generation for the selected host. Reject unsupported fields and compositions.
+   ExtProc uses its configuration envelope and Envoy attachments; standalone uses its listener/transport envelope. Each
+   host must preserve authorization before protected hooks, correct body framing and output commitment.
+3. Render workloads and private configuration/mounts, start replicas, and wait for acknowledgment of the loaded catalog
+   revision and dependency readiness. A healthy Pod or updated ConfigMap alone does not acknowledge activation.
+4. Activate matching runtime and routing generations together, admit compatible requests, then drain the old generation.
+   The initial ExtProc implementation requires deployment rollout. Pin admitted streams to their generation.
 
-Publish immutable configuration generations and activate matching runtime/routing configuration together. The initial
-ExtProc target requires deployment rollout; a ConfigMap update alone does not activate a generation. Fence mismatched
-generations and drain in-flight streams. Readiness must acknowledge the active policy generation, not merely a healthy
-Pod. Standalone activation follows the same contract through its own runtime integration.
+Kubernetes acceptance and runtime readiness remain separate. A changed protection fences new admissions to affected
+plans until a compatible generation is active. Previously admitted requests retain their pinned generation unless
+explicitly cancelled; publication cannot promise instantaneous revocation. Never reuse stale policy based on an inferred
+comparison of arbitrary NeMo configurations.
 
-Disabling/deleting a tenant withdraws admission and drains its streams before removing owned Praxis runtime and
-target-specific attachment resources. Retain Responses data according to its storage contract; never delete a referenced
-NeMo server merely because an attachment is removed.
+AI Gateway reports tenant and provider status; MaaS reports MaasTenantConfig/model/subscription attachment readiness,
+including `observedGeneration` and per-model subscription details. Publish the effective selection digest and provenance
+only to authorized administrators. Advertise ready protocols and restrictions without exposing private policy
+identities.
 
-### Admission, status and propagation
-
-Validate local shape with structural schema/CEL: discriminated storage modes, nonempty policy checks/phases, unique
-check names, explicit references and all-checks/subset selection and bounded lists/timeouts. Validate cross-resource
-ownership, policy refs, supported protocol and dependencies during admission/reconciliation. Missing required resources
-never mean “no checks.” Removing a referenced provider/policy is rejected, or makes affected operations unavailable
-until corrected.
-
-Report tenant acceptance/reference resolution/capability readiness on AI Gateway-owned AITenant status and provider
-`Accepted`/`ResolvedRefs`/`ProviderReady` on AIGuardrail status; report MaaS tenant-config/model/subscription attachment
-acceptance separately on MaasTenantConfig and other MaaS resources, with `GuardrailsReady`, `ResponsesReady` and current
-`observedGeneration`
-on the appropriate capability/deployment status, with per-model subscription details where resolution differs. Publish
-the effective plan digest and provenance to authorized tenant administrators; preserve the existing model-status rule
-against revealing subscription/auth-policy identities to model publishers. Discovery should advertise only ready
-protocols and streaming/tool restrictions, without disclosing private policy/config names.
-
-Compile, validate and stage a complete generation before activating it. Track runtime acknowledgment separately from
-Kubernetes acceptance. A newly tightened mandatory policy must not leave affected requests indefinitely on an older
-permissive plan:
-block their admission until the new generation is active. Additions/updates/deletions, credential rotation and runtime
-restarts need explicit propagation tests. Previously accepted generations may remain usable only where policy safety is
-unchanged.
-
-## Acceptance matrix
-
-| Test layer              | Required evidence                                                                                                                                                                                                                                                                                       |
-|-------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| API/defaulting          | All-checks and subset selection, omission/empty/null behavior, union and deduplication, mutable policy revalidation/stale-generation rejection and ordered-list patch conflicts                                                                                                                         |
-| Resolver                | Subscription requirements execute with no model guardrail configuration; all five mandatory attachment locations, additive union across scopes, no unselected subscription contribution, UID reuse and incompatible effective phases                                                                    |
-| Compiler                | Golden CR → permitted refs → expanded checks → Praxis mappings, per-model subsets, multi-server bindings, old-runtime rejection, phase order and secret redaction                                                                                                                                       |
-| Reference authorization | Explicit name/namespace references, same-tenant membership and UID validation, rejection of missing/foreign/ambiguous namespaces, no namespace fallback, Same/Selector/All matching, empty/invalid selectors, namespace-label changes, permission revocation, provider-name approval and UID recreation |
-| TrustyAI discovery      | Server readiness, supported Service/Route lookup, config load vs desired config, provider/config changes, API/auth compatibility and unavailable discovery                                                                                                                                              |
-| NeMo contract           | Actual required fields, config selection, phase options, no-op config rejection, unknown/error/malformed verdicts and dedicated auth                                                                                                                                                                    |
-| Persistence             | Ownership on every operation, concurrent append/delete, `store: false`, expiry, recovery and multiple replicas                                                                                                                                                                                          |
-| Model identity          | Same-path different-model dispatch, path/body mismatch rejection, forged headers, canonical alias translation and reauthorization on logical-model changes                                                                                                                                              |
-| Runtime safety          | No content release/store/tool action before verdict, no pre-auth callouts, no SSE or alternate-path bypass                                                                                                                                                                                              |
-| Usage                   | Per-iteration attribution, blocked output, missing usage, admission denial, retry/idempotency and recovery after DB failure                                                                                                                                                                             |
-| Lifecycle               | Enable/disable/drain, tenant deletion/recreation, credential rotation, schema migration and retained storage                                                                                                                                                                                            |
-| Integration             | Local and external models, native and translated Responses, supported auth modes and parent-operator upgrades                                                                                                                                                                                           |
+Disabling/deleting a tenant withdraws admission and drains streams before removing its owned runtime and network
+attachments. Retain Responses data according to its storage contract. Removing an attachment never deletes the
+referenced NeMo server. Credential rotation, policy updates and namespace/provider recreation use the same staged
+publication and identity-validation lifecycle.
 
 ## Alternatives for delivering MaaS governance to AI Gateway
 
@@ -1390,7 +1293,6 @@ unused policies and document that configuration is not execution. Deleting an ap
 invalidate a concurrent request selection and must follow catalog revision fencing. Future namespace sharing or ordered
 transformations need an explicit API contract; do not infer them from reference names or the current alphabetical order.
 
-## References and reviews
+## Reviews
 
-See the [source references](../responses-and-guardrails.md#references) in the main design and
-the [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.
+See the shared [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.
