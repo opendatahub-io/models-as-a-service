@@ -931,7 +931,9 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 		platformOverlayManifestPath(t), appNs, "controller-ns", "https://kubernetes.default.svc", "opendatahub", mcfg,
 	)
 	require.ErrorContains(t, err, "writer pod")
-	assert.False(t, isIPPMigrationCleanupComplete(tenant), "cleanup must not be marked complete while a writer remains")
+	persistedTenant := &maasv1alpha1.MaasTenantConfig{}
+	require.NoError(t, cl.Get(context.Background(), client.ObjectKeyFromObject(tenant), persistedTenant))
+	assert.False(t, isIPPMigrationCleanupComplete(persistedTenant), "cleanup must not be marked complete while a writer remains")
 }
 
 func TestCleanupIPPExternalModelRoutes_IsNamespaceScoped(t *testing.T) {
