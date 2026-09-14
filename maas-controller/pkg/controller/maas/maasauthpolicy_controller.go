@@ -1155,18 +1155,26 @@ allow {
 				"message": map[string]any{
 					"value": "Authentication required",
 				},
+				"body": map[string]any{
+					"value": `{"error":{"message":"Authentication required","type":"authentication_error","code":401}}`,
+				},
+				"headers": map[string]any{
+					"content-type": map[string]any{
+						"value": "application/json",
+					},
+				},
 			},
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied") + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
 						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"content-type": map[string]any{
-						"value": "text/plain",
+						"value": "application/json",
 					},
 				},
 			},
