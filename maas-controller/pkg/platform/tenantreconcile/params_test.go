@@ -27,6 +27,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
 
 		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
 			Spec: maasv1alpha1.TenantSpec{
 				GatewayRef: maasv1alpha1.TenantGatewayRef{
 					Namespace: "openshift-ingress",
@@ -43,7 +44,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, "opendatahub", got.AppNamespace)
-		assert.Equal(t, tenant.GetNamespace(), got.ModelNamespace)
+		assert.Equal(t, "model-ns", got.ModelNamespace)
 		assert.Equal(t, "opendatahub", got.ControllerNamespace)
 		assert.Equal(t, "openshift-ingress", got.GatewayNamespace)
 		assert.Equal(t, "maas-default-gateway", got.GatewayName)
@@ -62,6 +63,7 @@ func TestBuildPlatformParams(t *testing.T) {
 
 		maxExpirationDays := int32(45)
 		tenant := &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{Namespace: "model-ns"},
 			Spec: maasv1alpha1.TenantSpec{
 				GatewayRef: maasv1alpha1.TenantGatewayRef{
 					Namespace: "gateway-ns",
@@ -81,7 +83,7 @@ func TestBuildPlatformParams(t *testing.T) {
 		assert.NoError(t, err)
 
 		assert.Equal(t, "tenant-ns", got.AppNamespace)
-		assert.Equal(t, tenant.GetNamespace(), got.ModelNamespace)
+		assert.Equal(t, "model-ns", got.ModelNamespace)
 		assert.Equal(t, "gateway-ns", got.GatewayNamespace)
 		assert.Equal(t, "gateway-name", got.GatewayName)
 		assert.Equal(t, "cluster-audience", got.ClusterAudience)
