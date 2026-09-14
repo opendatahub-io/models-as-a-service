@@ -1,0 +1,4002 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Proposed integration of subscription request priorities with llm-d flow control.">
+      
+      
+      
+        <link rel="canonical" href="https://opendatahub-io.github.io/models-as-a-service/dev/architecture-internals/proposals/flow-control/">
+      
+      
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../../assets/favicon.ico">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.7">
+    
+    
+      
+        <title>MaaS Subscription Flow Control Design - ODH Models-as-a-Service Documentation</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../../assets/stylesheets/main.ec1eaa64.min.css">
+      
+        
+        <link rel="stylesheet" href="../../../assets/stylesheets/palette.ab4e12ef.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+      
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="slate" data-md-color-primary="white" data-md-color-accent="blue">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#maas-subscription-flow-control-design" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../../.." title="ODH Models-as-a-Service Documentation" class="md-header__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+      
+  <img src="../../../assets/favicon.ico" alt="logo">
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            ODH Models-as-a-Service Documentation
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              MaaS Subscription Flow Control Design
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+        <form class="md-header__option" data-md-component="palette">
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="slate" data-md-color-primary="white" data-md-color-accent="blue"  aria-label="Switch to light mode"  type="radio" name="__palette" id="__palette_0">
+    
+      <label class="md-header__button md-icon" title="Switch to light mode" for="__palette_1" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 18c-.89 0-1.74-.2-2.5-.55C11.56 16.5 13 14.42 13 12s-1.44-4.5-3.5-5.45C10.26 6.2 11.11 6 12 6a6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+    
+    
+    
+    <input class="md-option" data-md-color-media="" data-md-color-scheme="default" data-md-color-primary="black" data-md-color-accent="blue"  aria-label="Switch to dark mode"  type="radio" name="__palette" id="__palette_1">
+    
+      <label class="md-header__button md-icon" title="Switch to dark mode" for="__palette_0" hidden>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a4 4 0 0 0-4 4 4 4 0 0 0 4 4 4 4 0 0 0 4-4 4 4 0 0 0-4-4m0 10a6 6 0 0 1-6-6 6 6 0 0 1 6-6 6 6 0 0 1 6 6 6 6 0 0 1-6 6m8-9.31V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69L23.31 12z"/></svg>
+      </label>
+    
+  
+</form>
+      
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+          <a href="javascript:void(0)" class="md-search__icon md-icon" title="Share" aria-label="Share" data-clipboard data-clipboard-text="" data-md-component="search-share" tabindex="-1">
+            
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M18 16.08c-.76 0-1.44.3-1.96.77L8.91 12.7c.05-.23.09-.46.09-.7s-.04-.47-.09-.7l7.05-4.11c.54.5 1.25.81 2.04.81a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3c0 .24.04.47.09.7L8.04 9.81C7.5 9.31 6.79 9 6 9a3 3 0 0 0-3 3 3 3 0 0 0 3 3c.79 0 1.5-.31 2.04-.81l7.12 4.15c-.05.21-.08.43-.08.66 0 1.61 1.31 2.91 2.92 2.91s2.92-1.3 2.92-2.91A2.92 2.92 0 0 0 18 16.08"/></svg>
+          </a>
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/opendatahub-io/models-as-a-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    opendatahub-io/models-as-a-service
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../.." class="md-tabs__link">
+          
+  
+  
+  Home
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../concepts/architecture/" class="md-tabs__link">
+          
+  
+  
+  Concepts
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../quickstart/" class="md-tabs__link">
+          
+  
+  
+  Install
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../configuration-and-management/quota-and-access-configuration/" class="md-tabs__link">
+          
+  
+  
+  Administration Guide
+
+        </a>
+      </li>
+    
+  
+
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../observability/" class="md-tabs__link">
+          
+  
+  
+  Observability
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../user-guide/api-key-management/" class="md-tabs__link">
+          
+  
+  
+  User Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../controller-architecture/" class="md-tabs__link">
+          
+  
+  
+  Developer Guide
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../../reference/maas-api-overview/" class="md-tabs__link">
+          
+  
+  
+  API Reference
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../../.." title="ODH Models-as-a-Service Documentation" class="md-nav__button md-logo" aria-label="ODH Models-as-a-Service Documentation" data-md-component="logo">
+      
+  <img src="../../../assets/favicon.ico" alt="logo">
+
+    </a>
+    ODH Models-as-a-Service Documentation
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/opendatahub-io/models-as-a-service" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    opendatahub-io/models-as-a-service
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_1" id="__nav_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Home
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Platform Documentation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../release-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_1_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_1_3" id="__nav_1_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Migration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_1_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_1_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Migration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../migration/tier-to-subscription/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tier to Subscription
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../migration/upgrade-to-3.4/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.4
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../migration/upgrade-to-3.5/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Concepts
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Concepts
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/multi-tenancy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenancy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/personas/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Personas
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/subscription-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Access and Quota Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/model-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Reference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/auth-modes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Modes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/api-key-authentication/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Authentication
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../concepts/model-access-control/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Access Control
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Install
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Install
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../quickstart/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quick Start
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_2" id="__nav_3_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Prerequisites
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/platform-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3_3" id="__nav_3_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Installation
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_3_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Installation
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/maas-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models-as-a-Service
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/external-model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External Model Setup (Tech Preview)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/multi-tenant-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/multi-tenant-validation/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Multi-Tenant Validation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../install/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Administration Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Administration Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_1" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_1" id="__nav_4_1_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration & Management
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_1_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_1">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration & Management
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/quota-and-access-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Quota and Access Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/api-key-administration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Administration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/infra-namespace-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Infrastructure Namespace Separation
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/namespace-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Namespace User Permissions (RBAC)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/tenant-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tenant RBAC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/troubleshooting-external-model-rbac/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting ExternalModel RBAC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/tls-configuration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    TLS Configuration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/gateway-patterns/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Gateway Patterns
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_2" id="__nav_4_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Models
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Models
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/model-setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/model-listing-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Listing Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_4_3" id="__nav_4_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Advanced Administration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_4_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Advanced Administration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced-administration/subscription-cardinality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Subscription Cardinality
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced-administration/telemetry-defaults-and-cardinality/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Telemetry Defaults and Cardinality
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced-administration/limitador-persistence/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Limitador Persistence
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../configuration-and-management/authorino-caching/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authorino Caching
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced-administration/external-oidc/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    External OIDC
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../advanced-administration/controller-performance-tuning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Controller Performance Tuning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Observability
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Observability
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../observability/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../observability/setup/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../observability/otel-json-stdout/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    OTel JSON stdout
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../observability/metrics-and-dashboards/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Metrics & Dashboards
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../observability/operations/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    User Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    User Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/api-key-management/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Key Management
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/model-discovery/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Model Discovery
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../user-guide/inference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Inference
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7" >
+        
+          
+          <label class="md-nav__link" for="__nav_7" id="__nav_7_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Guide
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_7_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Developer Guide
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../controller-architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Controller Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../reconciliation-flow/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Reconciliation Flow
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../authentication-internals/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Authentication Internals
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_7_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_7_4" id="__nav_7_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_7_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_7_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Contributing
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/testing-guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS Testing and Contribution Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../contributing/release-strategy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Release Strategy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8" >
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/maas-api-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS API Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/api-reference/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS API (Swagger)
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_8_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_8_3" id="__nav_8_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaS CRDs
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="2" aria-labelledby="__nav_8_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_8_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    MaaS CRDs
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/maas-model-ref/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSModelRef
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/external-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    ExternalModel
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/maas-auth-policy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSAuthPolicy
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/maas-subscription/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaaSSubscription
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/ai-tenant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    AITenant
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../../reference/crds/tenant/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    MaasTenantConfig
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#motivation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Motivation
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#non-goals" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Non-Goals
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#proposed-design" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Proposed Design
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Proposed Design">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#subscription-priority-and-fairness" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Subscription priority and fairness
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#pool-discovery-and-objective-reconciliation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Pool discovery and objective reconciliation
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#request-classification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Request classification
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operator-ui-and-live-updates" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operator UI and live updates
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#availability-and-compatibility" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Availability and compatibility
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#llm-d-scheduler-policy-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        llm-d Scheduler Policy Controls
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="llm-d Scheduler Policy Controls">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#priority-holdback-what-domain-controls" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority holdback: What domain Controls
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#priority-tier-pricing-and-chargeback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Priority-Tier Pricing and Chargeback
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#security-and-privacy-considerations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security and Privacy Considerations
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#follow-up-tenant-request-priority-ranges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Follow-up: Tenant Request-Priority Ranges
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Follow-up: Tenant Request-Priority Ranges">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#allowed-priority-values-instead-of-ranges" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Allowed Priority Values Instead of Ranges
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#alternatives" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Alternatives
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#risks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Risks
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stakeholder-impacts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stakeholder Impacts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="maas-subscription-flow-control-design">MaaS Subscription Flow Control Design</h1>
+<div class="admonition note">
+<p class="admonition-title">Proposed design</p>
+<p>This document describes planned behavior and follow-up extensions. It is not documentation of an implemented feature.</p>
+</div>
+<p><strong>Author:</strong> Pierangelo Di Pilato</p>
+<p><strong>Date:</strong> 2026-09-08</p>
+<p><strong>Scope:</strong> Models-as-a-Service, AI Gateway, and llm-d request scheduling</p>
+<h2 id="overview">Overview</h2>
+<p>Integrate MaaS with Gateway API Inference Extension flow control. Use the AI tenant as the fairness key and the selected
+MaaS subscription as the logical objective key. Users authorized to manage subscriptions configure a subscription's
+request priority. When explicitly configured, the MaaS subscription controller reconciles an <code>InferenceObjective</code> for
+each distinct <code>InferencePool</code> backing the models in that subscription. Otherwise, requests use the scheduler's default
+priority without a generated objective.</p>
+<h2 id="motivation">Motivation</h2>
+<p>MaaS subscriptions already define model access, token rate limits, and billing metadata. Token rate limits constrain
+consumption over time, but do not determine which admitted requests should be dispatched first when inference capacity
+is scarce. Flow control adds request queuing, priority, and fairness at the inference scheduler.</p>
+<p>Non-MaaS Gateways already inject <code>x-gateway-inference-fairness-id</code> and <code>x-gateway-inference-objective</code> through
+AuthPolicy templates. Their defaults use the cluster issuer for fairness and the caller's service-account namespace, or
+an authenticated-user fallback, for the objective. MaaS needs these headers to reflect its tenant and subscription
+boundaries. Subscription administrators should not need to discover pools or manually maintain objectives in model
+namespaces.</p>
+<h2 id="goals">Goals</h2>
+<ul>
+<li>Configure scheduling priority once per subscription and apply it to every eligible model in that subscription.</li>
+<li>Group requests from the same AI tenant for fairness within each priority band.</li>
+<li>Reuse the existing flow-control headers and <code>InferenceObjective</code> API.</li>
+<li>Keep generated objectives synchronized with subscriptions and observed model topology.</li>
+<li>Derive flow-control identity from authorized tenant, subscription, and model context.</li>
+<li>Let authorized operators view, set, change, and clear request priority through the subscription UI.</li>
+</ul>
+<h2 id="non-goals">Non-Goals</h2>
+<ul>
+<li>Replace MaaS authorization, subscription selection, token rate limits, or billing.</li>
+<li>Introduce or change request <code>service_tier</code> handling. Its interaction with subscription selection, authorization, and
+  pricing requires a separate proposal; this integration derives scheduling priority from the selected subscription's
+  <code>requestPriority</code>, without a <code>service_tier</code> override.</li>
+<li>Introduce a new scheduler, per-user fairness, or per-model priority overrides within a subscription.</li>
+<li>Provide a global capacity allocation across independent pools or scheduler instances, or guarantee latency or minimum
+  capacity across priority bands.</li>
+<li>Add flow control to external providers or model routes without an <code>InferencePool</code>.</li>
+<li>Change the non-MaaS Gateway defaults.</li>
+</ul>
+<h2 id="proposed-design">Proposed Design</h2>
+<h3 id="subscription-priority-and-fairness">Subscription priority and fairness</h3>
+<p>Add an optional <code>MaaSSubscription.spec.requestPriority</code> field as the desired <code>InferenceObjective.spec.priority</code>. Use a
+signed <code>int32</code>, matching the objective API, and preserve the distinction between an omitted value and an explicit <code>0</code>
+(for example, using <code>*int32</code> in the Go API). Do not apply a CRD default that fills in this field. Higher values receive
+higher scheduling priority; negative values represent lower-than-default priority. Validate and preserve this value
+consistently across the subscription API and objective reconciliation.</p>
+<p>The existing <code>spec.priority</code> continues to control automatic subscription selection. <code>spec.requestPriority</code> controls
+request scheduling after a subscription has been selected. Updating either field does not change the other field's
+meaning, and request priority does not influence subscription selection. Explicit subscription selection and API-key
+subscription binding continue to follow the existing authorization rules.</p>
+<p>Subscriptions without <code>spec.requestPriority</code> create no <code>InferenceObjective</code>, but both canonical and legacy header pairs
+are still injected. The objective header carries the generated name for the subscription/pool pair. With no matching
+objective, llm-d applies scheduler priority <code>0</code>, regardless of subscription-selection priority. An explicit
+<code>spec.requestPriority: 0</code> creates an objective with priority <code>0</code> under that same name, following the same path as any
+other explicit value.</p>
+<p>For example, a subscription can have <code>spec.priority: 100</code> to make it preferred during automatic selection and
+<code>spec.requestPriority: 10</code> to schedule its requests at priority <code>10</code>.</p>
+<p>The documented default objective header value is the generated subscription/pool objective name, even when request
+priority is omitted. In that case the resource is intentionally absent and the scheduler defaults to priority <code>0</code>. When
+request priority is configured, the same header value matches the generated objective in the target pool's namespace.</p>
+<table>
+<thead>
+<tr>
+<th>Flow-control input</th>
+<th>MaaS source</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>x-llm-d-inference-fairness-id</code></td>
+<td>Stable, unambiguous identity of the resolved <code>AITenant</code></td>
+<td>All callers and subscriptions of that tenant share a fairness identity.</td>
+</tr>
+<tr>
+<td><code>x-llm-d-inference-objective</code></td>
+<td>Generated objective name for the authorized subscription and target pool</td>
+<td>Always injected; resolves the configured priority, or scheduler priority <code>0</code> when no objective exists.</td>
+</tr>
+<tr>
+<td><code>InferenceObjective.spec.priority</code></td>
+<td>Explicit <code>MaaSSubscription.spec.requestPriority</code></td>
+<td>Applies the same request priority to every pool covered by the subscription.</td>
+</tr>
+</tbody>
+</table>
+<p>MaaS emits the canonical <code>x-llm-d-*</code> names defined by llm-d Router's <code>FlowFairnessIDKey</code> and <code>ObjectiveKey</code> constants
+alongside their legacy aliases to support older deployments. Each alias carries exactly the same trusted value as its
+canonical counterpart:</p>
+<table>
+<thead>
+<tr>
+<th>Canonical header</th>
+<th>Legacy header</th>
+<th>Value</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>x-llm-d-inference-fairness-id</code></td>
+<td><code>x-gateway-inference-fairness-id</code></td>
+<td>Resolved AI tenant identity</td>
+</tr>
+<tr>
+<td><code>x-llm-d-inference-objective</code></td>
+<td><code>x-gateway-inference-objective</code></td>
+<td>Generated subscription/pool objective name</td>
+</tr>
+</tbody>
+</table>
+<p>The scheduler groups flows by <code>(fairness ID, priority)</code>. Two subscriptions belonging to one tenant at the same priority
+share a flow; creating additional subscriptions does not give that tenant additional fairness shares at that priority.
+Different priorities remain separate bands, and higher-priority traffic can delay lower-priority traffic indefinitely.
+Fairness applies where requests compete in the same flow-control scheduler; separate tenant Gateways alone do not
+establish a shared fairness domain. The fairness ID identifies the competing tenant, while the configured scheduler
+policy determines how flows share dispatch opportunities. The default global-strict policy does not provide tenant
+fairness; deployments requiring fair sharing must explicitly select an appropriate fairness policy.</p>
+<h3 id="pool-discovery-and-objective-reconciliation">Pool discovery and objective reconciliation</h3>
+<p>The MaaS subscription controller owns the desired objectives:</p>
+<ol>
+<li>Resolve the subscription's AI tenant using the existing tenant namespace association and validate that each
+   referenced model is exposed through that tenant's Gateway.</li>
+<li>Follow each <code>spec.modelRefs[]</code> entry to its <code>MaaSModelRef</code>. For <code>spec.modelRef.kind: LLMInferenceService</code>, read the
+   referenced service in the model reference's namespace.</li>
+<li>Discover the active pool through <code>LLMInferenceService.status.router.scheduler.inferencePool</code>, including its group,
+   kind, name, and namespace. Use this observed reference for both managed pools and explicitly referenced pools; do not
+   infer a generated pool name from the service name or assume that the subscription and pool share a namespace.</li>
+<li>When <code>spec.requestPriority</code> is explicitly set, reconcile one objective per distinct <code>(subscription, pool)</code> pair in
+   the pool's namespace, with <code>spec.poolRef.name</code>
+   pointing to that pool and <code>spec.priority</code> copied from the subscription's <code>spec.requestPriority</code>. Multiple model
+   references resolving to the same pool share that objective.</li>
+<li>Reconcile changes to request priority, model membership, tenant association, and observed pool references. Remove
+   obsolete objectives when request priority is cleared, a model leaves the subscription, its pool changes, or the
+   subscription is deleted. With request priority omitted, no objectives are desired.</li>
+</ol>
+<p>An <code>InferenceObjective</code> references one pool in its own namespace. Consequently, the bare subscription name cannot serve
+as every generated object's name: two models in the same namespace may use different pools, and subscriptions in
+different tenant namespaces may share a name. Generate deterministic, DNS-compatible names that include the tenant,
+subscription, and pool names, with a collision-resistant hash of their full resource identities. Truncate the readable
+name portions as needed to respect Kubernetes naming limits while preserving the hash. The subscription remains the
+logical objective; the pool-specific name is its representation in the inference API.</p>
+<p>For example, a subscription with <code>spec.requestPriority: 10</code> produces an objective for each referenced pool:
+The name below is a schematic placeholder; generated names include the pool-specific disambiguation described above.</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">inference.networking.x-k8s.io/v1alpha2</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">InferenceObjective</span>
+<a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
+<a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="c1"># longer than 63 chars names need to be handled through hashing see kmeta.ChildName algorithm</span>
+<a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">maas-&lt;ai-tenant-name&gt;-&lt;maas-subscription&gt;</span>
+<a id="__codelineno-0-6" name="__codelineno-0-6" href="#__codelineno-0-6"></a><span class="w">  </span><span class="nt">namespace</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;inference-pool-namespace&gt;</span>
+<a id="__codelineno-0-7" name="__codelineno-0-7" href="#__codelineno-0-7"></a><span class="nt">spec</span><span class="p">:</span>
+<a id="__codelineno-0-8" name="__codelineno-0-8" href="#__codelineno-0-8"></a><span class="w">  </span><span class="nt">priority</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">10</span>
+<a id="__codelineno-0-9" name="__codelineno-0-9" href="#__codelineno-0-9"></a><span class="w">  </span><span class="nt">poolRef</span><span class="p">:</span>
+<a id="__codelineno-0-10" name="__codelineno-0-10" href="#__codelineno-0-10"></a><span class="w">    </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">&lt;inference-pool-name&gt;</span>
+</code></pre></div>
+<p>Extend reconciliation watches to include relevant <code>LLMInferenceService</code> status changes, pools, and generated objectives.
+Track generated resources using controller ownership metadata that includes the subscription namespace, name, and UID.
+Extend the existing subscription cleanup finalizer for objectives in other namespaces, since cross-namespace owner
+references cannot provide garbage collection. Reconcile only resources owned by this integration; report naming or
+ownership conflicts instead of taking over unrelated objectives.</p>
+<h3 id="request-classification">Request classification</h3>
+<p>For every authorized inference request targeting a pool, the MaaS-generated AuthPolicy always injects all four headers:
+the canonical fairness and objective headers and their legacy aliases, after authentication, subscription selection, and
+model authorization. Their values come exclusively from the resolved tenant and subscription/pool identity. The
+objective header carries the generated resource name, not the numeric request priority, whether or not an objective
+resource is required. Clients cannot choose either scheduling identity by supplying their own headers.</p>
+<p>Extend the trusted subscription-selection metadata returned by maas-api to expose the resolved objective identity for
+the requested model. The controller must publish the model-to-objective-name mapping in subscription status even when
+request priority is unset and no objective resource is created, so maas-api can consume it through its existing informer
+cache. This keeps naming and pool discovery in the control plane and avoids a Kubernetes lookup on every inference
+request. The AuthPolicy consumes this metadata for both path-based and body-based model routing.</p>
+<p>All four headers must be set with replacement semantics, removing all client-supplied values, including duplicate or
+differently cased occurrences, before injecting trusted values. MaaS emits exactly one value per header, with identical
+values within each canonical/legacy pair. A requested subscription is only a selection input; it becomes an objective
+after MaaS validates access, model membership, and tenant association. Requests without a valid subscription must not
+obtain a scheduling identity through a fallback to arbitrary client headers. Existing authentication, authorization, and
+rate-limit enforcement remain in the request path.</p>
+<h3 id="operator-ui-and-live-updates">Operator UI and live updates</h3>
+<p>The subscription UI must expose a distinct <strong>Request priority</strong> control to authorized operators. Operators can view,
+set, change, or clear the value without recreating the subscription. An unset field displays <strong>Scheduler default (0)</strong>;
+the UI must preserve that unset state rather than saving an explicit <code>0</code>. Subscription-selection priority remains a
+separate setting with a separate description.</p>
+<p>Expose the configured request priority and per-model objective references and reconciliation state through the API used
+by the UI. Subscription details must let operators inspect generated objective names and their pool associations without
+inspecting raw traffic. Show pending or failed reconciliation separately from the configured value; when request
+priority is unset, indicate that no objective is required. Reconciliation status reports controller progress, not
+confirmation that every EPP instance has observed the update.</p>
+<p>Changing an explicit request priority updates existing objectives in place. Objective names must not depend on the
+numeric priority, so header values remain stable while EPP observes the updated objective priority. Setting a previously
+unset value creates objectives; clearing the field removes generated objectives while retaining the mappings and all
+four injected headers. EPP then falls back to priority <code>0</code>. Subsequent requests use the new behavior after controller,
+informer, and EPP propagation, using the same subscription and credentials without a restart or subscription recreation.</p>
+<h3 id="availability-and-compatibility">Availability and compatibility</h3>
+<p>Creating objectives and injecting headers requires an installed, compatible <code>InferenceObjective</code> API and flow control
+enabled in the target inference scheduler. MaaS manages subscription classification and objective lifecycle; KServe and
+the inference serving stack retain ownership of pools, scheduler deployment, and scheduling configuration.</p>
+<p>llm-d Router supports the canonical <code>x-llm-d-inference-objective</code> and <code>x-llm-d-inference-fairness-id</code> headers defined in
+its
+<a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/metadata/consts.go">header constants</a>. MaaS emits both
+canonical names and their legacy aliases so existing deployments that consume the older names receive the same
+scheduling identities. Newer routers prefer canonical values, while older routers consume the legacy values. Both pairs
+must be derived from the same trusted metadata and injected together, including when request priority is unset. Header
+compatibility does not replace the requirement for the objective API and scheduler flow-control support.</p>
+<p>Report per-model flow-control reconciliation state in subscription status. A missing observed pool for a service that is
+still reconciling is pending and retried; an external model or a route deliberately lacking an inference scheduler is
+not applicable. When request priority is unset, absence of an objective is expected and must not be reported as an
+objective reconciliation failure. Objective creation or update failures for explicit request priorities must be visible
+without preventing reconciliation of the subscription's other models.</p>
+<p>The existing scheduler defaults to priority <code>0</code> when an objective cannot be resolved. Controller and informer
+propagation are asynchronous, so updates may temporarily use the old priority or that default. This integration does not
+promise atomic changes across all pools. Missing objectives must not bypass MaaS access control or token rate limits,
+and MaaS must not report successful flow-control reconciliation while required objectives are missing.</p>
+<p>Deployments without the optional inference APIs must continue to support existing MaaS functionality. Enabling flow
+control should explicitly report unsupported or pending models rather than imply that priority is enforced for every
+backend.</p>
+<h3 id="llm-d-scheduler-policy-controls">llm-d Scheduler Policy Controls</h3>
+<p>The llm-d Router/Scheduler implementation and configuration are the authority for the behavior described here.
+<code>requestPriority</code> selects a band; the EPP's <code>flowControl</code> configuration determines dispatch eligibility, fairness,
+request ordering, and overload handling. Model owners own these controls. The initial MaaS API exposes request
+classification without adding subscription-level configuration for scheduler plugins.</p>
+<table>
+<thead>
+<tr>
+<th>Control</th>
+<th>Scheduling effect</th>
+<th>Implication for MaaS</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>priority-holdback-policy</code></td>
+<td>Gives lower-priority bands lower saturation ceilings. A gated band's requests remain queued.</td>
+<td>Preserves headroom for higher tiers before full saturation; it does not reserve a fixed GPU share.</td>
+</tr>
+<tr>
+<td><code>soft-reflective-ceiling-policy</code></td>
+<td>Alternates lower-band dispatch eligibility as saturation rises, using rank and band count.</td>
+<td>Provides gradual throttling across dispatch cycles, without guaranteeing service to lower bands.</td>
+</tr>
+<tr>
+<td><code>round-robin-fairness-policy</code></td>
+<td>Alternates dispatch opportunities among active flows within a band.</td>
+<td>With tenant fairness IDs, fairness is measured in turns, not tokens or GPU time.</td>
+</tr>
+<tr>
+<td><code>program-aware-fairness</code></td>
+<td>Uses accumulated weighted token consumption, decay, and queue wait to favor underserved flows.</td>
+<td>Can account for differences in request cost between tenants; usage accounting depends on completion data.</td>
+</tr>
+<tr>
+<td><code>global-strict-fairness-policy</code></td>
+<td>Selects the best request across flows according to the ordering policy; this is the default.</td>
+<td>Tenant IDs alone do not ensure fair sharing or protection from high-volume tenants.</td>
+</tr>
+<tr>
+<td><code>edf-ordering-policy</code> / <code>slo-deadline-ordering-policy</code></td>
+<td>Orders requests by queue-expiry deadline or a supplied TTFT deadline.</td>
+<td>Urgency affects request order within the selected band and fairness policy.</td>
+</tr>
+<tr>
+<td>Band <code>maxRequests</code> / <code>maxBytes</code> and queue TTLs</td>
+<td>Bound buffering and waiting; separate defaults can be configured for negative-priority bands.</td>
+<td>High-priority traffic is still subject to resource limits and expiry.</td>
+</tr>
+<tr>
+<td><code>enableEviction</code></td>
+<td>Enables demand-driven termination of eligible lower-priority in-flight requests; disabled by default.</td>
+<td>Negative-priority requests can be interrupted to reclaim capacity for higher-priority demand.</td>
+</tr>
+</tbody>
+</table>
+<h4 id="priority-holdback-what-domain-controls">Priority holdback: What <code>domain</code> Controls</h4>
+<p><code>domain</code> is a parameter of the <code>priority-holdback-policy</code> plugin. It determines how numerical priorities are mapped to
+dispatch ceilings between <code>minCeiling</code> and <code>maxCeiling</code>. It is configured by the pool administrator in the scheduler,
+separately from a subscription's <code>requestPriority</code>.</p>
+<p>A ceiling is a saturation threshold: when measured pool saturation reaches or exceeds a band's ceiling, dispatch from
+that band pauses and its requests remain queued. For example, a ceiling of <code>0.65</code> allows dispatch below saturation
+<code>0.65</code>. The value refers to the configured saturation detector's signal; it is not a reservation of 65% of GPU capacity.</p>
+<ul>
+<li><strong><code>domain: rank</code></strong> uses only the ordering of priority levels. It spaces ceilings evenly from highest to lowest rank,
+  regardless of numerical gaps. This fits priorities used as tier labels, such as premium, standard, and batch.</li>
+<li><strong><code>domain: value</code></strong> uses the numerical distance between priority levels. A priority close to the lowest value receives
+  a ceiling close to <code>minCeiling</code>. This fits configurations where numerical spacing is intended to affect holdback.</li>
+</ul>
+<p>For three registered priorities <code>100</code>, <code>10</code>, and <code>0</code>, with <code>minCeiling: 0.4</code> and <code>maxCeiling: 0.9</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Request priority</th>
+<th>Position</th>
+<th>Ceiling with <code>domain: rank</code></th>
+<th>Ceiling with <code>domain: value</code></th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>100</code></td>
+<td>Highest</td>
+<td><code>0.90</code></td>
+<td><code>0.90</code></td>
+</tr>
+<tr>
+<td><code>10</code></td>
+<td>Middle</td>
+<td><code>0.65</code></td>
+<td><code>0.45</code></td>
+</tr>
+<tr>
+<td><code>0</code></td>
+<td>Lowest</td>
+<td><code>0.40</code></td>
+<td><code>0.40</code></td>
+</tr>
+</tbody>
+</table>
+<p>With <code>rank</code>, the middle band gets the midpoint between <code>0.40</code> and <code>0.90</code>: <code>0.65</code>. With <code>value</code>, priority <code>10</code> is only
+10% of the way from <code>0</code> to <code>100</code>, so its ceiling is <code>0.40 + 0.10 * (0.90 - 0.40) = 0.45</code>.</p>
+<p>At saturation <code>0.50</code>, priority <code>10</code> is eligible under <code>rank</code> but held in queue under <code>value</code>. Priority <code>100</code> is eligible
+in both cases, and priority <code>0</code> is held in both. Eligibility still respects dispatch order: priority <code>10</code> gets a turn
+only when higher-priority work does not take that opportunity.</p>
+<p>Both modes give the highest band <code>maxCeiling</code> and, with multiple bands, the lowest band <code>minCeiling</code>. With a single
+registered priority, its ceiling is <code>maxCeiling</code>. Ceilings are computed from the priority levels known to the scheduler;
+adding or removing bands can change the mapping. A subscription's priority number therefore does not define a fixed
+capacity entitlement. Equally spaced priorities, such as <code>10</code>, <code>0</code>, and <code>-10</code>, produce the same ceilings in both modes.</p>
+<p>Dispatch still examines higher-priority bands first and stops when a band's ceiling blocks dispatch. Opening a lower
+band's ceiling does not guarantee a turn if higher-priority demand continues. These policies do not provide minimum
+capacity guarantees across priority bands. The saturation detector also matters: utilization-based detection consumes
+backend telemetry, while concurrency-based detection uses in-flight request or token accounting. Missing or stale
+telemetry can halt dispatch with the utilization detector.</p>
+<p>With in-flight eviction enabled, the existing sheddable filter admits only negative-priority victims, and reclamation
+requires victim priority to be below the blocked demand's priority. Victims are ordered by lowest priority, then newest
+dispatch time. Setting a negative <code>requestPriority</code> therefore permits interruption under that configuration; it does not
+merely place requests later in the queue. This behavior must be explained to subscription operators.</p>
+<p>If SLO deadline ordering is enabled, <code>x-llm-d-slo-ttft-ms</code> and its legacy alias can influence scheduling order. A
+follow-up must define trusted derivation or validation and bounds for these values before exposing subscription SLO
+controls. Protecting objective and fairness headers does not govern additional scheduling inputs. Tenant
+request-priority ranges complement scheduler policies by restricting which bands a subscription may select.</p>
+<h2 id="priority-tier-pricing-and-chargeback">Priority-Tier Pricing and Chargeback</h2>
+<p>The existing per-model <code>billingRate.perToken</code> on a subscription can incorporate the price of its priority tier. For
+example, an online subscription with higher <code>requestPriority</code> can carry a higher per-token rate than a batch
+subscription. This requires no additional priority-specific pricing field. MaaS does not automatically adjust the
+billing rate when request priority changes; administrators or a separate pricing policy must manage that relationship.</p>
+<p>For charges based on the configured rate, token usage and the applicable rate are sufficient; recording request
+priority is not a prerequisite. Historical attribution must preserve the applicable rate or an immutable pricing-policy
+version alongside usage. Looking up a subscription's current rate cannot reliably price earlier requests after a rate
+change. Durable rate attribution and charge calculation are separate billing concerns outside the initial flow-control
+implementation.</p>
+<p>An optional follow-up could record the request priority observed by MaaS and the objective identity for auditing and
+troubleshooting. These values must come from trusted request-time metadata, and the existing subscription-selection
+<code>priority</code> must not be confused with <code>requestPriority</code>. Objective names remain stable across priority changes, so they
+alone cannot reconstruct historical scheduling priority.</p>
+<p>If a future charging contract depends on the priority actually applied by EPP rather than the configured billing rate,
+it would additionally require scheduler-side priority reporting correlated with usage. Gateway metadata alone cannot
+establish applied priority during propagation delays or scheduler fallback. This is an optional extension, not a
+requirement for pricing through <code>billingRate.perToken</code>.</p>
+<p>The optional Envoy/OTel usage-log path can discard events when the collector is unavailable, and missing token usage
+currently falls back to zero. Before using it as an authoritative billing record, billing work must address durable
+delivery, duplicate handling, and incomplete usage, including interrupted streams. It must also define pricing changes,
+retry attribution, and charging rules for rejected requests and preempted negative-priority work. Pricing and billing
+enforcement remain outside the initial flow-control implementation.</p>
+<h2 id="security-and-privacy-considerations">Security and Privacy Considerations</h2>
+<p>Only users authorized to edit subscriptions may set their request priority. Since priorities can compete across tenants
+sharing a pool, platform administrators must govern which priority values tenant administrators can assign; fairness
+within a band does not constrain a tenant that assigns itself a higher band.</p>
+<blockquote>
+<p><strong>Current scope:</strong> Sharing inference pools across AI tenants is not currently supported, so cross-tenant priority
+escalation within a shared pool does not affect the supported deployment model. The initial implementation can
+proceed without tenant-level priority ranges. When cross-tenant pool sharing is introduced, the
+<a href="#follow-up-tenant-request-priority-ranges">tenant request-priority range follow-up</a> should define and enforce these
+boundaries. Subscription priorities still govern contention within each tenant.</p>
+</blockquote>
+<p>The controller requires read access to services and pools and permission to manage objectives in model namespaces.
+Preserve tenant-to-model Gateway validation before writing these resources, and carry the required RBAC changes into
+both the AI Gateway and ODH parent operators. Restrict direct objective edits to the platform's authorized
+administrators. Internal headers and status mappings must not contain API keys or other credentials.</p>
+<h2 id="follow-up-tenant-request-priority-ranges">Follow-up: Tenant Request-Priority Ranges</h2>
+<p>A future extension could let platform administrators configure an allowed request-priority range on <code>AITenant</code>, for
+example <code>spec.requestPriorityRange.min</code> and <code>spec.requestPriorityRange.max</code> (illustrative field names). Tenant
+administrators could then choose subscription request priorities within inclusive bounds set by the platform. This would
+constrain priority escalation on shared pools while preserving subscription-level control and the existing objective
+mapping. Managing the bounds must require platform-level authorization so tenant administrators cannot raise their own
+limits.</p>
+<p>The <a href="#allowed-priority-values-instead-of-ranges">allowed-values alternative</a> preserves the same batch-versus-online
+subscription flexibility while restricting choices to a discrete set. The follow-up should evaluate both approaches.</p>
+<p>The follow-up should define validation of subscription creation and updates, reconciliation when tenant bounds change,
+and UI display of the allowed range. It must also decide how to handle existing subscriptions outside a newly narrowed
+range and the scheduler's effective priority <code>0</code> for subscriptions that omit <code>requestPriority</code>, particularly when <code>0</code>
+falls outside the range. Rejecting invalid values should provide actionable feedback rather than silently clamping them.
+These policy and migration choices are deferred; tenant-level ranges are not required for this design's initial
+implementation because sharing inference pools across AI tenants is not currently supported. Priority governance
+should be addressed as part of the follow-up design for enabling cross-tenant pool sharing.</p>
+<h3 id="allowed-priority-values-instead-of-ranges">Allowed Priority Values Instead of Ranges</h3>
+<p>For future cross-tenant pool sharing, platform administrators could grant each <code>AITenant</code> a discrete set of allowed
+<code>requestPriority</code> values instead of a continuous range. Tenant administrators would retain subscription-level control:
+for example, a tenant allowed <code>-10</code>, <code>0</code>, and <code>10</code> could assign <code>-10</code> to a batch subscription and <code>10</code> to an online
+subscription. This does not impose one fixed priority on all of a tenant's subscriptions.</p>
+<p>A discrete set limits the priority bands tenants can introduce, making holdback behavior easier to govern, particularly
+with <code>domain: rank</code>. It offers less numerical flexibility than ranges and requires maintaining tenant entitlements and
+validating subscription updates. The initial numeric subscription API can remain unchanged; named tiers could be added
+separately if needed. As with ranges, the follow-up must define how entitlement changes affect existing subscriptions
+and how omitted request priority, with effective scheduler priority <code>0</code>, is handled.</p>
+<h2 id="alternatives">Alternatives</h2>
+<table>
+<thead>
+<tr>
+<th>Alternative</th>
+<th>Tradeoff</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Manually create objectives in each model namespace</td>
+<td>Reuses the API but requires subscription administrators to discover pools and maintain cross-namespace resources as subscriptions change.</td>
+</tr>
+<tr>
+<td>Use the subscription as the fairness key</td>
+<td>Gives tenants with more subscriptions more independent fairness shares at the same priority.</td>
+</tr>
+<tr>
+<td>Use the AI tenant as both fairness and objective key</td>
+<td>Cannot express different subscription priorities within one tenant.</td>
+</tr>
+<tr>
+<td>Use only token rate limits</td>
+<td>Controls consumption over a time window but does not prioritize queued requests competing for inference capacity.</td>
+</tr>
+<tr>
+<td>Reuse <code>spec.priority</code> for request scheduling</td>
+<td>Avoids a new field, but couples subscription selection with scheduling and changes the effect of existing nonzero priorities. Separate <code>spec.requestPriority</code> keeps these decisions independent.</td>
+</tr>
+<tr>
+<td>Reference an operator-defined priority tier</td>
+<td>A named tier such as <code>premium</code> could map to a centrally governed numeric priority, limiting tenant self-escalation. It introduces another configuration resource and makes tier changes affect all referencing subscriptions. Consider if centrally managed tiers become a requirement.</td>
+</tr>
+<tr>
+<td>Share objectives by pool and numeric priority</td>
+<td>Subscriptions with the same request priority could reuse one objective per pool while retaining tenant fairness headers. This reduces object count but requires shared ownership and cleanup, and priority changes must switch the subscription's objective mapping. Per-subscription objectives keep ownership direct and names stable across priority changes.</td>
+</tr>
+</tbody>
+</table>
+<h2 id="risks">Risks</h2>
+<ul>
+<li><strong>Resource growth:</strong> Objective count grows with the number of distinct subscription/pool pairs. Watches and cleanup
+  must avoid full-cluster reconciliation for every change.</li>
+<li><strong>Topology mismatch:</strong> Body-based routing and pool changes must use the same resolved backend for classification and
+  forwarding. Routes that can select multiple pools need an explicit mapping strategy before claiming support.</li>
+<li><strong>Scheduling expectations:</strong> Priority controls dispatch under contention; it is not a latency guarantee, and
+  lower-priority traffic can starve.</li>
+</ul>
+<p>Implementation validation must cover multiple pools in one namespace, equal subscription names across tenants, multiple
+models sharing a pool, request-priority and pool changes, subscription deletion, missing optional APIs, forged headers,
+and both path-based and body-based model resolution. End-to-end tests must demonstrate tenant fairness within one
+priority band using an explicitly configured fairness policy, and priority ordering under contention with flow control
+enabled. Test the selected pool policy configuration, including dispatch gating and negative-priority interruption when
+eviction is enabled. Verify that omitted <code>spec.requestPriority</code> creates no objective, overwrites all four headers with
+trusted values, and uses scheduler priority <code>0</code> while retaining tenant fairness. Test conflicting canonical/legacy
+values, spoofed values, duplicate headers, and case variants, with request priority both set and unset. Explicit <code>0</code>
+must create an objective and inject its name. Verify negative values, independence from subscription selection, and
+set/change/clear transitions using the same subscription and credentials. Test UI viewing and editing, default display,
+and per-model reconciliation details, along with the identical values within each canonical/legacy pair on both newer
+and older supported routers. After propagation, verify subsequent requests carry the correct objective name and tenant
+fairness identity, including when request priority is unset, and EPP applies the corresponding priority.</p>
+<h2 id="stakeholder-impacts">Stakeholder Impacts</h2>
+<table>
+<thead>
+<tr>
+<th>Group</th>
+<th>Key Contacts</th>
+<th>Date</th>
+<th>Impacted?</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>MaaS / AI Gateway</td>
+<td>TBD</td>
+<td>TBD</td>
+<td>Yes — objective reconciliation, subscription metadata, and AuthPolicy headers</td>
+</tr>
+<tr>
+<td>Dashboard</td>
+<td>TBD</td>
+<td>TBD</td>
+<td>Yes — request priority in MaaSSubscription pages</td>
+</tr>
+<tr>
+<td>Documentation</td>
+<td>TBD</td>
+<td>TBD</td>
+<td>Yes — subscription request priority semantics documentation</td>
+</tr>
+</tbody>
+</table>
+<h2 id="references">References</h2>
+<ul>
+<li><a href="https://github.com/opendatahub-io/architecture-context/blob/main/architecture/rhoai.next/models-as-a-service.md">MaaS architecture context</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/api/maas/v1alpha1/maassubscription_types.go">MaaS subscription API</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/pkg/controller/maas/maassubscription_controller.go">MaaS subscription controller</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-api/internal/subscription/selector.go">MaaS subscription selection</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/pkg/controller/maas/maasauthpolicy_controller.go">MaaS AuthPolicy generation</a></li>
+<li><a href="https://github.com/opendatahub-io/kserve/blob/main/pkg/apis/serving/v1alpha2/llm_inference_service_types.go">LLMInferenceService API and observed scheduler status</a></li>
+<li><a href="https://github.com/opendatahub-io/kserve/blob/main/config/llmisvc/gateway-inference-extension.yaml">InferenceObjective schema bundled with KServe</a></li>
+<li><a href="https://llm-d.ai/docs/0.8/api-reference/epp-http-headers">llm-d EPP HTTP headers reference</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/metadata/consts.go">llm-d Router header constants</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/apix/config/v1alpha1/endpointpickerconfig_types.go">llm-d flow-control configuration API</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/flowcontrol/controller/internal/processor.go">llm-d dispatch and priority gating</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/framework/plugins/flowcontrol/usagelimits/priorityholdback/priority_holdback.go">llm-d priority holdback policy</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/framework/plugins/flowcontrol/usagelimits/softreflectiveceiling/policy.go">llm-d soft reflective ceiling policy</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/tree/main/pkg/epp/framework/plugins/flowcontrol/fairness">llm-d fairness policies</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/framework/plugins/flowcontrol/ordering/slodeadline/slo_deadline.go">llm-d SLO deadline ordering</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/flowcontrol/controller/internal/reclamation.go">llm-d in-flight reclamation</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-api/internal/subscription/types.go">MaaS subscription-selection metadata</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/maas-controller/pkg/platform/tenantreconcile/postrender.go">MaaS telemetry-label generation</a></li>
+<li><a href="https://github.com/opendatahub-io/models-as-a-service/blob/main/deployment/components/observability/usage-logs/envoy-otel-access-log.yaml">MaaS structured usage logs</a></li>
+<li><a href="https://github.com/llm-d/llm-d-router/blob/main/pkg/epp/requestcontrol/director.go">llm-d request-priority resolution</a></li>
+</ul>
+
+
+
+
+
+
+
+  
+    
+  
+  
+    
+  
+
+
+  <aside class="md-source-file">
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Last update">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 14, 2026 13:40:15 UTC">September 14, 2026</span>
+  </span>
+
+    
+    
+      
+  <span class="md-source-file__fact">
+    <span class="md-icon" title="Created">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M14.47 15.08 11 13V7h1.5v5.25l3.08 1.83c-.41.28-.79.62-1.11 1m-1.39 4.84c-.36.05-.71.08-1.08.08-4.42 0-8-3.58-8-8s3.58-8 8-8 8 3.58 8 8c0 .37-.03.72-.08 1.08.69.1 1.33.32 1.92.64.1-.56.16-1.13.16-1.72 0-5.5-4.5-10-10-10S2 6.5 2 12s4.47 10 10 10c.59 0 1.16-.06 1.72-.16-.32-.59-.54-1.23-.64-1.92M18 15v3h-3v2h3v3h2v-3h3v-2h-3v-3z"/></svg>
+    </span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 14, 2026 13:40:15 UTC">September 14, 2026</span>
+  </span>
+
+    
+    
+    
+  </aside>
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+          <button type="button" class="md-top md-icon" data-md-component="top" hidden>
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M13 20h-2V8l-5.5 5.5-1.42-1.42L12 4.16l7.92 7.92-1.42 1.42L13 8z"/></svg>
+  Back to top
+</button>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "navigation.top", "search.highlight", "search.share", "content.code.copy", "content.code.annotate", "search.suggest", "search.boost", "navigation.instant"], "search": "../../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "latest", "provider": "mike"}}</script>
+    
+    
+      <script src="../../../assets/javascripts/bundle.d7400e89.min.js"></script>
+      
+    
+  </body>
+</html>
