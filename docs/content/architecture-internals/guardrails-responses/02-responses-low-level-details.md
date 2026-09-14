@@ -1,12 +1,13 @@
 # Responses: enablement, storage and request lifecycle
 
-| | |
-|---|---|
-| Status | Proposed |
+|         |                                                       |
+|---------|-------------------------------------------------------|
+| Status  | Proposed                                              |
 | Authors | Pierangelo Di Pilato, Christina Xu, Marius Ion Danciu |
-| Source | [Main design](../responses-and-guardrails.md) |
 
-This document defines tenant enablement, Responses database architecture, durable user ownership and request lifecycle. The combined filter chain and authentication handoff live in the guardrails companion because their execution boundaries must be reviewed together.
+This document defines tenant enablement, Responses database architecture, durable user ownership and request lifecycle.
+The combined filter chain and authentication handoff live in the guardrails companion because their execution boundaries
+must be reviewed together.
 
 This topic document copies the relevant sections of the main proposal for focused review. The main document is retained
 in full as the consolidated reference; these documents do not record separate design approval.
@@ -33,7 +34,8 @@ In this document:
 
 ## Responses enablement and lifecycle
 
-The [tenant example](01-guardrails-responses-high-level-design.md#proposal-through-resource-examples) shows the initial enablement fields and platform storage mode.
+The [tenant example](01-guardrails-responses-high-level-design.md#proposal-through-resource-examples) shows the initial
+enablement fields and platform storage mode.
 
 Omission means Responses is disabled. Enabling it requires Praxis; reject an IPP combination rather than implicitly
 transferring payload-processing ownership. Subscription and Model cannot enable a disabled tenant capability. Model
@@ -96,7 +98,8 @@ must implement `maxAge`; it is not an existing Praxis retention guarantee. Expir
 Concurrent conversation append/delete and continuation operations need version checks or transactions. Define deletion
 tombstones so a late in-flight write cannot recreate a deleted response.
 
-The [model example](01-guardrails-responses-high-level-design.md#proposal-through-resource-examples) shows the capability declaration.
+The [model example](01-guardrails-responses-high-level-design.md#proposal-through-resource-examples) shows the
+capability declaration.
 
 `ChatCompletions` is the default for every backend kind, including `LLMInferenceService` and `ExternalModel`, when
 `spec.capabilities`, `capabilities.responses` or its `mode` is omitted. Praxis translates the supported Responses subset
@@ -107,7 +110,8 @@ Defaulting selects the adapter; it does not enable Responses on a disabled tenan
 Validate the effective mode against the selected provider and report mismatches. Never silently discard unsupported
 parameters, multimodal input or tool types, or automatically switch to `Native` after a translation failure. Both modes
 retain the tenant's single public Responses lifecycle, including persistence and continuation; backend IDs must not
-bypass it. The [native compilation contract](02-guardrails-low-level-details.md#compilation-target-and-existing-limits) assumes an explicit `mode: Native` declaration.
+bypass it. The [native compilation contract](02-guardrails-low-level-details.md#compilation-target-and-existing-limits)
+assumes an explicit `mode: Native` declaration.
 
 `Unsupported` explicitly disables Responses for this model even when the tenant enables it. Embedding-only and
 reranker-only models should declare this mode. Reject all Responses inference and continuation attempts using an
@@ -135,9 +139,9 @@ retaining data. Reject requests selecting deferred tools before inference or out
 unknown feature fields rather than silently accepting them.
 
 Files, document extraction, vector stores, web search and MCP remain future capabilities requiring separate API and
-binding designs, trusted authentication, egress policy, size/time limits and advertised protocol coverage. The [deferred agentic flows](03-responses-future-expansion.md#deferred-agentic-flows)
-preserve future architectural context and existing Praxis building blocks, not initial feature
-availability.
+binding designs, trusted authentication, egress policy, size/time limits and advertised protocol coverage.
+The [deferred agentic flows](03-responses-future-expansion.md#deferred-agentic-flows)
+preserve future architectural context and existing Praxis building blocks, not initial feature availability.
 
 ## Responses database architecture and enterprise isolation
 
@@ -371,13 +375,14 @@ that StreamBuffer callouts can precede listener header filters: putting an auth 
 establish this boundary.
 
 Responses handlers and agentic execution compile into Praxis filters for the selected host, as specified
-in [Materializing MaaS configuration in Praxis](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis). In the initial ExtProc
-target, Envoy owns ordinary model forwarding. Local stored-object operations and iterative subrequests need explicit
-adapter support so a terminal local result is delivered without a duplicate Envoy upstream request. Unsupported
-compositions remain unavailable; do not introduce a parallel tenant HTTP proxy as an implicit fallback. Explicit
-standalone Praxis deployment is a supported architectural direction, subject to the [deployment target and migration
-contract](02-guardrails-low-level-details.md#deployment-targets-and-standalone-evolution). The AI Gateway controller owns the generated target-specific Praxis configuration and network
-integration; MaaS owns the authentication and selected-subscription contract consumed by it.
+in [Materializing MaaS configuration in Praxis](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis).
+In the initial ExtProc target, Envoy owns ordinary model forwarding. Local stored-object operations and iterative
+subrequests need explicit adapter support so a terminal local result is delivered without a duplicate Envoy upstream
+request. Unsupported compositions remain unavailable; do not introduce a parallel tenant HTTP proxy as an implicit
+fallback. Explicit standalone Praxis deployment is a supported architectural direction, subject to
+the [deployment target and migration contract](02-guardrails-low-level-details.md#deployment-targets-and-standalone-evolution).
+The AI Gateway controller owns the generated target-specific Praxis configuration and network integration; MaaS owns the
+authentication and selected-subscription contract consumed by it.
 
 Carry trusted tenant, principal, subscription and model UIDs plus policy generation through internal metadata. Strip
 spoofable incoming routing/policy headers; do not expose credentials or internal identity metadata to model providers. A
@@ -557,17 +562,18 @@ instantaneous emergency revocation needs a separate admission/cancellation mecha
 propagation delay.
 
 Existing authentication caching also applies; see the canonical
-[Authorino caching behavior](../../configuration-and-management/authorino-caching.md). The new plan cache must not prolong
-an already expired authorization decision. Publish the maximum observed policy propagation interval and test partial
-rollout, coordinator failure and partition behavior. Required policy changes are treated as potentially safety-relevant;
-do not attempt semantic comparison of arbitrary NeMo configs to decide whether stale policy is safe.
+[Authorino caching behavior](../../configuration-and-management/authorino-caching.md). The new plan cache must not
+prolong an already expired authorization decision. Publish the maximum observed policy propagation interval and test
+partial rollout, coordinator failure and partition behavior. Required policy changes are treated as potentially
+safety-relevant; do not attempt semantic comparison of arbitrary NeMo configs to decide whether stale policy is safe.
 
 ## Responses and Conversations using existing filters
 
-The [consolidated example](02-guardrails-low-level-details.md#worked-compilation-of-the-introductory-resources) shows the tenant's Conversations,
-PostgreSQL store, rehydration and default Chat Completions translation in the same chain as the resolved guardrails.
-Explicit `Native` mode replaces translation/path rewriting with `openai_responses_proxy`; `Unsupported` rejects model
-execution before this path. Bodyless operations still use the local ownership/authorization contract.
+The [consolidated example](02-guardrails-low-level-details.md#worked-compilation-of-the-introductory-resources) shows
+the tenant's Conversations, PostgreSQL store, rehydration and default Chat Completions translation in the same chain as
+the resolved guardrails. Explicit `Native` mode replaces translation/path rewriting with `openai_responses_proxy`;
+`Unsupported` rejects model execution before this path. Bodyless operations still use the local ownership/authorization
+contract.
 
 ## Tenant capability state transitions
 

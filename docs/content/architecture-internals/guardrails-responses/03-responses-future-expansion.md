@@ -1,12 +1,12 @@
 # Responses: future expansion and capability discovery
 
-| | |
-|---|---|
-| Status | Proposed |
+|         |                                                       |
+|---------|-------------------------------------------------------|
+| Status  | Proposed                                              |
 | Authors | Pierangelo Di Pilato, Christina Xu, Marius Ion Danciu |
-| Source | [Main design](../responses-and-guardrails.md) |
 
-These proposals are separate from the initial Responses enablement contract. Automatic capability discovery and agentic bindings are future work; they are not prerequisites for the initial tenant API.
+These proposals are separate from the initial Responses enablement contract. Automatic capability discovery and agentic
+bindings are future work; they are not prerequisites for the initial tenant API.
 
 This topic document copies the relevant sections of the main proposal for focused review. The main document is retained
 in full as the consolidated reference; these documents do not record separate design approval.
