@@ -1811,6 +1811,9 @@ func TestBuildGatewayAuthPolicySpec_ErrorResponses(t *testing.T) {
 		if !strings.Contains(bodyExpr, `"code":403`) {
 			t.Errorf("unauthorized body should contain code 403, got: %s", bodyExpr)
 		}
+		if !strings.Contains(bodyExpr, `.replace(`) {
+			t.Errorf("unauthorized body expression should JSON-escape the message with .replace(), got: %s", bodyExpr)
+		}
 
 		headers, ok := unauthz["headers"].(map[string]any)
 		if !ok {

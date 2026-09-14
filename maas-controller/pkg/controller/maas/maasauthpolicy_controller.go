@@ -1167,7 +1167,7 @@ allow {
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied") + '","type":"authorization_error","code":403}}'`,
+					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message.replace('\\', '\\\\').replace('"', '\\"') : "Access denied") + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
