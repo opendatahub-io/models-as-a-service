@@ -1,8 +1,8 @@
 # Guardrails: future expansion
 
-| | |
-|---|---|
-| Status | Deferred proposal; outside the initial API |
+|         |                                                       |
+|---------|-------------------------------------------------------|
+| Status  | Deferred proposal; outside the initial API            |
 | Authors | Pierangelo Di Pilato, Christina Xu, Marius Ion Danciu |
 
 The initial [guardrails API](02-guardrails-low-level-details.md#attachment-selection-and-composition) uses an additive
@@ -20,9 +20,10 @@ shipping it. Existing attachments must retain mandatory, additive behavior after
 overridable defaults implicitly. No attachment alias is needed in either shape.
 
 Within every attachment, `ref` still contains explicit `name` and `namespace`. An omitted or empty attachment `checks`
-selects all checks in that AIGuardrail, including future additions. A nonempty list selects named checks. This is distinct
-from an empty **list of attachments** in a defaults operation, which can clear optional defaults under `Replace`.
-All current namespace validation, provider permission, fail-closed behavior, check identity and execution ordering apply.
+selects all checks in that AIGuardrail, including future additions. A nonempty list selects named checks. This is
+distinct from an empty **list of attachments** in a defaults operation, which can clear optional defaults under
+`Replace`. All current namespace validation, provider permission, fail-closed behavior, check identity and execution
+ordering apply.
 
 ## Exact inheritance and merge semantics
 
@@ -32,13 +33,14 @@ owner, but another scope cannot remove or weaken them.
 
 For an authenticated `(tenant UID, subscription UID, model UID)` tuple:
 
-1. Collect required bindings from AITenant, MaasTenantConfig, Model, selected Subscription and its matching `modelRefs[]` entry.
-2. Start with AITenant defaults; apply MaasTenantConfig defaults, Model defaults, Subscription defaults, then the matching subscription model-entry
-   defaults. The consuming application's most specific scope wins for optional defaults. Model safety requirements
-   belong in `required`.
+1. Collect required bindings from AITenant, MaasTenantConfig, Model, selected Subscription and its matching
+   `modelRefs[]` entry.
+2. Start with AITenant defaults; apply MaasTenantConfig defaults, Model defaults, Subscription defaults, then the
+   matching subscription model-entry defaults. The consuming application's most specific scope wins for optional
+   defaults. Model safety requirements belong in `required`.
 3. Combine required and resolved default bindings and expand their policies into a set of selected checks. Deduplicate
-   by namespace, AIGuardrail name and check name, preserving all contributing attachment provenance. Run selected
-   checks in the deterministic catalog order for each applicable phase; all must pass. A block stops the operation, and an
+   by namespace, AIGuardrail name and check name, preserving all contributing attachment provenance. Run selected checks
+   in the deterministic catalog order for each applicable phase; all must pass. A block stops the operation, and an
    error fails closed. There is no “later pass overrides earlier block.”
 
 | Defaults field                                    | Effect on inherited defaults                          |
@@ -53,8 +55,8 @@ For an authenticated `(tenant UID, subscription UID, model UID)` tuple:
 At Tenant scope defaults seed the list. Explicit `null` is invalid. An attachment is identified by its source resource
 UID, attachment path, required/default category and referenced namespace/name. No attachment-level `name` is needed.
 Deduplicate execution by `(namespace, AIGuardrail name, check name)`, preserving every origin. Defaults replacement
-changes only the optional attachment list; it cannot remove a check selected by any required attachment. Execution
-order remains the deterministic catalog order, independently of scope precedence.
+changes only the optional attachment list; it cannot remove a check selected by any required attachment. Execution order
+remains the deterministic catalog order, independently of scope precedence.
 
 Example: Tenant requires `safety`, defaults to `topic`; Model requires `medical`, merges `pii`; Subscription requires
 `finance` and replaces defaults with `support`. The selected policy set is `{safety, medical, finance, support}`. With
@@ -114,23 +116,24 @@ This pseudocode assumes defaulting has normalized `checks` without a mode to `Me
 authentication and subscription selection happen first. Resolution must reject missing/deleted objects rather than
 substituting a same-name replacement or falling back to a different subscription with weaker checks.
 
-| Scenario                                                                             | Result                                                                                                                          |
-|--------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Tenant required Input check; Model replaces defaults                                 | Tenant Input check remains                                                                                                      |
-| Tenant default Input+Output check; Subscription replaces it with Input-only          | Allowed delegation for defaults; Output is no longer effective unless another binding requires it                               |
+| Scenario                                                                                    | Result                                                                                                                          |
+|---------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
+| Tenant required Input check; Model replaces defaults                                        | Tenant Input check remains                                                                                                      |
+| Tenant default Input+Output check; Subscription replaces it with Input-only                 | Allowed delegation for defaults; Output is no longer effective unless another binding requires it                               |
 | Tenant required Input+Output check; Subscription adds Input-only through another attachment | Original Input+Output binding remains; the new binding is separate                                                              |
-| Model requires a check; Subscription disables defaults                               | Model requirement remains                                                                                                       |
-| Subscription A replaces defaults; caller is authorized under Subscription B          | A has no effect on the request                                                                                                  |
-| Model default is incompatible but Subscription replaces it                           | Validate the final effective plan for runtime compatibility; local declarations must still be structurally valid and resolvable |
-| Effective default is unsupported or its provider is unavailable                      | Reject; an overridable default still enforces until explicitly overridden                                                       |
-| Model is deleted and recreated with the same name                                    | Existing stored model UID and old generated configuration do not authorize the new object                                       |
-| Policy is removed before its bindings are migrated                                   | Affected bindings become unresolved; no unguarded fallback                                                                      |
+| Model requires a check; Subscription disables defaults                                      | Model requirement remains                                                                                                       |
+| Subscription A replaces defaults; caller is authorized under Subscription B                 | A has no effect on the request                                                                                                  |
+| Model default is incompatible but Subscription replaces it                                  | Validate the final effective plan for runtime compatibility; local declarations must still be structurally valid and resolvable |
+| Effective default is unsupported or its provider is unavailable                             | Reject; an overridable default still enforces until explicitly overridden                                                       |
+| Model is deleted and recreated with the same name                                           | Existing stored model UID and old generated configuration do not authorize the new object                                       |
+| Policy is removed before its bindings are migrated                                          | Affected bindings become unresolved; no unguarded fallback                                                                      |
 
 ## Five-scope policy resolution: five scopes, two NeMo servers and subscription-specific overrides
 
-Input fragments use the shared attachment shape defined earlier. Every policy ref names its namespace explicitly and must pass same-tenant membership validation; each
-NeMo binding satisfies allowedConsumers and tenant approval. The fragments below show tenant, model and subscription
-resources, with MaasTenantConfig adding the tenant-admin baseline and the fifth scope under the matching
+Input fragments use the shared attachment shape defined earlier. Every policy ref names its namespace explicitly and
+must pass same-tenant membership validation; each NeMo binding satisfies allowedConsumers and tenant approval. The
+fragments below show tenant, model and subscription resources, with MaasTenantConfig adding the tenant-admin baseline
+and the fifth scope under the matching
 `MaaSSubscription.spec.modelRefs[]` entry. They omit unrelated and required resource fields and are not apply-ready
 manifests.
 
@@ -138,9 +141,9 @@ manifests.
 kind: AITenant
 spec:
   guardrails:
-    required: [ { ref: { name: safety-v1, namespace: <tenant-namespace> }, checks: [] } ]
+    required: [ { ref: { name: safety-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
     defaults:
-      checks: [ { ref: { name: topic-v1, namespace: <tenant-namespace> }, checks: [] } ]
+      checks: [ { ref: { name: topic-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
 ---
 kind: MaasTenantConfig
 metadata:
@@ -148,7 +151,7 @@ metadata:
   namespace: <tenant-namespace>
 spec:
   guardrails:
-    required: [{ref: {name: privacy-v1, namespace: <tenant-namespace>}, checks: [pii]}]
+    required: [ { ref: { name: privacy-v1, namespace: <tenant-namespace> }, checks: [ pii ] } ]
 ---
 kind: MaaSModelRef
 metadata:
@@ -156,32 +159,33 @@ metadata:
   namespace: <model-namespace>
 spec:
   guardrails:
-    required: [ { ref: { name: privacy-v1, namespace: <tenant-namespace> }, checks: [] } ]
+    required: [ { ref: { name: privacy-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
     defaults:
       mode: Merge
-      checks: [ { ref: { name: tone-v1, namespace: <tenant-namespace> }, checks: [] } ]
+      checks: [ { ref: { name: tone-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
 ---
 kind: MaaSSubscription
 spec:
   guardrails:
-    required: [ { ref: { name: audit-v1, namespace: <tenant-namespace> }, checks: [] } ]
+    required: [ { ref: { name: audit-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
     defaults:
       mode: Replace
-      checks: [ { ref: { name: support-v1, namespace: <tenant-namespace> }, checks: [] } ]
+      checks: [ { ref: { name: support-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
   modelRefs:
     - name: granite-7b
       namespace: <model-namespace>
       guardrails:
         defaults:
           mode: Replace
-          checks: [ { ref: { name: specialist-v1, namespace: <tenant-namespace> }, checks: [] } ]
+          checks: [ { ref: { name: specialist-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
 ```
 
 Resolved definitions: `safety-v1` has Input check `safety` on server A; `privacy-v1`
 has Input checks `pii`, then `regex` on server A; `audit-v1` has Input check `audit`
 on server B; `specialist-v1` has Input check `specialist` on server B. Lexical AIGuardrail order makes this request
 execute
-`audit, pii, regex, safety, specialist`, preserving the two checks within `privacy-v1`. MaasTenantConfig also requires `pii`, which executes once. Tenant `topic`, model `tone`
+`audit, pii, regex, safety, specialist`, preserving the two checks within `privacy-v1`. MaasTenantConfig also requires
+`pii`, which executes once. Tenant `topic`, model `tone`
 and subscription `support` defaults are not selected; their tenant-local checks may still be configured for other
 requests. Another subscription can have a different plan while sharing the same logical model.
 
@@ -196,8 +200,9 @@ adapter coverage.
 ## Additional acceptance criteria
 
 A future implementation must test all defaults modes, omitted/empty/null distinctions, precedence across all five
-scopes, selected-subscription isolation and required-check preservation. Conversion must retain initial attachments
-and their all-checks/subset behavior. UI and status must explain which defaults were replaced and by which scope.
+scopes, selected-subscription isolation and required-check preservation. Conversion must retain initial attachments and
+their all-checks/subset behavior. UI and status must explain which defaults were replaced and by which scope.
 
-See the [initial compilation and runtime contract](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis)
+See
+the [initial compilation and runtime contract](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis)
 and [shared acceptance matrix](02-guardrails-low-level-details.md#acceptance-matrix).
