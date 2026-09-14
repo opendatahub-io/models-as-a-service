@@ -17,6 +17,8 @@ Read alongside:
 - [Guardrails: API, Praxis compilation and reconciliation](02-guardrails-low-level-details.md)
 - [Responses: enablement, storage and request lifecycle](02-responses-low-level-details.md)
 
+- [Guardrails: future expansion](04-guardrails-future-expansion.md)
+
 In this document:
 
 - [Future KServe capability discovery for MaaS](#future-kserve-capability-discovery-for-maas)
