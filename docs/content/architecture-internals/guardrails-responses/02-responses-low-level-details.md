@@ -52,6 +52,11 @@ Responses requires the platform binding to exist and pass validation; no databas
 | `ExternalPostgres` | Future per-`AITenant` override: explicitly select a separately provisioned connection Secret and CA; database operations remain external                       |
 | `ManagedPostgres`  | Future development option: explicitly provision database/credentials/PVC; not part of the initial implementation or an implicit database-operator installation |
 
+These modes describe how the runtime obtains its database binding, not who operates PostgreSQL. A future database
+claim that only publishes a customer-provided connection is still an external binding; it does not make the database
+managed by MaaS or AI Gateway. The deferred `ManagedPostgres` label above is reserved for actual database resource
+provisioning and lifecycle ownership. Whether to retain that separate development option is a future API decision.
+
 The proposed platform convention is a separate `responses-db-config` Secret with key `DB_CONNECTION_URL`, plus
 `responses-db-ca` with key `ca.crt`, in the configured infrastructure namespace. These names are new proposed
 conventions, not existing MaaS resources. The platform administrator provisions them; tenant/model/subscription editors

@@ -164,14 +164,14 @@ fields, not apply-ready manifests; existing required fields are omitted. Namespa
 tenant, model and NeMo infrastructure namespaces, not installation defaults.
 
 Before creating these resources, prepare the tenant, model and separate NeMo infrastructure namespaces and the platform
-Responses database binding. Create `pii-cm`, `application-safety-cm` and `model-safety-cm` in `<guardrails-namespace>`,
+Responses database binding. Create `pii-cm`, `application-safety-cm`, `subscription-safety-cm` and `model-safety-cm` in `<guardrails-namespace>`,
 and the NeMo client credential/CA Secrets in `<tenant-namespace>`. The examples assume the tenant-to-namespace
 relationship and existing Gateway configuration are established. Resource creation is separate from readiness: each
 binding becomes usable only after its dependencies are validated.
 
 **Provide the NeMo service and its configuration.** TrustyAI deploys `tenant-nemo` and loads the `pii` configuration
 from `pii-cm`, `application-safety` from `application-safety-cm`, and `model-safety` from `model-safety-cm`, in the
-separate `<guardrails-namespace>`. These configurations must make `approved-check-model` resolvable by NeMo. The
+separate `<guardrails-namespace>`. It also loads `subscription-safety` from `subscription-safety-cm`. Any model dependencies used by the checks are configured within NeMo. The
 policies below reference this server and select their configurations.
 
 ```yaml
@@ -187,6 +187,8 @@ spec:
       configMaps: [ application-safety-cm ]
     - name: model-safety
       configMaps: [ model-safety-cm ]
+    - name: subscription-safety
+      configMaps: [ subscription-safety-cm ]
   allowedConsumers: # Proposed addition; nemoConfigs already exists.
     namespaces:
       from: Selector
@@ -202,7 +204,7 @@ endpoint, authentication and successful configuration loading must satisfy the
 [TrustyAI integration contract](02-guardrails-low-level-details.md#trustyai-integration-and-deployment-topology) before
 the policy becomes ready.
 
-**Define the reusable check separately.** The policy names the NeMo configuration and evaluation model; it does not
+**Define the reusable check separately.** The policy names the NeMo configuration and check phases; it does not
 contain the server's configuration files. All three AIGuardrails remain in `<tenant-namespace>` and explicitly reference
 NeMo in `<guardrails-namespace>`. The server's selector authorizes that provider reference under the
 [NeMo consumer-permission contract](02-guardrails-low-level-details.md#nemo-owned-consumer-permission). Credential and
@@ -231,12 +233,11 @@ spec:
   checks:
     - name: sensitive-data
       configId: pii
-      model: approved-check-model
       phases: [ Input, Output ]
 ```
 
-Create the application policy used by the subscription as well. It selects the NeMo `application-safety`
-configuration loaded above; its evaluation model must also be resolvable by that configuration.
+Create an application policy with two independently selectable checks: `application-check` for the tenant-admin
+baseline and `subscription-check` for the subscription-wide requirement. Each uses its own NeMo configuration, which owns any model dependencies for that check.
 
 ```yaml
 apiVersion: aigateway.opendatahub.io/v1alpha1
@@ -260,7 +261,9 @@ spec:
   checks:
     - name: application-check
       configId: application-safety
-      model: approved-check-model
+      phases: [ Input ]
+    - name: subscription-check
+      configId: subscription-safety
       phases: [ Input ]
 ```
 
@@ -289,7 +292,6 @@ spec:
   checks:
     - name: model-check
       configId: model-safety
-      model: approved-check-model
       phases: [ Input ]
 ```
 
@@ -311,7 +313,7 @@ spec:
     storage:
       mode: PlatformDefault
       deletionPolicy: Retain
-    retention:
+    retention: # Retention of persisted Responses, conversation items and continuation state.
       maxAge: 168h
   guardrails:
     - ref:
@@ -382,7 +384,11 @@ spec:
       checks: [ model-check ]
 ```
 
-**Add a subscription-specific requirement for that model.** `application-safety-v1` is the second AIGuardrail created
+**Add a subscription-wide check and a model-specific attachment.** Top-level `spec.guardrails` selects
+`subscription-check` for every model accessed through this subscription, including both Granite and Qwen. Other
+subscriptions do not inherit this selection. The model entry remains additive.
+
+ `application-safety-v1` is the second AIGuardrail created
 above in the tenant namespace. The subscription also selects the tenant-admin baseline check for Granite, illustrating
 independent attachment provenance: the check executes once, even when both scopes select it. Qwen receives that check
 through MaasTenantConfig and its own model-level check.
@@ -393,6 +399,11 @@ metadata:
   name: application-subscription
   namespace: <tenant-namespace>
 spec:
+  guardrails:
+    - ref:
+        name: application-safety-v1
+        namespace: <tenant-namespace>
+      checks: [ subscription-check ]
   modelRefs:
     - name: granite-7b
       namespace: <model-namespace>
@@ -407,10 +418,13 @@ spec:
 
 For requests authorized through this subscription:
 
-| Model        | Effective requirements                                        | Source of additional policy                                             |
-|--------------|---------------------------------------------------------------|-------------------------------------------------------------------------|
-| `granite-7b` | `application-safety-v1`, then `privacy-v1`                    | MaasTenantConfig and this subscription's Granite entry                  |
-| `qwen3`      | `application-safety-v1`, `model-safety-v1`, then `privacy-v1` | MaasTenantConfig plus the model itself, across authorized subscriptions |
+| Model | Effective Input checks, in execution order | Sources |
+|---|---|---|
+| `granite-7b` | `application-check`, `subscription-check`, `sensitive-data` | Tenant-admin baseline, subscription-wide check, platform baseline; the Granite entry also selects `application-check`, executed once |
+| `qwen3` | `application-check`, `subscription-check`, `model-check`, `sensitive-data` | Both tenant baselines, subscription-wide check and model attachment |
+
+Both models also execute `sensitive-data` on Output. Explicit check subsets keep `subscription-check` scoped to this
+subscription even though it shares an AIGuardrail with the tenant-admin baseline.
 
 AI Gateway validates and configures tenant-local AIGuardrails; MaaS resolves attachments to select which checks execute.
 These examples express the desired API contract: NeMo selector support, Responses-aware checks and safe output release
@@ -517,6 +531,7 @@ relevant implementation phase is accepted; they are not permission for a runtime
 | Do subscriptions restrict Responses independently?                       | Existing model authorization initially; explicit entitlement later if needed                                                  | MaaS and product                       |
 | What TrustyAI discovery API can be relied on?                            | Require a supported endpoint/readiness/config-load contract; no guessed resource names or workload-namespace override         | TrustyAI and AI Gateway                |
 | Which host and capabilities are implemented for the target build?        | Pin the selected host and prove trusted scope, local Responses/output gating and IRR transport before admitting compiled YAML | Praxis and AI Gateway                  |
+| How is the NeMo checks request `model` resolved? | Provider binding must supply it per config through a supported NeMo/TrustyAI contract; no model field on AIGuardrail | AI Gateway and NeMo/TrustyAI integration owners |
 | Which NeMo release/deployment is supported?                              | Pin the supplied v1 wire contract and verify against the selected deployment                                                  | NeMo integration owners                |
 | Which protocol/tool combinations ship together?                          | Core finite Responses and text checks first; matrix-gate later combinations                                                   | Praxis and AI Gateway                  |
 | Which capabilities and attachment locations ship in the initial release? | Prioritize guardrails and opinionated core Responses; approve a supported subset separately from the full architecture        | Product and implementation owners, TBD |
