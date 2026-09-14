@@ -8,9 +8,6 @@
 These proposals are separate from the initial Responses enablement contract. Automatic capability discovery and agentic
 bindings are future work; they are not prerequisites for the initial tenant API.
 
-This topic document copies the relevant sections of the main proposal for focused review. The main document is retained
-in full as the consolidated reference; these documents do not record separate design approval.
-
 Read alongside:
 
 - [Responses and guardrails: high-level design](01-guardrails-responses-high-level-design.md)
@@ -23,7 +20,7 @@ In this document:
 
 - [Future KServe capability discovery for MaaS](#future-kserve-capability-discovery-for-maas)
 - [Deferred agentic flows](#deferred-agentic-flows)
-- [References and reviews](#references-and-reviews)
+- [Reviews](#reviews)
 
 ## Future KServe capability discovery for MaaS
 
@@ -147,10 +144,6 @@ replica rollouts and endpoint changes, not only changes to the top-level resourc
 of its observations; MaaS applies its own access and feature policy. ExternalModel providers need a separate discovery
 adapter or explicit declarations; this KServe proposal does not imply automatic external-provider discovery.
 
-Acceptance should cover generation-only, embedding-only, reranker-only and multi-task services; native versus translated
-feature coverage; unknown/timeouts; spoofed or stale observations; mixed replicas; mode conflicts; and model UID
-recreation. Ship this independently from initial manual capability declarations.
-
 ## Deferred agentic flows
 
 The supplied `full-flow-agentic.yaml` and `agentic-loop.yaml` remain references for existing file-search and MCP
@@ -158,7 +151,6 @@ execution using `iterative_request_router` and the corresponding callout/dispatc
 outside the initial tenant API; their bindings, authorization and guarded iteration require separate deliverables. This
 design does not introduce additional filter types or speculative configuration fields for them.
 
-## References and reviews
+## Reviews
 
-See the [source references](../responses-and-guardrails.md#references) in the main design and
-the [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.
+See the shared [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.

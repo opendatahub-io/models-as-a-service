@@ -75,59 +75,6 @@ owner of the required policy. Do not add a global `guardrails.enabled: false`
 that removes inherited requirements. Likewise, do not try to rank arbitrary NeMo configs by “strictness”: different
 configs are not generally comparable.
 
-## Resolution algorithm and worked edge cases
-
-The resolver operates on admitted resources from one consistent published snapshot. Resource names are for
-configuration; UIDs identify the authorized objects and prevent name reuse from inheriting old authorization. Resolve
-MaaS attachment scopes and validate tenant approval and model applicability. Require current AI Gateway-accepted
-AIGuardrail binding revisions for the provider edge; MaaS does not resolve NeMo namespaces or evaluate allowedConsumers
-itself. Provider readiness gates activation separately from this composition.
-
-```text
-resolve(tenant, maasTenantConfig, model, selectedSubscription, snapshot):
-    assert model resolves to tenant
-    assert selectedSubscription is authorized for this model and principal
-    entry = unique selectedSubscription.modelRefs entry matching model
-    assert all AIGuardrail refs resolve within permitted MaaS scopes and tenant approval
-    assert each policy has a current AI Gateway-accepted provider binding revision in snapshot
-
-    required = tenant.required + maasTenantConfig.required + model.required + selectedSubscription.required + entry.required
-    defaults = tenant.defaults.checks
-    defaults = apply(defaults, maasTenantConfig.defaults)
-    defaults = apply(defaults, model.defaults)
-    defaults = apply(defaults, selectedSubscription.defaults)
-    defaults = apply(defaults, entry.defaults)
-
-    bindings = required + defaults
-    selected = expand each binding.checks (omitted/empty selects all), retaining all origins
-    selected = deduplicate by (namespace, AIGuardrail.name, check.name)
-    plan = sort selected by AIGuardrail.name, then the check index in that policy.spec.checks
-    validate every effective check against model applicability, protocol, modality and capabilities
-    return immutable plan with resource UIDs, revisions and origin for each binding
-
-apply(inherited, local):
-    Inherit or absent: return inherited
-    Merge:            return inherited + local.checks
-    Replace:          return local.checks
-    Disable:          return []
-```
-
-This pseudocode assumes defaulting has normalized `checks` without a mode to `Merge`. It does not grant access:
-authentication and subscription selection happen first. Resolution must reject missing/deleted objects rather than
-substituting a same-name replacement or falling back to a different subscription with weaker checks.
-
-| Scenario                                                                                    | Result                                                                                                                          |
-|---------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------|
-| Tenant required Input check; Model replaces defaults                                        | Tenant Input check remains                                                                                                      |
-| Tenant default Input+Output check; Subscription replaces it with Input-only                 | Allowed delegation for defaults; Output is no longer effective unless another binding requires it                               |
-| Tenant required Input+Output check; Subscription adds Input-only through another attachment | Original Input+Output binding remains; the new binding is separate                                                              |
-| Model requires a check; Subscription disables defaults                                      | Model requirement remains                                                                                                       |
-| Subscription A replaces defaults; caller is authorized under Subscription B                 | A has no effect on the request                                                                                                  |
-| Model default is incompatible but Subscription replaces it                                  | Validate the final effective plan for runtime compatibility; local declarations must still be structurally valid and resolvable |
-| Effective default is unsupported or its provider is unavailable                             | Reject; an overridable default still enforces until explicitly overridden                                                       |
-| Model is deleted and recreated with the same name                                           | Existing stored model UID and old generated configuration do not authorize the new object                                       |
-| Policy is removed before its bindings are migrated                                          | Affected bindings become unresolved; no unguarded fallback                                                                      |
-
 ## Five-scope policy resolution: five scopes, two NeMo servers and subscription-specific overrides
 
 Input fragments use the shared attachment shape defined earlier. Every policy ref names its namespace explicitly and
@@ -197,12 +144,9 @@ report the unsupported selector requirement until the minimal provider addition 
 or assume separate endpoints select configurations. The resolution example specifies MaaS semantics independently of
 adapter coverage.
 
-## Additional acceptance criteria
+## Lifecycle and compatibility
 
-A future implementation must test all defaults modes, omitted/empty/null distinctions, precedence across all five
-scopes, selected-subscription isolation and required-check preservation. Conversion must retain initial attachments and
-their all-checks/subset behavior. UI and status must explain which defaults were replaced and by which scope.
-
-See
-the [initial compilation and runtime contract](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis)
-and [shared acceptance matrix](02-guardrails-low-level-details.md#acceptance-matrix).
+A future rollout must preserve the mandatory behavior of existing attachments and retain all-checks/subset selection
+through conversion. Status should explain replaced defaults and their originating scope. The
+[initial publication lifecycle](02-guardrails-low-level-details.md#generation-activation-and-runtime-rollout) continues
+to govern policy changes; introducing overrides does not weaken ownership or runtime generation checks.

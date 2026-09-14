@@ -9,9 +9,6 @@ This document defines tenant enablement, Responses database architecture, durabl
 The combined filter chain and authentication handoff live in the guardrails companion because their execution boundaries
 must be reviewed together.
 
-This topic document copies the relevant sections of the main proposal for focused review. The main document is retained
-in full as the consolidated reference; these documents do not record separate design approval.
-
 Read alongside:
 
 - [Responses and guardrails: high-level design](01-guardrails-responses-high-level-design.md)
@@ -30,7 +27,7 @@ In this document:
 - [Request-path security and privacy contract](#request-path-security-and-privacy-contract)
 - [Responses and Conversations using existing filters](#responses-and-conversations-using-existing-filters)
 - [Tenant capability state transitions](#tenant-capability-state-transitions)
-- [References and reviews](#references-and-reviews)
+- [Reviews](#reviews)
 
 ## Responses enablement and lifecycle
 
@@ -254,9 +251,9 @@ migration runner. No new MaaS schema-initializer component is needed for first-u
 
 Initially, allow Praxis startup to initialize its dedicated Responses schema using narrowly scoped DDL permissions. That
 credential can create/own Responses tables and therefore is more privileged than a DML-only serving credential; it must
-have no access to the API-key database. Coordinate and test first-start initialization across filters and tenant
-replicas sharing the database; idempotent DDL alone does not establish concurrent initialization safety. Initialization
-failure leaves Responses unavailable, without falling back to another database.
+have no access to the API-key database. Coordinate first-start initialization across filters and tenant replicas sharing
+the database; idempotent DDL alone does not establish concurrent initialization safety. Initialization failure leaves
+Responses unavailable, without falling back to another database.
 
 Before a release changes the stored schema, Praxis must provide versioned migration steps, compatibility checks and a
 single-writer coordination mechanism per database/schema. It can extend startup initialization, as MaaS API does, or
@@ -279,9 +276,9 @@ whose security policy disallows runtime DDL. The migration credential must then 
   denial. Retention workers receive only the privileges required for their cleanup protocol.
 - **Application ownership:** the initial shared database requires tenant/principal ownership enforcement on every
   operation. Future database-per-tenant bindings reduce tenant blast radius but do not replace these checks. Row-level
-  security can add defense in depth if introduced and tested, including pooled-connection identity reset and transaction
-  scoping. It is not currently promised by the Praxis store. Table owners and privileged roles can bypass ordinary RLS,
-  and a compromised runtime holding the initial shared credential can expose all tenants in that Responses database.
+  security can add defense in depth if introduced, including pooled-connection identity reset and transaction scoping.
+  It is not currently promised by the Praxis store. Table owners and privileged roles can bypass ordinary RLS, and a
+  compromised runtime holding the initial shared credential can expose all tenants in that Responses database.
   See [PostgreSQL row security](https://www.postgresql.org/docs/current/ddl-rowsecurity.html).
 - **Network and credential boundaries:** permit database access only from the tenant runtime and approved maintenance
   workloads; use verified TLS, restricted egress and short-lived credentials where supported by the connection/rotation
@@ -332,12 +329,12 @@ Size the Responses service using retained bytes and write amplification, includi
 replicas and backups. Bound request bytes, conversation growth, tool iterations, concurrent operations and retained
 bytes per tenant; define admission and cleanup behavior at each limit. Sum connection pools across filters, replicas,
 rollout surge and maintenance jobs, leaving database headroom. A separate database on the same instance does not provide
-hard CPU/I/O isolation, so load-test authentication latency during Responses saturation before accepting shared hosting.
-No unlimited-scale guarantee follows from PostgreSQL or tenant separation.
+hard CPU/I/O isolation, so shared hosting needs reserved capacity and admission limits to protect authentication
+latency. No unlimited-scale guarantee follows from PostgreSQL or tenant separation.
 
 Database outages fail stateful Responses operations closed with bounded timeouts and actionable readiness, never by
 switching to the key database, SQLite, a backend's private store or silently discarding persistence. Draining, uncertain
-commit outcomes, idempotent retries and durable usage follow the transaction lifecycle below. Test recovery against a
+commit outcomes, idempotent retries and durable usage follow the transaction lifecycle below. Recovery requires a
 reachable writable primary; a TCP connection or a lagging replica does not establish readiness for continuation.
 
 Moving an existing tenant to a dedicated service is a data migration, not ordinary credential rotation: provision and
@@ -345,12 +342,6 @@ migrate the target, fence admissions and drain writers (or use a separately desi
 and validate data/tombstones/ownership, switch one generation, and retain the old target under its deletion policy.
 Never allow old and new generations to diverge as independent writable stores. Define rollback before cutover; once new
 writes exist, switching back requires reconciliation, not simply restoring the old Secret.
-
-Production acceptance must exercise denied cross-store/cross-tenant access, initialization with insufficient DDL
-privileges (and DML-only startup when supported), credential/CA rotation, backup access controls, deletion followed by
-restore, capacity exhaustion, key-validation latency under shared-instance load, primary failover, and interrupted
-migration/cutover. Deployment-specific security requirements that exceed these controls remain explicit release blockers
-for that deployment rather than implied capabilities.
 
 ## Request processing and Responses ownership
 
@@ -518,12 +509,12 @@ Persist only approved content and minimal failure metadata;
 must not cause hidden response/history persistence.
 
 The existing [quota documentation](../../configuration-and-management/quota-and-access-configuration.md)
-excludes Responses from token rate limiting. Responses enablement must therefore include a tested usage adapter and
-enforcement path, or explicitly remain a limited preview rather than promising existing subscription quotas. Meter each
-inference iteration, including work whose output is later blocked; reject-before-inference uses no generation tokens.
-Guardrail detector calls get separate operational usage. Avoid double counting a final aggregate and its subcalls.
-Budget enforcement must cover iterative amplification and missing usage, with bounded reservations and reconciliation;
-do not interpret missing usage as zero. Request admission quotas also cover storage operations and failed checks.
+excludes Responses from token rate limiting. Responses enablement must therefore include a usage adapter and enforcement
+path, or explicitly remain a limited preview rather than promising existing subscription quotas. Meter each inference
+iteration, including work whose output is later blocked; reject-before-inference uses no generation tokens. Guardrail
+detector calls get separate operational usage. Avoid double counting a final aggregate and its subcalls. Budget
+enforcement must cover iterative amplification and missing usage, with bounded reservations and reconciliation; do not
+interpret missing usage as zero. Request admission quotas also cover storage operations and failed checks.
 
 ## Request-path security and privacy contract
 
@@ -555,17 +546,11 @@ provider/policy must therefore include its downstream data destinations and rete
 through the platform's storage controls and use verified TLS in transit. Credential rotation, backup access, erasure,
 restore and incident response require explicit operational ownership.
 
-Policy propagation is eventually consistent. A CR update alone cannot synchronously change every running request. After
-the coordinator observes a change, it fences new admissions to affected plans until a complete replacement is
-acknowledged. Requests already admitted use their pinned plan unless explicitly cancelled. A platform that requires
-instantaneous emergency revocation needs a separate admission/cancellation mechanism; this ADR must not advertise zero
-propagation delay.
-
-Existing authentication caching also applies; see the canonical
-[Authorino caching behavior](../../configuration-and-management/authorino-caching.md). The new plan cache must not
-prolong an already expired authorization decision. Publish the maximum observed policy propagation interval and test
-partial rollout, coordinator failure and partition behavior. Required policy changes are treated as potentially
-safety-relevant; do not attempt semantic comparison of arbitrary NeMo configs to decide whether stale policy is safe.
+Policy changes follow the
+shared [publication lifecycle](02-guardrails-low-level-details.md#generation-activation-and-runtime-rollout).
+Existing [authentication caching](../../configuration-and-management/authorino-caching.md) still applies: selection
+caches cannot prolong expired authorization. Required changes fence affected admissions; already-admitted operations
+retain pinned policy unless cancelled explicitly.
 
 ## Responses and Conversations using existing filters
 
@@ -603,7 +588,6 @@ unsupported schema instead of starting with partially usable handlers. Restoring
 require a maintenance procedure and explicit validation; a Secret change can rotate credentials, but must not silently
 select a different database containing unrelated state.
 
-## References and reviews
+## Reviews
 
-See the [source references](../responses-and-guardrails.md#references) in the main design and
-the [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.
+See the shared [review record](01-guardrails-responses-high-level-design.md#reviews) in the high-level design.
