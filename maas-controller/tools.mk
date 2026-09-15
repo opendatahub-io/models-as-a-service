@@ -7,7 +7,7 @@ $(LOCALBIN):
 ## Tools
 GOLANGCI_LINT ?= $(LOCALBIN)/golangci-lint
 
-GOLANGCI_LINT_VERSION ?= v2.6.2
+GOLANGCI_LINT_VERSION ?= v2.12.2
 # Target the versioned binary so version bumps trigger reinstall
 $(GOLANGCI_LINT)-$(GOLANGCI_LINT_VERSION): $(LOCALBIN)
 	$(call go-install-tool,$(GOLANGCI_LINT),github.com/golangci/golangci-lint/v2/cmd/golangci-lint,$(GOLANGCI_LINT_VERSION))
