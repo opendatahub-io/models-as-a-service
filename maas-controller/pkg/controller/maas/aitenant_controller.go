@@ -1358,6 +1358,11 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 		endpoint = fmt.Sprintf("https://%s/internal/v1/tenants/%s/subscriptions/%s/api-keys",
 			net.JoinHostPort(serviceHost, "8443"), tenantName, url.PathEscape(subscription))
 	}
+	cleanupCommand := fmt.Sprintf(
+		"TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" "+
+			"&& exec curl --fail --silent --show-error --max-time 30 "+
+			"--cacert %s -H \"Authorization: Bearer ${TOKEN}\" -X DELETE %s",
+		aitenantAPIKeyCleanupCABundlePath, endpoint)
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1427,7 +1432,7 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 							Image:   image,
 							Command: []string{"/bin/sh", "-c"},
 							Args: []string{
-								fmt.Sprintf("TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" && exec curl --fail --silent --show-error --max-time 30 --cacert %s -H \"Authorization: Bearer ${TOKEN}\" -X DELETE %s", aitenantAPIKeyCleanupCABundlePath, endpoint),
+								cleanupCommand,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
