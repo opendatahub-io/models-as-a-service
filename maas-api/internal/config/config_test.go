@@ -492,4 +492,10 @@ func TestValidateAPIKeyDeletionRetention(t *testing.T) {
 	if err := invalidConfig.Validate(); err == nil || !strings.Contains(err.Error(), "API_KEY_DELETION_RETENTION_DAYS") {
 		t.Fatalf("negative retention validation error = %v", err)
 	}
+
+	tooLargeConfig := base
+	tooLargeConfig.APIKeyDeletionRetentionDays = maxAPIKeyDeletionRetentionDays + 1
+	if err := tooLargeConfig.Validate(); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("too-large retention validation error = %v", err)
+	}
 }

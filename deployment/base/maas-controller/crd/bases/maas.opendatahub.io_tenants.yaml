@@ -63,6 +63,7 @@ spec:
                       DeletionRetentionDays controls how long lifecycle-invalidated API keys
                       remain soft-deleted before physical deletion. The default is 90 days.
                     format: int32
+                    maximum: 106751
                     minimum: 1
                     type: integer
                   maxExpirationDays:

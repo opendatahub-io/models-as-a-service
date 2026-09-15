@@ -26,6 +26,7 @@ const (
 	TokenStatusRevoked = "revoked"
 )
 
+//nolint:interfacebloat // The store intentionally groups the complete API-key lifecycle contract.
 type MetadataStore interface {
 	// AddKey stores an API key with hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).

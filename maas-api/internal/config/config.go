@@ -21,6 +21,9 @@ const (
 	DefaultSecureAddr                  = ":8443"
 	DefaultInsecureAddr                = ":8080"
 	defaultAPIKeyDeletionRetentionDays = 90
+	// maxAPIKeyDeletionRetentionDays is the largest day count that can be
+	// safely converted to time.Duration without overflowing int64 nanoseconds.
+	maxAPIKeyDeletionRetentionDays = 106751
 )
 
 type Config struct {
@@ -280,6 +283,9 @@ func (c *Config) Validate() error {
 	}
 	if c.APIKeyDeletionRetentionDays < 1 {
 		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
+	}
+	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
+		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {

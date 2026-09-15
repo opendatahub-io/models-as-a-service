@@ -135,7 +135,8 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	store := setupTestPostgresStore(t)
+	tenant := "test-tenant-" + uuid.NewString()
+	store := setupTestPostgresStoreForTenant(t, tenant)
 	defer store.Close()
 
 	keyIDs := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()}
@@ -144,10 +145,10 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 	for i, id := range keyIDs {
 		require.NoError(t, store.AddKey(ctx, "lifecycle-user", id, keyHashes[i],
 			"lifecycle-key", "", nil, subscriptions[i],
-			"test-tenant", nil, false, nil))
+			tenant, nil, false, nil))
 	}
 
-	count, err := store.InvalidateSubscription(ctx, "test-tenant", "sub-delete")
+	count, err := store.InvalidateSubscription(ctx, tenant, "sub-delete")
 	require.NoError(t, err)
 	assert.Equal(t, 2, count)
 
@@ -162,7 +163,7 @@ func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, api_keys.StatusActive, kept.Status)
 
-	count, err = store.InvalidateTenant(ctx, "test-tenant")
+	count, err = store.InvalidateTenant(ctx, tenant)
 	require.NoError(t, err)
 	assert.Equal(t, 1, count, "tenant cleanup should only newly invalidate the remaining subscription key")
 
@@ -218,6 +219,10 @@ func TestPostgresStore_ConcurrentIndexesCreated(t *testing.T) {
 // setupTestPostgresStore creates a PostgreSQL store for testing.
 // Requires TEST_DATABASE_URL environment variable (e.g., "postgres://user:pass@localhost:5432/testdb").
 func setupTestPostgresStore(t *testing.T) *api_keys.PostgresStore {
+	return setupTestPostgresStoreForTenant(t, "test-tenant")
+}
+
+func setupTestPostgresStoreForTenant(t *testing.T, tenant string) *api_keys.PostgresStore {
 	t.Helper()
 
 	dbURL := os.Getenv("TEST_DATABASE_URL")
@@ -226,7 +231,7 @@ func setupTestPostgresStore(t *testing.T) *api_keys.PostgresStore {
 	}
 
 	testLogger := logger.Development()
-	store, err := api_keys.NewPostgresStoreFromURL(context.Background(), testLogger, dbURL, "test-tenant")
+	store, err := api_keys.NewPostgresStoreFromURL(context.Background(), testLogger, dbURL, tenant)
 	if err != nil {
 		t.Fatalf("Failed to create PostgreSQL store: %v", err)
 	}

@@ -665,7 +665,7 @@ func (s *PostgresStore) UpdateLastUsed(ctx context.Context, keyID string) error 
 // Uses the partial index idx_api_keys_ephemeral_expired for efficient lookups.
 // Only deletes keys belonging to this tenant.
 func (s *PostgresStore) DeleteExpiredEphemeral(ctx context.Context) (int64, error) {
-	query := `DELETE FROM api_keys WHERE tenant = $1 AND ephemeral = TRUE AND expires_at IS NOT NULL AND expires_at < NOW() - INTERVAL '30 minutes'`
+	query := `DELETE FROM api_keys WHERE tenant = $1 AND deleted_at IS NULL AND ephemeral = TRUE AND expires_at IS NOT NULL AND expires_at < NOW() - INTERVAL '30 minutes'`
 
 	result, err := s.db.ExecContext(ctx, query, s.tenantName)
 	if err != nil {

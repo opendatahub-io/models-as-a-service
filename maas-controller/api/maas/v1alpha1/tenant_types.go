@@ -141,6 +141,7 @@ type TenantAPIKeysConfig struct {
 	// remain soft-deleted before physical deletion. The default is 90 days.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=106751
 	DeletionRetentionDays *int32 `json:"deletionRetentionDays,omitempty"`
 }
 

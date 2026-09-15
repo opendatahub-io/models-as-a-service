@@ -49,9 +49,9 @@ These endpoints are registered under `/internal/v1/` and are **not exposed** on 
 | Method | Path | Called By | Description |
 |--------|------|-----------|-------------|
 | POST | `/internal/v1/api-keys/validate` | Authorino | Validate an API key (hash lookup, status/expiry check). Returns user identity and subscription for the gateway. |
-| POST | `/internal/v1/api-keys/cleanup` | CronJob `maas-api-key-cleanup` | Delete expired ephemeral keys (30-minute grace period) and physically remove lifecycle-invalidated keys after the configured retention period (90 days by default). |
-| DELETE | `/internal/v1/tenants/{tenant}/api-keys` | AITenant cleanup Job | Soft-delete and invalidate every API key for a tenant. Keys remain retained for audit and cannot validate. |
-| DELETE | `/internal/v1/tenants/{tenant}/subscriptions/{subscription}/api-keys` | MaaSSubscription cleanup Job | Soft-delete and invalidate only keys bound to the deleted subscription. |
+| POST | `/internal/v1/api-keys/cleanup` | CronJob `maas-api-key-cleanup` | Authenticated with the `maas-api-cleanup` ServiceAccount; deletes expired ephemeral keys (30-minute grace period) and physically removes lifecycle-invalidated keys after the configured retention period (90 days by default). |
+| DELETE | `/internal/v1/tenants/{tenant}/api-keys` | AITenant cleanup Job | Authenticated with the `maas-api-cleanup` ServiceAccount; soft-deletes and invalidates every API key for a tenant. Keys remain retained for audit and cannot validate. |
+| DELETE | `/internal/v1/tenants/{tenant}/subscriptions/{subscription}/api-keys` | MaaSSubscription cleanup Job | Authenticated with the `maas-api-cleanup` ServiceAccount; soft-deletes and invalidates only keys bound to the deleted subscription. |
 | POST | `/internal/v1/subscriptions/select` | Authorino | Select the appropriate subscription for a request based on user groups and optional explicit selection. |
 
 ---

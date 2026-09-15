@@ -187,6 +187,7 @@ class TestMultiTenantIntegration:
             # used against the newly provisioned maas-api instance.
             bootstrap_aitenant_tenant(case)
             wait_for_aitenant_cleanup_resources(case)
+            wait_for_deployment_available(f"maas-api-{case['tenant_label_name']}", timeout=180)
             validation = validate_api_key_at(
                 tenant_internal_url(case["tenant_label_name"]),
                 old_api_key,

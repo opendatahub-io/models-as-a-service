@@ -2351,22 +2351,14 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(job.Spec.TTLSecondsAfterFinished).NotTo(BeNil())
 	g.Expect(*job.Spec.TTLSecondsAfterFinished).To(Equal(aitenantAPIKeyCleanupTTLSeconds))
 	g.Expect(job.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
-	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeFalse())
+	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeTrue())
 	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
 	container := job.Spec.Template.Spec.Containers[0]
-	g.Expect(container.Command).To(Equal([]string{"curl"}))
-	g.Expect(container.Args).To(Equal([]string{
-		"--fail",
-		"--silent",
-		"--show-error",
-		"--max-time",
-		"30",
-		"--cacert",
-		"/etc/pki/maas-api/service-ca.crt",
-		"-X",
-		"DELETE",
-		"https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys",
-	}))
+	g.Expect(container.Command).To(Equal([]string{"/bin/sh", "-c"}))
+	g.Expect(container.Args).To(HaveLen(1))
+	g.Expect(container.Args[0]).To(ContainSubstring("/var/run/secrets/kubernetes.io/serviceaccount/token"))
+	g.Expect(container.Args[0]).To(ContainSubstring("Authorization: Bearer ${TOKEN}"))
+	g.Expect(container.Args[0]).To(ContainSubstring("https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys"))
 	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring(" -k "))
 	g.Expect(jobHasVolume(&job, "maas-api-service-ca", "openshift-service-ca.crt")).To(BeTrue())
 	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-service-ca", "/etc/pki/maas-api")).To(BeTrue())

@@ -1398,7 +1398,7 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:           aitenantAPIKeyCleanupServiceAccountName,
-					AutomountServiceAccountToken: boolPtr(false),
+					AutomountServiceAccountToken: boolPtr(true),
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
@@ -1425,18 +1425,9 @@ func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantNam
 						{
 							Name:    "revoke-keys",
 							Image:   image,
-							Command: []string{"curl"},
+							Command: []string{"/bin/sh", "-c"},
 							Args: []string{
-								"--fail",
-								"--silent",
-								"--show-error",
-								"--max-time",
-								"30",
-								"--cacert",
-								aitenantAPIKeyCleanupCABundlePath,
-								"-X",
-								"DELETE",
-								endpoint,
+								fmt.Sprintf("TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" && exec curl --fail --silent --show-error --max-time 30 --cacert %s -H \"Authorization: Bearer ${TOKEN}\" -X DELETE %s", aitenantAPIKeyCleanupCABundlePath, endpoint),
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
