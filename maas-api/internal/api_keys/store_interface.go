@@ -26,6 +26,7 @@ const (
 	TokenStatusRevoked = "revoked"
 )
 
+//nolint:interfacebloat // The store intentionally groups the complete API-key lifecycle contract.
 type MetadataStore interface {
 	// AddKey stores an API key with hash-only storage (no plaintext).
 	// Keys can be permanent (expiresAt=nil) or expiring (expiresAt set).
@@ -81,8 +82,13 @@ type MetadataStore interface {
 	BulkRevoke(ctx context.Context, username, subscription, tenant string, dryRun bool) (int, error)
 
 	// InvalidateTenant marks all active tokens within a tenant as revoked.
-	// Returns the count of keys that were revoked.
+	// All matching keys are soft-deleted for retention; active keys are revoked.
+	// Returns the count of rows newly soft-deleted.
 	InvalidateTenant(ctx context.Context, tenant string) (int, error)
+
+	// InvalidateSubscription soft-deletes all keys for one subscription within a
+	// tenant. It must not affect keys belonging to other subscriptions or tenants.
+	InvalidateSubscription(ctx context.Context, tenant, subscription string) (int, error)
 
 	// Revoke marks a specific API key as revoked (status transition: active → revoked).
 	Revoke(ctx context.Context, keyID string) error
@@ -95,6 +101,10 @@ type MetadataStore interface {
 	// Deletes keys where ephemeral=TRUE AND (status='expired' OR expires_at < NOW()).
 	// Returns the count of deleted keys.
 	DeleteExpiredEphemeral(ctx context.Context) (int64, error)
+
+	// DeleteSoftDeleted removes lifecycle-invalidated keys for this store's
+	// tenant after the retention period.
+	DeleteSoftDeleted(ctx context.Context, retention time.Duration) (int64, error)
 
 	Close() error
 }

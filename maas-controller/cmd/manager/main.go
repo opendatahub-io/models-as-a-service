@@ -1206,6 +1206,7 @@ func main() {
 	if err := (&maas.MaaSSubscriptionReconciler{
 		Client:                          mgr.GetClient(),
 		Scheme:                          mgr.GetScheme(),
+		AppNamespace:                    infraNamespace,
 		DefaultTenantNamespace:          maasSubscriptionNamespace,
 		TenantNamespaceDiscoveryEnabled: enableTenantNamespaceDiscovery,
 		GatewayName:                     gatewayName,

@@ -18,8 +18,12 @@ import (
 )
 
 const (
-	DefaultSecureAddr   = ":8443"
-	DefaultInsecureAddr = ":8080"
+	DefaultSecureAddr                  = ":8443"
+	DefaultInsecureAddr                = ":8080"
+	defaultAPIKeyDeletionRetentionDays = 90
+	// maxAPIKeyDeletionRetentionDays is the largest day count that can be
+	// safely converted to time.Duration without overflowing int64 nanoseconds.
+	maxAPIKeyDeletionRetentionDays = 106751
 )
 
 type Config struct {
@@ -78,6 +82,10 @@ type Config struct {
 	// Set to 0 to disable debouncing (every validation writes to DB). Default: 60.
 	LastUsedDebounceSecs int
 
+	// APIKeyDeletionRetentionDays controls how long lifecycle-invalidated API keys
+	// remain soft-deleted for audit purposes before physical deletion.
+	APIKeyDeletionRetentionDays int
+
 	MetricsPort int
 
 	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
@@ -116,6 +124,7 @@ func Load() *Config {
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
+	apiKeyDeletionRetentionDays, _ := env.GetInt("API_KEY_DELETION_RETENTION_DAYS", defaultAPIKeyDeletionRetentionDays)
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
 	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
@@ -138,31 +147,32 @@ func Load() *Config {
 	aitenantNamespace := env.GetString("AITENANT_NAMESPACE", "ai-tenants")
 
 	c := &Config{
-		Name:                      env.GetString("INSTANCE_NAME", gatewayName),
-		Namespace:                 env.GetString("NAMESPACE", constant.DefaultNamespace),
-		GatewayName:               gatewayName,
-		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
-		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
-		TenantName:                tenantName,
-		AITenantName:              aitenantName,
-		AITenantNamespace:         aitenantNamespace,
-		Address:                   env.GetString("ADDRESS", ""),
-		Secure:                    secure,
-		TLS:                       loadTLSConfig(),
-		DebugMode:                 debugMode,
-		LogFormat:                 logFormat,
-		DBConnectionURL:           "", // Loaded from K8s secret via LoadDatabaseURL()
-		APIKeyMaxExpirationDays:   maxExpirationDays,
-		AccessCheckTimeoutSeconds: accessCheckTimeoutSeconds,
-		SARCacheMaxSize:           sarCacheMaxSize,
-		LastUsedDebounceSecs:      lastUsedDebounceSecs,
-		MetricsPort:               metricsPort,
-		MetricsSecure:             metricsSecure,
-		MetricsCertDir:            metricsCertDir,
-		DiscoveryEnableHTTP2:      discoveryEnableHTTP2,
-		OTELEndpoint:              env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
-		OTELInsecure:              otelInsecure,
-		OTELSampleRate:            otelSampleRate,
+		Name:                        env.GetString("INSTANCE_NAME", gatewayName),
+		Namespace:                   env.GetString("NAMESPACE", constant.DefaultNamespace),
+		GatewayName:                 gatewayName,
+		GatewayNamespace:            env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
+		MaaSSubscriptionNamespace:   env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		TenantName:                  tenantName,
+		AITenantName:                aitenantName,
+		AITenantNamespace:           aitenantNamespace,
+		Address:                     env.GetString("ADDRESS", ""),
+		Secure:                      secure,
+		TLS:                         loadTLSConfig(),
+		DebugMode:                   debugMode,
+		LogFormat:                   logFormat,
+		DBConnectionURL:             "", // Loaded from K8s secret via LoadDatabaseURL()
+		APIKeyMaxExpirationDays:     maxExpirationDays,
+		AccessCheckTimeoutSeconds:   accessCheckTimeoutSeconds,
+		SARCacheMaxSize:             sarCacheMaxSize,
+		LastUsedDebounceSecs:        lastUsedDebounceSecs,
+		APIKeyDeletionRetentionDays: apiKeyDeletionRetentionDays,
+		MetricsPort:                 metricsPort,
+		MetricsSecure:               metricsSecure,
+		MetricsCertDir:              metricsCertDir,
+		DiscoveryEnableHTTP2:        discoveryEnableHTTP2,
+		OTELEndpoint:                env.GetString("OTEL_EXPORTER_OTLP_ENDPOINT", ""),
+		OTELInsecure:                otelInsecure,
+		OTELSampleRate:              otelSampleRate,
 		// Deprecated env var (backward compatibility with pre-TLS version)
 		deprecatedHTTPPort: env.GetString("PORT", ""),
 	}
@@ -266,6 +276,16 @@ func (c *Config) Validate() error {
 
 	if c.LastUsedDebounceSecs < 0 {
 		return errors.New("LAST_USED_DEBOUNCE_SECS must be greater than or equal to 0")
+	}
+
+	if c.APIKeyDeletionRetentionDays == 0 {
+		c.APIKeyDeletionRetentionDays = defaultAPIKeyDeletionRetentionDays
+	}
+	if c.APIKeyDeletionRetentionDays < 1 {
+		return errors.New("API_KEY_DELETION_RETENTION_DAYS must be at least 1")
+	}
+	if c.APIKeyDeletionRetentionDays > maxAPIKeyDeletionRetentionDays {
+		return fmt.Errorf("API_KEY_DELETION_RETENTION_DAYS must be at most %d", maxAPIKeyDeletionRetentionDays)
 	}
 
 	if c.MetricsPort < 1 || c.MetricsPort > 65535 {

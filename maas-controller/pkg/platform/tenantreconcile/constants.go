@@ -70,10 +70,11 @@ const (
 	// Production deployments use this default. ROSA deployments must override to "" (empty) to disable separation.
 	DefaultInfraNamespace = "AUTO"
 
-	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-	DefaultAPIKeyMaxExpirationDays = "90"
+	DefaultMaaSAPIImage                = "quay.io/opendatahub/maas-api:latest"
+	DefaultPayloadProcessingImage      = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultMaaSAPIKeyCleanupImage      = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays     = "90"
+	DefaultAPIKeyDeletionRetentionDays = "90"
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"
