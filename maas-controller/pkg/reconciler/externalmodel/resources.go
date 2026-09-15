@@ -85,8 +85,8 @@ func buildDestinationRule(endpoint, name, namespace string, labels map[string]st
 
 // buildHTTPRoute creates the HTTPRoute in the model's namespace.
 // Path prefix is /<namespace>/<name> for namespace isolation.
-// Only a Host header filter is set (required for TLS SNI).
-// IPP ext-proc handles path rewriting and provider-specific headers.
+// Sets Host (required for TLS SNI) and X-Gateway-Model-Name (required for IPP
+// model resolution on body-less requests like GET /v1/models).
 func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, namespace string, port int32, gatewayName, gatewayNamespace string, labels map[string]string) *gatewayapiv1.HTTPRoute {
 	gwNamespace := gatewayapiv1.Namespace(gatewayNamespace)
 	pathType := gatewayapiv1.PathMatchPathPrefix
@@ -106,8 +106,6 @@ func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, na
 		},
 	}
 
-	// Host header is required for TLS SNI — must be set before TLS handshake,
-	// which happens before IPP ext-proc runs.
 	filters := []gatewayapiv1.HTTPRouteFilter{
 		{
 			Type: gatewayapiv1.HTTPRouteFilterRequestHeaderModifier,
@@ -116,6 +114,10 @@ func buildHTTPRoute(endpoint, routeName, serviceName, modelName, targetModel, na
 					{
 						Name:  "Host",
 						Value: endpoint,
+					},
+					{
+						Name:  "X-Gateway-Model-Name",
+						Value: modelName,
 					},
 				},
 			},
