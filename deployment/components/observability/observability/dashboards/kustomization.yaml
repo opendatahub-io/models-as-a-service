@@ -8,6 +8,7 @@ metadata:
 
 resources:
   - usage-dashboard.yaml
+  - auth-decisions-dashboard.yaml
 
 labels:
   - pairs:
