@@ -52,10 +52,10 @@ Responses requires the platform binding to exist and pass validation; no databas
 | `ExternalPostgres` | Future per-`AITenant` override: explicitly select a separately provisioned connection Secret and CA; database operations remain external                       |
 | `ManagedPostgres`  | Future development option: explicitly provision database/credentials/PVC; not part of the initial implementation or an implicit database-operator installation |
 
-These modes describe how the runtime obtains its database binding, not who operates PostgreSQL. A future database
-claim that only publishes a customer-provided connection is still an external binding; it does not make the database
-managed by MaaS or AI Gateway. The deferred `ManagedPostgres` label above is reserved for actual database resource
-provisioning and lifecycle ownership. Whether to retain that separate development option is a future API decision.
+These modes describe how the runtime obtains its database binding, not who operates PostgreSQL. A future database claim
+that only publishes a customer-provided connection is still an external binding; it does not make the database managed
+by MaaS or AI Gateway. The deferred `ManagedPostgres` label above is reserved for actual database resource provisioning
+and lifecycle ownership. Whether to retain that separate development option is a future API decision.
 
 The proposed platform convention is a separate `responses-db-config` Secret with key `DB_CONNECTION_URL`, plus
 `responses-db-ca` with key `ca.crt`, in the configured infrastructure namespace. These names are new proposed
@@ -117,9 +117,13 @@ assumes an explicit `mode: Native` declaration.
 
 `Unsupported` explicitly disables Responses for this model even when the tenant enables it. Embedding-only and
 reranker-only models should declare this mode. Reject all Responses inference and continuation attempts using an
-unsupported model before model execution; ownership-authorized deletion of existing records remains available under the
-lifecycle rules. This mode does not disable the model's embedding/reranking endpoints or bypass their independent
-authorization/policies. Omission still defaults to `ChatCompletions`; it is not automatic task detection.
+unsupported model at gateway admission before Responses orchestration, guardrail callouts or backend inference;
+ownership-authorized deletion of existing records remains available under the lifecycle rules. This mode does not
+disable the model's embedding/reranking endpoints or bypass their independent authorization/policies. Omission still
+defaults to `ChatCompletions`; it is not automatic task detection. Without capability discovery or an explicit
+declaration, the gateway cannot infer that an otherwise unknown model is embedding-only or reranker-only. This default
+does not preserve a prior Responses path: it introduces the translation path for the new API. A different
+omitted-capabilities default remains an API decision, not an implied change to existing embedding/reranking routes.
 
 ```yaml
 kind: MaaSModelRef

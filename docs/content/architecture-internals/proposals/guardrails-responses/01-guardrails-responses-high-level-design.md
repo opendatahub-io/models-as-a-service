@@ -146,8 +146,9 @@ duplicate policy on the backend resources.
 ### Resource relationships and configuration lifecycle
 
 AITenant supplies the platform baseline and Responses infrastructure; MaasTenantConfig supplies the tenant-admin MaaS
-baseline. Models, subscriptions and subscription model entries add checks. All five locations reference tenant-local
-AIGuardrails, whose NeMo provider may live in a separately authorized namespace.
+baseline. Models, subscriptions and subscription model entries add checks. Subscription and tenant-admin attachments use
+the tenant target namespace; model attachments may also reference AIGuardrails in the model-ref namespace. The NeMo
+provider may live in a separately authorized infrastructure namespace.
 
 AI Gateway validates the catalog and compiles its available checks into Praxis. MaaS resolves the attachments and
 selects checks for each authorized request. Changing selections among already-configured checks requires no gateway
@@ -164,15 +165,16 @@ fields, not apply-ready manifests; existing required fields are omitted. Namespa
 tenant, model and NeMo infrastructure namespaces, not installation defaults.
 
 Before creating these resources, prepare the tenant, model and separate NeMo infrastructure namespaces and the platform
-Responses database binding. Create `pii-cm`, `application-safety-cm`, `subscription-safety-cm` and `model-safety-cm` in `<guardrails-namespace>`,
-and the NeMo client credential/CA Secrets in `<tenant-namespace>`. The examples assume the tenant-to-namespace
-relationship and existing Gateway configuration are established. Resource creation is separate from readiness: each
-binding becomes usable only after its dependencies are validated.
+Responses database binding. Create `pii-cm`, `application-safety-cm`, `subscription-safety-cm` and `model-safety-cm` in
+`<guardrails-namespace>`, and the NeMo client credential/CA Secrets in `<tenant-namespace>`. The examples assume the
+tenant-to-namespace relationship and existing Gateway configuration are established. Resource creation is separate from
+readiness: each binding becomes usable only after its dependencies are validated.
 
 **Provide the NeMo service and its configuration.** TrustyAI deploys `tenant-nemo` and loads the `pii` configuration
 from `pii-cm`, `application-safety` from `application-safety-cm`, and `model-safety` from `model-safety-cm`, in the
-separate `<guardrails-namespace>`. It also loads `subscription-safety` from `subscription-safety-cm`. Any model dependencies used by the checks are configured within NeMo. The
-policies below reference this server and select their configurations.
+separate `<guardrails-namespace>`. It also loads `subscription-safety` from `subscription-safety-cm`. Any model
+dependencies used by the checks are configured within NeMo. The policies below reference this server and select their
+configurations.
 
 ```yaml
 kind: NemoGuardrails
@@ -204,12 +206,15 @@ endpoint, authentication and successful configuration loading must satisfy the
 [TrustyAI integration contract](02-guardrails-low-level-details.md#trustyai-integration-and-deployment-topology) before
 the policy becomes ready.
 
-**Define the reusable check separately.** The policy names the NeMo configuration and check phases; it does not
-contain the server's configuration files. All three AIGuardrails remain in `<tenant-namespace>` and explicitly reference
-NeMo in `<guardrails-namespace>`. The server's selector authorizes that provider reference under the
+**Define the reusable check separately.** The policy names the NeMo configuration and check phases; it does not contain
+the server's configuration files. All three AIGuardrails remain in `<tenant-namespace>` and explicitly reference NeMo in
+`<guardrails-namespace>`. The server's selector authorizes that provider reference under the
 [NeMo consumer-permission contract](02-guardrails-low-level-details.md#nemo-owned-consumer-permission). Credential and
 CA references remain local to each AIGuardrail's tenant namespace; model and subscription attachments reference
-AIGuardrails by explicit `name` and `namespace`, validated against the attachment's tenant membership.
+AIGuardrails by name, with the namespace resolved under
+the [scoped reference rules](02-guardrails-low-level-details.md#scoped-policy-references). MaaSSubscription and
+MaasTenantConfig must not specify `ref.namespace`: they always use the accepted AITenant target namespace. MaaSModelRef
+must explicitly select its own namespace or that tenant target namespace; no other namespace is allowed.
 
 ```yaml
 apiVersion: aigateway.opendatahub.io/v1alpha1
@@ -236,8 +241,9 @@ spec:
       phases: [ Input, Output ]
 ```
 
-Create an application policy with two independently selectable checks: `application-check` for the tenant-admin
-baseline and `subscription-check` for the subscription-wide requirement. Each uses its own NeMo configuration, which owns any model dependencies for that check.
+Create an application policy with two independently selectable checks: `application-check` for the tenant-admin baseline
+and `subscription-check` for the subscription-wide requirement. Each uses its own NeMo configuration, which owns any
+model dependencies for that check.
 
 ```yaml
 apiVersion: aigateway.opendatahub.io/v1alpha1
@@ -337,14 +343,25 @@ spec:
   guardrails:
     - ref:
         name: application-safety-v1
-        namespace: <tenant-namespace>
       checks: [ application-check ]
 ```
 
 **Register the model and declare how it handles Responses.** Create the referenced `LLMInferenceService` first.
-`ChatCompletions` is the default adapter mode; `Native` is explicit opt-in, and embedding-only or reranker-only models
-can declare `Unsupported`. The model already inherits the tenant's required baseline and need not repeat that
-attachment.
+
+| Mode                        | Gateway and backend behavior                                                                                                                                                           |
+|-----------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `ChatCompletions` (default) | Praxis rehydrates Responses history and translates the supported request/response flow to the backend's Chat Completions API.                                                          |
+| `Native`                    | The backend supports the native Responses API; Praxis forwards the supported native format without Chat Completions translation.                                                       |
+| `Unsupported`               | Reject Responses inference/continuation for this model at the gateway before orchestration, guardrail callouts or backend inference. Other model APIs remain independently authorized. |
+
+Both supported modes retain gateway authorization, guardrails and the public Responses/Conversations state lifecycle.
+`Native` does not mean ungoverned passthrough or a separate backend-owned public store. These modes choose the backend
+adapter; they do not independently enable Responses or promise arbitrary agentic-tool support. The model already
+inherits the tenant baselines and need not repeat those attachments.
+
+Omitting capabilities still selects `ChatCompletions` in this proposal; it is not automatic detection of embedding or
+reranker models. Such models declare `Unsupported`. The choice of default remains distinct from the requirement to
+reject known-incompatible requests before doing Responses work.
 
 ```yaml
 kind: MaaSModelRef
@@ -362,8 +379,9 @@ spec:
 
 **Attach a requirement directly to another model.** Create `qwen3-instruct` as an `LLMInferenceService`, then register
 this second model. Its publisher requires the tenant-local `model-safety-v1` for every authorized subscription using
-this model. All policy references explicitly name the tenant namespace and require same-tenant membership validation.
-The tenant's `privacy-v1` baseline still applies automatically.
+this model. This model example explicitly selects the tenant namespace; a model-local policy would instead name the
+MaaSModelRef's own namespace. Both require same-tenant membership validation. The tenant's `privacy-v1` baseline still
+applies automatically.
 
 ```yaml
 kind: MaaSModelRef
@@ -388,10 +406,9 @@ spec:
 `subscription-check` for every model accessed through this subscription, including both Granite and Qwen. Other
 subscriptions do not inherit this selection. The model entry remains additive.
 
- `application-safety-v1` is the second AIGuardrail created
-above in the tenant namespace. The subscription also selects the tenant-admin baseline check for Granite, illustrating
-independent attachment provenance: the check executes once, even when both scopes select it. Qwen receives that check
-through MaasTenantConfig and its own model-level check.
+`application-safety-v1` is the second AIGuardrail created above in the tenant namespace. The subscription also selects
+the tenant-admin baseline check for Granite, illustrating independent attachment provenance: the check executes once,
+even when both scopes select it. Qwen receives that check through MaasTenantConfig and its own model-level check.
 
 ```yaml
 kind: MaaSSubscription
@@ -402,7 +419,6 @@ spec:
   guardrails:
     - ref:
         name: application-safety-v1
-        namespace: <tenant-namespace>
       checks: [ subscription-check ]
   modelRefs:
     - name: granite-7b
@@ -410,7 +426,6 @@ spec:
       guardrails:
         - ref:
             name: application-safety-v1
-            namespace: <tenant-namespace>
           checks: [ application-check ]
     - name: qwen3
       namespace: <model-namespace>
@@ -418,10 +433,10 @@ spec:
 
 For requests authorized through this subscription:
 
-| Model | Effective Input checks, in execution order | Sources |
-|---|---|---|
-| `granite-7b` | `application-check`, `subscription-check`, `sensitive-data` | Tenant-admin baseline, subscription-wide check, platform baseline; the Granite entry also selects `application-check`, executed once |
-| `qwen3` | `application-check`, `subscription-check`, `model-check`, `sensitive-data` | Both tenant baselines, subscription-wide check and model attachment |
+| Model        | Effective Input checks, in execution order                                 | Sources                                                                                                                              |
+|--------------|----------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------|
+| `granite-7b` | `application-check`, `subscription-check`, `sensitive-data`                | Tenant-admin baseline, subscription-wide check, platform baseline; the Granite entry also selects `application-check`, executed once |
+| `qwen3`      | `application-check`, `subscription-check`, `model-check`, `sensitive-data` | Both tenant baselines, subscription-wide check and model attachment                                                                  |
 
 Both models also execute `sensitive-data` on Output. Explicit check subsets keep `subscription-check` scoped to this
 subscription even though it shares an AIGuardrail with the tenant-admin baseline.
@@ -523,20 +538,21 @@ revocation.
 These questions have recommended initial answers. They should be resolved by the named stakeholder groups before the
 relevant implementation phase is accepted; they are not permission for a runtime to silently choose weaker behavior.
 
-| Question                                                                 | Initial decision in this proposal                                                                                             | Decision owner                         |
-|--------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------|----------------------------------------|
-| Who can publish policies in each namespace?                              | Policy administrators receive separate `AIGuardrail` RBAC; NeMo owners manage allowedConsumers                                | AI Gateway and tenant administration   |
-| Is a managed production DB required?                                     | Platform-provisioned shared PostgreSQL first; per-tenant overrides and managed storage later                                  | Platform operations and product        |
-| Can users share conversations?                                           | No cross-user sharing; the same tenant/principal retains ownership across subscription changes                                | MaaS API and product                   |
-| Do subscriptions restrict Responses independently?                       | Existing model authorization initially; explicit entitlement later if needed                                                  | MaaS and product                       |
-| What TrustyAI discovery API can be relied on?                            | Require a supported endpoint/readiness/config-load contract; no guessed resource names or workload-namespace override         | TrustyAI and AI Gateway                |
-| Which host and capabilities are implemented for the target build?        | Pin the selected host and prove trusted scope, local Responses/output gating and IRR transport before admitting compiled YAML | Praxis and AI Gateway                  |
-| How is the NeMo checks request `model` resolved? | Provider binding must supply it per config through a supported NeMo/TrustyAI contract; no model field on AIGuardrail | AI Gateway and NeMo/TrustyAI integration owners |
-| Which NeMo release/deployment is supported?                              | Pin the supplied v1 wire contract and verify against the selected deployment                                                  | NeMo integration owners                |
-| Which protocol/tool combinations ship together?                          | Core finite Responses and text checks first; matrix-gate later combinations                                                   | Praxis and AI Gateway                  |
-| Which capabilities and attachment locations ship in the initial release? | Prioritize guardrails and opinionated core Responses; approve a supported subset separately from the full architecture        | Product and implementation owners, TBD |
-| What bounds and propagation SLO ship?                                    | Require measured defaults and a tested maximum stale-policy interval                                                          | Runtime, security and operations       |
-| How do non-MaaS gateway consumers use this infrastructure?               | Reuse tenant infrastructure; define their authorization/ownership contract separately                                         | AI Gateway                             |
+| Question                                                                 | Initial decision in this proposal                                                                                                                      | Decision owner                                  |
+|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------|
+| Who can publish policies in each namespace?                              | Policy administrators receive separate `AIGuardrail` RBAC; NeMo owners manage allowedConsumers                                                         | AI Gateway and tenant administration            |
+| Is a managed production DB required?                                     | Platform-provisioned shared PostgreSQL first; per-tenant overrides and managed storage later                                                           | Platform operations and product                 |
+| Can users share conversations?                                           | No cross-user sharing; the same tenant/principal retains ownership across subscription changes                                                         | MaaS API and product                            |
+| Do subscriptions restrict Responses independently?                       | Existing model authorization initially; explicit entitlement later if needed                                                                           | MaaS and product                                |
+| What TrustyAI discovery API can be relied on?                            | Require a supported endpoint/readiness/config-load contract; no guessed resource names or workload-namespace override                                  | TrustyAI and AI Gateway                         |
+| Which host and capabilities are implemented for the target build?        | Pin the selected host and prove trusted scope, local Responses/output gating and IRR transport before admitting compiled YAML                          | Praxis and AI Gateway                           |
+| How does AI Gateway discover model-namespace AIGuardrails?               | Define authoritative namespace-to-tenant association without MaaS resource watches; keep model-local attachments unavailable until catalog publication | AI Gateway and MaaS design owners               |
+| How is the NeMo checks request `model` resolved?                         | Provider binding must supply it per config through a supported NeMo/TrustyAI contract; no model field on AIGuardrail                                   | AI Gateway and NeMo/TrustyAI integration owners |
+| Which NeMo release/deployment is supported?                              | Pin the supplied v1 wire contract and verify against the selected deployment                                                                           | NeMo integration owners                         |
+| Which protocol/tool combinations ship together?                          | Core finite Responses and text checks first; matrix-gate later combinations                                                                            | Praxis and AI Gateway                           |
+| Which capabilities and attachment locations ship in the initial release? | Prioritize guardrails and opinionated core Responses; approve a supported subset separately from the full architecture                                 | Product and implementation owners, TBD          |
+| What bounds and propagation SLO ship?                                    | Require measured defaults and a tested maximum stale-policy interval                                                                                   | Runtime, security and operations                |
+| How do non-MaaS gateway consumers use this infrastructure?               | Reuse tenant infrastructure; define their authorization/ownership contract separately                                                                  | AI Gateway                                      |
 
 ## Additional documents
 

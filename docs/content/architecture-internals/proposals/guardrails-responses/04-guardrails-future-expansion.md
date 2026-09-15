@@ -19,7 +19,10 @@ would change the initial list-shaped field: define a versioned API conversion or
 shipping it. Existing attachments must retain mandatory, additive behavior after conversion; they must never become
 overridable defaults implicitly. No attachment alias is needed in either shape.
 
-Within every attachment, `ref` still contains explicit `name` and `namespace`. An omitted or empty attachment `checks`
+Within every attachment, `ref.name` remains required and namespace resolution follows the
+[current scoped reference rules](02-guardrails-low-level-details.md#scoped-policy-references), including forbidden
+`ref.namespace` on MaaSSubscription and MaasTenantConfig, and the two permitted namespace choices on MaaSModelRef. An
+omitted or empty attachment `checks`
 selects all checks in that AIGuardrail, including future additions. A nonempty list selects named checks. This is
 distinct from an empty **list of attachments** in a defaults operation, which can clear optional defaults under
 `Replace`. All current namespace validation, provider permission, fail-closed behavior, check identity and execution
@@ -98,7 +101,7 @@ metadata:
   namespace: <tenant-namespace>
 spec:
   guardrails:
-    required: [ { ref: { name: privacy-v1, namespace: <tenant-namespace> }, checks: [ pii ] } ]
+    required: [ { ref: { name: privacy-v1 }, checks: [ pii ] } ]
 ---
 kind: MaaSModelRef
 metadata:
@@ -114,17 +117,17 @@ spec:
 kind: MaaSSubscription
 spec:
   guardrails:
-    required: [ { ref: { name: audit-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
+    required: [ { ref: { name: audit-v1 }, checks: [ ] } ]
     defaults:
       mode: Replace
-      checks: [ { ref: { name: support-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
+      checks: [ { ref: { name: support-v1 }, checks: [ ] } ]
   modelRefs:
     - name: granite-7b
       namespace: <model-namespace>
       guardrails:
         defaults:
           mode: Replace
-          checks: [ { ref: { name: specialist-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
+          checks: [ { ref: { name: specialist-v1 }, checks: [ ] } ]
 ```
 
 Resolved definitions: `safety-v1` has Input check `safety` on server A; `privacy-v1`
