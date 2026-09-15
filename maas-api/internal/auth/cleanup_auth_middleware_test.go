@@ -1,4 +1,4 @@
-package auth
+package auth_test
 
 import (
 	"net/http"
@@ -6,11 +6,12 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
-	authenticationv1 "k8s.io/api/authentication/v1"
+	authv1 "k8s.io/api/authentication/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/auth"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
@@ -35,16 +36,16 @@ func TestCleanupAuthMiddleware(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			client := fake.NewSimpleClientset()
 			client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-				return true, &authenticationv1.TokenReview{
-					Status: authenticationv1.TokenReviewStatus{
+				return true, &authv1.TokenReview{
+					Status: authv1.TokenReviewStatus{
 						Authenticated: tt.authenticated,
-						User:          authenticationv1.UserInfo{Username: tt.reviewUsername},
+						User:          authv1.UserInfo{Username: tt.reviewUsername},
 					},
 				}, nil
 			})
 
 			router := gin.New()
-			router.Use(CleanupAuthMiddleware(logger.Development(), client, "maas-api-cleanup", "maas-infra"))
+			router.Use(auth.CleanupAuthMiddleware(logger.Development(), client, "maas-api-cleanup", "maas-infra"))
 			router.GET("/cleanup", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 
 			req := httptest.NewRequest(http.MethodGet, "/cleanup", nil)
@@ -63,16 +64,16 @@ func TestCleanupAuthMiddleware(t *testing.T) {
 func TestCleanupAuthMiddlewareRejectsServiceAccountUsernameWithExtraText(t *testing.T) {
 	client := fake.NewSimpleClientset()
 	client.PrependReactor("create", "tokenreviews", func(action k8stesting.Action) (bool, runtime.Object, error) {
-		return true, &authenticationv1.TokenReview{
-			Status: authenticationv1.TokenReviewStatus{
+		return true, &authv1.TokenReview{
+			Status: authv1.TokenReviewStatus{
 				Authenticated: true,
-				User:          authenticationv1.UserInfo{Username: "system:serviceaccount:maas-infra:maas-api-cleanup:extra"},
+				User:          authv1.UserInfo{Username: "system:serviceaccount:maas-infra:maas-api-cleanup:extra"},
 			},
 		}, nil
 	})
 
 	router := gin.New()
-	router.Use(CleanupAuthMiddleware(logger.Development(), client, "maas-api-cleanup", "maas-infra"))
+	router.Use(auth.CleanupAuthMiddleware(logger.Development(), client, "maas-api-cleanup", "maas-infra"))
 	router.GET("/cleanup", func(c *gin.Context) { c.Status(http.StatusNoContent) })
 	req := httptest.NewRequest(http.MethodGet, "/cleanup", nil)
 	req.Header.Set("Authorization", "Bearer valid")

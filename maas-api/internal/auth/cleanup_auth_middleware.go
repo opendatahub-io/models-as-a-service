@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
-	authenticationv1 "k8s.io/api/authentication/v1"
+	authv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
@@ -37,8 +37,8 @@ func CleanupAuthMiddleware(log *logger.Logger, kubeClient kubernetes.Interface, 
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), cleanupAuthTimeout)
 		defer cancel()
-		review, err := kubeClient.AuthenticationV1().TokenReviews().Create(ctx, &authenticationv1.TokenReview{
-			Spec: authenticationv1.TokenReviewSpec{Token: strings.TrimSpace(bearerToken)},
+		review, err := kubeClient.AuthenticationV1().TokenReviews().Create(ctx, &authv1.TokenReview{
+			Spec: authv1.TokenReviewSpec{Token: strings.TrimSpace(bearerToken)},
 		}, metav1.CreateOptions{})
 		if err != nil {
 			log.Error("Cleanup service-account TokenReview failed", "error", err)

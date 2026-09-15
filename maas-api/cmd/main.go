@@ -325,7 +325,7 @@ func registerHandlers(
 	// ServiceAccount token and are additionally restricted by NetworkPolicy.
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	cleanupAuth := auth.CleanupAuthMiddleware(log, cluster.ClientSet, "maas-api-cleanup", cfg.Namespace)
+	cleanupAuth := auth.CleanupAuthMiddleware(log, cluster.ClientSet, "maas-api-cleanup", cfg.Namespace) //nolint:contextcheck // gin middleware uses c.Request.Context()
 	internalRoutes.POST("/api-keys/cleanup", cleanupAuth, apiKeyHandler.CleanupExpiredEphemeralKeys)
 	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
 	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
