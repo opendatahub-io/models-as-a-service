@@ -1045,7 +1045,7 @@ class TestCascadeDeletion:
 
     @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+        """Delete and recreate a subscription without reviving its old API key.
 
         When the last subscription is deleted, AuthPolicy's subscription validation
         fails (no subscriptions found for user) and returns 403 Forbidden before
@@ -1056,11 +1056,23 @@ class TestCascadeDeletion:
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
             # With no subscription, expect 403 from AuthPolicy subscription validation
             r = _poll_status(api_key, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
-        finally:
+
+            # The subscription name may be reused, but the key that was bound to
+            # the deleted subscription must remain invalidated.
             _apply_cr(original)
+            _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+            r = _poll_status(api_key, 403, timeout=30)
+            assert r.status_code == 403, (
+                "API key bound to a deleted subscription became usable after the "
+                f"subscription was recreated: {r.status_code}"
+            )
+        finally:
+            if not _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION):
+                _apply_cr(original)
             _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
             # Wait for the TRLP to be re-enforced before returning — this confirms the
             # controller has fully reconciled the restored subscription and the maas-api

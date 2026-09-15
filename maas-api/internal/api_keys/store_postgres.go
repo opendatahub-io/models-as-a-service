@@ -6,11 +6,11 @@ package api_keys
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-	"encoding/json"
 
 	"github.com/lib/pq"
 
@@ -77,27 +77,27 @@ func (s *PostgresStore) AddKey(
 		userGroups = []string{}
 	}
 
-    // Marshal labels to JSONB (NULL if empty)
-    var labelsJSON []byte
-    var err error
-    if len(labels) > 0 {
-        labelsJSON, err = json.Marshal(labels)
-        if err != nil {
-            return fmt.Errorf("failed to marshal labels: %w", err)
-        }
-    }
+	// Marshal labels to JSONB (NULL if empty)
+	var labelsJSON []byte
+	var err error
+	if len(labels) > 0 {
+		labelsJSON, err = json.Marshal(labels)
+		if err != nil {
+			return fmt.Errorf("failed to marshal labels: %w", err)
+		}
+	}
 
 	query := `
 		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral, labels)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
 	`
 
-    var labelsParam any
-    if labelsJSON != nil {
-        labelsParam = labelsJSON
-    } else {
-        labelsParam = nil
-    }
+	var labelsParam any
+	if labelsJSON != nil {
+		labelsParam = labelsJSON
+	} else {
+		labelsParam = nil
+	}
 
 	// Use pq.Array to handle PostgreSQL TEXT[] type
 	_, err = s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, tenant, time.Now().UTC(), expiresAt, ephemeral, labelsParam)
@@ -133,7 +133,6 @@ func (s *PostgresStore) List(ctx context.Context, username string, params Pagina
 	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
 	args = append(args, s.tenantName)
 	argPos++
-
 	// Exclude ephemeral keys by default
 	whereClauses = append(whereClauses, "ephemeral = FALSE")
 
@@ -246,7 +245,6 @@ func (s *PostgresStore) Search(
 	whereClauses = append(whereClauses, fmt.Sprintf("tenant = $%d", argPos))
 	args = append(args, s.tenantName)
 	argPos++
-
 	// Exclude ephemeral keys by default
 	if filters.IncludeEphemeral == nil || !*filters.IncludeEphemeral {
 		whereClauses = append(whereClauses, "ephemeral = FALSE")
@@ -279,17 +277,17 @@ func (s *PostgresStore) Search(
 		argPos++
 	}
 
-    // Add labels containment filter
-    if len(filters.LabelsContain) > 0 {
-        // Convert filter to JSONB for @> containment operator
-        filterJSON, err := json.Marshal(filters.LabelsContain)
-        if err != nil {
-            return nil, fmt.Errorf("failed to marshal labels filter: %w", err)
-        }
-        whereClauses = append(whereClauses, fmt.Sprintf("labels @> $%d::jsonb", argPos))
-        args = append(args, filterJSON)
-        argPos++
-    }
+	// Add labels containment filter
+	if len(filters.LabelsContain) > 0 {
+		// Convert filter to JSONB for @> containment operator
+		filterJSON, err := json.Marshal(filters.LabelsContain)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal labels filter: %w", err)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("labels @> $%d::jsonb", argPos))
+		args = append(args, filterJSON)
+		argPos++
+	}
 
 	// Build final WHERE clause
 	whereClause := ""
@@ -426,7 +424,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var createdAt time.Time
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
-    var labelsJSON []byte
+	var labelsJSON []byte
 
 	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON); err != nil {
 		if err == sql.ErrNoRows {
@@ -446,13 +444,13 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
 
-    // Parse labels JSONB
-    if labelsJSON != nil {
-        if err := json.Unmarshal(labelsJSON, &k.Labels); err != nil {
-            s.logger.Warn("Failed to unmarshal labels", "keyId", keyID, "error", err)
-            k.Labels = nil // Set to a safe value (empty map) on unmarshal error (defensive)
-        }
-    }
+	// Parse labels JSONB
+	if labelsJSON != nil {
+		if err := json.Unmarshal(labelsJSON, &k.Labels); err != nil {
+			s.logger.Warn("Failed to unmarshal labels", "keyId", keyID, "error", err)
+			k.Labels = nil // Set to a safe value (empty map) on unmarshal error (defensive)
+		}
+	}
 
 	return &k, nil
 }
@@ -462,7 +460,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 	query := `
 		SELECT id, username, name, description, user_groups, subscription, tenant, status, expires_at, last_used_at, ephemeral
 		FROM api_keys
-		WHERE key_hash = $1 AND tenant = $2
+		WHERE key_hash = $1 AND tenant = $2 AND deleted_at IS NULL
 	`
 	row := s.db.QueryRowContext(ctx, query, keyHash, s.tenantName)
 
@@ -513,7 +511,7 @@ func (s *PostgresStore) GetByHash(ctx context.Context, keyHash string) (*ApiKey,
 // operations. It dynamically adds username and/or subscription filters alongside
 // the mandatory tenant and status=active predicates.
 func (s *PostgresStore) bulkRevokeWhereClause(username, subscription string) (string, []any) {
-	conditions := []string{"tenant = $1", "status = 'active'", "(expires_at IS NULL OR expires_at > NOW())"}
+	conditions := []string{"tenant = $1", "status = 'active'", "deleted_at IS NULL", "(expires_at IS NULL OR expires_at > NOW())"}
 	args := []any{s.tenantName}
 	paramIdx := 2
 
@@ -577,14 +575,17 @@ func (s *PostgresStore) BulkRevoke(ctx context.Context, username, subscription, 
 	return count, nil
 }
 
-// InvalidateTenant revokes all active keys within this tenant.
-// Returns the count of keys that were revoked.
+// InvalidateTenant soft-deletes all keys within this tenant and revokes active keys.
+// Returns the count of rows newly soft-deleted.
 func (s *PostgresStore) InvalidateTenant(ctx context.Context, tenant string) (int, error) {
 	if tenant != s.tenantName {
 		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
 	}
 
-	query := `UPDATE api_keys SET status = 'revoked' WHERE tenant = $1 AND status = 'active'`
+	query := `UPDATE api_keys
+		SET deleted_at = NOW(),
+		    status = CASE WHEN status = 'active' THEN 'revoked' ELSE status END
+		WHERE tenant = $1 AND deleted_at IS NULL`
 
 	result, err := s.db.ExecContext(ctx, query, s.tenantName)
 	if err != nil {
@@ -597,7 +598,35 @@ func (s *PostgresStore) InvalidateTenant(ctx context.Context, tenant string) (in
 	}
 
 	count := int(rows)
-	s.logger.Info("Revoked all keys for tenant", "count", count, "tenant", s.tenantName)
+	s.logger.Info("Invalidated all keys for tenant", "count", count, "tenant", s.tenantName)
+	return count, nil
+}
+
+// InvalidateSubscription soft-deletes all keys for one subscription within a tenant.
+func (s *PostgresStore) InvalidateSubscription(ctx context.Context, tenant, subscription string) (int, error) {
+	if tenant != s.tenantName {
+		return 0, fmt.Errorf("%w: attempted to revoke keys for tenant %q but store is scoped to %q", ErrTenantMismatch, tenant, s.tenantName)
+	}
+	if strings.TrimSpace(subscription) == "" {
+		return 0, errors.New("subscription is required")
+	}
+
+	query := `UPDATE api_keys
+		SET deleted_at = NOW(),
+		    status = CASE WHEN status = 'active' THEN 'revoked' ELSE status END
+		WHERE tenant = $1 AND subscription = $2 AND deleted_at IS NULL`
+	result, err := s.db.ExecContext(ctx, query, tenant, subscription)
+	if err != nil {
+		return 0, fmt.Errorf("failed to revoke subscription keys: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+
+	count := int(rows)
+	s.logger.Info("Invalidated all keys for subscription", "count", count,
+		"tenant", s.tenantName, "subscription", logger.RedactValue(subscription))
 	return count, nil
 }
 
@@ -652,6 +681,28 @@ func (s *PostgresStore) DeleteExpiredEphemeral(ctx context.Context) (int64, erro
 		s.logger.Info("Deleted expired ephemeral keys", "count", rows)
 	}
 
+	return rows, nil
+}
+
+// DeleteSoftDeleted physically removes lifecycle-invalidated keys after retention.
+func (s *PostgresStore) DeleteSoftDeleted(ctx context.Context, retention time.Duration) (int64, error) {
+	if retention < 0 {
+		return 0, errors.New("retention must not be negative")
+	}
+	query := `DELETE FROM api_keys
+		WHERE tenant = $1 AND deleted_at IS NOT NULL AND deleted_at < $2`
+	cutoff := time.Now().UTC().Add(-retention)
+	result, err := s.db.ExecContext(ctx, query, s.tenantName, cutoff)
+	if err != nil {
+		return 0, fmt.Errorf("failed to delete soft-deleted keys: %w", err)
+	}
+	rows, err := result.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("failed to get affected rows: %w", err)
+	}
+	if rows > 0 {
+		s.logger.Info("Deleted retained API keys", "count", rows, "retention", retention.String())
+	}
 	return rows, nil
 }
 

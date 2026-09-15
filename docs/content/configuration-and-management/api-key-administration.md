@@ -2,6 +2,12 @@
 
 This guide covers administrative operations for managing API keys across the MaaS platform.
 
+## Lifecycle Cleanup
+
+Deleting an `AITenant` invalidates all of its API keys. Deleting a `MaaSSubscription` invalidates only keys bound to that subscription. These operations are performed through internal maas-api endpoints and are gated by Kubernetes finalizers, so a transient maas-api outage causes deletion to retry instead of leaving credentials usable.
+
+Lifecycle-invalidated rows are soft-deleted with a 90-day retention period by default, matching the tenancy architecture decision record. Set `spec.apiKeys.deletionRetentionDays` on `MaasTenantConfig` for an operator-managed tenant, or set `API_KEY_DELETION_RETENTION_DAYS` on a standalone maas-api deployment. The regular internal cleanup CronJob physically removes rows after the retention period. Each lifecycle cleanup emits a structured audit log containing the tenant, scope, deleted-key count, timestamp, and controller initiator.
+
 ## Bulk Key Revocation
 
 Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A **dry-run** mode is available to preview how many keys would be revoked before committing.

@@ -136,6 +136,12 @@ type TenantAPIKeysConfig struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Minimum=1
 	MaxExpirationDays *int32 `json:"maxExpirationDays,omitempty"`
+
+	// DeletionRetentionDays controls how long lifecycle-invalidated API keys
+	// remain soft-deleted before physical deletion. The default is 90 days.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Minimum=1
+	DeletionRetentionDays *int32 `json:"deletionRetentionDays,omitempty"`
 }
 
 // TenantMaasAPIConfig defines scaling and resource configuration for maas-api pods.

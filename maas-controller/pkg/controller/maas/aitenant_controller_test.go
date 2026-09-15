@@ -2668,6 +2668,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		},
 	}
 	var failedJobDeletePropagation *metav1.DeletionPropagation
+	recorder := record.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -2689,6 +2690,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		AppNamespace:     "odh-ai-gateway-infra",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		Recorder:         recorder,
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
@@ -2711,6 +2713,12 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	g.Expect(failedJobDeletePropagation).NotTo(BeNil())
 	g.Expect(*failedJobDeletePropagation).To(Equal(metav1.DeletePropagationBackground))
+	select {
+	case event := <-recorder.Events:
+		g.Expect(event).To(ContainSubstring("APIKeyCleanupFailed"))
+	default:
+		t.Fatal("expected APIKeyCleanupFailed warning event")
+	}
 
 	var remainingTenant maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant)).To(Succeed())
@@ -3276,7 +3284,7 @@ func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) 
 	g.Expect(err).NotTo(HaveOccurred(), "spoofed stale claim should survive cleanupStaleClaims")
 }
 
-func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
+func TestAITenantReconcile_DeletionTimeoutDoesNotBypassAPIKeyCleanup(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -3324,38 +3332,14 @@ func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
 	var remaining maasv1alpha1.AITenant
 	err = cl.Get(ctx, key, &remaining)
-	if apierrors.IsNotFound(err) {
-		// Object was fully deleted after finalizer removal — forced cleanup succeeded.
-	} else {
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer),
-			"finalizer must be removed after deletion timeout")
-
-		cond := apimeta.FindStatusCondition(remaining.Status.Conditions, maasv1alpha1.AITenantConditionReady)
-		g.Expect(cond).NotTo(BeNil())
-		g.Expect(cond.Reason).To(Equal("CleanupForced"))
-		g.Expect(cond.Message).To(ContainSubstring("Deletion timeout"))
-	}
-
-	select {
-	case event := <-recorder.Events:
-		g.Expect(event).To(ContainSubstring("AITenantCleanupForced"))
-		g.Expect(event).To(ContainSubstring("API keys may still exist"))
-	default:
-		t.Fatal("expected a Warning event but none was emitted")
-	}
-
-	var updatedNS corev1.Namespace
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-timeout"}, &updatedNS)).To(Succeed())
-	g.Expect(updatedNS.Labels).NotTo(HaveKey(aitenantManagedLabel),
-		"best-effort releaseTenantNamespace must strip ownership labels during forced cleanup")
-	g.Expect(updatedNS.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
-	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
-	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNamespaceAnnotation))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(remaining.Finalizers).To(ContainElement(aitenantFinalizer),
+		"security cleanup must keep the finalizer until API keys are invalidated")
+	g.Expect(recorder.Events).To(BeEmpty())
 }
 
 func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {

@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -983,7 +984,9 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, nil
 	}
 
-	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout {
+	// Never bypass the security cleanup gate. The timeout may only accelerate
+	// best-effort cleanup after API-key invalidation has completed.
+	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout && tenantAPIKeysRevoked(aitenant) {
 		return r.forceRemoveAITenantFinalizer(ctx, aitenant)
 	}
 
@@ -999,6 +1002,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if err != nil {
 		statusSnapshot = aitenant.Status.DeepCopy()
 		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
+		if r.Recorder != nil {
+			r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "APIKeyCleanupFailed",
+				"failed to invalidate API keys for tenant %s: %v", aitenant.Name, err)
+		}
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
@@ -1065,8 +1072,11 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 }
 
 func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
+	if !tenantAPIKeysRevoked(aitenant) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	log := oteljson.FromContext(ctx)
-	msg := fmt.Sprintf("Deletion timeout (%s) reached; cleanup finalizer removed without successful cleanup — API keys may still exist", r.DeletionTimeout)
+	msg := fmt.Sprintf("Deletion timeout (%s) reached after API-key invalidation; remaining cleanup is best effort", r.DeletionTimeout)
 	log.Info("AITenant deletion timeout reached, forcing finalizer removal",
 		"deletionTimestamp", aitenant.DeletionTimestamp.Time,
 		"timeout", r.DeletionTimeout)
@@ -1079,7 +1089,7 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 
 	if r.Recorder != nil {
 		r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "AITenantCleanupForced",
-			"Deletion timeout (%s) reached for AITenant %s/%s; cleanup finalizer removed without successful cleanup — API keys may still exist",
+			"Deletion timeout (%s) reached for AITenant %s/%s after API-key invalidation; remaining cleanup is best effort",
 			r.DeletionTimeout, aitenant.Namespace, aitenant.Name)
 	}
 
@@ -1314,7 +1324,11 @@ func tenantAPIKeysRevoked(aitenant *maasv1alpha1.AITenant) bool {
 }
 
 func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1alpha1.AITenant) bool {
-	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
+	return apiKeyRevocationJobMatchesUID(job, string(aitenant.UID))
+}
+
+func apiKeyRevocationJobMatchesUID(job *batcv1.Job, uid string) bool {
+	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == uid
 }
 
 func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
@@ -1322,8 +1336,15 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	if tenantID == tenantreconcile.DefaultAITenantName {
 		tenantID = ""
 	}
+	return apiKeyRevocationJob(
+		aitenantAPIKeyRevocationJobName(aitenant.Name),
+		aitenant.Name, aitenant.Namespace, string(aitenant.UID),
+		aitenant.Name, "", tenantID, namespace,
+	)
+}
+
+func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantName, subscription, tenantID, namespace string) *batcv1.Job {
 	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
-	tenantName := aitenant.Name
 	image := tenantreconcile.DefaultMaaSAPIKeyCleanupImage
 	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
 		image = related
@@ -1333,7 +1354,10 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
-	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
+	if subscription != "" {
+		endpoint = fmt.Sprintf("https://%s/internal/v1/tenants/%s/subscriptions/%s/api-keys",
+			net.JoinHostPort(serviceHost, "8443"), tenantName, url.PathEscape(subscription))
+	}
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1345,12 +1369,18 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 				"app.kubernetes.io/managed-by":  "maas-controller",
 				"app.kubernetes.io/name":        "maas-api",
 				"app.kubernetes.io/part-of":     "models-as-a-service",
-				tenantreconcile.LabelTenantName: aitenant.Name,
+				tenantreconcile.LabelTenantName: tenantName,
 			},
 			Annotations: map[string]string{
-				aitenantNameAnnotation:      aitenant.Name,
-				aitenantNamespaceAnnotation: aitenant.Namespace,
-				aitenantUIDAnnotation:       string(aitenant.UID),
+				aitenantNameAnnotation:      ownerName,
+				aitenantNamespaceAnnotation: ownerNamespace,
+				aitenantUIDAnnotation:       ownerUID,
+				"maas.opendatahub.io/cleanup-scope": func() string {
+					if subscription == "" {
+						return "tenant"
+					}
+					return "subscription"
+				}(),
 			},
 		},
 		Spec: batcv1.JobSpec{

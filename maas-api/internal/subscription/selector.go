@@ -141,7 +141,7 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		}
 
 		// Exclude subscriptions being deleted
-		if sub.DeletionTimestamp != nil {
+		if subscriptionIsDeleting(&sub) {
 			continue
 		}
 
@@ -207,6 +207,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		for _, sub := range subscriptions {
 			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
 			if qualifiedName == requestedSubscription {
+				if subscriptionIsDeleting(&sub) {
+					continue
+				}
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
@@ -228,6 +231,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if !strings.Contains(requestedSubscription, "/") {
 			for _, sub := range subscriptions {
 				if sub.Name != requestedSubscription {
+					continue
+				}
+				if subscriptionIsDeleting(&sub) {
 					continue
 				}
 				if !userHasAccess(&sub, username, groups) {
@@ -253,6 +259,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	// Branch 2: Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			// If model is specified, only include subscriptions that contain that model
 			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
@@ -302,6 +311,9 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	var accessible []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			accessible = append(accessible, sub)
 		}
@@ -313,6 +325,10 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	sortSubscriptionsByPriority(accessible)
 	return toResponse(&accessible[0]), nil
+}
+
+func subscriptionIsDeleting(sub *subscription) bool {
+	return sub != nil && sub.DeletionTimestamp != nil
 }
 
 // loadSubscriptions fetches and parses MaaSSubscription resources.

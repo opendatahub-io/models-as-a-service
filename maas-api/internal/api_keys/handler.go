@@ -685,10 +685,20 @@ func (h *Handler) CleanupExpiredEphemeralKeys(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cleanup expired ephemeral keys"})
 		return
 	}
+	retainedCount, err := h.service.CleanupSoftDeleted(c.Request.Context())
+	if err != nil {
+		h.logger.Error("Failed to cleanup retained API keys", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to cleanup retained API keys"})
+		return
+	}
 
+	message := fmt.Sprintf("Successfully deleted %d expired ephemeral key(s)", count)
+	if retainedCount > 0 {
+		message = fmt.Sprintf("Successfully deleted %d expired ephemeral and %d retained API key(s)", count, retainedCount)
+	}
 	c.JSON(http.StatusOK, CleanupResponse{
-		DeletedCount: count,
-		Message:      fmt.Sprintf("Successfully deleted %d expired ephemeral key(s)", count),
+		DeletedCount: count + retainedCount,
+		Message:      message,
 	})
 }
 
@@ -712,11 +722,57 @@ func (h *Handler) RevokeTenantAPIKeys(c *gin.Context) {
 		return
 	}
 
-	h.logger.Info("Revoked tenant API keys", "tenant", tenant, "count", count)
+	deletedAt := time.Now().UTC()
+	h.emitLifecycleCleanupAudit(c, "tenant", tenant, "", count, deletedAt, "aitenant-controller")
+	h.logger.Info("Invalidated tenant API keys", "tenant", tenant, "count", count)
 	c.JSON(http.StatusOK, TenantRevokeResponse{
 		RevokedCount: count,
-		Message:      fmt.Sprintf("Successfully revoked %d active API key(s) for tenant %s", count, tenant),
+		DeletedCount: count,
+		DeletedAt:    deletedAt,
+		Message:      fmt.Sprintf("Successfully invalidated %d API key(s) for tenant %s", count, tenant),
 	})
+}
+
+// RevokeSubscriptionAPIKeys handles DELETE /internal/v1/tenants/:tenant/subscriptions/:subscription/api-keys.
+// It soft-deletes only keys bound to the requested subscription within the tenant.
+func (h *Handler) RevokeSubscriptionAPIKeys(c *gin.Context) {
+	h = h.withContext(c)
+
+	tenant := strings.TrimSpace(c.Param("tenant"))
+	subscription := strings.TrimSpace(c.Param("subscription"))
+	count, err := h.service.RevokeSubscriptionAPIKeys(c.Request.Context(), tenant, subscription)
+	if err != nil {
+		h.logger.Error("Failed to revoke subscription API keys", "error", err,
+			"tenant", tenant, "subscription", logger.RedactValue(subscription))
+		switch {
+		case errors.Is(err, ErrTenantRequired), errors.Is(err, ErrTenantMismatch):
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		default:
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to revoke subscription API keys"})
+		}
+		return
+	}
+
+	deletedAt := time.Now().UTC()
+	h.emitLifecycleCleanupAudit(c, "subscription", tenant, subscription, count, deletedAt, "maassubscription-controller")
+	c.JSON(http.StatusOK, SubscriptionRevokeResponse{
+		RevokedCount: count,
+		DeletedCount: count,
+		DeletedAt:    deletedAt,
+		Message:      fmt.Sprintf("Successfully invalidated %d API key(s) for subscription %s", count, subscription),
+	})
+}
+
+func (h *Handler) emitLifecycleCleanupAudit(c *gin.Context, scope, tenant, subscription string, count int, deletedAt time.Time, initiator string) {
+	h.reqLogger(c).Info("AUDIT API-key lifecycle cleanup",
+		"audit.action", "api-key-soft-delete",
+		"audit.scope", scope,
+		"audit.tenant", tenant,
+		"audit.subscription", logger.RedactValue(subscription),
+		"audit.deletedCount", count,
+		"audit.deletedAt", deletedAt.UTC().Format(time.RFC3339),
+		"audit.initiator", initiator,
+	)
 }
 
 // BulkRevokeAPIKeys handles POST /v1/api-keys/bulk-revoke

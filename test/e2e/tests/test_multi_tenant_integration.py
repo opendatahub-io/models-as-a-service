@@ -38,6 +38,7 @@ from multitenancy_helpers import (
     apply_tenant_cr,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
+    create_api_key_at,
     delete_best_effort,
     delete_maas_auth_policy,
     delete_maas_subscription,
@@ -49,14 +50,20 @@ from multitenancy_helpers import (
     remove_discovery_labels,
     require_aitenant_crd,
     require_tenant_namespace_discovery,
+    response_summary,
+    wait_for_deployment_available,
     wait_for_aitenant_cleanup_resources,
     wait_for_aitenant_cleanup_resources_deleted,
     wait_for_annotation_contains,
     wait_for_finalizer,
     wait_for_json,
     wait_for_not_found,
+    wait_for_route_admitted,
     wait_for_status_phase,
+    tenant_internal_url,
+    validate_api_key_at,
 )
+from test_helper import _get_cluster_token
 
 pytestmark = pytest.mark.xdist_group("mt_lifecycle")
 
@@ -113,6 +120,32 @@ class TestMultiTenantIntegration:
                 expected_phase="Active",
             )
             wait_for_aitenant_cleanup_resources(case)
+
+            # Bind the key to the tenant's subscription, then verify it remains
+            # invalid after the tenant and its subscription are recreated.
+            route = wait_for_route_admitted(f"{case['gateway_name']}-route")
+            tenant_api_url = f"https://{route['spec']['host']}/maas-api"
+            wait_for_deployment_available(f"maas-api-{case['tenant_label_name']}", timeout=180)
+            key_response = create_api_key_at(
+                tenant_api_url,
+                _get_cluster_token(),
+                f"e2e-aitenant-delete-{case['suffix']}",
+                subscription=case["subscription_name"],
+            )
+            assert key_response.status_code in (200, 201), (
+                f"failed to create tenant-scoped API key: {response_summary(key_response)}"
+            )
+            old_api_key = key_response.json().get("key")
+            assert old_api_key, "tenant-scoped API key response did not include a key"
+            validation = validate_api_key_at(
+                tenant_internal_url(case["tenant_label_name"]),
+                old_api_key,
+            )
+            assert validation.status_code == 200 and validation.json().get("valid") is True, (
+                f"new tenant API key did not validate: status={validation.status_code} "
+                f"body={validation.text}"
+            )
+
             user_objects = apply_unrelated_tenant_objects(case)
 
             delete_best_effort(AITENANT_KIND, case["tenant_label_name"], AITENANT_NAMESPACE, timeout="180s")
@@ -149,6 +182,20 @@ class TestMultiTenantIntegration:
             assert get_json_or_none("secret", user_objects["secret"], case["tenant_ns"]) is not None
             assert get_json_or_none("rolebinding", user_objects["rolebinding"], case["tenant_ns"]) is not None
             wait_for_aitenant_cleanup_resources_deleted(case)
+
+            # Recreate the same tenant name and verify the old key cannot be
+            # used against the newly provisioned maas-api instance.
+            bootstrap_aitenant_tenant(case)
+            wait_for_aitenant_cleanup_resources(case)
+            validation = validate_api_key_at(
+                tenant_internal_url(case["tenant_label_name"]),
+                old_api_key,
+            )
+            assert validation.status_code == 200 and validation.json().get("valid") is False, (
+                "API key from the deleted tenant remained valid after recreating "
+                f"the tenant with the same name: status={validation.status_code} "
+                f"body={validation.text}"
+            )
         finally:
             cleanup_discovery_case(case)
 

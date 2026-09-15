@@ -7,6 +7,7 @@ import (
 	"database/sql"
 	"os"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -21,7 +22,7 @@ func TestPostgresStore_LabelsRoundTrip(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	
+
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
 	}
@@ -53,7 +54,7 @@ func TestPostgresStore_SearchByLabels(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	
+
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
 	}
@@ -100,7 +101,7 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 	if testing.Short() {
 		t.Skip("Skipping integration test in short mode")
 	}
-	
+
 	if os.Getenv("TEST_DATABASE_URL") == "" {
 		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
 	}
@@ -111,7 +112,7 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 
 	// Create key without labels (nil/NULL)
 	keyID := uuid.New().String()
-	keyHash := uuid.New().String()  // Unique hash to allow multiple runs without dropping table.
+	keyHash := uuid.New().String() // Unique hash to allow multiple runs without dropping table.
 	err := store.AddKey(ctx, "alice", keyID, keyHash,
 		"legacy-key", "no labels", []string{"group1"},
 		"subscription1", "test-tenant", nil, false, nil)
@@ -121,6 +122,60 @@ func TestPostgresStore_BackwardCompatibility_NullLabels(t *testing.T) {
 	key, err := store.Get(ctx, keyID)
 	require.NoError(t, err)
 	assert.Nil(t, key.Labels) // Important: should be nil, not empty map
+}
+
+// TestPostgresStore_LifecycleInvalidation verifies that lifecycle cleanup
+// soft-deletes keys, prevents validation, and preserves subscription scope.
+func TestPostgresStore_LifecycleInvalidation(t *testing.T) {
+	if testing.Short() {
+		t.Skip("Skipping integration test in short mode")
+	}
+	if os.Getenv("TEST_DATABASE_URL") == "" {
+		t.Skip("Skipping integration test (TEST_DATABASE_URL not set)")
+	}
+
+	ctx := context.Background()
+	store := setupTestPostgresStore(t)
+	defer store.Close()
+
+	keyIDs := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()}
+	keyHashes := []string{uuid.New().String(), uuid.New().String(), uuid.New().String()}
+	subscriptions := []string{"sub-delete", "sub-delete", "sub-keep"}
+	for i, id := range keyIDs {
+		require.NoError(t, store.AddKey(ctx, "lifecycle-user", id, keyHashes[i],
+			"lifecycle-key", "", nil, subscriptions[i],
+			"test-tenant", nil, false, nil))
+	}
+
+	count, err := store.InvalidateSubscription(ctx, "test-tenant", "sub-delete")
+	require.NoError(t, err)
+	assert.Equal(t, 2, count)
+
+	for i, id := range keyIDs[:2] {
+		key, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, api_keys.StatusRevoked, key.Status)
+		_, err = store.GetByHash(ctx, keyHashes[i])
+		assert.ErrorIs(t, err, api_keys.ErrKeyNotFound)
+	}
+	kept, err := store.Get(ctx, keyIDs[2])
+	require.NoError(t, err)
+	assert.Equal(t, api_keys.StatusActive, kept.Status)
+
+	count, err = store.InvalidateTenant(ctx, "test-tenant")
+	require.NoError(t, err)
+	assert.Equal(t, 1, count, "tenant cleanup should only newly invalidate the remaining subscription key")
+
+	// Move one soft-deleted row beyond retention and verify physical cleanup is
+	// still restricted to this store's tenant.
+	db, err := sql.Open("pgx", os.Getenv("TEST_DATABASE_URL"))
+	require.NoError(t, err)
+	defer db.Close()
+	_, err = db.ExecContext(ctx, "UPDATE api_keys SET deleted_at = NOW() - INTERVAL '91 days' WHERE id = $1", keyIDs[0])
+	require.NoError(t, err)
+	deleted, err := store.DeleteSoftDeleted(ctx, 90*24*time.Hour)
+	require.NoError(t, err)
+	assert.GreaterOrEqual(t, deleted, int64(1))
 }
 
 // TestPostgresStore_ConcurrentIndexesCreated verifies that all indexes registered
@@ -164,17 +219,17 @@ func TestPostgresStore_ConcurrentIndexesCreated(t *testing.T) {
 // Requires TEST_DATABASE_URL environment variable (e.g., "postgres://user:pass@localhost:5432/testdb").
 func setupTestPostgresStore(t *testing.T) *api_keys.PostgresStore {
 	t.Helper()
-	
+
 	dbURL := os.Getenv("TEST_DATABASE_URL")
 	if dbURL == "" {
 		t.Fatal("TEST_DATABASE_URL environment variable not set")
 	}
-	
+
 	testLogger := logger.Development()
 	store, err := api_keys.NewPostgresStoreFromURL(context.Background(), testLogger, dbURL, "test-tenant")
 	if err != nil {
 		t.Fatalf("Failed to create PostgreSQL store: %v", err)
 	}
-	
+
 	return store
 }

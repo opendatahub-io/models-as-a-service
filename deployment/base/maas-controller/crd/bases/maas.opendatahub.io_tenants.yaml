@@ -58,6 +58,13 @@ spec:
               apiKeys:
                 description: APIKeys contains configuration for API key management.
                 properties:
+                  deletionRetentionDays:
+                    description: |-
+                      DeletionRetentionDays controls how long lifecycle-invalidated API keys
+                      remain soft-deleted before physical deletion. The default is 90 days.
+                    format: int32
+                    minimum: 1
+                    type: integer
                   maxExpirationDays:
                     format: int32
                     minimum: 1
