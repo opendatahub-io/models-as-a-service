@@ -490,11 +490,11 @@ spec:
                 - key: model
                   value:
                     string_value: "%DYNAMIC_METADATA(envoy.filters.http.json_to_metadata:model)%"
+                - key: upstream_host
+                  value:
+                    string_value: '%UPSTREAM_HOST%'
               resource_attributes:
                 values:
                 - key: service.name
                   value:
                     string_value: models-as-a-service
-                - key: service.namespace
-                  value:
-                    string_value: openshift-ingress
