@@ -1187,7 +1187,7 @@ allow {
 			// now that the route-level policy is removed this condition lives at the gateway level.
 			"when": []any{
 				map[string]any{
-					"predicate": `request.path != "/maas-api/health" || request.method != "GET"`,
+					"predicate": `(request.path != "/maas-api/health" && request.path != "/health") || request.method != "GET"`,
 				},
 			},
 			"rules": defaultsRules,
