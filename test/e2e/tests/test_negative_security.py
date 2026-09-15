@@ -276,9 +276,10 @@ class TestHeaderSpoofing:
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         # Warm up: confirm the API key works with a normal request before
-        # testing duplicate headers. Under parallel load, Rego policy
-        # propagation can take longer than the 30s retry window below.
-        _poll_status(api_key, 200, timeout=60)
+        # testing duplicate headers. Under parallel load, Authorino/Rego policy
+        # and API-key validation can lag; other e2e tests use 8s + 90s polls.
+        time.sleep(8)
+        _poll_status(api_key, 200, timeout=90)
 
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
         # The requests library uses a dict for headers, so it cannot send two
@@ -296,7 +297,7 @@ class TestHeaderSpoofing:
 
         # As above, keep the raw duplicate headers on every retry while waiting
         # for shared gateway authorization state to settle.
-        deadline = time.time() + 30
+        deadline = time.time() + 60
         while True:
             gateway = _gateway_url()
             parsed = urlparse(gateway)

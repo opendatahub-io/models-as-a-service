@@ -1162,16 +1162,63 @@ def deployment_log_snapshot(
     namespace: str = GATEWAY_NAMESPACE,
     since: str = "30s",
 ) -> str:
-    result = _oc_run(
+    for args in (
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
-        timeout=120,
+        ["logs", f"deployment/{deployment_name}", "-n", namespace, "--tail=300"],
+    ):
+        result = _oc_run(args, timeout=120)
+        if result.returncode == 0 and (result.stdout or "").strip():
+            return result.stdout
+    return ""
+
+
+def extproc_deployment_uses_praxis(
+    deployment_name: str,
+    namespace: str = GATEWAY_NAMESPACE,
+) -> bool:
+    """True when the deployment runs odh-praxis-extproc (not legacy Go IPP)."""
+    image_result = _oc_run(
+        [
+            "get",
+            "deployment",
+            deployment_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].image}",
+        ],
+        timeout=60,
     )
-    if result.returncode != 0:
-        return ""
-    return result.stdout or ""
+    args_result = _oc_run(
+        [
+            "get",
+            "deployment",
+            deployment_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].args}",
+        ],
+        timeout=60,
+    )
+    if image_result.returncode != 0:
+        return False
+    image = (image_result.stdout or "").strip()
+    args = (args_result.stdout or "").strip() if args_result.returncode == 0 else ""
+    return (
+        "odh-praxis-extproc" in image
+        or "praxis-extproc" in image
+        or "/etc/praxis/extproc.yaml" in args
+    )
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:
+    """Detect legacy Go IPP per-request log lines (praxis-extproc is quiet at INFO).
+
+    praxis-extproc (Rust) does not emit per-request lines at default log levels;
+    :9090/metrics was also empty/unhelpful in e2e probes. Tests that opt the
+    default tenant into praxis skip this check and rely on HTTP 200 instead.
+    """
     markers = ("x-request-id", "handlers/server.go", "processing request headers")
     return any(marker in log_text for marker in markers)
 

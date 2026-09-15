@@ -1017,6 +1017,7 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     deadline = time.time() + timeout
     last = None
     last_err = None
+    last_auth_recheck = 0.0
     while time.time() < deadline:
         try:
             r = inference_fn(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
@@ -1025,6 +1026,26 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
             if ok:
                 return r
             last = r
+            # Parallel workers can churn maas-gateway-auth; empty 401/403 or
+            # AUTH_FAILURE usually means propagation, not a permanent deny.
+            if r.status_code in (401, 403, 500):
+                body = (r.text or "").strip()
+                transient = (
+                    r.status_code in (401, 403) and not body
+                ) or (r.status_code == 500 and "AUTH_FAILURE" in body)
+                if transient and time.time() - last_auth_recheck >= 10:
+                    remaining = max(0, int(deadline - time.time()))
+                    if remaining > 0:
+                        log.info(
+                            "Inference poll got transient %d; re-checking gateway AuthPolicy (%ds left)...",
+                            r.status_code,
+                            remaining,
+                        )
+                        try:
+                            _wait_for_gateway_auth_enforced(timeout=min(60, remaining))
+                        except TimeoutError:
+                            pass
+                        last_auth_recheck = time.time()
         except requests.RequestException as exc:
             last_err = exc
             log.debug(f"Transient request error while polling: {exc}")
@@ -1036,6 +1057,9 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     err_msg = f"Expected {exp_str} within {timeout}s"
     if last is not None:
         err_msg += f", last status: {last.status_code}"
+        body_preview = (last.text or "").strip()[:200]
+        if body_preview:
+            err_msg += f", last body: {body_preview}"
     if last_err is not None:
         err_msg += f", last error: {last_err}"
     if last is None and last_err is None:

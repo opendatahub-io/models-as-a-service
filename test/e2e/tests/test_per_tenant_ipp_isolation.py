@@ -31,6 +31,7 @@ from multitenancy_helpers import (
     deployment_log_snapshot,
     envoyfilter_grpc_cluster_names,
     envoyfilter_target_gateway,
+    extproc_deployment_uses_praxis,
     get_ipp_deployment_env,
     get_json_or_none,
     ipp_logs_show_recent_activity,
@@ -371,9 +372,17 @@ class TestPerTenantIPPRouting:
         tenant_logs = deployment_log_snapshot(
             tenant_names["processing_deployment"], since="1m"
         )
-        assert ipp_logs_show_recent_activity(default_logs), (
-            "Expected ext_proc activity in default payload-processing logs"
-        )
+        # praxis-extproc does not log per-request activity at INFO; hybrid BBR HTTP 200
+        # is the routing signal when the default dataplane is praxis.
+        if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
+            log.info(
+                "Default dataplane uses praxis-extproc (no per-request log markers); "
+                "routing verified via HTTP 200"
+            )
+        else:
+            assert ipp_logs_show_recent_activity(default_logs), (
+                "Expected ext_proc activity in default payload-processing logs"
+            )
         assert not ipp_logs_show_recent_activity(tenant_logs), (
             "Tenant IPP logs should stay quiet for default-gateway traffic"
         )
