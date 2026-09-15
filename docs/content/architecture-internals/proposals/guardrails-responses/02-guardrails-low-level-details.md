@@ -302,42 +302,53 @@ in the initial API. [Required/default composition](04-guardrails-future-expansio
 
 ## API validation and compatibility contract
 
-The field sketches use the current `maas.opendatahub.io/v1alpha1` resource model; adding them still requires generated
-CRDs, defaulting/validation and controller support. Do not use an opaque Praxis YAML field as the user-facing policy
+The sketches span the MaaS resources, proposed AI Gateway APIs and TrustyAI provider integration. Adding these fields
+still requires generated CRDs, defaulting/validation and controller support in the owning component. Do not use an opaque Praxis YAML field as the user-facing policy
 API. Unknown policy fields must produce actionable validation errors rather than being silently interpreted as an
 unguarded request.
 
-| Field or combination                                                                | Proposed validation/default                                                                                              |
-|-------------------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------------------------|
-| `responses` absent or `enabled` omitted                                             | Disabled; `enabled` defaults to false                                                                                    |
-| Enabled Responses with no storage                                                   | Invalid; no implicit ephemeral storage                                                                                   |
-| `PlatformDefault` with override/managed fields, or mixed storage modes              | Invalid discriminated union; future modes rejected until supported                                                       |
-| `responses.enabled: false` with retained configuration                              | Valid staged configuration; no Responses endpoints become available                                                      |
-| `retention.maxAge`                                                                  | Required positive duration when enabled; no undocumented unlimited-retention default                                     |
-| `storage.deletionPolicy`                                                            | Initially only `Retain`; destructive deletion needs a later explicit contract                                            |
-| `responses.enabled: true`                                                           | Enables Responses and Conversations together; readiness requires both API surfaces                                       |
-| Model `spec.capabilities.responses` or its enclosing fields/`mode` omitted          | Effective mode is `ChatCompletions` for every backend kind; tenant enablement and compatibility checks still apply       |
-| Model `spec.capabilities.responses.mode: Unsupported`                               | Responses unavailable for this model regardless of tenant enablement; preserve unrelated model APIs                      |
-| Model `spec.capabilities.responses.mode: Native`                                    | Explicit native backend declaration; validate compatibility before activation                                            |
-| Guardrails configured with IPP selected                                             | Invalid until that backend implements the same enforcement contract                                                      |
-| `AIGuardrail.spec.checks`                                                           | Nonempty ordered list; local check names unique                                                                          |
-| `AIGuardrail.spec` update                                                           | Mutable with authorization/revalidation, current observedGeneration and a new binding revision; fence unsafe transitions |
-| Check `configId` | Required nonempty string; selected configuration loaded by NeMo                     |
-| Check `model` | Not part of the AIGuardrail API; request-level model resolution belongs to the provider binding |
-| Provider request parameters unresolved | Check unavailable; never guess a model or fall back to the inference-model alias |
-| Check `phases`                                                                      | Nonempty set containing only `Input` and/or `Output` initially                                                           |
-| Attachment-level phase/config override                                              | Invalid; settings belong to the referenced policy                                                                        |
-| NeMo provider reference namespace omitted                                           | AIGuardrail namespace                                                                                                    |
-| Policy ref missing `name` or `namespace`, or containing `scope`                     | Invalid; explicit name/namespace required                                                                                |
-| Policy namespace outside the attachment's tenant or initial tenant catalog          | Invalid/unresolved; validate authoritative membership, no namespace fallback                                             |
-| NeMo ref denied by allowedConsumers                                                 | Invalid/unresolved; never drop the check                                                                                 |
-| Provider outside tenant/platform approval                                           | Unresolved/invalid even when allowedConsumers permits attachment                                                         |
-| Duplicate subscription model namespace/name key                                     | Invalid; one matching entry per model                                                                                    |
-| Attachment `checks` omitted or empty                                                | Select all checks; follow validated additions to the referenced AIGuardrail                                              |
-| Nonempty attachment `checks`                                                        | Select named checks; reject duplicates, unknown names and null                                                           |
-| `guardrails` omitted or empty                                                       | No local contribution; other scopes still apply                                                                          |
-| Initial `guardrails` object containing `required`/`defaults` or an attachment alias | Invalid; use a list of `ref + checks` entries                                                                            |
-| A missing policy/provider                                                           | Reject affected requests; never remove the unresolved check                                                              |
+In the table, **attachment resources** means the following five locations, all using the same `ref + checks` shape:
+
+- `AITenant.spec.guardrails[]`
+- `MaasTenantConfig.spec.guardrails[]`
+- `MaaSModelRef.spec.guardrails[]`
+- `MaaSSubscription.spec.guardrails[]`
+- `MaaSSubscription.spec.modelRefs[].guardrails[]`
+
+Fields labeled as attachment fields are relative to an entry in one of these lists. Arrows in the resource column
+identify cross-resource validation, from the referencing resource to its target; they do not imply controller ownership.
+
+| Resource(s) | Field or combination | Proposed validation/default |
+|---|---|---|
+| `AITenant` | `spec.responses` absent or `spec.responses.enabled` omitted | Disabled; `enabled` defaults to false |
+| `AITenant` | `spec.responses.enabled: true` without `spec.responses.storage` | Invalid; no implicit ephemeral storage |
+| `AITenant` | `spec.responses.storage`: `PlatformDefault` with override/managed fields, or mixed modes | Invalid discriminated union; future modes rejected until supported |
+| `AITenant` | `spec.responses.enabled: false` with retained configuration | Valid staged configuration; no Responses endpoints become available |
+| `AITenant` | `spec.responses.retention.maxAge` | Required positive duration when enabled; no undocumented unlimited-retention default |
+| `AITenant` | `spec.responses.storage.deletionPolicy` | Initially only `Retain`; destructive deletion needs a later explicit contract |
+| `AITenant` | `spec.responses.enabled: true` | Enables Responses and Conversations together; readiness requires both API surfaces |
+| `MaaSModelRef` | `spec.capabilities.responses` or its enclosing fields/`mode` omitted | Effective mode is `ChatCompletions` for every backend kind; tenant enablement and compatibility checks still apply |
+| `MaaSModelRef` | `spec.capabilities.responses.mode: Unsupported` | Responses unavailable for this model regardless of tenant enablement; preserve unrelated model APIs |
+| `MaaSModelRef` | `spec.capabilities.responses.mode: Native` | Explicit native backend declaration; validate compatibility before activation |
+| `AITenant` and attachment resources | `spec.payloadProcessing.type: ipp` with guardrail attachments | Invalid until that backend implements the same enforcement contract |
+| `AIGuardrail` | `spec.checks` | Nonempty ordered list; local check names unique |
+| `AIGuardrail` | `spec` update | Mutable with authorization/revalidation, current observedGeneration and a new binding revision; fence unsafe transitions |
+| `AIGuardrail` | `spec.checks[].configId` | Required nonempty string; selected configuration loaded by NeMo |
+| `AIGuardrail` | `spec.checks[].model` | Not part of the AIGuardrail API; request-level model resolution belongs to the provider binding |
+| `AIGuardrail` | Resolved provider binding: request parameters unavailable | Check unavailable; never guess a model or fall back to the inference-model alias |
+| `AIGuardrail` | `spec.checks[].phases` | Nonempty set containing only `Input` and/or `Output` initially |
+| Attachment resources | Attachment-level phase/config override | Invalid; settings belong to the referenced policy |
+| `AIGuardrail` | `spec.provider.nemo.ref.namespace` omitted | AIGuardrail namespace |
+| Attachment resources | Policy ref missing `name` or `namespace`, or containing `scope` | Invalid; explicit name/namespace required |
+| Attachment resources | Policy namespace outside the attachment's tenant or initial tenant catalog | Invalid/unresolved; validate authoritative membership, no namespace fallback |
+| `AIGuardrail` → `NemoGuardrails` | `spec.provider.nemo.ref` denied by target `spec.allowedConsumers` | Invalid/unresolved; never drop the check |
+| `AIGuardrail` | `spec.provider.nemo.ref` outside tenant/platform approval | Unresolved/invalid even when allowedConsumers permits attachment |
+| `MaaSSubscription` | Duplicate `spec.modelRefs[]` namespace/name key | Invalid; one matching entry per model |
+| Attachment resources | Attachment `checks` omitted or empty | Select all checks; follow validated additions to the referenced AIGuardrail |
+| Attachment resources | Nonempty attachment `checks` | Select named checks; reject duplicates, unknown names and null |
+| Attachment resources | `guardrails` omitted or empty | No local contribution; other scopes still apply |
+| Attachment resources | Initial `guardrails` object containing `required`/`defaults` or an attachment alias | Invalid; use a list of `ref + checks` entries |
+| Attachment resources → `AIGuardrail` → `NemoGuardrails` | A missing policy/provider | Reject affected requests; never remove the unresolved check |
 
 Guardrails can operate on Chat Completions while Responses is disabled. Enabling Responses is not a prerequisite for
 guardrails. Conversely, enabling Responses does not invent a default NeMo provider: an empty effective policy means no
@@ -566,10 +577,36 @@ recompilation. An invalid guardrail remains unavailable and cannot be selected s
 can remain configured. Creating an AIGuardrail does not expose an inference route or make it mandatory for every
 request. No AIGatewayPolicy or MaaS HTTP configuration endpoint is needed initially.
 
-**Check identity.** The logical selection key is `(namespace, AIGuardrail.name, check.name)` within the tenant. Encode
-the tuple as a compact UTF-8 JSON array and derive its lowercase SHA-256 hex digest; use
-`x-aigateway-guardrail-<digest>` as the selection header name. Preserve names exactly, detect conflicting identifier
-assignments and reject them. This shared encoding contract does not mandate where resolver code lives. Resource UID,
+<a id="guardrail-check-identifier"></a>
+
+**Check identity.** Every check uses the same derivation, regardless of where it is attached:
+
+```text
+RENDER_CHECK_ID(namespace, guardrail, check) =
+    lowercase_hex(SHA-256(UTF-8(compact_JSON([namespace, guardrail, check]))))
+
+header_name = "x-aigateway-guardrail-" + RENDER_CHECK_ID(namespace, guardrail, check)
+```
+
+The inputs are the AIGuardrail's namespace, `metadata.name` and `spec.checks[].name` (not the NeMo config ID).
+Compact JSON has no separator whitespace; preserve the exact input strings. All consumers use the same encoding.
+In the YAML examples, `RENDER_CHECK_ID(<tenant-namespace>,guardrail,check)` denotes a compiler substitution using the
+shown resource/check names. It is documentation notation, not a Praxis expression or a literal HTTP header name.
+Resolve the namespace placeholder and replace the whole expression with the digest before publishing configuration.
+There are N distinct headers for N configured checks, and repeated references to the same check reuse one header.
+
+**Length and hashing cost.** The rendered header name is always 86 ASCII bytes: the 22-byte prefix plus the full
+64-character lowercase SHA-256 digest. Long valid resource/check names do not lengthen it; never truncate the input
+names or digest. Apply resource/schema length limits before hashing. The readable expressions in the examples do not
+appear on the wire. Bound both catalog size and aggregate selection-header bytes for the selected gateway/host; a
+fixed name length alone does not bound the number of headers. Reject an oversized configuration rather than omit checks.
+
+Compute identifiers when catalog/configuration changes and cache the tuple-to-ID mapping for request selection; requests
+need not rehash names. Keep SHA-256 rather than MD5: these identifiers distinguish enforcement checks, so collision
+resistance is useful even though the hash does not authenticate the request. MD5 is unsuitable when collision resistance
+is required ([RFC 6151](https://www.rfc-editor.org/rfc/rfc6151.html#section-2)). A possible hash-speed difference is not a
+reason to weaken this configuration-time contract. Preserve the original tuple and reject conflicting digest assignments
+before publication; never merge different checks because their hashes match. This shared encoding contract does not mandate where resolver code lives. Resource UID,
 generation and binding revision identify the version of the check, not its selection key. In-place updates retain the
 key; rename changes it; deleting/recreating a resource invalidates old UID/revision expectations. Header identifiers
 contain neither subscription identity nor attachment order.
@@ -676,19 +713,19 @@ spec:
               plain:
                 selector: auth.metadata.responsesIdentity.ownerID
               metrics: false
-            x-aigateway-guardrail-RENDER_PRIVACY_CHECK_ID:
+            x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,privacy-v1,sensitive-data):
               plain:
                 expression: 'auth.metadata.maasDecision.privacySelected ? "true" : "false"'
               metrics: false
-            x-aigateway-guardrail-RENDER_APPLICATION_CHECK_ID:
+            x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,application-check):
               plain:
                 expression: 'auth.metadata.maasDecision.applicationSelected ? "true" : "false"'
               metrics: false
-            x-aigateway-guardrail-RENDER_SUBSCRIPTION_CHECK_ID:
+            x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,subscription-check):
               plain:
                 expression: 'auth.metadata.maasDecision.subscriptionSafetySelected ? "true" : "false"'
               metrics: false
-            x-aigateway-guardrail-RENDER_MODEL_CHECK_ID:
+            x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,model-safety-v1,model-check):
               plain:
                 expression: 'auth.metadata.maasDecision.modelSafetySelected ? "true" : "false"'
               metrics: false
@@ -712,10 +749,8 @@ establish trust. The `x-maas-tenant`, `x-maas-subscription` and `x-maas-model` p
 consistency checks, not guardrail selection. Consume and validate the client's subscription selection before replacing
 that internal projection with its resolved UID.
 
-The four header suffix placeholders identify `privacy-v1/sensitive-data`,
-`application-safety-v1/application-check`, `application-safety-v1/subscription-check` and
-`model-safety-v1/model-check`. Each digest includes the resolved tenant namespace according to the
-[check identity contract](#compilation-and-request-authorization). MaaS and AI Gateway derive identical names without
+Every header below uses the same [check identifier formula](#guardrail-check-identifier), with a different
+resource/check tuple. MaaS and AI Gateway derive identical names without
 sharing MaaS attachment data. Emit one flag per selected check, reused for both configured phases; unselected checks
 receive `"false"` or are absent under the validated complete decision envelope. Missing required selections are an
 authorization failure, not something the gateway can infer from resource names. Reject unknown selected identifiers;
@@ -846,7 +881,7 @@ filter_chains:
         conditions:
           - when:
               headers:
-                x-aigateway-guardrail-RENDER_APPLICATION_CHECK_ID: "true"
+                x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,application-check): "true"
         provider: &tenant_nemo
           type: nemo
           endpoint: RENDER_TENANT_NEMO_CHECKS_URL
@@ -864,7 +899,7 @@ filter_chains:
         conditions:
           - when:
               headers:
-                x-aigateway-guardrail-RENDER_SUBSCRIPTION_CHECK_ID: "true"
+                x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,subscription-check): "true"
         provider:
           <<: *tenant_nemo
           model: RENDER_SUBSCRIPTION_NEMO_REQUEST_MODEL
@@ -876,7 +911,7 @@ filter_chains:
         conditions:
           - when:
               headers:
-                x-aigateway-guardrail-RENDER_MODEL_CHECK_ID: "true"
+                x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,model-safety-v1,model-check): "true"
         provider:
           <<: *tenant_nemo
           model: RENDER_MODEL_NEMO_REQUEST_MODEL
@@ -888,7 +923,7 @@ filter_chains:
         conditions:
           - when:
               headers:
-                x-aigateway-guardrail-RENDER_PRIVACY_CHECK_ID: "true"
+                x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,privacy-v1,sensitive-data): "true"
         provider:
           <<: *tenant_nemo
           model: RENDER_PRIVACY_NEMO_REQUEST_MODEL
@@ -932,10 +967,10 @@ filter_chains:
           - x-maas-subscription
           - x-maas-model
           - x-maas-responses-owner
-          - x-aigateway-guardrail-RENDER_PRIVACY_CHECK_ID
-          - x-aigateway-guardrail-RENDER_APPLICATION_CHECK_ID
-          - x-aigateway-guardrail-RENDER_MODEL_CHECK_ID
-          - x-aigateway-guardrail-RENDER_SUBSCRIPTION_CHECK_ID
+          - x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,privacy-v1,sensitive-data)
+          - x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,application-check)
+          - x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,model-safety-v1,model-check)
+          - x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,subscription-check)
           - x-maas-policy-revision
 ```
 
