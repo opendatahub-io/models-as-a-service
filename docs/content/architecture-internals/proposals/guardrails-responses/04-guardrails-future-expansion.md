@@ -21,7 +21,7 @@ overridable defaults implicitly. No attachment alias is needed in either shape.
 
 Within every attachment, `ref.name` remains required and namespace resolution follows the
 [current scoped reference rules](02-guardrails-low-level-details.md#scoped-policy-references), including forbidden
-`ref.namespace` on MaaSSubscription and MaasTenantConfig, and the two permitted namespace choices on MaaSModelRef. An
+`ref.namespace` on AITenant, MaaSSubscription and MaasTenantConfig, and the two permitted namespace choices on MaaSModelRef. An
 omitted or empty attachment `checks`
 selects all checks in that AIGuardrail, including future additions. A nonempty list selects named checks. This is
 distinct from an empty **list of attachments** in a defaults operation, which can clear optional defaults under
@@ -91,9 +91,9 @@ manifests.
 kind: AITenant
 spec:
   guardrails:
-    required: [ { ref: { name: safety-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
+    required: [ { ref: { name: safety-v1 }, checks: [ ] } ]
     defaults:
-      checks: [ { ref: { name: topic-v1, namespace: <tenant-namespace> }, checks: [ ] } ]
+      checks: [ { ref: { name: topic-v1 }, checks: [ ] } ]
 ---
 kind: MaasTenantConfig
 metadata:

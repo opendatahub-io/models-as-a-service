@@ -94,7 +94,7 @@ support.
 | Storage              | Shared platform Responses binding, separate from API-key storage; Praxis owns schema lifecycle                                       | [Database architecture](02-responses-low-level-details.md#responses-database-architecture-and-enterprise-isolation)     |
 | Guardrails           | Reusable AIGuardrail policies attach at tenant, model, subscription and subscription model-entry scopes                              | [Resources](02-guardrails-low-level-details.md#reusable-guardrail-resources-and-attachments)                            |
 | Composition          | Selected checks accumulate; empty or omitted check selectors select all checks                                                       | [Selection rules](02-guardrails-low-level-details.md#attachment-selection-and-composition)                              |
-| References           | Explicit policy name/namespace references require same-tenant membership; NeMo owners permit consumers through Same, Selector or All | [Reference authorization](02-guardrails-low-level-details.md#reference-authorization-discovery-and-model-applicability) |
+| References           | Tenant/subscription references use the enforced tenant namespace; model refs have two permitted targets; NeMo owners permit consumers through Same, Selector or All | [Reference authorization](02-guardrails-low-level-details.md#reference-authorization-discovery-and-model-applicability) |
 | Execution            | Compile to existing Praxis filters using conditions or selected pipelines; initially ExtProc, later standalone                       | [Praxis mapping](02-guardrails-low-level-details.md#materializing-maas-configuration-in-praxis)                         |
 
 ### Ownership and API placement
@@ -212,7 +212,7 @@ the server's configuration files. All three AIGuardrails remain in `<tenant-name
 [NeMo consumer-permission contract](02-guardrails-low-level-details.md#nemo-owned-consumer-permission). Credential and
 CA references remain local to each AIGuardrail's tenant namespace; model and subscription attachments reference
 AIGuardrails by name, with the namespace resolved under
-the [scoped reference rules](02-guardrails-low-level-details.md#scoped-policy-references). MaaSSubscription and
+the [scoped reference rules](02-guardrails-low-level-details.md#scoped-policy-references). AITenant, MaaSSubscription and
 MaasTenantConfig must not specify `ref.namespace`: they always use the accepted AITenant target namespace. MaaSModelRef
 must explicitly select its own namespace or that tenant target namespace; no other namespace is allowed.
 
@@ -324,7 +324,6 @@ spec:
   guardrails:
     - ref:
         name: privacy-v1
-        namespace: <tenant-namespace>
       checks: [ ]
 ```
 

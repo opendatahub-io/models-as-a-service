@@ -122,7 +122,7 @@ Policy lookup is constrained by the resource carrying the attachment. The AITena
 | `MaaSSubscription`, including `spec.modelRefs[].guardrails` | `ref.name` only. `ref.namespace` is forbidden, even if it equals the tenant namespace. Always resolve in the AITenant target namespace.                                                             |
 | `MaasTenantConfig`                                          | `ref.name` only. `ref.namespace` is forbidden. Always resolve in the AITenant target namespace.                                                                                                     |
 | `MaaSModelRef`                                              | Explicit `ref.name` and `ref.namespace`. Namespace must equal either the MaaSModelRef's own namespace or the AITenant target namespace. No other namespace is allowed, even within the same tenant. |
-| `AITenant`                                                  | Explicit `ref.name` and `ref.namespace`; namespace must equal its resolved target namespace.                                                                                                        |
+| `AITenant` | `ref.name` only. `ref.namespace` is forbidden. Always resolve in its accepted target namespace, not the namespace containing the AITenant object. |
 
 `ref.scope` is not exposed. There is no search, inferred fallback or precedence between the two model choices: resolve
 exactly the selected target. A subscription model entry follows the subscription rule, not the MaaSModelRef rule.
@@ -344,7 +344,7 @@ identify cross-resource validation, from the referencing resource to its target;
 | `AIGuardrail`                                           | `spec.provider.nemo.ref.namespace` omitted                                               | AIGuardrail namespace                                                                                                    |
 | Attachment resources                                    | Policy ref missing `name`, or containing `scope`                                         | Invalid; `name` is required and `scope` is not exposed                                                                   |
 | `MaaSSubscription`, `MaasTenantConfig`                  | Policy reference, including subscription model entries                                   | `ref.name` only; reject any `ref.namespace`; always use the AITenant target namespace                                    |
-| `AITenant`                                              | Policy `ref.namespace`                                                                   | Required; must equal the AITenant target namespace                                                                       |
+| `AITenant` | Policy `ref.namespace` | Forbidden; resolve `ref.name` in the accepted AITenant target namespace |
 | `MaaSModelRef`                                          | Policy `ref.namespace`                                                                   | Required; only the MaaSModelRef namespace or AITenant target namespace is allowed                                        |
 | Attachment resources                                    | Policy namespace outside the source resource's permitted targets or tenant               | Invalid/unresolved; validate authoritative membership, no namespace fallback                                             |
 | `AIGuardrail` → `NemoGuardrails`                        | `spec.provider.nemo.ref` denied by target `spec.allowedConsumers`                        | Invalid/unresolved; never drop the check                                                                                 |
@@ -1159,7 +1159,7 @@ tenant catalog and has a validated provider binding. Resource fragments omit unr
 kind: AITenant
 spec:
   guardrails:
-    - ref: { name: safety-v1, namespace: <tenant-namespace> }
+    - ref: { name: safety-v1 }
       checks: [ ]
 ---
 kind: MaasTenantConfig
