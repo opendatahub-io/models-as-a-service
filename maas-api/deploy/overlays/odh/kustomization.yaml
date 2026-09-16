@@ -29,6 +29,15 @@ patches:
       value:
         matchLabels:
           gateway.istio.io/managed: istio.io-gateway-controller
+- target:
+    kind: NetworkPolicy
+    name: maas-api-egress-restrict
+  patch: |-
+    - op: replace
+      path: /spec/egress/2/to/0/podSelector
+      value:
+        matchLabels:
+          app: postgres
 
 labels:
 - pairs:
