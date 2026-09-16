@@ -80,6 +80,11 @@ type Config struct {
 
 	MetricsPort int
 
+	// GatewayIdentityToken is a shared secret injected by the gateway AuthPolicy after
+	// successful authentication. maas-api rejects protected routes without a matching
+	// X-MaaS-Gateway-Auth header when this value is set.
+	GatewayIdentityToken string
+
 	// MetricsSecure serves /metrics over HTTPS with authn/authz when true.
 	// Default: true (OpenShift). Set false for non-OpenShift/xKS.
 	MetricsSecure bool
@@ -157,6 +162,7 @@ func Load() *Config {
 		SARCacheMaxSize:           sarCacheMaxSize,
 		LastUsedDebounceSecs:      lastUsedDebounceSecs,
 		MetricsPort:               metricsPort,
+		GatewayIdentityToken:      env.GetString("GATEWAY_IDENTITY_TOKEN", ""),
 		MetricsSecure:             metricsSecure,
 		MetricsCertDir:            metricsCertDir,
 		DiscoveryEnableHTTP2:      discoveryEnableHTTP2,

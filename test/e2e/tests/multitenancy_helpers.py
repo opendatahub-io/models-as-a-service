@@ -1161,19 +1161,86 @@ def deployment_log_snapshot(
     *,
     namespace: str = GATEWAY_NAMESPACE,
     since: str = "30s",
+    tail: int = 500,
 ) -> str:
-    result = _oc_run(
-        ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
+    """Return recent logs for a payload-processing Deployment.
+
+    Uses --since first; when that window is empty (common right after traffic),
+    falls back to --tail so ext_proc activity is not missed.
+    """
+    args = [
+        "logs",
+        f"deployment/{deployment_name}",
+        "-n",
+        namespace,
+        f"--since={since}",
+        f"--tail={tail}",
+    ]
+    result = _oc_run(args, timeout=120)
+    if result.returncode != 0:
+        err = (result.stderr or result.stdout or "").strip()
+        if err:
+            log.warning(
+                "Failed to read logs for deployment/%s in %s: %s",
+                deployment_name,
+                namespace,
+                err[:300],
+            )
+        return ""
+    text = result.stdout or ""
+    if text.strip():
+        return text
+    # Some oc/kubectl versions return empty stdout for --since when the window
+    # has no new lines; retry with tail only.
+    fallback = _oc_run(
+        [
+            "logs",
+            f"deployment/{deployment_name}",
+            "-n",
+            namespace,
+            f"--tail={tail}",
+        ],
         timeout=120,
     )
-    if result.returncode != 0:
+    if fallback.returncode != 0:
         return ""
-    return result.stdout or ""
+    return fallback.stdout or ""
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:
-    markers = ("x-request-id", "handlers/server.go", "processing request headers")
-    return any(marker in log_text for marker in markers)
+    markers = (
+        "x-request-id",
+        "handlers/server.go",
+        "processing request headers",
+        "ext_proc",
+        "ExternalProcessor",
+    )
+    lowered = log_text.lower()
+    return any(marker.lower() in lowered for marker in markers)
+
+
+def wait_for_ipp_log_activity(
+    deployment_name: str,
+    *,
+    namespace: str = GATEWAY_NAMESPACE,
+    expect_activity: bool = True,
+    timeout: int = 90,
+    poll_interval: int = 3,
+) -> str:
+    """Poll deployment logs until ext_proc activity appears or stays quiet."""
+    deadline = time.time() + timeout
+    last_logs = ""
+    while time.time() < deadline:
+        last_logs = deployment_log_snapshot(
+            deployment_name,
+            namespace=namespace,
+            since="2m",
+        )
+        active = ipp_logs_show_recent_activity(last_logs)
+        if active == expect_activity:
+            return last_logs
+        time.sleep(poll_interval)
+    return last_logs
 
 
 def per_tenant_maas_api_names(tenant_name: str) -> dict[str, str]:

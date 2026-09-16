@@ -331,11 +331,13 @@ def api_key(api_keys_base_url: str, headers: dict) -> str:
     system:authenticated to satisfy AuthPolicy requirements for model access.
     """
     from multitenancy_helpers import response_summary
+    from test_helper import _request_with_gateway_retry
 
     sim_sub = os.environ.get("E2E_SIMULATOR_SUBSCRIPTION", "simulator-subscription")
     key_name = f"e2e-test-inference-key-{_xdist_worker_suffix()}"
     print(f"[api_key] Creating API key for inference tests ({key_name})...")
-    r = requests.post(
+    r = _request_with_gateway_retry(
+        requests.post,
         api_keys_base_url,
         headers=headers,
         json={"name": key_name, "subscription": sim_sub},
