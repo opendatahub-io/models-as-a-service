@@ -122,8 +122,9 @@ ownership-authorized deletion of existing records remains available under the li
 disable the model's embedding/reranking endpoints or bypass their independent authorization/policies. Omission still
 defaults to `ChatCompletions`; it is not automatic task detection. Without capability discovery or an explicit
 declaration, the gateway cannot infer that an otherwise unknown model is embedding-only or reranker-only. This default
-does not preserve a prior Responses path: it introduces the translation path for the new API. A different
-omitted-capabilities default remains an API decision, not an implied change to existing embedding/reranking routes.
+does not preserve a prior Responses path: it introduces the translation path for the new API. Changing the
+omitted-capabilities default would revise this proposal's explicit `ChatCompletions` choice; it is not an implied
+change to existing embedding/reranking routes.
 
 ```yaml
 kind: MaaSModelRef
