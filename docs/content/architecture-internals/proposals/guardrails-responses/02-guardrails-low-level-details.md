@@ -124,7 +124,7 @@ Policy lookup is constrained by the resource carrying the attachment. The AITena
 | `MaaSModelRef`                                              | Explicit `ref.name` and `ref.namespace`. Namespace must equal either the MaaSModelRef's own namespace or the AITenant target namespace. No other namespace is allowed, even within the same tenant. |
 | `AITenant` | `ref.name` only. `ref.namespace` is forbidden. Always resolve in its accepted target namespace, not the namespace containing the AITenant object. |
 
-`ref.scope` is not exposed. There is no search, inferred fallback or precedence between the two model choices: resolve
+There is no search, inferred fallback or precedence between the two model choices: resolve
 exactly the selected target. A subscription model entry follows the subscription rule, not the MaaSModelRef rule.
 Validate authoritative same-tenant membership and pin tenant, namespace and policy UIDs. Failed, ambiguous or changed
 membership makes attachments unresolved; caller-provided names or self-assigned labels cannot establish membership. AI
@@ -262,10 +262,10 @@ is not necessarily a dedicated evaluator, and it is not an allowlist of originat
 and model-specific applicability remain with request authorization. AIGuardrail does not need a model field or a
 MaaSModelRef reference for gateway reconciliation.
 
-The [NeMo wire contract](#mapping-to-the-nemo-api) still requires a request-level model in the supplied API version.
-Resolving that value is a provider-integration responsibility. Do not infer it from the public MaaS alias or parse
-arbitrary ConfigMaps as an authorization mechanism. NeMo owns configuration parsing; the binding must provide approved
-request parameters for the selected config. Unsupported model requirements or modalities leave the check unavailable.
+The [NeMo wire contract](#mapping-to-the-nemo-api) supplies the fixed request value `check-model`. Each LLM-based
+rail uses its explicit task model from NeMo configuration; no per-config model discovery or public MaaS alias
+substitution is needed. Unsupported or missing task bindings leave the check unavailable. NeMo owns config parsing;
+AI Gateway does not parse arbitrary ConfigMaps to derive model authorization.
 
 ## Attachment selection and composition
 
@@ -337,12 +337,11 @@ identify cross-resource validation, from the referencing resource to its target;
 | `AIGuardrail`                                           | `spec.checks`                                                                            | Nonempty ordered list; local check names unique                                                                          |
 | `AIGuardrail`                                           | `spec` update                                                                            | Mutable with authorization/revalidation, current observedGeneration and a new binding revision; fence unsafe transitions |
 | `AIGuardrail`                                           | `spec.checks[].configId`                                                                 | Required nonempty string; selected configuration loaded by NeMo                                                          |
-| `AIGuardrail`                                           | `spec.checks[].model`                                                                    | Not part of the AIGuardrail API; request-level model resolution belongs to the provider binding                          |
-| `AIGuardrail`                                           | Resolved provider binding: request parameters unavailable                                | Check unavailable; never guess a model or fall back to the inference-model alias                                         |
+| `AIGuardrail` → `NemoGuardrails` | Required task model binding missing or unusable | Check unavailable; no fallback to the request main model |
 | `AIGuardrail`                                           | `spec.checks[].phases`                                                                   | Nonempty set containing only `Input` and/or `Output` initially                                                           |
 | Attachment resources                                    | Attachment-level phase/config override                                                   | Invalid; settings belong to the referenced policy                                                                        |
 | `AIGuardrail`                                           | `spec.provider.nemo.ref.namespace` omitted                                               | AIGuardrail namespace                                                                                                    |
-| Attachment resources                                    | Policy ref missing `name`, or containing `scope`                                         | Invalid; `name` is required and `scope` is not exposed                                                                   |
+| Attachment resources                                    | Policy ref missing `name`                                         | Invalid; `name` is required                                                                   |
 | `MaaSSubscription`, `MaasTenantConfig`                  | Policy reference, including subscription model entries                                   | `ref.name` only; reject any `ref.namespace`; always use the AITenant target namespace                                    |
 | `AITenant` | Policy `ref.namespace` | Forbidden; resolve `ref.name` in the accepted AITenant target namespace |
 | `MaaSModelRef`                                          | Policy `ref.namespace`                                                                   | Required; only the MaaSModelRef namespace or AITenant target namespace is allowed                                        |
@@ -353,7 +352,6 @@ identify cross-resource validation, from the referencing resource to its target;
 | Attachment resources                                    | Attachment `checks` omitted or empty                                                     | Select all checks; follow validated additions to the referenced AIGuardrail                                              |
 | Attachment resources                                    | Nonempty attachment `checks`                                                             | Select named checks; reject duplicates, unknown names and null                                                           |
 | Attachment resources                                    | `guardrails` omitted or empty                                                            | No local contribution; other scopes still apply                                                                          |
-| Attachment resources                                    | Initial `guardrails` object containing `required`/`defaults` or an attachment alias      | Invalid; use a list of `ref + checks` entries                                                                            |
 | Attachment resources → `AIGuardrail` → `NemoGuardrails` | A missing policy/provider                                                                | Reject affected requests; never remove the unresolved check                                                              |
 
 Guardrails can operate on Chat Completions while Responses is disabled. Enabling Responses is not a prerequisite for
@@ -475,83 +473,100 @@ they must not infer a model from an absent payload.
 
 ## Mapping to the NeMo API
 
-Use `POST /v1/guardrail/checks` as an independent evaluation callout. Keep inference routing, credentials, token
-accounting and Responses persistence in the gateway. NeMo's `/v1/guardrail/chat/completions` and `/completions` also
-generate completions; using them would transfer inference ownership and is a separate integration mode.
+Use `POST /v1/guardrail/checks` for independent content evaluation. MaaS inference routing, credentials, accounting and Responses
+persistence remain in the gateway. The request's `model` is the fixed compatibility value `check-model`; it does not
+select the MaaS inference backend or the model used by a guardrail task. No model field is exposed on AIGuardrail.
 
-The supplied schema requires `model` and `messages`; this is a wire requirement, not an AIGuardrail field. The provider
-integration must resolve the request model for each selected NeMo config and include it in the accepted binding used by
-the compiler. The value may differ across configs on one server. Praxis receives it through its existing
-`provider.model` setting. Models used internally by NeMo remain configured there, and their usage is separate from
-application inference usage.
+### Task-specific model ownership
 
-**Open integration contract:** the supplied OpenAPI does not establish how the TrustyAI-served checks endpoint uses that
-field or how a config exposes the appropriate value. NeMo/TrustyAI must supply a supported resolution contract; we do
-not assume an existing `configId → model` discovery API. Until a supported binding can resolve the value unambiguously,
-keep the affected check unavailable. Never send a placeholder, omit a required wire field, or substitute the originating
-inference-model name. Changes to resolved request parameters invalidate the binding/catalog revision and follow the
-normal publication lifecycle.
+The NeMo configuration explicitly binds every LLM-based rail task to its model, provider and connection settings.
+For example, `self check input` selects the model configured under `type: self_check_input`. A local blocklist check
+does not invoke a model. The same policy can check content from different MaaS inference models without changing its
+own model bindings.
 
-For an Input phase binding, the following template uses the resolved request model; `RENDER_*` must be replaced before
-sending:
+The following ConfigMap fragment illustrates the agreed flow. The NeMo owner also supplies the `check blocklist` flow
+implementation and the self-check prompt; naming those flows alone does not define them. Register the completed bundle
+as `maas-input-check` through `NemoGuardrails.spec.nemoConfigs` in the approved infrastructure namespace.
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: maas-input-check-config
+  namespace: <guardrails-namespace>
+data:
+  config.yaml: |
+    models:
+      - type: self_check_input
+        engine: openai
+        model: meta-llama/Llama-3.1-8B-Instruct
+        parameters:
+          base_url: https://vllm-service:8000/v1
+          api_key: EMPTY
+    rails:
+      input:
+        flows:
+          - check blocklist
+          - self check input
+```
+
+The model and endpoint above are illustrative provider settings. Production connectivity still requires approved
+credentials and verified TLS; `EMPTY` is not an instruction to disable authentication. NeMo owns those credentials,
+the task model's lifecycle and the downstream destinations. They are separate from Praxis's credentials for calling
+NeMo. Output checks that invoke an LLM need their own explicit task binding.
+
+The supported NeMo runtime must route each LLM-based rail to its explicit task model, with no implicit fallback to the
+request-selected main model. Missing task bindings, initialization failures or unavailable dependencies make the check
+unavailable. The fixed `check-model` value must never be invoked as a fallback model. This includes any main-model
+initialization performed while loading the configuration; do not assume a schema-valid request guarantees a usable
+configuration. Non-LLM-only checks need no invented task model.
+
+Use request IDs and existing trusted model metadata for correlation. Sending the original inference-model name in this
+field is unnecessary and may affect main-model overrides or the NeMo configuration cache. Model discovery and a
+`configId → model` mapping are no longer prerequisites: task models stay in NeMo, and changes to the config invalidate
+its observed binding revision through the normal publication lifecycle.
+
+### Checks request and verdict contract
+
+For an Input check, Praxis sends:
 
 ```json
 {
-  "model": "RENDER_NEMO_REQUEST_MODEL",
-  "messages": [
-    {
-      "role": "user",
-      "content": "Hello"
-    }
-  ],
+  "model": "check-model",
+  "messages": [{"role": "user", "content": "Hello"}],
   "guardrails": {
-    "config_id": "safety-v1",
-    "options": {
-      "rails": {
-        "input": true,
-        "output": false,
-        "retrieval": false,
-        "dialog": false
-      }
-    }
+    "config_ids": ["maas-input-check"]
   }
 }
 ```
 
-For Output, enable only output rails and include the evaluated input context plus assistant output. Validate that the
-selected config actually implements the requested phase: a successful call to a config with no applicable rails is not
-evidence of protection. Declared check phases require integration verification; attachment alone does not prove
-coverage.
+Use exactly one config ID per call, even though the field is a list. Expand MaaS selections into independent check
+calls; do not delegate cross-policy composition to NeMo's multi-config merging. A single NeMo configuration may contain
+several internally ordered flows, as above. The existing proposed Praxis `provider.config_id` remains singular and is
+serialized as the one-element wire `guardrails.config_ids` list.
 
-The schema also allows inline `guardrails.config`, combined `config_ids`, rail-name lists under `options.rails`, and
-`context`/`state`. Initially select only `config_id`; reject conflicting selectors and strip/reject caller-supplied
-guardrail controls. The schema says `config_ids` are combined but does not define collision/ordering semantics.
-Therefore, do not implement MaaS inheritance by concatenating `config_ids`. Expand the effective policies and evaluate
-their checks separately, combining their verdicts. If a rail needs a complex internal flow, author it as one NeMo config
-and reference that policy. Inline Colang, model definitions and action-server URLs remain NeMo administrator
-responsibilities.
+NeMo selects rails by message role: user/system messages use input rails, assistant messages use output rails, and tool messages use tool-input
+rails. Praxis's existing `phase.request/response` controls **when the filter runs**, not which NeMo rails run. In particular,
+a request containing assistant history can invoke output rails too; setting `phase.request: true` does not force input-only
+execution. The adapter must prepare boundary-appropriate messages and validate that the selected configuration covers
+the intended checks. Compositions requiring phase isolation that this role-based contract cannot express remain unsupported;
+do not silently reinterpret roles or skip protected content. Responses-aware message extraction remains proposed work.
+Do not accept client-supplied config selection, model overrides, inline configurations or rail options from the inference
+request.
 
-`GuardrailCheckResponse` requires `status` and `rails_status`. Its `StatusEnum` is
-`success | blocked | unknown`; the current Praxis adapter additionally recognizes
-`error`. Accept only a structurally valid, consistent successful verdict. Treat
-`blocked` as a content rejection; treat `unknown`, `error`, malformed/inconsistent verdicts, non-2xx, timeouts and
-missing configs as evaluation failures. Fail closed with a sanitized 503; use a sanitized 403 for a block before headers
-are committed. Never return NeMo internal errors, config paths or prompt content to the caller.
+The response uses `status` and `rails_status`, with optional `guardrails_data`. Retain the current Praxis adapter's
+`success` → pass and `blocked` → sanitized content rejection mapping. Error or unknown statuses, malformed responses,
+missing configs, non-2xx responses and timeouts fail closed. Validate the required response fields before accepting a pass;
+the current adapter treats `rails_status` as optional, so enforcing the supplied OpenAPI contract requires stricter parsing.
+Do not expose internal error details through failure diagnostics. Output must remain gated until the verdict is accepted.
 
-No standard replacement-message field is established by this check response schema.
-`guardrails_data.output_data` is an arbitrary map, not a redaction contract. The current Praxis NeMo mapper produces
-pass/block/error, and its generic Redact branch forwards unchanged. Redaction therefore requires a separately specified
-adapter, including checks after transformation; it is outside the initial API.
+The endpoint and verdict convention already match the existing Praxis NeMo adapter. Config selection and the integration
+changes below are still required; accepting the existing endpoint URL does not make the complete example executable.
+This contract uses the supplied NeMo OpenAPI and the inspected role-based checks handler.
 
-Use dedicated service credentials and verified TLS for callouts. Do not forward MaaS API keys to NeMo. Allow approved
-internal service addresses explicitly without turning off egress protection globally. Disallow a NeMo self-check model
-route that recursively invokes the same gateway guardrails.
-
-NVIDIA's [versioned checks example](https://docs.nvidia.com/nemo/microservices/25.12.0/guardrails/checks.html)
-uses the same v1 endpoint and config selector. Its
-[newer checks documentation](https://docs.nvidia.com/nemo-platform/documentation/guardrail-models/core-concepts/running-checks)
-uses a different, workspace-scoped API path. Use the supplied v1 contract; do not infer compatibility from the product
-name alone.
+Use dedicated service credentials and verified TLS for callouts; never forward MaaS API keys. Permit approved private
+endpoints without disabling egress protection globally. A task model must not route recursively through the same gateway
+guardrails. Model-backed check usage is separate from application inference usage.
 
 ## Materializing MaaS configuration in Praxis
 
@@ -655,7 +670,7 @@ authorization and catalog contracts with its own transport. Alternative handoffs
 | Selected-subscription contract                                         | Trusted-context Praxis filter settings for allowed tenant/model/subscription tuples                              |
 | Five attachment locations and reference permissions                    | MaaS resolves additive selections; AI Gateway configures the tenant catalog independently                        |
 | `AIGuardrail.spec.provider.nemo.ref`                                   | Discovered checks endpoint, dedicated credentials/CA mounts and resolved provider identity                       |
-| Policy check `configId`, `phases` plus resolved provider request model | NeMo filter parameters and phase-specific execution                                                              |
+| Policy check `configId`, `phases` and fixed `check-model` | One-element NeMo config list, filter execution phases and existing Praxis model setting |
 | Responses enablement/storage                                           | Store, validation, rehydration and protocol filters; DB Secret/CA mounts, migration/retention lifecycle          |
 | Optional agentic capability                                            | Supported Praxis iterative subpipeline, per-boundary checks and explicit subrequest bindings/limits              |
 | Resource/config/permission revisions                                   | Generation encoded in runtime configuration and deployment status; stale-generation rejection                    |
@@ -894,15 +909,16 @@ filter_chains:
                 x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,application-check): "true"
         provider: &tenant_nemo
           type: nemo
-          endpoint: RENDER_TENANT_NEMO_CHECKS_URL
-          model: RENDER_APPLICATION_NEMO_REQUEST_MODEL # Resolved provider binding, not an AIGuardrail field.
+          endpoint: RENDER_TENANT_NEMO_CHECKS_URL # Discovered base URL plus /v1/guardrail/checks.
+          model: check-model # Fixed compatibility value; task models are configured in NeMo.
           timeout_ms: 5000
-          config_id: application-safety # PROPOSED: guardrails.config_id on the wire.
+          allow_private_endpoint: true # Existing option for the approved in-cluster NeMo endpoint.
+          config_id: application-safety # PROPOSED: guardrails.config_ids: [application-safety] on the wire.
           authentication: # PROPOSED: dedicated callout identity.
             bearer_token_file: RENDER_NEMO_TOKEN_PATH
           tls: # PROPOSED: provider-specific trust bundle.
             ca_file: RENDER_NEMO_CA_PATH
-        phase: { request: true, response: false }
+        phase: { request: true, response: false } # Existing hook selection; NeMo routes by message role.
 
       # application-safety-v1 / subscription-check: both models in this subscription.
       - filter: ai_guardrails
@@ -912,7 +928,7 @@ filter_chains:
                 x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,subscription-check): "true"
         provider:
           <<: *tenant_nemo
-          model: RENDER_SUBSCRIPTION_NEMO_REQUEST_MODEL
+          model: check-model # Fixed compatibility value; task models are configured in NeMo.
           config_id: subscription-safety # PROPOSED selector.
         phase: { request: true, response: false }
 
@@ -924,7 +940,7 @@ filter_chains:
                 x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,model-safety-v1,model-check): "true"
         provider:
           <<: *tenant_nemo
-          model: RENDER_MODEL_NEMO_REQUEST_MODEL
+          model: check-model # Fixed compatibility value; task models are configured in NeMo.
           config_id: model-safety # PROPOSED selector.
         phase: { request: true, response: false }
 
@@ -936,7 +952,7 @@ filter_chains:
                 x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,privacy-v1,sensitive-data): "true"
         provider:
           <<: *tenant_nemo
-          model: RENDER_PRIVACY_NEMO_REQUEST_MODEL
+          model: check-model # Fixed compatibility value; task models are configured in NeMo.
           config_id: pii # PROPOSED selector.
         phase: { request: true, response: true }
 
@@ -1039,13 +1055,20 @@ example has one Output check and does not require that expansion.
 
 ### Minimal additions and remaining integration boundaries
 
+The current `praxis-ai/filters/src/guardrails/providers/nemo.rs` accepts `endpoint`, `allow_private_endpoint`, `model`
+and `timeout_ms`, sends only `model` and `messages`, and uses the `/v1/guardrail/checks` verdict convention. Generic
+`ai_guardrails` already supports `phase.request/response` and conditions. These settings need no new YAML schema.
+The proposed NeMo schema additions are **`config_id`, `authentication.bearer_token_file` and `tls.ca_file`**; they are
+marked in the generated YAML. Setting the existing `model` field to `check-model` is a compilation choice, subject to the NeMo task-routing contract above.
+
 | Requirement                                | Existing foundation                                                      | Smallest proposed change or integration obligation                                                                                                                                                                              |
 |--------------------------------------------|--------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Select each NeMo configuration             | Existing `ai_guardrails` NeMo provider and model/endpoint/timeout fields | Add optional `provider.config_id` and serialize it as `guardrails.config_id`; keep the same server endpoint                                                                                                                     |
-| Resolve the NeMo request model             | Existing Praxis `provider.model` wire field                              | Establish a NeMo/TrustyAI provider-binding contract per config; compile resolved values without exposing `checks[].model`; unresolved bindings stay unavailable                                                                 |
+| Select each NeMo configuration | Existing NeMo provider | Add singular `provider.config_id`; serialize it as one-element `guardrails.config_ids` for `/v1/guardrail/checks` |
+| Validate `/v1/guardrail/checks` verdicts | Existing endpoint and `success`/`blocked`/error mapping | Retain verdict mapping; require `rails_status` per the supplied OpenAPI before accepting a pass |
+| Keep task models in NeMo | Existing Praxis `provider.model` field | Set fixed `check-model`; require explicit NeMo task routing with no fallback; no per-config model discovery |
 | Dedicated NeMo authentication              | Existing provider HTTP callout                                           | Add `provider.authentication.bearer_token_file`, read from a private mount and send only to the approved endpoint; define rotation and redirect handling                                                                        |
 | Provider-specific CA trust                 | Existing TLS-capable HTTP transport                                      | Add `provider.tls.ca_file` for this provider's trust configuration; retain verified server identity                                                                                                                             |
-| Enforce the configured phase               | Existing `phase.request/response`                                        | Honor the phase in the NeMo request's rail options; no additional public field                                                                                                                                                  |
+| Preserve boundary semantics | Existing `phase.request/response` and role-based NeMo checks | Prepare boundary-appropriate messages and validate configuration coverage; reject unsupported phase isolation |
 | Check Chat and canonical Responses content | Existing format/state, rehydration, translator and guardrail filters     | Extend `ai_guardrails` extraction to recognize canonical Responses input/output state, including history; fail rather than treating unsupported content as empty                                                                |
 | Prevent unsafe release/persistence         | Existing body lifecycle and local-response plumbing                      | Integrate a finite-output commitment gate with the host, translator and store; no claim that list order alone solves this                                                                                                       |
 | User identity and store ownership          | Existing `responses.tenant_id` metadata and tenant-scoped store queries  | Add per-filter `identity.header` with a shared tuple resolver, verified principal ownership context and ownership-aware schema/store operations; reject missing identity before any handler, including the tenant fallback path |
@@ -1054,7 +1077,7 @@ example has one Output check and does not require that expansion.
 
 The NeMo adapter fields and stateful filters' `identity.header` option add YAML schema. The remaining changes are
 behavioral integration work, some substantial, not additional configuration toggles. In particular, the current provider
-ignores its phase argument, current extraction is Chat-oriented, and output blocking/translation must be proven as a
+ignores its phase argument while NeMo routes by message role, current extraction is Chat-oriented, and output blocking/translation must be proven as a
 composed flow. An approved deployment must not infer that accepting these new fields makes the remaining requirements
 complete.
 

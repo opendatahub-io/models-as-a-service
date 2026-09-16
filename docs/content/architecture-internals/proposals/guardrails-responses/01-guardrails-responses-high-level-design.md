@@ -206,6 +206,9 @@ endpoint, authentication and successful configuration loading must satisfy the
 [TrustyAI integration contract](02-guardrails-low-level-details.md#trustyai-integration-and-deployment-topology) before
 the policy becomes ready.
 
+NeMo owns model selection for LLM-based rail tasks. The [checks contract](02-guardrails-low-level-details.md#mapping-to-the-nemo-api)
+uses `/v1/guardrail/checks` with fixed `model: check-model`; AIGuardrail selects configurations and phases without a model field.
+
 **Define the reusable check separately.** The policy names the NeMo configuration and check phases; it does not contain
 the server's configuration files. All three AIGuardrails remain in `<tenant-namespace>` and explicitly reference NeMo in
 `<guardrails-namespace>`. The server's selector authorizes that provider reference under the
@@ -543,7 +546,6 @@ does not make each of them an unanswered question. Release sequencing and deferr
 |----------------------------------------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|-------------------------------------------------|
 | How does AI Gateway discover model-namespace AIGuardrails?                       | Publish authoritative namespace-to-tenant membership without MaaS resource watches or status dependencies. See [reference discovery](02-guardrails-low-level-details.md#scoped-policy-references).                                       | AI Gateway and MaaS design owners               |
 | What TrustyAI discovery contract is supported?                                   | Specify endpoint/service identity, loaded-config readiness and revision signals, including behavior when ConfigMaps change. See [TrustyAI integration](02-guardrails-low-level-details.md#trustyai-integration-and-deployment-topology). | TrustyAI and AI Gateway                         |
-| How is the NeMo checks request `model` resolved?                                 | Establish how the selected checks implementation uses the field and how the provider binding supplies it per configuration. See [NeMo wire contract](02-guardrails-low-level-details.md#mapping-to-the-nemo-api).                        | AI Gateway and NeMo/TrustyAI integration owners |
 | Which runtime versions and integration capabilities form a supported deployment? | Select compatible NeMo, TrustyAI, Praxis and host versions supporting the required wire behavior, identity and output gating. The proposed fields are not proof that a particular build implements them.                                 | NeMo/TrustyAI, Praxis and AI Gateway owners     |
 | What numerical limits and propagation objectives apply?                          | Set catalog/header-size limits, callout/request budgets and the supported stale-policy interval. The design defines bounded, fail-closed behavior but does not choose production values.                                                 | Runtime, security and operations                |
 
