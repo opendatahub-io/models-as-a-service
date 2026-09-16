@@ -8,12 +8,13 @@ Kubernetes-native platform for managing inference model endpoints, built with Go
 
 ## Repository structure
 
-Two independent Go modules — **no root `go.mod` or root `Makefile`**. Always `cd` into the correct subproject before running Go tooling.
+Independent Go modules — **no root `go.mod` or root `Makefile`**. Always `cd` into the correct subproject before running Go tooling.
 
 | Directory | What it is |
 |-----------|-----------|
 | `maas-controller/` | Kubernetes controller (kubebuilder, controller-runtime) |
 | `maas-api/` | HTTP API service (keys, tokens, subscriptions) |
+| `maas-discovery/` | Tenant discovery service (multi-tenancy, ADR ODH-ADR-MS-0004) |
 | `deployment/` | Kustomize manifests (base, overlays, components) |
 | `docs/` | MkDocs user/admin documentation |
 | `test/e2e/` | pytest-based E2E tests |
@@ -41,6 +42,14 @@ make -C maas-controller test                 # unit tests with -race
 ```bash
 make lint
 make test
+```
+
+### maas-discovery (from maas-discovery/)
+
+```bash
+make lint
+make test
+make build    # full pipeline: tidy, lint, test, binary
 ```
 
 ### Kustomize manifests (from repo root)
