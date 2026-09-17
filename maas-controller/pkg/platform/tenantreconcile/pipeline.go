@@ -120,8 +120,32 @@ func RunPlatform(
 			}
 		}
 	} else {
-		if err := clearIPPMigrationCleanupComplete(ctx, c, tenant); err != nil {
-			return nil, fmt.Errorf("clear IPP migration cleanup marker: %w", err)
+		// Legacy IPP is selected. If our own bundle already exists for this tenant,
+		// this is steady-state (or a crash/restart mid-deploy): keep applying/self-
+		// healing unconditionally and never consult the migration marker — otherwise
+		// a marker left in its "blocked" resting value (see IPPMigrationMarkerBlockedValue)
+		// would permanently stop routine drift-correction resyncs.
+		//
+		// Only when our bundle does NOT exist yet (a genuine transition-in, e.g. after
+		// switching away from praxis) do we need to claim the marker first, so a rapid
+		// legacy→praxis→legacy flip cannot let both controllers deploy at once (see
+		// claimIPPMigrationMarker).
+		bundleExists, err := legacyIPPBundleExists(ctx, c, params)
+		if err != nil {
+			return nil, fmt.Errorf("check legacy IPP bundle existence: %w", err)
+		}
+		if !bundleExists {
+			claimed, err := claimIPPMigrationMarker(ctx, c, tenant)
+			if err != nil {
+				return nil, fmt.Errorf("claim IPP migration marker: %w", err)
+			}
+			if !claimed {
+				return &RunResult{
+					DeploymentPending: true,
+					Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
+					Warnings:          params.Warnings,
+				}, nil
+			}
 		}
 		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
 			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
@@ -327,22 +351,66 @@ var inferenceExternalModelRouteOwnerGVK = schema.GroupVersionKind{Group: "infere
 
 func isIPPMigrationCleanupComplete(tenant client.Object) bool {
 	annotations := tenant.GetAnnotations()
-	return annotations != nil && annotations[AnnotationIPPMigrationCleanupComplete] == "true"
+	return annotations != nil && annotations[AnnotationIPPMigrationCleanupComplete] == IPPMigrationMarkerClearValue
 }
 
 func markIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
 	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
-		annotations[AnnotationIPPMigrationCleanupComplete] = "true"
+		annotations[AnnotationIPPMigrationCleanupComplete] = IPPMigrationMarkerClearValue
 	})
 }
 
-func clearIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
-	if !isIPPMigrationCleanupComplete(tenant) {
-		return nil
+// legacyIPPBundleExists reports whether this tenant's legacy IPP Deployment is already
+// present in the gateway namespace. Once true, AnnotationIPPMigrationCleanupComplete is
+// irrelevant to this tenant going forward: it only sequences the initial transition-in
+// after a backend swap, never ongoing reconciliation of an already-deployed backend.
+func legacyIPPBundleExists(ctx context.Context, c client.Client, params PlatformParams) (bool, error) {
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Namespace: params.GatewayNamespace, Name: PayloadProcessingDeploymentName(params.TenantIdentifier)}
+	if err := c.Get(ctx, key, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get legacy IPP deployment %s/%s: %w", key.Namespace, key.Name, err)
 	}
-	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
-		delete(annotations, AnnotationIPPMigrationCleanupComplete)
-	})
+	return true, nil
+}
+
+// claimIPPMigrationMarker atomically consumes a "clear to deploy" marker
+// (IPPMigrationMarkerClearValue) before legacy IPP is (re)deployed for a tenant that
+// does not currently have its own bundle, by deleting the annotation — returning it to
+// its "blocked" (absent) resting state — rather than writing a sentinel value. It uses
+// an optimistic-concurrency Update — not a blind merge patch — so that if
+// ai-gateway-controller is concurrently attempting the mirror-image claim for the same
+// tenant config at nearly the same time (e.g. a rapid legacy→praxis→legacy flip before
+// the original cleanup's signal has been consumed), only one of the two controllers can
+// win: the other observes a Conflict, does not proceed, and re-evaluates from a fresh
+// read on its next reconcile.
+//
+// A false return (with a nil error) means the marker is currently absent — a cleanup is
+// genuinely in flight, or was just claimed by the other controller — and the caller
+// must wait, not that an error occurred.
+func claimIPPMigrationMarker(ctx context.Context, c client.Client, tenant client.Object) (claimed bool, err error) {
+	latest, ok := tenant.DeepCopyObject().(client.Object)
+	if !ok {
+		return false, fmt.Errorf("expected client.Object copy, got %T", tenant.DeepCopyObject())
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(tenant), latest); err != nil {
+		return false, fmt.Errorf("get tenant config for IPP migration marker claim: %w", err)
+	}
+	annotations := latest.GetAnnotations()
+	if annotations == nil || annotations[AnnotationIPPMigrationCleanupComplete] != IPPMigrationMarkerClearValue {
+		return false, nil
+	}
+	delete(annotations, AnnotationIPPMigrationCleanupComplete)
+	latest.SetAnnotations(annotations)
+	if err := c.Update(ctx, latest); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim IPP migration marker: %w", err)
+	}
+	return true, nil
 }
 
 func patchTenantAnnotations(ctx context.Context, c client.Client, tenant client.Object, mutate func(map[string]string)) error {

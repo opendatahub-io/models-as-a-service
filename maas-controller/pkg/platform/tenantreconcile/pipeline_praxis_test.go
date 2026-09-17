@@ -359,6 +359,10 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
+	// Simulates AITenantReconciler.seedIPPMigrationCleanupCompleteOnCreate: every real
+	// MaasTenantConfig is seeded with the clear marker at creation time, so a brand-new
+	// tenant's first-ever deploy is never blocked.
+	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = IPPMigrationMarkerClearValue
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -372,7 +376,7 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 
 	var applied []appliedResource
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName),
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName),
 	}, &applied)
 
 	result, err := RunPlatform(
@@ -392,6 +396,13 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.False(t, result.DeploymentPending, result.Detail)
+
+	// The initial transition-in must have claimed (deleted) the migration marker,
+	// returning it to its blocked resting state until the next swap.
+	var gotTenant maasv1alpha1.MaasTenantConfig
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, &gotTenant))
+	_, stillPresent := gotTenant.Annotations[AnnotationIPPMigrationCleanupComplete]
+	assert.False(t, stillPresent, "claiming must delete the marker annotation")
 
 	hasIPPDeployment := false
 	hasIPPEnvoyFilter := false
@@ -416,6 +427,9 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
+	// Simulates AITenantReconciler.seedIPPMigrationCleanupCompleteOnCreate: every real
+	// MaasTenantConfig is seeded with the clear marker at creation time.
+	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = IPPMigrationMarkerClearValue
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -430,7 +444,7 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	}
 
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName), ef,
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ef,
 	}, nil)
 
 	result, err := RunPlatform(
@@ -450,6 +464,70 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.False(t, result.DeploymentPending, result.Detail)
+}
+
+// TestRunPlatform_LegacyBlockedDuringInFlightSwap covers the race this whole
+// handshake exists to close for a tenant that has an existing (non-praxis)
+// backend and is transitioning in for the first time: praxis's own
+// switch-off cleanup has not finished (and therefore has not yet written the
+// clear marker), and legacy's own bundle does not exist yet either. Without
+// the marker gate, RunPlatform would apply legacy IPP immediately —
+// concurrently with the in-flight praxis cleanup — recreating the exact
+// resource-name collision the swap handshake is meant to prevent. The
+// absent-marker-is-blocked default (rather than absent-is-ok) is what makes
+// this safe without requiring any seeding for tenants that predate this
+// handshake: every tenant reconciled before this code shipped is guaranteed
+// to already have a bundle deployed (nothing previously gated that), so
+// legacyIPPBundleExists is the only realistic way to reach this path with an
+// absent marker — and that is precisely the case that must block.
+func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
+	const (
+		tenantName = "existing-team"
+		appNs      = "ai-tenant-existing-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "existing-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName) // no migration marker annotation set
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		Source:     "aitenant",
+	}
+
+	var applied []appliedResource
+	cl := runPlatformTestClient(t, scheme, []client.Object{
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName),
+	}, &applied)
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.DeploymentPending, "must wait for the switch-off cleanup's clear signal, not race ahead of it")
+
+	for _, res := range applied {
+		if isIPPResource(res.gvk, res.name) {
+			t.Fatalf("unexpected IPP resource applied while the migration marker is unclaimed: %s %s/%s", res.gvk.String(), res.namespace, res.name)
+		}
+	}
 }
 
 func unstructuredIPPObject(gvk schema.GroupVersionKind, namespace, name string, annotations map[string]string) *unstructured.Unstructured {

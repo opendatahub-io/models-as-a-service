@@ -32,9 +32,47 @@ const (
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
-	// AnnotationIPPMigrationCleanupComplete marks that the one-shot legacy IPP cleanup
-	// for an IPP→praxis migration has finished on this tenant config.
+	// AnnotationIPPMigrationCleanupComplete coordinates the payload-processing backend
+	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
+	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
+	//
+	// Semantics:
+	//   - IPPMigrationMarkerClearValue ("true"): clear to deploy. The party currently
+	//     selected by AnnotationPayloadProcessingType may (re)claim the marker and
+	//     start deploying its bundle for this tenant.
+	//   - absent (any other value is treated the same as absent): blocked. A cleanup is
+	//     in flight, or was just claimed by a transitioning-in party (claiming deletes
+	//     the annotation rather than writing a sentinel value — see
+	//     claimIPPMigrationMarker). Any other party must wait.
+	//
+	// Every new MaasTenantConfig is seeded with IPPMigrationMarkerClearValue at creation
+	// time (see AITenantReconciler.ensureTenantConfig's mutateCreate hook) so a brand-new
+	// tenant's first-ever deploy is never blocked. Absent is deliberately the "blocked"
+	// state rather than "clear": a tenant that has never swapped backends before (which,
+	// for every tenant that predates this handshake, is guaranteed to already have a
+	// bundle deployed — nothing previously gated that) has an absent marker with no
+	// seeding needed, and correctly defaults to safe (must-wait) rather than permissive
+	// the first time it ever does swap, instead of racing a switch-off cleanup that
+	// hasn't written anything yet.
+	//
+	// This gate is only consulted when a party is selected AND its own bundle does not
+	// yet exist for this tenant (see legacyIPPBundleExists / the ai-gateway-controller
+	// equivalent). Once a bundle exists, steady-state/drift-correction reconciles skip
+	// this annotation entirely — otherwise a crash mid-deploy, or the marker's resting
+	// (absent) value, would permanently block routine re-apply.
+	//
+	// The switch-off party (the controller currently owning the bundle being replaced)
+	// deletes its bundle first, then sets the marker to IPPMigrationMarkerClearValue only
+	// after full cleanup success. A transitioning-in party claims the marker via an
+	// optimistic-concurrency Update (resourceVersion-checked), not a blind merge-patch,
+	// so a rapid backend flip-flop cannot let two controllers both observe and act on the
+	// same "clear to deploy" value: the loser gets a Conflict and re-evaluates.
 	AnnotationIPPMigrationCleanupComplete = "maas.opendatahub.io/ipp-migration-cleanup-complete"
+
+	// IPPMigrationMarkerClearValue is the only AnnotationIPPMigrationCleanupComplete
+	// value that means "clear to deploy" — see that constant's doc for the full absent
+	// (blocked) vs clear state machine.
+	IPPMigrationMarkerClearValue = "true"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
