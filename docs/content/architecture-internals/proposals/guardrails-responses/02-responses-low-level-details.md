@@ -44,18 +44,10 @@ following the existing MaaS operational pattern: per-tenant runtime deployments 
 Secret. `PlatformDefault` selects that binding; it does not reuse the API-key database or its credentials. Enabling
 Responses requires the platform binding to exist and pass validation; no database is provisioned implicitly.
 
-`storage.mode` leaves room for later alternatives:
-
-| Mode               | Initial or future contract                                                                                                                                     |
-|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| `PlatformDefault`  | Initial mode and default when storage mode is omitted: use the shared infrastructure Responses connection and CA binding                                       |
-| `ExternalPostgres` | Future per-`AITenant` override: explicitly select a separately provisioned connection Secret and CA; database operations remain external                       |
-| `ManagedPostgres`  | Future development option: explicitly provision database/credentials/PVC; not part of the initial implementation or an implicit database-operator installation |
-
-These modes describe how the runtime obtains its database binding, not who operates PostgreSQL. A future database claim
-that only publishes a customer-provided connection is still an external binding; it does not make the database managed
-by MaaS or AI Gateway. The deferred `ManagedPostgres` label above is reserved for actual database resource provisioning
-and lifecycle ownership. Whether to retain that separate development option is a future API decision.
+`PlatformDefault` is the only initial storage mode and is the default when `storage.mode` is omitted.
+This proposal adds a separate Responses database binding using the existing Secret-based convention; it does not
+change MaaS API database configuration or require migration of its database or connection Secrets.
+Per-tenant overrides and database provisioning are [future storage options](03-responses-future-expansion.md#future-storage-bindings).
 
 The proposed platform convention is a separate `responses-db-config` Secret with key `DB_CONNECTION_URL`, plus
 `responses-db-ca` with key `ca.crt`, in the configured infrastructure namespace. These names are new proposed
@@ -64,28 +56,6 @@ cannot replace this platform binding. The compiler projects the connection priva
 runtime and compiles verified TLS. The database can be on the same PostgreSQL instance as MaaS, but must be a separate
 logical Responses database with separate credentials. SQLite remains suitable for local examples, not shared production
 state.
-
-```yaml
-kind: AITenant
-spec:
-  responses:
-    enabled: true
-    storage:
-      mode: ExternalPostgres
-      externalPostgres:
-        connectionSecretRef:
-          name: responses-database
-          key: DB_CONNECTION_URL
-        caBundleRef:
-          name: responses-database-ca
-          key: ca.crt
-      deletionPolicy: Retain
-```
-
-Override references resolve in the `AITenant` namespace and require platform authorization and restricted projection
-into the runtime. Once supported, an explicit override takes precedence over the platform default; an invalid override
-fails closed and never falls back to shared storage. Rotation activates a new runtime generation without disclosing
-credentials. Changing a database target is an explicit migration, including when switching between default and override.
 
 The controller reports `ResponsesReady` only after storage connectivity, schema migration, ownership enforcement and
 route activation are ready. Prepare new resources before switching routes. Disabling Responses stops all its public
@@ -518,7 +488,7 @@ Persist only approved content and minimal failure metadata;
 `store: false`
 must not cause hidden response/history persistence.
 
-The existing [quota documentation](../../configuration-and-management/quota-and-access-configuration.md)
+The existing [quota documentation](../../../configuration-and-management/quota-and-access-configuration.md)
 excludes Responses from token rate limiting. Responses enablement must therefore include a usage adapter and enforcement
 path, or explicitly remain a limited preview rather than promising existing subscription quotas. Meter each inference
 iteration, including work whose output is later blocked; reject-before-inference uses no generation tokens. Guardrail
@@ -558,7 +528,7 @@ restore and incident response require explicit operational ownership.
 
 Policy changes follow the
 shared [publication lifecycle](02-guardrails-low-level-details.md#generation-activation-and-runtime-rollout).
-Existing [authentication caching](../../configuration-and-management/authorino-caching.md) still applies: selection
+Existing [authentication caching](../../../configuration-and-management/authorino-caching.md) still applies: selection
 caches cannot prolong expired authorization. Required changes fence affected admissions; already-admitted operations
 retain pinned policy unless cancelled explicitly.
 

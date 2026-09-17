@@ -516,9 +516,9 @@ lifecycle.
 ### Architectural scope versus candidate release scope
 
 This ADR defines the full architectural contract; each release must implement a supported subset without weakening its
-invariants or silently accepting deferred features. Prioritization, cross-team prerequisites and scoped deliverables are
-maintained in the companion [proposed delivery plan](../responses-and-guardrails-delivery-plan.md). Architectural
-acceptance does not establish staffing, release dates or approval to activate every described capability.
+invariants or silently accepting deferred features. Prioritization, cross-team prerequisites and scoped deliverables
+require separate planning. Architectural acceptance does not establish staffing, release dates or approval to activate
+every described capability.
 
 ## Security and Privacy Considerations
 

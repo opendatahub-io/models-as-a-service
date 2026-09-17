@@ -5,8 +5,8 @@
 | Status  | Proposed                                              |
 | Authors | Pierangelo Di Pilato, Christina Xu, Marius Ion Danciu |
 
-These proposals are separate from the initial Responses enablement contract. Automatic capability discovery and agentic
-bindings are future work; they are not prerequisites for the initial tenant API.
+These proposals are separate from the initial Responses enablement contract. Per-tenant storage overrides, database provisioning,
+automatic capability discovery and agentic bindings are future work; they are not prerequisites for the initial tenant API.
 
 Read alongside:
 
@@ -18,9 +18,53 @@ Read alongside:
 
 In this document:
 
+- [Future storage bindings](#future-storage-bindings)
 - [Future KServe capability discovery for MaaS](#future-kserve-capability-discovery-for-maas)
 - [Deferred agentic flows](#deferred-agentic-flows)
 - [Reviews](#reviews)
+
+## Future storage bindings
+
+The initial [Responses storage contract](02-responses-low-level-details.md#responses-enablement-and-lifecycle)
+uses a shared, Secret-based Responses connection through `PlatformDefault`. The alternatives below extend binding
+selection or provisioning; they do not replace the existing MaaS API connection convention.
+
+`storage.mode` leaves room for later alternatives:
+
+| Mode               | Initial or future contract                                                                                                                                     |
+|--------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `PlatformDefault`  | Initial mode and default when storage mode is omitted: use the shared infrastructure Responses connection and CA binding                                       |
+| `ExternalPostgres` | Future per-`AITenant` override: explicitly select a separately provisioned connection Secret and CA; database operations remain external                       |
+| `ManagedPostgres`  | Future development option: explicitly provision database/credentials/PVC; not part of the initial implementation or an implicit database-operator installation |
+
+These modes describe how the runtime obtains its database binding, not who operates PostgreSQL. A future database claim
+that only publishes a customer-provided connection is still an external binding; it does not make the database managed
+by MaaS or AI Gateway. The deferred `ManagedPostgres` label above is reserved for actual database resource provisioning
+and lifecycle ownership. Whether to retain that separate development option is a future API decision.
+
+The following fragment illustrates a future per-`AITenant` override, not an initially supported configuration:
+
+```yaml
+kind: AITenant
+spec:
+  responses:
+    enabled: true
+    storage:
+      mode: ExternalPostgres
+      externalPostgres:
+        connectionSecretRef:
+          name: responses-database
+          key: DB_CONNECTION_URL
+        caBundleRef:
+          name: responses-database-ca
+          key: ca.crt
+      deletionPolicy: Retain
+```
+
+Override references resolve in the `AITenant` namespace and require platform authorization and restricted projection
+into the runtime. Once supported, an explicit override takes precedence over the platform default; an invalid override
+fails closed and never falls back to shared storage. Rotation activates a new runtime generation without disclosing
+credentials. Changing a database target is an explicit migration, including when switching between default and override.
 
 ## Future KServe capability discovery for MaaS
 
