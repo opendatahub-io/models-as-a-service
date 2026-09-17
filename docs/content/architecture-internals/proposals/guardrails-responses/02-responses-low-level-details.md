@@ -143,7 +143,7 @@ timestamps. It is security-sensitive identity data and can contain PII; it must 
 Responses adds arbitrary customer content, potentially including credentials accidentally pasted into prompts, regulated
 data, confidential documents, model outputs, conversation history and tool results. Guardrail execution does not certify
 that this content is safe to persist. See the existing
-[API-key schema](../../../../maas-api/db/schema/0001_create_api_keys.up.sql).
+[API-key schema](../../../../../maas-api/db/schema/0001_create_api_keys.up.sql).
 
 | Requirement         | MaaS API-key store                                                                               | Responses store                                                                                                                           |
 |---------------------|--------------------------------------------------------------------------------------------------|-------------------------------------------------------------------------------------------------------------------------------------------|
@@ -223,7 +223,7 @@ for Responses. Keep database provisioning separate from table initialization:
 
 MaaS API's `NewPostgresStoreFromURL` connects to an existing database and runs embedded versioned migrations with
 `golang-migrate` before returning a usable store. See
-[the existing startup migration implementation](../../../../maas-api/internal/api_keys/db_driver.go). Praxis already
+[the existing startup migration implementation](../../../../../maas-api/internal/api_keys/db_driver.go). Praxis already
 follows the startup-initialization part of this pattern: `PostgresResponseStore::new` executes generated DDL, validates
 table columns and stamps/checks the schema version. The configured Responses and Conversations filters use this store
 implementation. A version mismatch currently returns a migration-required error; this is **not** an existing incremental
