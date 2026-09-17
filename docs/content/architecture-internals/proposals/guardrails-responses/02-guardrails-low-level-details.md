@@ -501,8 +501,8 @@ data:
         engine: openai
         model: meta-llama/Llama-3.1-8B-Instruct
         parameters:
-          base_url: https://vllm-service:8000/v1
-          api_key: EMPTY
+          base_url: <maas-gateway-model-base-url>
+          api_key: <dedicated-judge-subscription-api-key>
     rails:
       input:
         flows:
@@ -510,8 +510,8 @@ data:
           - self check input
 ```
 
-The model and endpoint above are illustrative provider settings. Production connectivity still requires approved
-credentials and verified TLS; `EMPTY` is not an instruction to disable authentication. NeMo owns those credentials,
+The model, endpoint and key above are placeholders. For 3.6, use the
+[judge-model API-key flow](#judge-model-authentication-for-36) and verified TLS. NeMo owns those credentials,
 the task model's lifecycle and the downstream destinations. They are separate from Praxis's credentials for calling
 NeMo. Output checks that invoke an LLM need their own explicit task binding.
 
@@ -807,6 +807,89 @@ identity before these handlers can use the fallback. The proposed internal heade
 are specified in the
 [worked Praxis configuration](#worked-compilation-of-the-introductory-resources); they are not tenant CRD fields or
 currently implemented Praxis options.
+
+### Judge-model authentication for 3.6
+
+The 3.6 stance is to use the existing MaaS subscription and API-key flow for NeMo's LLM-based checks. NeMo calls the judge through
+the MaaS/AI Gateway, retaining gateway governance and llm-d optimizations where the model deployment uses llm-d.
+MaaS does not grant NeMo direct access to an LLMInferenceService endpoint at request time. This choice adds no new
+judge-specific AuthPolicy branch or TokenRateLimitPolicy exemption. Other guardrails integration work described in
+this proposal still applies.
+
+1. The **model deployer** deploys the judge as an ordinary model with an LLMInferenceService and MaaSModelRef, or uses
+   an ordinarily supported external model. The judge model has no guardrail attachments.
+2. The **MaaS tenant administrator** includes the judge model in a dedicated MaaSSubscription, for example
+   `guardrails-subscription`, and grants the key owner's normal access to it.
+3. The **authorized key owner** (the tenant administrator when entitled to that subscription) mints a dedicated API key
+   bound to that subscription using [API Key Management](../../../user-guide/api-key-management.md). The key belongs to
+   the issuing identity. Existing key expiration requirements apply, so plan renewal rather than assuming a permanent key.
+4. The **NeMo service owner** deploys NeMo and manually configures its task-model endpoint, model name and dedicated API
+   key in the selected NeMo config bundle. The discussed 3.6 approach supplies this through the NeMo configuration
+   ConfigMap, making access to that configuration credential-bearing. Do not commit the populated key to Git. Automated
+   key provisioning and supported Secret-based configuration are deferred, not assumed to exist.
+5. The **AI Gateway controller** compiles the configuration so that judge requests select no guardrail checks. NeMo's
+   downstream request follows ordinary API-key authorization and subscription token limits. No invocation-mode header
+   or `X-MaaS-Subscription` header is needed because the API key already binds the subscription.
+
+These are tenant-scoped operational personas with the required existing permissions. Routine judge onboarding does
+not introduce a cluster-admin step. Installing operators and preparing the shared gateway remain platform setup.
+Praxis's credentials for calling NeMo are separate from NeMo's MaaS API key, and the application's key is never
+forwarded to NeMo as its judge credential.
+
+**No self-check through the same MaaSModelRef in 3.6.** A request cannot use its inference MaaSModelRef as its judge.
+A separate MaaSModelRef may point to the same LLMInferenceService, provided the judge request resolves to no checks.
+In this proposal, that requires checking tenant and subscription attachments as well as model attachments: an empty
+model attachment list does not override inherited checks. Also, an empty attachment `checks` selector means all checks,
+not disabled checks. If the effective judge configuration selects checks, this topology cannot be used for the initial
+flow. NeMo's task name `self_check_input` describes a rail task and does not imply reuse of the inference MaaSModelRef.
+
+```mermaid
+sequenceDiagram
+    actor Admin as MaaS tenant administrator / key owner
+    actor Owner as NeMo service owner
+    participant MaaS as MaaS API and resources
+    participant NeMo as NeMo service
+    participant Gateway as MaaS / AI Gateway
+    participant Praxis as Praxis
+    participant Judge as Judge model backend
+    actor User as Application user
+
+    Admin->>MaaS: Register judge model and dedicated subscription with no effective checks
+    Admin->>MaaS: Mint API key bound to judge subscription
+    MaaS-->>Admin: Dedicated API key with expiration
+    Admin->>Owner: Provide dedicated key for NeMo configuration
+    Owner->>NeMo: Deploy and configure judge endpoint, model and key
+    User->>Gateway: Responses request with application credential
+    Gateway->>Gateway: Authorize inference model and resolve required checks
+    Gateway->>Praxis: Execute selected check on authorized request
+    Praxis->>NeMo: Submit content and configured check ID
+    NeMo->>Gateway: Judge inference with dedicated MaaS API key
+    Gateway->>Gateway: Validate key, subscription access and ordinary limits
+    Note over Gateway: Judge request selects no guardrail checks
+    Gateway->>Judge: Forward through configured backend routing
+    Judge-->>Gateway: Judge result
+    Gateway-->>NeMo: Result with ordinary usage accounting
+    NeMo-->>Praxis: Check verdict
+    Praxis-->>Gateway: Continue or block application request
+    Note over Gateway,User: Continue inference only if required checks pass<br/>Authentication, quota or check errors must not silently pass
+```
+
+Judge usage remains visible under its subscription and subject to its configured limits. Excluding those metrics from
+customer chargeback is an accounting choice, not a gateway bypass. No requirement for unlimited judge quota or disabled
+usage accounting was settled in the discussion. The deliberate 3.6 tradeoff is manual credential issuance,
+distribution and renewal in exchange for reusing the existing authorization path and reducing new policy testing.
+NeMo configuration is Kubernetes-API-based in this scope, not a new UI flow.
+
+Direct unauthenticated service calls or ad hoc LLMInferenceService access were discussed only as ways to unblock
+experiments. They are not the selected deployment path. See the
+[deferred authentication options](04-guardrails-future-expansion.md#judge-model-authentication-after-36)
+for GitOps credentials, ServiceAccount/SAR access and future self-check support.
+
+### PoC: unmetered model access
+
+The [experimental SAR PoC and its setup/runtime diagrams](04-guardrails-future-expansion.md#poc-unmetered-model-access)
+are retained as future design material, outside the selected 3.6 API-key flow. The PoC implementation is not included
+in this proposal. The description captures the experiment, which has not been validated on a cluster.
 
 ### Worked compilation of the introductory resources
 
