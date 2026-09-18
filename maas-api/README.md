@@ -289,6 +289,7 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 | `ADDRESS` | `:8443` (HTTPS) or `:8080` (HTTP) | Server listen address (host:port). |
 | `PORT` | - | **DEPRECATED.** Use `ADDRESS` with `SECURE=false` instead. |
 | `API_KEY_MAX_EXPIRATION_DAYS` | `90` | Maximum allowed API key lifetime in days. Users cannot create keys with longer expiration. Minimum: 1. |
+| `API_KEY_DELETION_RETENTION_DAYS` | `90` | Retention period in days for lifecycle-invalidated API keys before physical deletion. Minimum: 1. |
 | `ACCESS_CHECK_TIMEOUT_SECONDS` | `15` | Timeout for model access validation during `/v1/models` requests. Models that don't respond within this window are excluded. Minimum: 1. |
 | `TLS_CERT` | - | Path to TLS certificate file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
 | `TLS_KEY` | - | Path to TLS private key file (PEM format). Required if `SECURE=true` and not using self-signed cert. |
@@ -300,7 +301,7 @@ The maas-api server is configured via **environment variables** or **CLI flags**
 
 ### CLI Flags
 
-Most environment variables have corresponding CLI flags. When both are provided, CLI flags take precedence. Note that `API_KEY_MAX_EXPIRATION_DAYS` and `ACCESS_CHECK_TIMEOUT_SECONDS` are environment variable only and have no CLI flag equivalents.
+Most environment variables have corresponding CLI flags. When both are provided, CLI flags take precedence. Note that `API_KEY_MAX_EXPIRATION_DAYS`, `API_KEY_DELETION_RETENTION_DAYS`, and `ACCESS_CHECK_TIMEOUT_SECONDS` are environment variable only and have no CLI flag equivalents.
 
 | Flag | Env Var | Default | Description |
 |------|---------|---------|-------------|

@@ -367,6 +367,24 @@ func (s *Service) RevokeTenantAPIKeys(ctx context.Context, tenant string) (int, 
 	return s.store.InvalidateTenant(ctx, tenant)
 }
 
+// RevokeSubscriptionAPIKeys soft-deletes all keys bound to one subscription
+// within a tenant. The operation is intentionally separate from user-facing
+// bulk revoke so lifecycle cleanup receives retention semantics.
+func (s *Service) RevokeSubscriptionAPIKeys(ctx context.Context, tenant, subscription string) (int, error) {
+	tenant = strings.TrimSpace(tenant)
+	subscription = strings.TrimSpace(subscription)
+	if tenant == "" {
+		return 0, ErrTenantRequired
+	}
+	if subscription == "" {
+		return 0, errors.New("subscription is required")
+	}
+	if configuredTenant := s.GetTenantName(); configuredTenant != "" && tenant != configuredTenant {
+		return 0, fmt.Errorf("%w: requested tenant %q but service is scoped to %q", ErrTenantMismatch, tenant, configuredTenant)
+	}
+	return s.store.InvalidateSubscription(ctx, tenant, subscription)
+}
+
 // StartDebounceCleanup starts a background goroutine that periodically evicts
 // stale entries from the lastUsedDebounce map. Without this the map grows
 // indefinitely — one entry per unique key ID that has ever been validated.
@@ -451,5 +469,21 @@ func (s *Service) CleanupExpiredEphemeral(ctx context.Context) (int64, error) {
 		return 0, fmt.Errorf("cleanup failed: %w", err)
 	}
 	s.logger.WithContext(ctx).Info("Ephemeral key cleanup completed", "deletedCount", count)
+	return count, nil
+}
+
+// CleanupSoftDeleted physically removes lifecycle-invalidated keys after the
+// configured retention period. Called by the internal maintenance endpoint.
+func (s *Service) CleanupSoftDeleted(ctx context.Context) (int64, error) {
+	retentionDays := 90
+	if s.config != nil && s.config.APIKeyDeletionRetentionDays > 0 {
+		retentionDays = s.config.APIKeyDeletionRetentionDays
+	}
+	count, err := s.store.DeleteSoftDeleted(ctx, time.Duration(retentionDays)*24*time.Hour)
+	if err != nil {
+		return 0, fmt.Errorf("retained key cleanup failed: %w", err)
+	}
+	s.logger.WithContext(ctx).Info("Retained API-key cleanup completed",
+		"deletedCount", count, "retentionDays", retentionDays)
 	return count, nil
 }

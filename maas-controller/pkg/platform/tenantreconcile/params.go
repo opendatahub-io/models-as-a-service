@@ -36,7 +36,8 @@ type PlatformParams struct {
 	PayloadProcessingImage string
 	MaaSAPIKeyCleanupImage string
 
-	APIKeyMaxExpirationDays string
+	APIKeyMaxExpirationDays     string
+	APIKeyDeletionRetentionDays string
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
@@ -84,21 +85,22 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 	}
 
 	params := PlatformParams{
-		AppNamespace:            appNamespace,
-		ControllerNamespace:     controllerNamespace,
-		GatewayNamespace:        platformContext.GatewayRef.Namespace,
-		GatewayName:             platformContext.GatewayRef.Name,
-		ClusterAudience:         clusterAudience,
-		MonitoringNamespace:     monitoringNamespace,
-		SubscriptionNamespace:   tenant.GetNamespace(),
-		ModelNamespace:          tenant.GetNamespace(),
-		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
-		TenantIdentifier:        tenantID,
-		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
-		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
-		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
-		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
-		SkipIPP:                 platformContext.SkipIPP,
+		AppNamespace:                appNamespace,
+		ControllerNamespace:         controllerNamespace,
+		GatewayNamespace:            platformContext.GatewayRef.Namespace,
+		GatewayName:                 platformContext.GatewayRef.Name,
+		ClusterAudience:             clusterAudience,
+		MonitoringNamespace:         monitoringNamespace,
+		SubscriptionNamespace:       tenant.GetNamespace(),
+		ModelNamespace:              tenant.GetNamespace(),
+		ExternalOIDC:                platformContext.ExternalOIDC.DeepCopy(),
+		TenantIdentifier:            tenantID,
+		MaaSAPIImage:                firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
+		PayloadProcessingImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
+		MaaSAPIKeyCleanupImage:      firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
+		APIKeyMaxExpirationDays:     resolveAPIKeyMaxExpirationDays(tenant),
+		APIKeyDeletionRetentionDays: resolveAPIKeyDeletionRetentionDays(tenant),
+		SkipIPP:                     platformContext.SkipIPP,
 	}
 
 	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
@@ -353,6 +355,14 @@ func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
 	return DefaultAPIKeyMaxExpirationDays
 }
 
+func resolveAPIKeyDeletionRetentionDays(tenant client.Object) string {
+	cfg := apiKeysConfigFor(tenant)
+	if cfg != nil && cfg.DeletionRetentionDays != nil {
+		return strconv.FormatInt(int64(*cfg.DeletionRetentionDays), 10)
+	}
+	return DefaultAPIKeyDeletionRetentionDays
+}
+
 func apiKeysConfigFor(tenant client.Object) *maasv1alpha1.TenantAPIKeysConfig {
 	switch t := tenant.(type) {
 	case *maasv1alpha1.MaasTenantConfig:
@@ -539,6 +549,10 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	}
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
+	}
+	deletionRetentionDays := firstNonEmpty(params.APIKeyDeletionRetentionDays, DefaultAPIKeyDeletionRetentionDays)
+	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_DELETION_RETENTION_DAYS", deletionRetentionDays); err != nil {
+		return fmt.Errorf("patch API_KEY_DELETION_RETENTION_DAYS: %w", err)
 	}
 	if params.MaaSAPIResources != nil {
 		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {

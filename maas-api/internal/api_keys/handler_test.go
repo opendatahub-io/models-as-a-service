@@ -1801,6 +1801,7 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		err := json.Unmarshal(w.Body.Bytes(), &response)
 		require.NoError(t, err)
 		assert.Equal(t, 2, response.RevokedCount)
+		assert.Equal(t, 2, response.DeletedCount)
 
 		key, err := store.Get(ctx, "tenant-delete-1")
 		require.NoError(t, err)
@@ -1852,6 +1853,56 @@ func TestRevokeTenantAPIKeys(t *testing.T) {
 		assert.NotContains(t, w.Body.String(), "database unavailable")
 		assert.NotContains(t, w.Body.String(), "internal dsn details")
 	})
+}
+
+func TestRevokeSubscriptionAPIKeys(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	ctx := context.Background()
+	store := NewMockStore()
+	cfg := &config.Config{TenantName: "test-tenant"}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), nil)
+
+	for _, key := range []struct {
+		id           string
+		subscription string
+		tenant       string
+	}{
+		{id: "subscription-delete-1", subscription: "sub-delete", tenant: "test-tenant"},
+		{id: "subscription-delete-2", subscription: "sub-delete", tenant: "test-tenant"},
+		{id: "other-subscription", subscription: "sub-keep", tenant: "test-tenant"},
+		{id: "other-tenant", subscription: "sub-delete", tenant: "other-tenant"},
+	} {
+		require.NoError(t, store.AddKey(ctx, "alice", key.id, key.id+"-hash", key.id, "", []string{"users"}, key.subscription, key.tenant, nil, false, nil))
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodDelete, "/internal/v1/tenants/test-tenant/subscriptions/sub-delete/api-keys", nil)
+	c.Params = gin.Params{{Key: "tenant", Value: "test-tenant"}, {Key: "subscription", Value: "sub-delete"}}
+	handler.RevokeSubscriptionAPIKeys(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	var response SubscriptionRevokeResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+	assert.Equal(t, 2, response.RevokedCount)
+	assert.Equal(t, 2, response.DeletedCount)
+	assert.False(t, response.DeletedAt.IsZero())
+
+	for _, id := range []string{"subscription-delete-1", "subscription-delete-2"} {
+		key, err := store.Get(ctx, id)
+		require.NoError(t, err)
+		assert.Equal(t, StatusRevoked, key.Status)
+	}
+	key, err := store.Get(ctx, "other-subscription")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status)
+	key, err = store.Get(ctx, "other-tenant")
+	require.NoError(t, err)
+	assert.Equal(t, StatusActive, key.Status)
+
+	_, err = store.GetByHash(ctx, "subscription-delete-1-hash")
+	assert.ErrorIs(t, err, ErrKeyNotFound, "soft-deleted keys must not validate")
 }
 
 func TestSearchExcludesEphemeralByDefault(t *testing.T) {
