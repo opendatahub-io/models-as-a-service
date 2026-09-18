@@ -108,7 +108,7 @@ func RunPlatform(
 
 	// SSA only creates/updates resources in the rendered set; it does NOT delete
 	// absent resources. When SkipIPP is true (praxis), run a one-shot, ownership-
-	// gated cleanup of legacy maas-controller IPP operands, then stop touching
+	// gated cleanup of existing MaaS-owned IPP operands, then stop touching
 	// payload-processing names — ai-gateway-controller owns them for praxis tenants.
 	if params.SkipIPP {
 		if !isIPPMigrationCleanupComplete(tenant) {
@@ -319,6 +319,12 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 
 const aiGatewayControllerFieldOwner = "ai-gateway-controller"
 
+const ippExternalModelManagedBy = "ipp-external-model-reconciler"
+
+const ippExternalModelLabel = "inference.opendatahub.io/external-model"
+
+var inferenceExternalModelRouteOwnerGVK = schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"}
+
 func isIPPMigrationCleanupComplete(tenant client.Object) bool {
 	annotations := tenant.GetAnnotations()
 	return annotations != nil && annotations[AnnotationIPPMigrationCleanupComplete] == "true"
@@ -395,9 +401,9 @@ func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UI
 	return false
 }
 
-// isMaaSOwnedIPPResource reports whether obj is legacy IPP applied by maas-controller
-// and safe to delete during the one-shot IPP→praxis migration cleanup. Resources owned
-// by ai-gateway-controller (praxis) or with opendatahub.io/managed=false are excluded.
+// isMaaSOwnedIPPResource reports whether obj is an existing IPP resource applied by
+// maas-controller and safe to delete when enabling Praxis. Resources owned by
+// ai-gateway-controller or with opendatahub.io/managed=false are excluded.
 func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {
 	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
 		return false
@@ -460,16 +466,136 @@ func ippResourcesForTenant(params PlatformParams) []ippResourceRef {
 	}
 }
 
-// cleanupIPPResources removes legacy maas-controller IPP operands during the one-shot
-// IPP→praxis migration. Only maas-owned resources are deleted; praxis operands applied
-// by ai-gateway-controller at the same names are left intact.
+// cleanupIPPResources removes maas-controller IPP operands during one-shot Praxis
+// enablement. Only MaaS-owned resources are deleted; ai-gateway-controller resources
+// at the same names are left intact.
 func cleanupIPPResources(ctx context.Context, c client.Client, params PlatformParams, configUID types.UID, log logr.Logger) error {
 	for _, ref := range ippResourcesForTenant(params) {
 		if err := deleteIPPResourceIfManaged(ctx, c, ref, configUID, log); err != nil {
 			return err
 		}
 	}
+	if err := ensureIPPWritersStopped(ctx, c, params, configUID); err != nil {
+		return err
+	}
+	if err := cleanupIPPExternalModelRoutes(ctx, c, params, log); err != nil {
+		return err
+	}
 	return nil
+}
+
+func ensureIPPWritersStopped(ctx context.Context, c client.Client, params PlatformParams, configUID types.UID) error {
+	// The pinned IPP entrypoint enables its ExternalModel reconciler unless
+	// DISABLE_EXTERNAL_MODEL_CONTROLLER=true. MaaS does not claim to observe
+	// that flag; it proves the writer is stopped by observing its owned
+	// Deployment and tenant-scoped pods disappear before route cleanup.
+	var writerChecks []ippResourceRef
+	for _, ref := range ippResourcesForTenant(params) {
+		if ref.gvk != GVKDeployment {
+			continue
+		}
+		writerChecks = append(writerChecks, ref)
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(ref.gvk)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ref.namespace, Name: ref.name}, obj); err == nil {
+			if isMaaSOwnedIPPResource(obj, configUID) {
+				if obj.GetDeletionTimestamp() != nil {
+					return fmt.Errorf("IPP writer %s/%s is terminating; defer IPP-owned HTTPRoute cleanup", ref.namespace, ref.name)
+				}
+				return fmt.Errorf("IPP writer %s/%s is still present; defer IPP-owned HTTPRoute cleanup", ref.namespace, ref.name)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check IPP writer %s/%s: %w", ref.namespace, ref.name, err)
+		}
+	}
+	for _, ref := range writerChecks {
+		pods := &corev1.PodList{}
+		if err := c.List(ctx, pods, client.InNamespace(ref.namespace), client.MatchingLabels{LabelTenantInstance: ref.name}); err != nil {
+			return fmt.Errorf("check IPP writer pods for %s/%s: %w", ref.namespace, ref.name, err)
+		}
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			labels := pod.GetLabels()
+			if labels["app.kubernetes.io/managed-by"] == aiGatewayControllerFieldOwner {
+				continue
+			}
+			app := labels["app"]
+			if app == "" {
+				return fmt.Errorf("IPP writer pod %s/%s has ambiguous identity; defer IPP-owned HTTPRoute cleanup", pod.Namespace, pod.Name)
+			}
+			if app == PayloadProcessingName || app == PayloadPreProcessingName {
+				return fmt.Errorf("IPP writer pod %s/%s is still present; defer IPP-owned HTTPRoute cleanup", pod.Namespace, pod.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// cleanupIPPExternalModelRoutes removes only routes created by the IPP ExternalModel
+// reconciler. Route names alone do not prove ownership. ModelNamespace is the
+// tenant namespace containing ExternalModels and their routes; AppNamespace may
+// be shared infrastructure and must not be searched by this cleanup. Foreground
+// deletion of the IPP Deployments completes before this runs, ensuring their
+// in-process route writer has stopped.
+func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.ModelNamespace == "" {
+		return errors.New("model namespace is required for IPP-owned HTTPRoute cleanup")
+	}
+	routes := &unstructured.UnstructuredList{}
+	routes.SetGroupVersionKind(GVKHTTPRoute.GroupVersion().WithKind("HTTPRouteList"))
+	if err := c.List(ctx, routes, client.InNamespace(params.ModelNamespace)); err != nil {
+		return fmt.Errorf("list existing IPP HTTPRoutes in %s: %w", params.ModelNamespace, err)
+	}
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		labels := route.GetLabels()
+		if labels["app.kubernetes.io/managed-by"] != ippExternalModelManagedBy {
+			continue
+		}
+		modelName := labels[ippExternalModelLabel]
+		if modelName == "" || hasSSAFieldManager(route, aiGatewayControllerFieldOwner) {
+			continue
+		}
+		owner := controllerOwner(route, inferenceExternalModelRouteOwnerGVK, modelName)
+		if owner == nil || owner.UID == "" {
+			log.Info("Skipping ambiguous IPP HTTPRoute cleanup", "name", route.GetName(), "namespace", route.GetNamespace())
+			continue
+		}
+		inference := &unstructured.Unstructured{}
+		inference.SetGroupVersionKind(inferenceExternalModelRouteOwnerGVK)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: params.ModelNamespace, Name: modelName}, inference); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", params.ModelNamespace, modelName, route.GetName(), err)
+		}
+		if inference.GetUID() != owner.UID {
+			continue
+		}
+		log.Info("Deleting IPP-owned ExternalModel HTTPRoute while enabling Praxis", "name", route.GetName(), "namespace", route.GetNamespace(), "model", modelName)
+		deleteOptions, err := validatedDeleteOptions(route)
+		if err != nil {
+			return fmt.Errorf("prepare IPP-owned HTTPRoute %s/%s deletion: %w", route.GetNamespace(), route.GetName(), err)
+		}
+		if err := c.Delete(ctx, route, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale IPP HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+		}
+	}
+	return nil
+}
+
+func controllerOwner(obj *unstructured.Unstructured, gvk schema.GroupVersionKind, name string) *metav1.OwnerReference {
+	var match *metav1.OwnerReference
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.Controller != nil && *owner.Controller && owner.APIVersion == gvk.GroupVersion().String() && owner.Kind == gvk.Kind && owner.Name == name {
+			if match != nil {
+				return nil
+			}
+			ownerRef := owner
+			match = &ownerRef
+		}
+	}
+	return match
 }
 
 func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippResourceRef, configUID types.UID, log logr.Logger) error {
@@ -492,12 +618,28 @@ func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippRes
 		return nil
 	}
 
-	log.Info("Deleting legacy IPP resource during praxis migration",
+	log.Info("Deleting IPP resource while enabling Praxis",
 		"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
-	if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+	deleteOptions, err := validatedDeleteOptions(obj)
+	if err != nil {
+		return fmt.Errorf("prepare %s %s/%s deletion: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
+	}
+	if ref.gvk == GVKDeployment {
+		deleteOptions = append(deleteOptions, client.PropagationPolicy(metav1.DeletePropagationForeground))
+	}
+	if err := c.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete %s %s/%s: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
 	}
 	return nil
+}
+
+func validatedDeleteOptions(obj client.Object) ([]client.DeleteOption, error) {
+	uid := obj.GetUID()
+	resourceVersion := obj.GetResourceVersion()
+	if uid == "" || resourceVersion == "" {
+		return nil, fmt.Errorf("validated object %s/%s is missing UID or resourceVersion", obj.GetNamespace(), obj.GetName())
+	}
+	return []client.DeleteOption{client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}}, nil
 }
 
 // cleanupPayloadProcessingHPA deletes the payload-processing HPA when autoscaling
