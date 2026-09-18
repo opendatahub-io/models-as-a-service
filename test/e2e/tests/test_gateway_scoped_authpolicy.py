@@ -18,7 +18,6 @@ from multitenancy_helpers import (
     assert_no_per_model_authpolicy,
     get_gateway_authpolicy,
     get_gateway_authpolicy_target_ref,
-    get_json_or_none,
 )
 from test_helper import (
     _create_test_auth_policy,
@@ -49,8 +48,8 @@ def _gateway_auth_rego(context) -> str:
 class TestGatewayAuthPolicyStructure:
     """S10: AuthPolicy targets Gateway; no legacy per-model policies."""
 
-    def test_target_ref_points_to_gateway(self, worker_tenant_context):
-        """6.1: maas-gateway-auth targetRef must be Gateway, not HTTPRoute."""
+    def test_gateway_auth_policy_contract(self, worker_tenant_context):
+        """Gateway AuthPolicy targets the Gateway and replaces per-model policies."""
         context = worker_tenant_context
         ap = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
         assert ap is not None, (
@@ -69,11 +68,8 @@ class TestGatewayAuthPolicyStructure:
         assert accepted and accepted[0].get("status") == "True", (
             f"{context.gateway_authpolicy_name} must be Accepted, got {conditions!r}"
         )
-
-    def test_no_per_model_authpolicy_for_fixture_model(self, worker_tenant_context):
-        """6.2: Gateway-only mode must not create maas-auth-{model} in model namespace."""
         assert_no_per_model_authpolicy(
-            worker_tenant_context.model_ref, worker_tenant_context.model_namespace,
+            context.model_ref, context.model_namespace,
         )
 
 
@@ -171,8 +167,8 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
     on clusters with zero subscriptions.
     """
 
-    def test_gateway_auth_group_membership_has_when_guard(self, worker_tenant_context):
-        """require-group-membership must have a when guard to skip management endpoints."""
+    def test_management_rules_have_model_identity_guards(self, worker_tenant_context):
+        """Management authorization rules run only when a model is targeted."""
         ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
         assert ap is not None
 
@@ -194,11 +190,6 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             f"(path-based + header-based check), got: {predicate}"
         )
 
-    def test_gateway_auth_subscription_check_gated_by_model_identity(self, worker_tenant_context):
-        """subscription-valid authorization must only run when a model is targeted."""
-        ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
-        assert ap is not None
-
         defaults = (ap.get("spec") or {}).get("defaults") or {}
         authorization = defaults.get("rules", {}).get("authorization") or {}
         sub_valid = authorization.get("subscription-valid") or {}
@@ -211,39 +202,4 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
         assert 'request.path.split' in predicate and 'x-gateway-model-name' in predicate, (
             "subscription-valid 'when' predicate must use the model-identity CEL expression "
             f"(path-based + header-based check), got: {predicate}"
-        )
-
-    def test_gateway_default_auth_scoped_if_present(self, worker_tenant_context):
-        """If gateway-default-auth exists, it must scope deny-all to model paths only."""
-        _ = worker_tenant_context
-        pytest.skip("legacy gateway-default-auth is scoped to the shared default gateway")
-
-        default_auth = get_json_or_none(
-            "authpolicy", "gateway-default-auth", GATEWAY_NAMESPACE
-        )
-        if default_auth is None:
-            pytest.skip(
-                "gateway-default-auth not present (maas-gateway-auth is active); "
-                "scoping is validated by unit tests"
-            )
-
-        defaults = (default_auth.get("spec") or {}).get("defaults") or {}
-        when_list = defaults.get("when") or []
-        assert len(when_list) > 0, (
-            "gateway-default-auth must have a 'when' predicate to exclude "
-            "management endpoints (/v1/*, /maas-api/*) from deny-all"
-        )
-        predicate = when_list[0].get("predicate", "")
-        assert predicate, "gateway-default-auth 'when' predicate must not be empty"
-        assert 'request.path.split' in predicate, (
-            "gateway-default-auth predicate must use path-based model identity CEL, "
-            f"got: {predicate}"
-        )
-        assert '"v1"' in predicate and '"maas-api"' in predicate, (
-            "gateway-default-auth predicate must exclude /v1/* and /maas-api/* paths "
-            f"via CEL expression, got: {predicate}"
-        )
-        assert 'x-gateway-model-name' in predicate, (
-            "gateway-default-auth predicate must include header-based model identity check, "
-            f"got: {predicate}"
         )

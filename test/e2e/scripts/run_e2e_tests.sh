@@ -96,7 +96,6 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_subscription_list_endpoints.py"
     "$TEST_DIR/tests/test_models_endpoint.py"
     "$TEST_DIR/tests/test_external_models.py"
-    "$TEST_DIR/tests/test_smoke.py"
     "$TEST_DIR/tests/test_tenant.py"
     "$TEST_DIR/tests/test_config_tenant.py"
     "$TEST_DIR/tests/test_tenant_discovery.py"

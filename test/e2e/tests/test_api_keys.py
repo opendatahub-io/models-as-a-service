@@ -765,119 +765,54 @@ class TestAPIKeyExpiration:
                 "skipping expiration policy tests"
             )
 
-    def test_create_key_within_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration within the limit should succeed."""
+    def test_expiration_policy_boundaries(
+        self,
+        api_keys_base_url: str,
+        headers: dict,
+        max_expiration_days: int,
+    ):
+        """Validate successful, boundary, rejected, and non-expiring key requests."""
+        cases = [
+            ("within-limit", (max_expiration_days // 2) * 24 or 24, True),
+            ("at-limit", max_expiration_days * 24, True),
+            ("exceeds-limit", max_expiration_days * 2 * 24, False),
+            ("without-expiration", None, True),
+            ("short-expiration", 1, True),
+        ]
 
-        # Request expiration at half the limit (e.g., 15 days if limit is 30)
-        expires_in_hours = (max_expiration_days // 2) * 24
-        if expires_in_hours <= 0:
-            expires_in_hours = 24  # At least 1 day
+        for label, expires_in_hours, should_succeed in cases:
+            payload = {
+                "name": f"test-{label}-{uuid.uuid4().hex[:8]}",
+                "description": f"Expiration boundary case: {label}",
+            }
+            if expires_in_hours is not None:
+                payload["expiresIn"] = f"{expires_in_hours}h"
 
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-within-limit",
-                "description": f"Test key with {expires_in_hours}h expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key within limit: expires_in={expires_in_hours}h, expiresAt={data.get('expiresAt')}")
+            response = requests.post(
+                api_keys_base_url,
+                headers=headers,
+                json=payload,
+                timeout=30,
+                verify=TLS_VERIFY,
+            )
 
-    def test_create_key_at_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exactly at the limit should succeed."""
+            if not should_succeed:
+                assert response.status_code == 400, (
+                    f"Expected 400 for {label}, got {response.status_code}: {response.text}"
+                )
+                error_text = response.text.lower()
+                assert "exceed" in error_text or "maximum" in error_text, (
+                    f"Error for {label} should mention the maximum: {response.text}"
+                )
+                continue
 
-        # Request expiration exactly at the limit
-        expires_in_hours = max_expiration_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-at-limit",
-                "description": f"Test key with exactly {max_expiration_days} days expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key at limit: expires_in={expires_in_hours}h ({max_expiration_days} days)")
-
-    def test_create_key_exceeds_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exceeding the limit should fail."""
-
-        # Request expiration exceeding the limit (e.g., 2x the limit)
-        exceeds_days = max_expiration_days * 2
-        expires_in_hours = exceeds_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-exceeds-limit",
-                "description": f"Test key with {exceeds_days} days expiration (exceeds {max_expiration_days} day limit)",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code == 400, f"Expected 400 for exceeding limit, got {r.status_code}: {r.text}"
-        
-        # Verify error message mentions the limit
-        error_text = r.text.lower()
-        assert "exceed" in error_text or "maximum" in error_text, \
-            f"Error message should mention exceeding maximum: {r.text}"
-        print(f"[expiration] Correctly rejected key exceeding limit: {exceeds_days} days > {max_expiration_days} days")
-
-    def test_create_key_without_expiration(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key without expiration should succeed (expiration is optional by default)."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-no-expiration",
-                "description": "Test key without expiration"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        # expiresAt should be absent or null for non-expiring keys
-        expires_at = data.get("expiresAt")
-        if expires_at:
-            print(f"[expiration] Key created with default expiration: {expires_at}")
-        else:
-            print("[expiration] Key created without expiration (never expires)")
-
-    def test_create_key_with_short_expiration(self, api_keys_base_url: str, headers: dict):
-        """Test: Creating API key with very short expiration (1 hour) should succeed."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-short-expiration",
-                "description": "Test key with 1 hour expiration",
-                "expiresIn": "1h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key with 1h expiration: expiresAt={data.get('expiresAt')}")
+            assert response.status_code in (200, 201), (
+                f"Expected 200/201 for {label}, got {response.status_code}: {response.text}"
+            )
+            data = response.json()
+            assert "key" in data, f"Response for {label} should contain key"
+            if expires_in_hours is not None:
+                assert "expiresAt" in data, f"Response for {label} should contain expiresAt"
 
 
 class TestAPIKeyModelInference:
