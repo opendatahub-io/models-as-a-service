@@ -1,5 +1,5 @@
 // Package cache provides read access to tenant metadata.
-// The informer-backed implementation will be added in RHOAIENG-90729.
+// The informer-backed implementation watches AITenant and Gateway CRs.
 package cache
 
 import (

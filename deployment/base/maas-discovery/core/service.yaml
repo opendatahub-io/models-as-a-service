@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-discovery
+spec:
+  selector:
+    app.kubernetes.io/name: maas-discovery
+  ports:
+  - name: https
+    port: 8443
+    targetPort: https
+    protocol: TCP
+  type: ClusterIP
