@@ -4,11 +4,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
-
-	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
 
 func TestIsMaaSOwnedIPPResource(t *testing.T) {
@@ -61,15 +58,4 @@ func TestIsMaaSOwnedIPPResource(t *testing.T) {
 	}}
 	unmanagedPraxis.SetGroupVersionKind(GVKDeployment)
 	assert.False(t, isMaaSOwnedIPPResource(unmanagedPraxis, configUID))
-}
-
-func TestIPPMigrationCleanupMarker(t *testing.T) {
-	tenant := &maasv1alpha1.MaasTenantConfig{
-		ObjectMeta: metav1.ObjectMeta{
-			Annotations: map[string]string{AnnotationIPPMigrationCleanupComplete: "true"},
-		},
-	}
-	assert.True(t, isIPPMigrationCleanupComplete(tenant))
-	tenant.SetAnnotations(nil)
-	assert.False(t, isIPPMigrationCleanupComplete(tenant))
 }

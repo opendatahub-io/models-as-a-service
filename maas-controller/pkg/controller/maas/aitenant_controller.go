@@ -769,7 +769,7 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 			return err
 		}
 		return nil
-	}, seedIPPMigrationCleanupCompleteOnCreate); err != nil {
+	}, seedPayloadProcessingStatusOnCreate); err != nil {
 		if isNamespaceMissingError(err) {
 			return false, true, nil
 		}
@@ -790,21 +790,21 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 		ready.ObservedGeneration == config.Generation, false, nil
 }
 
-// seedIPPMigrationCleanupCompleteOnCreate is the mutateCreate hook for
-// ensureTenantConfig: it seeds tenantreconcile.AnnotationIPPMigrationCleanupComplete to
-// IPPMigrationMarkerClearValue only at the moment a MaasTenantConfig is first created,
-// so a brand-new tenant's first-ever deploy is never blocked by the payload-processing
-// backend swap handshake (see that annotation's doc comment for the full state
-// machine). This must never run on the update path (upsertWithCreate's plain mutate
-// callback, which runs on every reconcile): once a tenant has swapped backends at least
-// once, an absent marker correctly means "blocked, a cleanup is in flight" —
-// re-seeding it there on every reconcile would incorrectly clear that block.
-func seedIPPMigrationCleanupCompleteOnCreate(obj client.Object) error {
+// seedPayloadProcessingStatusOnCreate is the mutateCreate hook for
+// ensureTenantConfig: it seeds tenantreconcile.AnnotationPayloadProcessingStatus
+// to cleanup-complete only at the moment a MaasTenantConfig is first created,
+// so a brand-new tenant's first-ever deploy is never blocked by the payload-
+// processing backend swap handshake (see that annotation's doc comment).
+// This must never run on the update path (upsertWithCreate's plain mutate
+// callback): once a tenant has swapped backends, absent correctly means
+// legacy steady / blocked for praxis — re-seeding cleanup-complete on every
+// reconcile would incorrectly clear that.
+func seedPayloadProcessingStatusOnCreate(obj client.Object) error {
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
 		annotations = map[string]string{}
 	}
-	annotations[tenantreconcile.AnnotationIPPMigrationCleanupComplete] = tenantreconcile.IPPMigrationMarkerClearValue
+	annotations[tenantreconcile.AnnotationPayloadProcessingStatus] = tenantreconcile.PayloadProcessingStatusCleanupComplete
 	obj.SetAnnotations(annotations)
 	return nil
 }

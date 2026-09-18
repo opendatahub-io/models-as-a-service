@@ -250,7 +250,7 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 
 	gotTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, gotTenant))
-	assert.Equal(t, "true", gotTenant.Annotations[AnnotationIPPMigrationCleanupComplete])
+	assert.Equal(t, PayloadProcessingStatusCleanupComplete, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
 }
 
 func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.T) {
@@ -309,7 +309,7 @@ func TestRunPlatform_PraxisSkipsCleanupAfterMigrationComplete(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
-	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = "true"
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -359,10 +359,9 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
-	// Simulates AITenantReconciler.seedIPPMigrationCleanupCompleteOnCreate: every real
-	// MaasTenantConfig is seeded with the clear marker at creation time, so a brand-new
-	// tenant's first-ever deploy is never blocked.
-	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = IPPMigrationMarkerClearValue
+	// Simulates AITenantReconciler seed: every new MaasTenantConfig is seeded
+	// with cleanup-complete at creation time.
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -397,12 +396,10 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	require.NotNil(t, result)
 	assert.False(t, result.DeploymentPending, result.Detail)
 
-	// The initial transition-in must have claimed (deleted) the migration marker,
-	// returning it to its blocked resting state until the next swap.
+	// Claiming for legacy deletes the status back to absent (legacy steady).
 	var gotTenant maasv1alpha1.MaasTenantConfig
 	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, &gotTenant))
-	_, stillPresent := gotTenant.Annotations[AnnotationIPPMigrationCleanupComplete]
-	assert.False(t, stillPresent, "claiming must delete the marker annotation")
+	assert.Equal(t, "", payloadProcessingStatus(&gotTenant))
 
 	hasIPPDeployment := false
 	hasIPPEnvoyFilter := false
@@ -427,9 +424,7 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
-	// Simulates AITenantReconciler.seedIPPMigrationCleanupCompleteOnCreate: every real
-	// MaasTenantConfig is seeded with the clear marker at creation time.
-	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = IPPMigrationMarkerClearValue
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -467,19 +462,9 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 }
 
 // TestRunPlatform_LegacyBlockedDuringInFlightSwap covers the race this whole
-// handshake exists to close for a tenant that has an existing (non-praxis)
-// backend and is transitioning in for the first time: praxis's own
-// switch-off cleanup has not finished (and therefore has not yet written the
-// clear marker), and legacy's own bundle does not exist yet either. Without
-// the marker gate, RunPlatform would apply legacy IPP immediately —
-// concurrently with the in-flight praxis cleanup — recreating the exact
-// resource-name collision the swap handshake is meant to prevent. The
-// absent-marker-is-blocked default (rather than absent-is-ok) is what makes
-// this safe without requiring any seeding for tenants that predate this
-// handshake: every tenant reconciled before this code shipped is guaranteed
-// to already have a bundle deployed (nothing previously gated that), so
-// legacyIPPBundleExists is the only realistic way to reach this path with an
-// absent marker — and that is precisely the case that must block.
+// TestRunPlatform_LegacyBlockedDuringInFlightSwap covers the race the swap
+// handshake closes: a peer still owns the dataplane (opaque non-absent status)
+// and has not finished switch-off cleanup. Legacy must wait — not apply IPP.
 func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
 	const (
 		tenantName = "existing-team"
@@ -488,7 +473,8 @@ func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
 		gwName     = "existing-gateway"
 	)
 	scheme := praxisTestScheme(t)
-	tenant := praxisTenantConfig(appNs, tenantName) // no migration marker annotation set
+	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = "steady" // opaque peer claim
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -521,11 +507,11 @@ func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, result)
-	assert.True(t, result.DeploymentPending, "must wait for the switch-off cleanup's clear signal, not race ahead of it")
+	assert.True(t, result.DeploymentPending, "must wait for peer switch-off to write cleanup-complete")
 
 	for _, res := range applied {
 		if isIPPResource(res.gvk, res.name) {
-			t.Fatalf("unexpected IPP resource applied while the migration marker is unclaimed: %s %s/%s", res.gvk.String(), res.namespace, res.name)
+			t.Fatalf("unexpected IPP resource applied while a peer still owns: %s %s/%s", res.gvk.String(), res.namespace, res.name)
 		}
 	}
 }
@@ -1013,7 +999,7 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 	require.ErrorContains(t, err, "writer pod")
 	persistedTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), client.ObjectKeyFromObject(tenant), persistedTenant))
-	assert.False(t, isIPPMigrationCleanupComplete(persistedTenant), "cleanup must not be marked complete while a writer remains")
+	assert.False(t, isPayloadProcessingCleanupComplete(persistedTenant), "cleanup must not be marked complete while a writer remains")
 }
 
 func TestCleanupIPPExternalModelRoutes_IsNamespaceScoped(t *testing.T) {

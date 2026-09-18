@@ -109,10 +109,9 @@ func TestRemoveAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation(t *t
 }
 
 // TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate asserts that a
-// brand-new MaasTenantConfig is seeded with the "clear to deploy" IPP
-// migration marker at creation time, so its first-ever deploy is never
-// blocked by the payload-processing backend swap handshake (see
-// tenantreconcile.AnnotationIPPMigrationCleanupComplete).
+// brand-new MaasTenantConfig is seeded with cleanup-complete at creation
+// time, so its first-ever deploy is never blocked by the payload-processing
+// backend swap handshake (see tenantreconcile.AnnotationPayloadProcessingStatus).
 func TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
@@ -144,19 +143,16 @@ func TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate(t *testing.T) {
 	var tenant maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-a"}, &tenant)).To(Succeed())
 	g.Expect(tenant.Annotations).To(HaveKeyWithValue(
-		tenantreconcile.AnnotationIPPMigrationCleanupComplete,
-		tenantreconcile.IPPMigrationMarkerClearValue,
+		tenantreconcile.AnnotationPayloadProcessingStatus,
+		tenantreconcile.PayloadProcessingStatusCleanupComplete,
 	))
 }
 
 // TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim asserts
-// that once a transitioning-in party has claimed the IPP migration marker
-// (deleting it — see tenantreconcile.claimIPPMigrationMarker), a later,
-// unrelated AITenant reconcile must NOT resurrect it: seeding only ever
-// happens on the literal Create path (AITenantReconciler.
-// seedIPPMigrationCleanupCompleteOnCreate), never on the repeated
-// mutate/update path, or an absent marker mid-swap would be incorrectly
-// un-blocked.
+// that once a transitioning-in party has claimed the status (legacy deletes
+// it to absent; see tenantreconcile.claimLegacySteady), a later, unrelated
+// AITenant reconcile must NOT resurrect cleanup-complete: seeding only ever
+// happens on the literal Create path.
 func TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
@@ -189,18 +185,18 @@ func TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim(t *testing
 	var tenant maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
 
-	// Simulate a transitioning-in party claiming the marker (deleting it).
-	delete(tenant.Annotations, tenantreconcile.AnnotationIPPMigrationCleanupComplete)
+	// Simulate a transitioning-in legacy party claiming (deleting to absent).
+	delete(tenant.Annotations, tenantreconcile.AnnotationPayloadProcessingStatus)
 	g.Expect(cl.Update(context.Background(), &tenant)).To(Succeed())
 
 	// A later, unrelated reconcile (e.g. triggered by a gateway status
-	// change) must not resurrect the marker.
+	// change) must not resurrect cleanup-complete.
 	g.Expect(cl.Get(context.Background(), key, aitenant)).To(Succeed())
 	_, _, err := r.ensureTenantConfig(context.Background(), aitenant)
 	g.Expect(err).NotTo(HaveOccurred())
 
 	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
-	g.Expect(tenant.Annotations).NotTo(HaveKey(tenantreconcile.AnnotationIPPMigrationCleanupComplete))
+	g.Expect(tenant.Annotations).NotTo(HaveKey(tenantreconcile.AnnotationPayloadProcessingStatus))
 }
 
 func existingAITenantGateway(name string) *gatewayapiv1.Gateway {
