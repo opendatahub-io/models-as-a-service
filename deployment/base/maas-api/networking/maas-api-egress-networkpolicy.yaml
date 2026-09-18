@@ -1,0 +1,50 @@
+# Egress NetworkPolicy for maas-api pods.
+#
+# maas-api handles API keys, tokens, and database credentials. Per the RHOAI
+# operand NetworkPolicy contract, sensitive workloads must restrict egress to
+# documented destinations only.
+#
+# In-cluster Postgres is deployed alongside maas-api in the infrastructure
+# namespace (app=postgres). Kubernetes API access is required for token
+# projection and subject access reviews.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-api-egress-restrict
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+    app.kubernetes.io/component: networking
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
+  policyTypes:
+    - Egress
+  egress:
+    # DNS (CoreDNS on OCP listens on 5353 as well as 53)
+    - ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 5353
+        - protocol: TCP
+          port: 5353
+    # Kubernetes API server
+    - ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 6443
+    # Postgres in the infrastructure namespace
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432

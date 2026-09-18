@@ -23,6 +23,7 @@ import (
 	"sync"
 
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -96,7 +97,7 @@ type TenantReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;patch;delete
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;patch;update;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups=apiextensions.k8s.io,resources=customresourcedefinitions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=dscinitialization.opendatahub.io,resources=dscinitializations,verbs=get;list;watch
@@ -238,6 +239,60 @@ func (r *TenantReconciler) inTenantWorkNamespaces() predicate.Predicate {
 	})
 }
 
+// inTenantPlatformNamespaces extends inTenantWorkNamespaces with the gateway namespace
+// where payload-processing NetworkPolicies are reconciled.
+func (r *TenantReconciler) inTenantPlatformNamespaces() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		ns := o.GetNamespace()
+		return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
+	})
+}
+
+// managedTenantNetworkPolicy matches operand NetworkPolicies owned by TenantReconciler.
+func managedTenantNetworkPolicy() predicate.Predicate {
+	return predicate.NewPredicateFuncs(func(o client.Object) bool {
+		return isManagedTenantNetworkPolicyLabels(o.GetLabels())
+	})
+}
+
+func isManagedTenantNetworkPolicyLabels(labels map[string]string) bool {
+	if labels == nil {
+		return false
+	}
+	if labels[tenantreconcile.LabelODHAppPrefix+"/"+tenantreconcile.ComponentName] == "true" {
+		return true
+	}
+	switch labels["app.kubernetes.io/part-of"] {
+	case "models-as-a-service", "maas":
+		return true
+	}
+	return labels[tenantreconcile.LabelTenantName] != "" || labels[tenantreconcile.LabelTenantNamespace] != ""
+}
+
+func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
+	return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
+}
+
+func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
+	np, ok := obj.(*netwv1.NetworkPolicy)
+	if !ok {
+		return nil
+	}
+	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
+		return nil
+	}
+	if r.TenantNamespaceDiscoveryEnabled {
+		tenantNs := np.GetLabels()[tenantreconcile.LabelTenantNamespace]
+		if tenantNs != "" {
+			return []reconcile.Request{{NamespacedName: types.NamespacedName{
+				Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+				Namespace: tenantNs,
+			}}}
+		}
+	}
+	return r.enqueueDefaultTenant(ctx, obj)
+}
+
 func authenticationClusterSingleton() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == openshiftAuthenticationClusterName
@@ -274,6 +329,11 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			&corev1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
 			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
+		).
+		Watches(
+			&netwv1.NetworkPolicy{},
+			handler.EnqueueRequestsFromMapFunc(r.mapNetworkPolicyToMaasTenantConfigs),
+			builder.WithPredicates(r.inTenantPlatformNamespaces(), managedTenantNetworkPolicy()),
 		)
 
 	const authCRD = "authentications.config.openshift.io"
