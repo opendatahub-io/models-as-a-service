@@ -111,17 +111,35 @@ func RunPlatform(
 	// gated cleanup of existing MaaS-owned IPP operands, then stop touching
 	// payload-processing names — ai-gateway-controller owns them for praxis tenants.
 	if params.SkipIPP {
-		if !isIPPMigrationCleanupComplete(tenant) {
+		switch payloadProcessingStatus(tenant) {
+		case PayloadProcessingStatusCleanupComplete:
+			// Already signaled; do not re-cleanup.
+		case "":
+			// Absent: legacy still owned the names — clean up, then signal.
 			if err := cleanupIPPResources(ctx, c, params, mcfg.UID, log); err != nil {
 				return nil, fmt.Errorf("cleanup IPP resources: %w", err)
 			}
-			if err := markIPPMigrationCleanupComplete(ctx, c, tenant); err != nil {
-				return nil, fmt.Errorf("mark IPP migration cleanup complete: %w", err)
+			if err := markPayloadProcessingCleanupComplete(ctx, c, tenant); err != nil {
+				return nil, fmt.Errorf("mark payload-processing cleanup complete: %w", err)
 			}
+		default:
+			// Any other value is a peer claim; do not overwrite it.
 		}
 	} else {
-		if err := clearIPPMigrationCleanupComplete(ctx, c, tenant); err != nil {
-			return nil, fmt.Errorf("clear IPP migration cleanup marker: %w", err)
+		// Legacy IPP is selected. Status drives the handshake (no bundleExists gate):
+		//   absent            → apply
+		//   cleanup-complete  → CAS-claim to absent, then apply
+		//   any other value   → wait for peer switch-off
+		ready, err := ensureLegacyMayDeploy(ctx, c, tenant)
+		if err != nil {
+			return nil, fmt.Errorf("ensure legacy may deploy: %w", err)
+		}
+		if !ready {
+			return &RunResult{
+				DeploymentPending: true,
+				Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
+				Warnings:          params.Warnings,
+			}, nil
 		}
 		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
 			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
@@ -325,24 +343,81 @@ const ippExternalModelLabel = "inference.opendatahub.io/external-model"
 
 var inferenceExternalModelRouteOwnerGVK = schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"}
 
-func isIPPMigrationCleanupComplete(tenant client.Object) bool {
+func payloadProcessingStatus(tenant client.Object) string {
 	annotations := tenant.GetAnnotations()
-	return annotations != nil && annotations[AnnotationIPPMigrationCleanupComplete] == "true"
-}
-
-func markIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
-	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
-		annotations[AnnotationIPPMigrationCleanupComplete] = "true"
-	})
-}
-
-func clearIPPMigrationCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
-	if !isIPPMigrationCleanupComplete(tenant) {
-		return nil
+	if annotations == nil {
+		return ""
 	}
+	return annotations[AnnotationPayloadProcessingStatus]
+}
+
+func isPayloadProcessingCleanupComplete(tenant client.Object) bool {
+	return payloadProcessingStatus(tenant) == PayloadProcessingStatusCleanupComplete
+}
+
+func markPayloadProcessingCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
 	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
-		delete(annotations, AnnotationIPPMigrationCleanupComplete)
+		annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	})
+}
+
+// ensureLegacyMayDeploy decides whether legacy IPP may apply for tenant.
+//
+//	absent           → ready
+//	cleanup-complete → CAS-claim to absent, then ready
+//	any other value  → wait (peer owns the dataplane)
+func ensureLegacyMayDeploy(ctx context.Context, c client.Client, tenant client.Object) (ready bool, err error) {
+	switch payloadProcessingStatus(tenant) {
+	case "":
+		return true, nil
+	case PayloadProcessingStatusCleanupComplete:
+		return claimLegacySteady(ctx, c, tenant)
+	default:
+		return false, nil
+	}
+}
+
+// legacyIPPBundleExists reports whether this tenant's legacy IPP Deployment is
+// already present. Kept for tests / diagnostics; the deploy gate no longer
+// uses it (status is the durable claim).
+func legacyIPPBundleExists(ctx context.Context, c client.Client, params PlatformParams) (bool, error) {
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Namespace: params.GatewayNamespace, Name: PayloadProcessingDeploymentName(params.TenantIdentifier)}
+	if err := c.Get(ctx, key, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get legacy IPP deployment %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return true, nil
+}
+
+// claimLegacySteady atomically consumes cleanup-complete by deleting the
+// status annotation (legacy steady = absent) via optimistic-concurrency Update.
+func claimLegacySteady(ctx context.Context, c client.Client, tenant client.Object) (claimed bool, err error) {
+	latest, ok := tenant.DeepCopyObject().(client.Object)
+	if !ok {
+		return false, fmt.Errorf("expected client.Object copy, got %T", tenant.DeepCopyObject())
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(tenant), latest); err != nil {
+		return false, fmt.Errorf("get tenant config for payload-processing status claim: %w", err)
+	}
+	if payloadProcessingStatus(latest) != PayloadProcessingStatusCleanupComplete {
+		return false, nil
+	}
+	annotations := latest.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	delete(annotations, AnnotationPayloadProcessingStatus)
+	latest.SetAnnotations(annotations)
+	if err := c.Update(ctx, latest); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim payload-processing status to legacy steady: %w", err)
+	}
+	return true, nil
 }
 
 func patchTenantAnnotations(ctx context.Context, c client.Client, tenant client.Object, mutate func(map[string]string)) error {
@@ -401,15 +476,21 @@ func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UI
 	return false
 }
 
-// isMaaSOwnedIPPResource reports whether obj is an existing IPP resource applied by
-// maas-controller and safe to delete when enabling Praxis. Resources owned by
-// ai-gateway-controller or with opendatahub.io/managed=false are excluded.
+// isMaaSOwnedIPPResource reports whether obj is safe to delete during the one-shot
+// Praxis enablement cleanup. Resources owned by ai-gateway-controller are excluded.
+//
+// opendatahub.io/managed=false does NOT block cleanup: that annotation only opts a
+// resource out of steady-state SSA (see ApplyRendered). Backend switch-off must
+// still remove the whole IPP name set — including the plugins ConfigMap maas
+// stamps managed=false on — so the other controller can recreate it in its own
+// schema. Unmanaged leftovers (and MaaS-owned operands) are therefore deleted;
+// only cross-controller praxis ownership is preserved as a race guard.
 func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {
-	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
-		return false
-	}
 	if hasSSAFieldManager(obj, aiGatewayControllerFieldOwner) {
 		return false
+	}
+	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
+		return true
 	}
 	if hasConfigControllerOwner(obj, configUID) {
 		return true

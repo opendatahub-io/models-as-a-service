@@ -250,7 +250,7 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 
 	gotTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, gotTenant))
-	assert.Equal(t, "true", gotTenant.Annotations[AnnotationIPPMigrationCleanupComplete])
+	assert.Equal(t, PayloadProcessingStatusCleanupComplete, gotTenant.Annotations[AnnotationPayloadProcessingStatus])
 }
 
 func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.T) {
@@ -309,7 +309,7 @@ func TestRunPlatform_PraxisSkipsCleanupAfterMigrationComplete(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
-	tenant.Annotations[AnnotationIPPMigrationCleanupComplete] = "true"
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -359,6 +359,9 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
+	// Simulates AITenantReconciler seed: every new MaasTenantConfig is seeded
+	// with cleanup-complete at creation time.
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -372,7 +375,7 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 
 	var applied []appliedResource
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName),
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName),
 	}, &applied)
 
 	result, err := RunPlatform(
@@ -392,6 +395,11 @@ func TestRunPlatform_DefaultTenantAppliesIPPResources(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.False(t, result.DeploymentPending, result.Detail)
+
+	// Claiming for legacy deletes the status back to absent (legacy steady).
+	var gotTenant maasv1alpha1.MaasTenantConfig
+	require.NoError(t, cl.Get(context.Background(), types.NamespacedName{Namespace: appNs, Name: maasv1alpha1.MaasTenantConfigInstanceName}, &gotTenant))
+	assert.Equal(t, "", payloadProcessingStatus(&gotTenant))
 
 	hasIPPDeployment := false
 	hasIPPEnvoyFilter := false
@@ -416,6 +424,7 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	)
 	scheme := praxisTestScheme(t)
 	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
 	mcfg := &maasv1alpha1.Config{
 		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
 	}
@@ -430,7 +439,7 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	}
 
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, readyMaaSAPIDeployment(appNs, tenantName), ef,
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ef,
 	}, nil)
 
 	result, err := RunPlatform(
@@ -450,6 +459,61 @@ func TestRunPlatform_DefaultTenantReadyWithIPPEnvoyFilter(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, result)
 	assert.False(t, result.DeploymentPending, result.Detail)
+}
+
+// TestRunPlatform_LegacyBlockedDuringInFlightSwap covers the race this whole
+// TestRunPlatform_LegacyBlockedDuringInFlightSwap covers the race the swap
+// handshake closes: a peer still owns the dataplane (opaque non-absent status)
+// and has not finished switch-off cleanup. Legacy must wait — not apply IPP.
+func TestRunPlatform_LegacyBlockedDuringInFlightSwap(t *testing.T) {
+	const (
+		tenantName = "existing-team"
+		appNs      = "ai-tenant-existing-team"
+		gwNS       = "openshift-ingress"
+		gwName     = "existing-gateway"
+	)
+	scheme := praxisTestScheme(t)
+	tenant := praxisTenantConfig(appNs, tenantName)
+	tenant.Annotations[AnnotationPayloadProcessingStatus] = "steady" // opaque peer claim
+	mcfg := &maasv1alpha1.Config{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+	}
+	gateway := &gwapiv1.Gateway{
+		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
+	}
+	platformContext := PlatformContext{
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gwNS, Name: gwName},
+		Source:     "aitenant",
+	}
+
+	var applied []appliedResource
+	cl := runPlatformTestClient(t, scheme, []client.Object{
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName),
+	}, &applied)
+
+	result, err := RunPlatform(
+		context.Background(),
+		logr.Discard(),
+		cl,
+		scheme,
+		tenant,
+		platformContext,
+		platformOverlayManifestPath(t),
+		appNs,
+		"controller-ns",
+		"https://kubernetes.default.svc",
+		"opendatahub",
+		mcfg,
+	)
+	require.NoError(t, err)
+	require.NotNil(t, result)
+	assert.True(t, result.DeploymentPending, "must wait for peer switch-off to write cleanup-complete")
+
+	for _, res := range applied {
+		if isIPPResource(res.gvk, res.name) {
+			t.Fatalf("unexpected IPP resource applied while a peer still owns: %s %s/%s", res.gvk.String(), res.namespace, res.name)
+		}
+	}
 }
 
 func unstructuredIPPObject(gvk schema.GroupVersionKind, namespace, name string, annotations map[string]string) *unstructured.Unstructured {
@@ -563,7 +627,7 @@ func TestCleanupIPPResources_DeletesManagedResources(t *testing.T) {
 	}
 }
 
-func TestCleanupIPPResources_SkipsUnmanagedResources(t *testing.T) {
+func TestCleanupIPPResources_DeletesUnmanagedResources(t *testing.T) {
 	const (
 		tenantID = "praxis-team"
 		gwNS     = "openshift-ingress"
@@ -589,7 +653,8 @@ func TestCleanupIPPResources_SkipsUnmanagedResources(t *testing.T) {
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(GVKDeployment)
 	key := types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingDeploymentName(tenantID)}
-	require.NoError(t, cl.Get(context.Background(), key, got))
+	err = cl.Get(context.Background(), key, got)
+	assert.True(t, apierrors.IsNotFound(err), "unmanaged IPP resources must be deleted on switch-off")
 }
 
 func TestCleanupIPPResources_SkipsPraxisOwnedResources(t *testing.T) {
@@ -854,7 +919,7 @@ func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *te
 		"foreign deployment with writer pod": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
 			pod:        pod("writer", PayloadProcessingName, nil),
-			wantError:  "writer pod",
+			wantError:  "still present",
 		},
 		"Praxis deployment with writer pod": {
 			deployment: func() client.Object {
@@ -863,8 +928,9 @@ func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *te
 			pod:       pod("writer", PayloadProcessingName, nil),
 			wantError: "writer pod",
 		},
-		"foreign deployment without writer pod": {
+		"unmanaged deployment without writer pod still blocks": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
+			wantError:  "still present",
 		},
 		"Praxis pod is excluded": {
 			pod: pod("praxis", PayloadProcessingName, map[string]string{"app.kubernetes.io/managed-by": aiGatewayControllerFieldOwner}),
@@ -933,7 +999,7 @@ func TestRunPlatformDoesNotMarkCleanupCompleteWhileWriterPodRemains(t *testing.T
 	require.ErrorContains(t, err, "writer pod")
 	persistedTenant := &maasv1alpha1.MaasTenantConfig{}
 	require.NoError(t, cl.Get(context.Background(), client.ObjectKeyFromObject(tenant), persistedTenant))
-	assert.False(t, isIPPMigrationCleanupComplete(persistedTenant), "cleanup must not be marked complete while a writer remains")
+	assert.False(t, isPayloadProcessingCleanupComplete(persistedTenant), "cleanup must not be marked complete while a writer remains")
 }
 
 func TestCleanupIPPExternalModelRoutes_IsNamespaceScoped(t *testing.T) {
