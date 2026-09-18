@@ -641,7 +641,7 @@ func TestCleanupIPPResources_DeletesManagedResources(t *testing.T) {
 	}
 }
 
-func TestCleanupIPPResources_SkipsUnmanagedResources(t *testing.T) {
+func TestCleanupIPPResources_DeletesUnmanagedResources(t *testing.T) {
 	const (
 		tenantID = "praxis-team"
 		gwNS     = "openshift-ingress"
@@ -667,7 +667,8 @@ func TestCleanupIPPResources_SkipsUnmanagedResources(t *testing.T) {
 	got := &unstructured.Unstructured{}
 	got.SetGroupVersionKind(GVKDeployment)
 	key := types.NamespacedName{Namespace: gwNS, Name: PayloadProcessingDeploymentName(tenantID)}
-	require.NoError(t, cl.Get(context.Background(), key, got))
+	err = cl.Get(context.Background(), key, got)
+	assert.True(t, apierrors.IsNotFound(err), "unmanaged IPP resources must be deleted on switch-off")
 }
 
 func TestCleanupIPPResources_SkipsPraxisOwnedResources(t *testing.T) {
@@ -932,7 +933,7 @@ func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *te
 		"foreign deployment with writer pod": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
 			pod:        pod("writer", PayloadProcessingName, nil),
-			wantError:  "writer pod",
+			wantError:  "still present",
 		},
 		"Praxis deployment with writer pod": {
 			deployment: func() client.Object {
@@ -941,8 +942,9 @@ func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *te
 			pod:       pod("writer", PayloadProcessingName, nil),
 			wantError: "writer pod",
 		},
-		"foreign deployment without writer pod": {
+		"unmanaged deployment without writer pod still blocks": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
+			wantError:  "still present",
 		},
 		"Praxis pod is excluded": {
 			pod: pod("praxis", PayloadProcessingName, map[string]string{"app.kubernetes.io/managed-by": aiGatewayControllerFieldOwner}),

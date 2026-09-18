@@ -469,15 +469,21 @@ func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UI
 	return false
 }
 
-// isMaaSOwnedIPPResource reports whether obj is an existing IPP resource applied by
-// maas-controller and safe to delete when enabling Praxis. Resources owned by
-// ai-gateway-controller or with opendatahub.io/managed=false are excluded.
+// isMaaSOwnedIPPResource reports whether obj is safe to delete during the one-shot
+// Praxis enablement cleanup. Resources owned by ai-gateway-controller are excluded.
+//
+// opendatahub.io/managed=false does NOT block cleanup: that annotation only opts a
+// resource out of steady-state SSA (see ApplyRendered). Backend switch-off must
+// still remove the whole IPP name set — including the plugins ConfigMap maas
+// stamps managed=false on — so the other controller can recreate it in its own
+// schema. Unmanaged leftovers (and MaaS-owned operands) are therefore deleted;
+// only cross-controller praxis ownership is preserved as a race guard.
 func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {
-	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
-		return false
-	}
 	if hasSSAFieldManager(obj, aiGatewayControllerFieldOwner) {
 		return false
+	}
+	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
+		return true
 	}
 	if hasConfigControllerOwner(obj, configUID) {
 		return true

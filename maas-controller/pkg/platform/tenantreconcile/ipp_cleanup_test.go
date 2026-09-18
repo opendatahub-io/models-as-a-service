@@ -47,8 +47,20 @@ func TestIsMaaSOwnedIPPResource(t *testing.T) {
 	assert.True(t, isMaaSOwnedIPPResource(legacyWithOwner, configUID))
 	assert.False(t, isMaaSOwnedIPPResource(praxisOwned, configUID))
 	assert.True(t, isMaaSOwnedIPPResource(legacyWithManager, configUID))
-	assert.False(t, isMaaSOwnedIPPResource(unmanaged, configUID))
+	assert.True(t, isMaaSOwnedIPPResource(unmanaged, configUID), "unmanaged resources must still be deleted on backend switch-off")
 	assert.True(t, isMaaSOwnedIPPResource(legacyWithTenantLabel, configUID))
+
+	// Praxis ownership wins over managed=false so we never delete the peer's bundle.
+	unmanagedPraxis := &unstructured.Unstructured{Object: map[string]any{
+		"metadata": map[string]any{
+			"annotations": map[string]any{AnnotationManaged: "false"},
+			"managedFields": []any{
+				map[string]any{"manager": aiGatewayControllerFieldOwner},
+			},
+		},
+	}}
+	unmanagedPraxis.SetGroupVersionKind(GVKDeployment)
+	assert.False(t, isMaaSOwnedIPPResource(unmanagedPraxis, configUID))
 }
 
 func TestIPPMigrationCleanupMarker(t *testing.T) {
