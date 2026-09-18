@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-discovery
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: maas-discovery-tls
+spec:
+  selector:
+    app.kubernetes.io/name: maas-discovery
+  ports:
+  - name: https
+    port: 8443
+    targetPort: https
+    protocol: TCP
+  type: ClusterIP

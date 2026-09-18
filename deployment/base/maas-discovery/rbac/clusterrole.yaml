@@ -1,0 +1,9 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: maas-discovery
+rules:
+# OpenShift cluster TLS security profile
+- apiGroups: ["config.openshift.io"]
+  resources: ["apiservers"]
+  verbs: ["get", "list", "watch"]
