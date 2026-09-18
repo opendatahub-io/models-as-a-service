@@ -82,6 +82,27 @@ def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
     )
 
 
+def _poll_auth_denied(
+    url: str,
+    headers: dict,
+    body: dict,
+    *,
+    timeout: int = 60,
+) -> requests.Response:
+    """POST until auth rejects the request; retry transient 404 (route propagation)."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        if last.status_code in (401, 403):
+            return last
+        if last.status_code != 404:
+            break
+        log.info("Auth check got transient 404 (route propagation), retrying...")
+        time.sleep(2)
+    status = last.status_code if last is not None else "no response"
+    raise AssertionError(f"Expected 401/403, got {status}")
+
 
 # ─── Connectivity check ──────────────────────────────────────────────────────
 
@@ -302,8 +323,7 @@ class TestExternalModelAuth:
         }
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}"
+        _poll_auth_denied(url, headers, body)
 
     def test_no_key_returns_401(self, external_models_setup):
         """No API key returns 401/403."""
@@ -312,8 +332,7 @@ class TestExternalModelAuth:
         headers = {"Content-Type": "application/json"}
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}"
+        _poll_auth_denied(url, headers, body)
 
 
 # ─── Tests: Egress ───────────────────────────────────────────────────────────
