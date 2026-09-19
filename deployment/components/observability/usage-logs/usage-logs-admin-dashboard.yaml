@@ -75,7 +75,7 @@ spec:
               name: usage-logs-all
             labelName: model
             matchers:
-              - '{service_name="models-as-a-service", model!="-"}'
+              - '{service_name="models-as-a-service", model!="-", response_type!="error"}'
     - kind: ListVariable
       spec:
         name: view_by
@@ -149,7 +149,7 @@ spec:
                     name: usage-logs-all
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model"}
+                    subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user" [$__range]))
                     or vector(0)
 
@@ -208,13 +208,13 @@ spec:
                     (
                       (
                         sum(count_over_time({service_name="models-as-a-service",
-                        subscription=~"$subscription", model=~"$model", response_type="hit"}
+                        subscription=~"$subscription", subscription!="-",model=~"$model", response_type="hit"}
                         | user_id=~"$user" [$__range]))
                         or vector(0)
                       )
                       /
                       sum(count_over_time({service_name="models-as-a-service",
-                      subscription=~"$subscription", model=~"$model"}
+                      subscription=~"$subscription", subscription!="-", model=~"$model"}
                       | user_id=~"$user" [$__range]))
                     )
                     or vector(1)
@@ -343,6 +343,13 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "value #4"
+                header: "Failed requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -354,10 +361,10 @@ spec:
                     name: usage-logs-all
                   query: >-
                     sum by (user_id, model, subscription) (sum_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | user_id=~"$user"
-                    | unwrap tokens_total [$__range]))
+                    | label_format target_tokens=`{{ if eq .response_type "hit" }}{{ .tokens_total }}{{ else }}0{{ end }}`
+                    | unwrap target_tokens [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -367,10 +374,11 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range]))
+                    sum by (user_id, model, subscription) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | user_id=~"$user"
+                    | label_format is_hit=`{{ if eq .response_type "hit" }}1{{ else }}0{{ end }}`
+                    | unwrap is_hit [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -380,16 +388,25 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-all
                   query: >-
-                    sum by (user_id, model, subscription) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    | user_id=~"$user" [$__range]))
-                    or
-                    (sum by (user_id, model, subscription) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range])) * 0)
-
+                    sum by (user_id, model, subscription) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | user_id=~"$user"
+                    | label_format is_rate_limit=`{{ if eq .response_type "rate_limit" }}1{{ else }}0{{ end }}`
+                    | unwrap is_rate_limit [$__range]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-all
+                  query: >-
+                    sum by (user_id, model, subscription) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
+                    | user_id=~"$user"
+                    | label_format is_error=`{{ if eq .response_type "error" }}1{{ else }}0{{ end }}`
+                    | unwrap is_error [$__range]))
   layouts:
     - kind: Grid
       spec:
