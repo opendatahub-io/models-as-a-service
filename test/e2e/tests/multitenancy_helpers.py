@@ -17,6 +17,7 @@ import requests
 MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT", "120"))
 
 from test_helper import (
+    CONTROLLER_DEPLOYMENT_NAME,
     DEPLOYMENT_NAMESPACE,
     GATEWAY_PROPAGATION_DELAY,
     GATEWAY_PROPAGATION_RETRIES,
@@ -362,7 +363,7 @@ def wait_for_annotation_contains(
 
 
 def controller_has_tenant_namespace_discovery() -> bool:
-    result = _oc_run(["get", "deployment", "maas-controller", "-n", DEPLOYMENT_NAMESPACE, "-o", "json"])
+    result = _oc_run(["get", "deployment", CONTROLLER_DEPLOYMENT_NAME, "-n", DEPLOYMENT_NAMESPACE, "-o", "json"])
     if result.returncode != 0:
         return False
     deployment = json.loads(result.stdout)
@@ -374,10 +375,10 @@ def controller_has_tenant_namespace_discovery() -> bool:
 
 
 def patch_controller_tenant_namespace_discovery(*, enabled: bool = True) -> None:
-    """Patch maas-controller Deployment to enable or disable tenant namespace discovery."""
-    result = _oc_run(["get", "deployment", "maas-controller", "-n", DEPLOYMENT_NAMESPACE, "-o", "json"])
+    """Patch controller Deployment to enable or disable tenant namespace discovery."""
+    result = _oc_run(["get", "deployment", CONTROLLER_DEPLOYMENT_NAME, "-n", DEPLOYMENT_NAMESPACE, "-o", "json"])
     if result.returncode != 0:
-        raise RuntimeError(f"failed to read maas-controller deployment: {result.stderr.strip()}")
+        raise RuntimeError(f"failed to read {CONTROLLER_DEPLOYMENT_NAME} deployment: {result.stderr.strip()}")
 
     deployment = json.loads(result.stdout)
     containers = deployment["spec"]["template"]["spec"]["containers"]
@@ -391,28 +392,28 @@ def patch_controller_tenant_namespace_discovery(*, enabled: bool = True) -> None
     apply_result = _oc_run(["apply", "-f", "-"], input_text=patch)
     if apply_result.returncode != 0:
         raise RuntimeError(
-            f"failed to patch maas-controller deployment: {apply_result.stderr.strip() or apply_result.stdout.strip()}"
+            f"failed to patch {CONTROLLER_DEPLOYMENT_NAME} deployment: {apply_result.stderr.strip() or apply_result.stdout.strip()}"
         )
 
     rollout = _oc_run(
-        ["rollout", "status", f"deployment/maas-controller", "-n", DEPLOYMENT_NAMESPACE, "--timeout=180s"],
+        ["rollout", "status", f"deployment/{CONTROLLER_DEPLOYMENT_NAME}", "-n", DEPLOYMENT_NAMESPACE, "--timeout=180s"],
         timeout=200,
     )
     if rollout.returncode != 0:
-        raise RuntimeError(f"maas-controller rollout failed: {rollout.stderr.strip() or rollout.stdout.strip()}")
+        raise RuntimeError(f"{CONTROLLER_DEPLOYMENT_NAME} rollout failed: {rollout.stderr.strip() or rollout.stdout.strip()}")
 
 
 def require_tenant_namespace_discovery():
     if env_bool("ENABLE_TENANT_NAMESPACE_DISCOVERY"):
         if not controller_has_tenant_namespace_discovery():
             pytest.fail(
-                "ENABLE_TENANT_NAMESPACE_DISCOVERY=true but maas-controller is missing "
+                f"ENABLE_TENANT_NAMESPACE_DISCOVERY=true but {CONTROLLER_DEPLOYMENT_NAME} is missing "
                 f"{DISCOVERY_ARG}; patch the deployment or run prow with multitenancy setup"
             )
         return
     if not controller_has_tenant_namespace_discovery():
         pytest.skip(
-            f"maas-controller does not have {DISCOVERY_ARG}; "
+            f"{CONTROLLER_DEPLOYMENT_NAME} does not have {DISCOVERY_ARG}; "
             "set ENABLE_TENANT_NAMESPACE_DISCOVERY=true and patch the deployment to run multi-tenancy E2E"
         )
 

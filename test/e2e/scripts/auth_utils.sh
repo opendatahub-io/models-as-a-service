@@ -390,12 +390,16 @@ run_auth_debug_report() {
   _run "maas-api service" "kubectl get svc maas-api -n $MAAS_API_DEPLOYMENT_NAMESPACE -o wide 2>/dev/null || true"
   _append ""
 
-  _section "maas-controller"
-  _run "maas-controller pods" "kubectl get pods -n $DEPLOYMENT_NAMESPACE -l app=maas-controller -o wide 2>/dev/null || true"
+  local _ctrl_deploy="${CONTROLLER_DEPLOYMENT_NAME:-maas-controller}"
+  if [[ ! "$_ctrl_deploy" =~ ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$ ]]; then
+    _ctrl_deploy="maas-controller"
+  fi
+  _section "$_ctrl_deploy"
+  _run "$_ctrl_deploy pods" "kubectl get pods -n $DEPLOYMENT_NAMESPACE -l app=$_ctrl_deploy -o wide 2>/dev/null || true"
 
   local env_display
-  env_display=$(kubectl get deployment maas-controller -n $DEPLOYMENT_NAMESPACE -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="INFRA_NAMESPACE" or .name=="MAAS_API_NAMESPACE") | if .value then "\(.name)=\(.value)" elif .valueFrom.fieldRef.fieldPath then "\(.name)=\(.valueFrom.fieldRef.fieldPath)" else "\(.name)=N/A" end' 2>/dev/null || echo 'namespace env=N/A')
-  _run "maas-controller namespace env" "echo '$env_display'"
+  env_display=$(kubectl get deployment "$_ctrl_deploy" -n "$DEPLOYMENT_NAMESPACE" -o jsonpath='{.spec.template.spec.containers[0].env}' 2>/dev/null | jq -r '.[] | select(.name=="INFRA_NAMESPACE" or .name=="MAAS_API_NAMESPACE") | if .value then "\(.name)=\(.value)" elif .valueFrom.fieldRef.fieldPath then "\(.name)=\(.valueFrom.fieldRef.fieldPath)" else "\(.name)=N/A" end' 2>/dev/null || echo 'namespace env=N/A')
+  _run "$_ctrl_deploy namespace env" "echo '$env_display'"
   _append ""
 
   _section "Kuadrant Policies"

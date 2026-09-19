@@ -31,6 +31,7 @@ import requests
 
 from multitenancy_helpers import controller_has_tenant_namespace_discovery
 from test_helper import (
+    CONTROLLER_DEPLOYMENT_NAME,
     MODEL_NAMESPACE,
     MODEL_REF,
     TIMEOUT,
@@ -60,7 +61,7 @@ def _skip_when_tenant_discovery_enabled():
         )
     if controller_has_tenant_namespace_discovery():
         pytest.skip(
-            "maas-controller has tenant namespace discovery enabled; "
+            f"{CONTROLLER_DEPLOYMENT_NAME} has tenant namespace discovery enabled; "
             "these tests assume dormant single-namespace reconciliation"
         )
 
