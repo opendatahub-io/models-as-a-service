@@ -125,6 +125,7 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 - Scope Secret informer cache to infrastructure namespace.
 - Parse Authorino bracket-wrapped groups header format.
 - Return empty list (not error) from management endpoints when no auth context present.
+- **Gateway auth 401/403 responses now return OpenAI-compatible JSON error bodies (RHOAIENG-94567):** Previously, the gateway `AuthPolicy` returned empty or plain-text bodies for authentication and authorization failures. Responses now include structured `{"error":{"message":"...","type":"...","code":...}}` JSON bodies with `Content-Type: application/json`, matching the OpenAI error format expected by standard SDKs and clients.
 
 ### Known Limitations
 
