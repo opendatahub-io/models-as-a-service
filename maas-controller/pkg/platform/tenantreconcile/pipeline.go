@@ -509,6 +509,18 @@ func ensureIPPWritersStopped(ctx context.Context, c client.Client, params Platfo
 		}
 	}
 	for _, ref := range writerChecks {
+		dep := &unstructured.Unstructured{}
+		dep.SetGroupVersionKind(ref.gvk)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ref.namespace, Name: ref.name}, dep); err == nil {
+			if !isMaaSOwnedIPPResource(dep, configUID) {
+				// Praxis (or another non-MaaS owner) still runs this Deployment.
+				// Its pods share tenant-instance labels with legacy IPP writers, so
+				// skip pod checks for this ref rather than blocking migration.
+				continue
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check IPP writer %s/%s: %w", ref.namespace, ref.name, err)
+		}
 		pods := &corev1.PodList{}
 		if err := c.List(ctx, pods, client.InNamespace(ref.namespace), client.MatchingLabels{LabelTenantInstance: ref.name}); err != nil {
 			return fmt.Errorf("check IPP writer pods for %s/%s: %w", ref.namespace, ref.name, err)

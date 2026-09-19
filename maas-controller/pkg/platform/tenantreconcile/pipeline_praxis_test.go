@@ -825,6 +825,26 @@ func TestEnsureIPPWritersStopped_DefersForTerminatingDeploymentAndRemainingPod(t
 	assert.ErrorContains(t, err, "writer pod")
 }
 
+func TestEnsureIPPWritersStopped_SkipsPodsWhenPraxisOwnsDeployment(t *testing.T) {
+	const (
+		ns       = "openshift-ingress"
+		tenantID = "team-a"
+	)
+	params := PlatformParams{GatewayNamespace: ns, TenantIdentifier: tenantID}
+	deployment := praxisOwnedDeployment(ns, PayloadProcessingDeploymentName(tenantID))
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name:      "praxis-writer",
+		Namespace: ns,
+		Labels: map[string]string{
+			LabelTenantInstance: PayloadProcessingDeploymentName(tenantID),
+			"app":               PayloadProcessingName,
+		},
+	}}
+	cl := fake.NewClientBuilder().WithScheme(praxisTestScheme(t)).WithObjects(deployment, pod).Build()
+	err := ensureIPPWritersStopped(context.Background(), cl, params, types.UID("cfg"))
+	assert.NoError(t, err)
+}
+
 func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *testing.T) {
 	const (
 		ns       = "openshift-ingress"
@@ -854,14 +874,12 @@ func TestEnsureIPPWritersStoppedChecksPodsIndependentOfDeploymentOwnership(t *te
 		"foreign deployment with writer pod": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
 			pod:        pod("writer", PayloadProcessingName, nil),
-			wantError:  "writer pod",
 		},
 		"Praxis deployment with writer pod": {
 			deployment: func() client.Object {
 				return praxisOwnedDeployment(ns, PayloadProcessingDeploymentName(tenantID))
 			}(),
-			pod:       pod("writer", PayloadProcessingName, nil),
-			wantError: "writer pod",
+			pod: pod("writer", PayloadProcessingName, nil),
 		},
 		"foreign deployment without writer pod": {
 			deployment: unstructuredIPPObject(GVKDeployment, ns, PayloadProcessingDeploymentName(tenantID), map[string]string{AnnotationManaged: "false"}),
