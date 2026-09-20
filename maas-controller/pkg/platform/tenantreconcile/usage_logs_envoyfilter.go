@@ -7,6 +7,15 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
+// usageLogsServiceNamespaceAttr is the OTel resource attribute carrying the namespace that
+// usage log records are attributed to.
+const usageLogsServiceNamespaceAttr = "service.namespace"
+
+// otelAccessLoggerName is the Envoy access logger that carries resource_attributes.
+// HttpConnectionManager.access_log is a repeated field, and resource_attributes exists only
+// on OpenTelemetryAccessLogConfig — other logger types must be left alone.
+const otelAccessLoggerName = "envoy.access_loggers.open_telemetry"
+
 // PatchUsageLogsEnvoyFilterWorkloadSelector sets spec.workloadSelector.labels["gateway.networking.k8s.io/gateway-name"]
 // to the tenant's gateway so the EnvoyFilter applies only to traffic through this tenant's gateway.
 func PatchUsageLogsEnvoyFilterWorkloadSelector(ef *unstructured.Unstructured, gatewayName string) error {
@@ -16,6 +25,81 @@ func PatchUsageLogsEnvoyFilterWorkloadSelector(ef *unstructured.Unstructured, ga
 		return fmt.Errorf("write workloadSelector: %w", err)
 	}
 	unstructured.RemoveNestedField(ef.Object, "spec", "targetRefs")
+	return nil
+}
+
+// PatchUsageLogsServiceNamespace appends the service.namespace resource attribute on the OTel
+// access logger. The manifest does not include this attribute; it is always added here so
+// usage records are attributed to the per-tenant workload namespace (e.g. ai-tenant-redteam,
+// or models-as-a-service for the default tenant) rather than the gateway namespace the
+// EnvoyFilter lives in.
+func PatchUsageLogsServiceNamespace(ef *unstructured.Unstructured, namespace string) error {
+	if namespace == "" {
+		return errors.New("service namespace must not be empty")
+	}
+
+	raw, found, err := unstructured.NestedFieldNoCopy(ef.Object, "spec", "configPatches")
+	if err != nil {
+		return fmt.Errorf("read configPatches: %w", err)
+	}
+	configPatches, ok := raw.([]any)
+	if !found || !ok || len(configPatches) == 0 {
+		return errors.New("configPatches not found or empty")
+	}
+
+	patched := false
+	for _, cp := range configPatches {
+		patch, ok := cp.(map[string]any)
+		if !ok {
+			continue
+		}
+		accessLogRaw, found, err := unstructured.NestedFieldNoCopy(patch, "patch", "value", "typed_config", "access_log")
+		if err != nil {
+			return fmt.Errorf("read access_log: %w", err)
+		}
+		accessLog, ok := accessLogRaw.([]any)
+		if !found || !ok {
+			continue
+		}
+		for i, entry := range accessLog {
+			accessLogEntry, ok := entry.(map[string]any)
+			if !ok {
+				return fmt.Errorf("access_log[%d] is not an object", i)
+			}
+			if name, _, _ := unstructured.NestedString(accessLogEntry, "name"); name != otelAccessLoggerName {
+				continue
+			}
+			if err := appendUsageLogsResourceAttribute(accessLogEntry, usageLogsServiceNamespaceAttr, namespace); err != nil {
+				return err
+			}
+			patched = true
+		}
+	}
+	if !patched {
+		return fmt.Errorf("no %s access_log entry found in configPatches", otelAccessLoggerName)
+	}
+	return nil
+}
+
+// appendUsageLogsResourceAttribute appends a string resource attribute on a single OTel access
+// log entry. The manifest is not expected to already contain this key.
+func appendUsageLogsResourceAttribute(accessLogEntry map[string]any, key, value string) error {
+	raw, found, err := unstructured.NestedFieldNoCopy(accessLogEntry, "typed_config", "resource_attributes", "values")
+	if err != nil {
+		return fmt.Errorf("read resource_attributes.values: %w", err)
+	}
+	values, ok := raw.([]any)
+	if !found || !ok {
+		values = nil
+	}
+
+	values = append(values, map[string]any{
+		"key":   key,
+		"value": map[string]any{"string_value": value},
+	})
+	if err := unstructured.SetNestedSlice(accessLogEntry, values, "typed_config", "resource_attributes", "values"); err != nil {
+		return fmt.Errorf("append resource attribute %s: %w", key, err)
+	}
 	return nil
 }
 

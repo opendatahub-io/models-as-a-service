@@ -29,26 +29,6 @@ func deletionTimestampSet(e event.UpdateEvent) bool {
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
-// payloadProcessingTypeAnnotationChanged returns true when the mirrored
-// maas.opendatahub.io/payload-processing-type annotation changes on an AITenant.
-// Annotation-only edits do not bump metadata.generation, so this predicate ensures
-// MaasTenantConfig mirrors stay in sync when operators switch praxis ↔ legacy IPP.
-func payloadProcessingTypeAnnotationChanged(e event.UpdateEvent) bool {
-	key := tenantreconcile.AnnotationPayloadProcessingType
-	return objectAnnotation(e.ObjectOld, key) != objectAnnotation(e.ObjectNew, key)
-}
-
-func objectAnnotation(obj client.Object, key string) string {
-	if obj == nil {
-		return ""
-	}
-	annotations := obj.GetAnnotations()
-	if annotations == nil {
-		return ""
-	}
-	return annotations[key]
-}
-
 // unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
 // and Update events only when the object's generation changed or its status.conditions
 // actually transitioned (type+status pairs differ). This filters out noise from

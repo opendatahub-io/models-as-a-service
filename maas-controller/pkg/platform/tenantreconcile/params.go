@@ -24,7 +24,9 @@ type PlatformParams struct {
 	GatewayName           string
 	ClusterAudience       string
 	SubscriptionNamespace string
-	ExternalOIDC          *maasv1alpha1.TenantExternalOIDCConfig
+	// ModelNamespace is the tenant namespace containing ExternalModels and their HTTPRoutes.
+	ModelNamespace string
+	ExternalOIDC   *maasv1alpha1.TenantExternalOIDCConfig
 
 	// TenantIdentifier is the tenant name used for per-tenant resource naming.
 	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
@@ -89,6 +91,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		ClusterAudience:         clusterAudience,
 		MonitoringNamespace:     monitoringNamespace,
 		SubscriptionNamespace:   tenant.GetNamespace(),
+		ModelNamespace:          tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),

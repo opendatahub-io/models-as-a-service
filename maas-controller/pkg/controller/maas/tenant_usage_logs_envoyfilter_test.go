@@ -3,6 +3,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	goruntime "runtime"
 	"testing"
@@ -90,6 +91,51 @@ func defaultUsageLogsPlatformContext() tenantreconcile.PlatformContext {
 }
 
 func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
+	usageLogsServiceNamespace := func(ef *unstructured.Unstructured) (string, error) {
+		configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		if err != nil {
+			return "", err
+		}
+		if found {
+			for _, cp := range configPatches {
+				patch, ok := cp.(map[string]any)
+				if !ok {
+					continue
+				}
+				accessLog, found, err := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "access_log")
+				if err != nil {
+					return "", err
+				}
+				if found {
+					for _, entry := range accessLog {
+						logEntry, ok := entry.(map[string]any)
+						if !ok {
+							continue
+						}
+						values, found, err := unstructured.NestedSlice(logEntry, "typed_config", "resource_attributes", "values")
+						if err != nil {
+							return "", err
+						}
+						if found {
+							for _, v := range values {
+								attr, ok := v.(map[string]any)
+								if !ok {
+									continue
+								}
+								if k, _, _ := unstructured.NestedString(attr, "key"); k != "service.namespace" {
+									continue
+								}
+								namespace, _, _ := unstructured.NestedString(attr, "value", "string_value")
+								return namespace, nil
+							}
+						}
+					}
+				}
+			}
+		}
+		return "", errors.New("service.namespace resource attribute not found in EnvoyFilter")
+	}
+
 	t.Run("disabled by default", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)
@@ -230,6 +276,10 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantName, tenantreconcile.DefaultAITenantName))
 		g.Expect(ef.GetAnnotations()).To(HaveKeyWithValue(tenantreconcile.AnnotationAITenantNamespace, usageLogsTestAITenantNS))
+
+		namespace, err := usageLogsServiceNamespace(ef)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(namespace).To(Equal(usageLogsTestDefaultTenant))
 	})
 
 	t.Run("enabled creates per-tenant filter for named tenant", func(t *testing.T) {
@@ -254,6 +304,11 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName("redteam"), Namespace: usageLogsTestGatewayNS}, ef)).
 			To(Succeed())
+
+		// service.namespace is injected by the patcher (the manifest only has service.name).
+		namespace, err := usageLogsServiceNamespace(ef)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(namespace).To(Equal("ai-tenant-redteam"))
 	})
 
 	t.Run("deletes existing when disabled", func(t *testing.T) {

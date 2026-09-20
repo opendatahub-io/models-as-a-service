@@ -45,22 +45,27 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
-func TestApplyAITenantMetadata_PropagatesPayloadProcessingTypeAnnotation(t *testing.T) {
+// TestApplyAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation asserts that
+// maas.opendatahub.io/payload-processing-type is no longer mirrored from AITenant onto
+// MaasTenantConfig: it lives only on MaasTenantConfig, set directly by operators, and
+// applyAITenantMetadata must leave a pre-existing value on the tenant config alone
+// regardless of what (if anything) the owning AITenant carries.
+func TestApplyAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation(t *testing.T) {
 	g := NewWithT(t)
 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "praxis-team",
 			Namespace: tenantreconcile.DefaultAITenantNamespace,
-			Annotations: map[string]string{
-				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
-			},
 		},
 	}
 	config := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 			Namespace: "ai-tenant-praxis-team",
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
+			},
 		},
 	}
 
@@ -69,32 +74,59 @@ func TestApplyAITenantMetadata_PropagatesPayloadProcessingTypeAnnotation(t *test
 	g.Expect(config.Annotations).To(HaveKeyWithValue(
 		tenantreconcile.AnnotationPayloadProcessingType,
 		tenantreconcile.PayloadProcessingTypePraxis,
-	))
-
-	aitenant.Annotations = nil
-	applyAITenantMetadata(config, aitenant, config.Namespace)
-	_, ok := config.Annotations[tenantreconcile.AnnotationPayloadProcessingType]
-	g.Expect(ok).To(BeFalse())
+	), "operator-set payload-processing-type on MaasTenantConfig must survive AITenant metadata reconciliation")
 }
 
-func TestAITenantReconcile_RemovesPayloadProcessingTypeMirrorOnDeannotation(t *testing.T) {
+// TestRemoveAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation asserts that
+// releasing AITenant ownership of a namespace/object (e.g. on AITenant deletion) does
+// not also clear the operator-set payload-processing-type selection.
+func TestRemoveAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation(t *testing.T) {
 	g := NewWithT(t)
-	s := aitenantTestScheme(t)
-	ctx := context.Background()
 
 	aitenant := &maasv1alpha1.AITenant{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "praxis-sync",
+			Name:      "praxis-team",
 			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	config := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis-team",
 			Annotations: map[string]string{
 				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
 			},
 		},
 	}
+	applyAITenantMetadata(config, aitenant, config.Namespace)
+
+	removeAITenantMetadata(config, aitenant, config.Namespace)
+
+	g.Expect(config.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingType,
+		tenantreconcile.PayloadProcessingTypePraxis,
+	))
+}
+
+// TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate asserts that a
+// brand-new MaasTenantConfig is seeded with cleanup-complete at creation
+// time, so its first-ever deploy is never blocked by the payload-processing
+// backend swap handshake (see tenantreconcile.AnnotationPayloadProcessingStatus).
+func TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	gateway := existingAITenantGateway("team-a")
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
-		WithObjects(aitenant, existingAITenantGateway("praxis-sync")).
+		WithObjects(aitenant, gateway).
 		Build()
 	r := &AITenantReconciler{
 		Client:           cl,
@@ -108,27 +140,63 @@ func TestAITenantReconcile_RemovesPayloadProcessingTypeMirrorOnDeannotation(t *t
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	reconcileAITenantToActive(t, r, key)
 
-	configKey := client.ObjectKey{
-		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
-		Namespace: "ai-tenant-praxis-sync",
-	}
-	var config maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(ctx, configKey, &config)).To(Succeed())
-	g.Expect(config.Annotations).To(HaveKeyWithValue(
-		tenantreconcile.AnnotationPayloadProcessingType,
-		tenantreconcile.PayloadProcessingTypePraxis,
+	var tenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-a"}, &tenant)).To(Succeed())
+	g.Expect(tenant.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingStatus,
+		tenantreconcile.PayloadProcessingStatusCleanupComplete,
 	))
+}
 
-	g.Expect(cl.Get(ctx, key, aitenant)).To(Succeed())
-	delete(aitenant.Annotations, tenantreconcile.AnnotationPayloadProcessingType)
-	g.Expect(cl.Update(ctx, aitenant)).To(Succeed())
+// TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim asserts
+// that once a transitioning-in party has claimed the status (legacy deletes
+// it to absent; see tenantreconcile.claimLegacySteady), a later, unrelated
+// AITenant reconcile must NOT resurrect cleanup-complete: seeding only ever
+// happens on the literal Create path.
+func TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
 
-	_, _, err := r.ensureTenantConfig(ctx, aitenant)
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	gateway := existingAITenantGateway("team-a")
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantToActive(t, r, key)
+
+	tenantKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-a"}
+	var tenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
+
+	// Simulate a transitioning-in legacy party claiming (deleting to absent).
+	delete(tenant.Annotations, tenantreconcile.AnnotationPayloadProcessingStatus)
+	g.Expect(cl.Update(context.Background(), &tenant)).To(Succeed())
+
+	// A later, unrelated reconcile (e.g. triggered by a gateway status
+	// change) must not resurrect cleanup-complete.
+	g.Expect(cl.Get(context.Background(), key, aitenant)).To(Succeed())
+	_, _, err := r.ensureTenantConfig(context.Background(), aitenant)
 	g.Expect(err).NotTo(HaveOccurred())
 
-	g.Expect(cl.Get(ctx, configKey, &config)).To(Succeed())
-	_, ok := config.Annotations[tenantreconcile.AnnotationPayloadProcessingType]
-	g.Expect(ok).To(BeFalse())
+	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
+	g.Expect(tenant.Annotations).NotTo(HaveKey(tenantreconcile.AnnotationPayloadProcessingStatus))
 }
 
 func existingAITenantGateway(name string) *gatewayapiv1.Gateway {
