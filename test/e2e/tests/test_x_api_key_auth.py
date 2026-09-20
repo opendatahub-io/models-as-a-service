@@ -36,6 +36,7 @@ from test_helper import (
     _gateway_url,
     _inference,
     _poll_status,
+    _wait_for_gateway_auth_enforced,
 )
 
 log = logging.getLogger(__name__)
@@ -128,11 +129,17 @@ def _trigger_reconcile():
                     result.stderr.strip())
 
 
-def _inference_x_api_key(api_key, path=None, model_name=None):
-    """Send inference with x-api-key header instead of Authorization."""
+def _inference_x_api_key(api_key, path=None, extra_headers=None, model_name=None):
+    """Send inference with x-api-key header instead of Authorization.
+
+    Accepts the same kwargs as ``_inference`` so it can be passed to
+    ``_poll_status(..., inference_fn=_inference_x_api_key)``.
+    """
     path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
         json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
@@ -175,7 +182,12 @@ def x_api_key_setup(api_key):
         _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
         raise
 
+    # AuthPolicy YAML can list api-keys-x-api-key before Kuadrant/Authorino has
+    # enforced it. Bearer still works via the existing api-keys identity, so a
+    # Bearer-only readiness check misses empty-body 401s on x-api-key.
+    _wait_for_gateway_auth_enforced(timeout=120)
     _poll_status(api_key, 200, timeout=60)
+    _poll_status(api_key, 200, timeout=120, inference_fn=_inference_x_api_key)
 
     log.info("x-api-key identity source is active, running tests...")
     yield api_key
