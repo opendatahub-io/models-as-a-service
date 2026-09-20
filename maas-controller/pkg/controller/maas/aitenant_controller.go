@@ -288,7 +288,6 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			predicate.Or(
 				predicate.GenerationChangedPredicate{},
 				predicate.Funcs{UpdateFunc: deletionTimestampSet},
-				predicate.Funcs{UpdateFunc: payloadProcessingTypeAnnotationChanged},
 			),
 		)).
 		Watches(
@@ -757,7 +756,7 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 			Namespace: tenantNamespace,
 		},
 	}
-	if err := r.upsert(ctx, config, aitenant, func(obj client.Object) error {
+	if err := r.upsertWithCreate(ctx, config, aitenant, func(obj client.Object) error {
 		t, ok := obj.(*maasv1alpha1.MaasTenantConfig)
 		if !ok {
 			return fmt.Errorf("expected MaasTenantConfig, got %T", obj)
@@ -770,7 +769,7 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 			return err
 		}
 		return nil
-	}); err != nil {
+	}, seedPayloadProcessingStatusOnCreate); err != nil {
 		if isNamespaceMissingError(err) {
 			return false, true, nil
 		}
@@ -789,6 +788,25 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 	return ready != nil &&
 		ready.Status == metav1.ConditionTrue &&
 		ready.ObservedGeneration == config.Generation, false, nil
+}
+
+// seedPayloadProcessingStatusOnCreate is the mutateCreate hook for
+// ensureTenantConfig: it seeds tenantreconcile.AnnotationPayloadProcessingStatus
+// to cleanup-complete only at the moment a MaasTenantConfig is first created,
+// so a brand-new tenant's first-ever deploy is never blocked by the payload-
+// processing backend swap handshake (see that annotation's doc comment).
+// This must never run on the update path (upsertWithCreate's plain mutate
+// callback): once a tenant has swapped backends, absent correctly means
+// legacy steady / blocked for praxis — re-seeding cleanup-complete on every
+// reconcile would incorrectly clear that.
+func seedPayloadProcessingStatusOnCreate(obj client.Object) error {
+	annotations := obj.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	annotations[tenantreconcile.AnnotationPayloadProcessingStatus] = tenantreconcile.PayloadProcessingStatusCleanupComplete
+	obj.SetAnnotations(annotations)
+	return nil
 }
 
 func (r *AITenantReconciler) copyLegacyTenantConfig(ctx context.Context, config *maasv1alpha1.MaasTenantConfig) error {
@@ -1779,15 +1797,6 @@ func applyAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, t
 	}
 	annotations[aitenantNameAnnotation] = aitenant.Name
 	annotations[aitenantNamespaceAnnotation] = aitenant.Namespace
-	payloadProcessingType := ""
-	if aitenantAnnotations := aitenant.GetAnnotations(); aitenantAnnotations != nil {
-		payloadProcessingType = aitenantAnnotations[tenantreconcile.AnnotationPayloadProcessingType]
-	}
-	if payloadProcessingType != "" {
-		annotations[tenantreconcile.AnnotationPayloadProcessingType] = payloadProcessingType
-	} else {
-		delete(annotations, tenantreconcile.AnnotationPayloadProcessingType)
-	}
 	obj.SetAnnotations(annotations)
 }
 
@@ -1806,7 +1815,6 @@ func removeAITenantMetadata(obj client.Object, aitenant *maasv1alpha1.AITenant, 
 	removeMapValueIfEqual(&annotations, aitenantNameAnnotation, aitenant.Name)
 	removeMapValueIfEqual(&annotations, aitenantNamespaceAnnotation, aitenant.Namespace)
 	removeMapValueIfEqual(&annotations, aitenantCreatedAnnotation, "true")
-	delete(annotations, tenantreconcile.AnnotationPayloadProcessingType)
 	obj.SetAnnotations(annotations)
 }
 

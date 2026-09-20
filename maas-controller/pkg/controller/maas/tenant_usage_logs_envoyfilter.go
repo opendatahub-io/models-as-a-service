@@ -149,6 +149,12 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		return false, fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
 	}
 
+	// Attribute usage records to the per-tenant workload namespace, not the gateway
+	// namespace the EnvoyFilter itself lives in.
+	if err := tenantreconcile.PatchUsageLogsServiceNamespace(ef, tenant.GetNamespace()); err != nil {
+		return false, fmt.Errorf("patch service.namespace in EnvoyFilter: %w", err)
+	}
+
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
@@ -163,7 +169,8 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 
 	log.V(1).Info("applied usage-logs EnvoyFilter",
 		"name", efName, "namespace", r.GatewayNamespace,
-		"gateway", gatewayName, "collector", collectorAddress)
+		"gateway", gatewayName, "collector", collectorAddress,
+		"serviceNamespace", tenant.GetNamespace())
 	return true, nil
 }
 

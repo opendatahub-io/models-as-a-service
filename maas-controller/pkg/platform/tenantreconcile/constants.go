@@ -32,9 +32,34 @@ const (
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
-	// AnnotationIPPMigrationCleanupComplete marks that the one-shot legacy IPP cleanup
-	// for an IPP→praxis migration has finished on this tenant config.
-	AnnotationIPPMigrationCleanupComplete = "maas.opendatahub.io/ipp-migration-cleanup-complete"
+	// AnnotationPayloadProcessingStatus coordinates the payload-processing backend
+	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
+	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
+	//
+	// From maas-controller's perspective only two values matter:
+	//   - PayloadProcessingStatusCleanupComplete ("cleanup-complete"): clear to claim.
+	//     When legacy is selected, CAS-claim by deleting the annotation (back to absent)
+	//     then deploy. When praxis is selected (SkipIPP), this means we already finished
+	//     IPP cleanup and must not re-run it.
+	//   - absent: legacy owns / may deploy when legacy is selected (existing tenants are
+	//     assumed to run legacy IPP). When praxis is selected, absent means we still need
+	//     to clean up legacy IPP and then write cleanup-complete.
+	//   - any other value (e.g. praxis's own claim sentinel): not our turn — wait when
+	//     legacy is selected; do not overwrite when SkipIPP. maas-controller does not
+	//     interpret peer-specific values.
+	//
+	// Every new MaasTenantConfig is seeded with cleanup-complete at creation time
+	// (see AITenantReconciler.ensureTenantConfig's mutateCreate hook) so a brand-new
+	// tenant's first-ever deploy is never blocked by absent.
+	//
+	// The switch-off party deletes its bundle first, then sets cleanup-complete only
+	// after full cleanup success. Transitioning-in parties claim via optimistic-
+	// concurrency Update (resourceVersion-checked), not a blind merge-patch.
+	AnnotationPayloadProcessingStatus = "maas.opendatahub.io/payload-processing-status"
+
+	// PayloadProcessingStatusCleanupComplete means peer cleanup finished; the
+	// selected party may claim.
+	PayloadProcessingStatusCleanupComplete = "cleanup-complete"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
