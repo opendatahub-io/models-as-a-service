@@ -1124,3 +1124,180 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 		})
 	}
 }
+
+
+func TestCleanupMaaSSubscriptions_LogsStuckDetection(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	scheme := tenantTestScheme(t)
+	tenantNS := "test-tenant"
+
+	stuckTime := metav1.NewTime(time.Now().Add(-3 * time.Minute))
+	stuckSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "stuck-sub",
+			Namespace:         tenantNS,
+			DeletionTimestamp: &stuckTime,
+			Finalizers:        []string{"test.finalizer/cleanup"},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tenantTestNamespace(tenantNS)).
+		WithObjects(stuckSub, tenant).
+		Build()
+
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	// Cleanup should detect the stuck subscription
+	deleted, err := r.cleanupMaaSSubscriptions(ctx, ctrl.Log.WithValues("test", "stuck-detection"), tenant)
+
+	// Should still return false because subscription hasn't been deleted
+	g.Expect(deleted).To(BeFalse())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestCleanupMaaSSubscriptions_RecentlyDeletedWaits(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	scheme := tenantTestScheme(t)
+	tenantNS := "test-tenant"
+
+	recentTime := metav1.NewTime(time.Now().Add(-30 * time.Second))
+	recentSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "recent-sub",
+			Namespace:         tenantNS,
+			DeletionTimestamp: &recentTime,
+			Finalizers:        []string{"test.finalizer/cleanup"},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tenantTestNamespace(tenantNS)).
+		WithObjects(recentSub, tenant).
+		Build()
+
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	// Should wait, not force-remove
+	deleted, err := r.cleanupMaaSSubscriptions(ctx, ctrl.Log.WithValues("test", "recent-deletion"), tenant)
+
+	g.Expect(deleted).To(BeFalse())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Verify finalizer is still there (we're just waiting)
+	var updated maasv1alpha1.MaaSSubscription
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(recentSub), &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).NotTo(BeEmpty())
+}
+
+func TestCleanupMaaSSubscriptions_NoSubscriptions(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	scheme := tenantTestScheme(t)
+	tenantNS := "test-tenant"
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tenantTestNamespace(tenantNS)).
+		WithObjects(tenant).
+		Build()
+
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	// Should return true immediately when there are no subscriptions
+	deleted, err := r.cleanupMaaSSubscriptions(ctx, ctrl.Log.WithValues("test", "no-subs"), tenant)
+
+	g.Expect(deleted).To(BeTrue())
+	g.Expect(err).NotTo(HaveOccurred())
+}
+
+func TestCleanupMaaSAuthPolicies_RecentlyDeletedWaits(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	scheme := tenantTestScheme(t)
+	tenantNS := "test-tenant"
+
+	recentTime := metav1.NewTime(time.Now().Add(-45 * time.Second))
+	recentPolicy := &maasv1alpha1.MaaSAuthPolicy{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "recent-policy",
+			Namespace:         tenantNS,
+			DeletionTimestamp: &recentTime,
+			Finalizers:        []string{"test.finalizer/cleanup"},
+		},
+	}
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tenantTestNamespace(tenantNS)).
+		WithObjects(recentPolicy, tenant).
+		Build()
+
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	// Should wait, not force-remove
+	deleted, err := r.cleanupMaaSAuthPolicies(ctx, ctrl.Log.WithValues("test", "recent-deletion"), tenant)
+
+	g.Expect(deleted).To(BeFalse())
+	g.Expect(err).NotTo(HaveOccurred())
+
+	// Verify finalizer is still there
+	var updated maasv1alpha1.MaaSAuthPolicy
+	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(recentPolicy), &updated)).To(Succeed())
+	g.Expect(updated.Finalizers).NotTo(BeEmpty())
+}
+
+func TestCleanupMaaSAuthPolicies_NoAuthPolicies(t *testing.T) {
+	g := NewWithT(t)
+	ctx := context.Background()
+	scheme := tenantTestScheme(t)
+	tenantNS := "test-tenant"
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "default-tenant",
+			Namespace: tenantNS,
+		},
+	}
+
+	cl := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(tenantTestNamespace(tenantNS)).
+		WithObjects(tenant).
+		Build()
+
+	r := &TenantReconciler{Client: cl, Scheme: scheme}
+
+	// Should return true immediately when there are no auth policies
+	deleted, err := r.cleanupMaaSAuthPolicies(ctx, ctrl.Log.WithValues("test", "no-policies"), tenant)
+
+	g.Expect(deleted).To(BeTrue())
+	g.Expect(err).NotTo(HaveOccurred())
+}
