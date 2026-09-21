@@ -24,8 +24,15 @@ spec:
   policyTypes:
     - Egress
   egress:
-    # DNS (CoreDNS on OCP listens on 5353 as well as 53)
-    - ports:
+    # DNS (OpenShift CoreDNS; allow both 53 and 5353 for OVN DNAT)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-dns
+          podSelector:
+            matchLabels:
+              dns.operator.openshift.io/daemonset-dns: default
+      ports:
         - protocol: UDP
           port: 53
         - protocol: TCP
@@ -34,8 +41,12 @@ spec:
           port: 5353
         - protocol: TCP
           port: 5353
-    # Kubernetes API server
-    - ports:
+    # Kubernetes API server (in-cluster client uses kubernetes.default.svc)
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: openshift-kube-apiserver
+      ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
