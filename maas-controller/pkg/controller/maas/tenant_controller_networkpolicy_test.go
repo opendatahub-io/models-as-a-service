@@ -74,7 +74,7 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 			Namespace: infraNS,
 			Labels: map[string]string{
 				tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
-				tenantreconcile.LabelTenantNamespace:                                  tenantNS,
+				tenantreconcile.LabelTenantNamespace:                                    tenantNS,
 			},
 		},
 	}
