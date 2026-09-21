@@ -473,7 +473,7 @@ they must not infer a model from an absent payload.
 
 ## Mapping to the NeMo API
 
-Use `POST /v1/guardrail/checks` for independent content evaluation. MaaS inference routing, credentials, accounting and Responses
+Use `POST /v1/checks` for independent content evaluation. MaaS inference routing, credentials, accounting and Responses
 persistence remain in the gateway. The request's `model` is the fixed compatibility value `check-model`; it does not
 select the MaaS inference backend or the model used by a guardrail task. No model field is exposed on AIGuardrail.
 
@@ -992,7 +992,7 @@ filter_chains:
                 x-aigateway-guardrail-RENDER_CHECK_ID(<tenant-namespace>,application-safety-v1,application-check): "true"
         provider: &tenant_nemo
           type: nemo
-          endpoint: RENDER_TENANT_NEMO_CHECKS_URL # Discovered base URL plus /v1/guardrail/checks.
+          endpoint: RENDER_TENANT_NEMO_CHECKS_URL # Discovered base URL plus /v1/checks.
           model: check-model # Fixed compatibility value; task models are configured in NeMo.
           timeout_ms: 5000
           allow_private_endpoint: true # Existing option for the approved in-cluster NeMo endpoint.
@@ -1139,15 +1139,15 @@ example has one Output check and does not require that expansion.
 ### Minimal additions and remaining integration boundaries
 
 The current `praxis-ai/filters/src/guardrails/providers/nemo.rs` accepts `endpoint`, `allow_private_endpoint`, `model`
-and `timeout_ms`, sends only `model` and `messages`, and uses the `/v1/guardrail/checks` verdict convention. Generic
+and `timeout_ms`, sends only `model` and `messages`, and uses the `/v1/checks` verdict convention. Generic
 `ai_guardrails` already supports `phase.request/response` and conditions. These settings need no new YAML schema.
 The proposed NeMo schema additions are **`config_id`, `authentication.bearer_token_file` and `tls.ca_file`**; they are
 marked in the generated YAML. Setting the existing `model` field to `check-model` is a compilation choice, subject to the NeMo task-routing contract above.
 
 | Requirement                                | Existing foundation                                                      | Smallest proposed change or integration obligation                                                                                                                                                                              |
 |--------------------------------------------|--------------------------------------------------------------------------|---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
-| Select each NeMo configuration | Existing NeMo provider | Add singular `provider.config_id`; serialize it as one-element `guardrails.config_ids` for `/v1/guardrail/checks` |
-| Validate `/v1/guardrail/checks` verdicts | Existing endpoint and `success`/`blocked`/error mapping | Retain verdict mapping; require `rails_status` per the supplied OpenAPI before accepting a pass |
+| Select each NeMo configuration | Existing NeMo provider | Add singular `provider.config_id`; serialize it as one-element `guardrails.config_ids` for `/v1/checks` |
+| Validate `/v1/checks` verdicts | Existing endpoint and `success`/`blocked`/error mapping | Retain verdict mapping; require `rails_status` per the supplied OpenAPI before accepting a pass |
 | Keep task models in NeMo | Existing Praxis `provider.model` field | Set fixed `check-model`; require explicit NeMo task routing with no fallback; no per-config model discovery |
 | Dedicated NeMo authentication              | Existing provider HTTP callout                                           | Add `provider.authentication.bearer_token_file`, read from a private mount and send only to the approved endpoint; define rotation and redirect handling                                                                        |
 | Provider-specific CA trust                 | Existing TLS-capable HTTP transport                                      | Add `provider.tls.ca_file` for this provider's trust configuration; retain verified server identity                                                                                                                             |

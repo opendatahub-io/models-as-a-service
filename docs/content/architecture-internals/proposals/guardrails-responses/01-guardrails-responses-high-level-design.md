@@ -1,4 +1,4 @@
-# Responses and guardrails: high-level design
+``# Responses and guardrails: high-level design
 
 |         |                                                       |
 |---------|-------------------------------------------------------|
@@ -207,7 +207,7 @@ endpoint, authentication and successful configuration loading must satisfy the
 the policy becomes ready.
 
 NeMo owns model selection for LLM-based rail tasks. The [checks contract](02-guardrails-low-level-details.md#mapping-to-the-nemo-api)
-uses `/v1/guardrail/checks` with fixed `model: check-model`; AIGuardrail selects configurations and phases without a model field.
+uses `/v1/checks` with fixed `model: check-model`; AIGuardrail selects configurations and phases without a model field.
 
 **Define the reusable check separately.** The policy names the NeMo configuration and check phases; it does not contain
 the server's configuration files. All three AIGuardrails remain in `<tenant-namespace>` and explicitly reference NeMo in
