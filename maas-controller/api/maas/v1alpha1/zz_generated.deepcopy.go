@@ -720,8 +720,8 @@ func (in *MaaSSubscriptionSpec) DeepCopyInto(out *MaaSSubscriptionSpec) {
 		*out = new(TokenMetadata)
 		(*in).DeepCopyInto(*out)
 	}
-	if in.RequestPriority != nil {
-		in, out := &in.RequestPriority, &out.RequestPriority
+	if in.InferencePriority != nil {
+		in, out := &in.InferencePriority, &out.InferencePriority
 		*out = new(int32)
 		**out = **in
 	}
