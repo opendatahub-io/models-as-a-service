@@ -88,6 +88,7 @@ xml_serial="${xml%.xml}-serial.xml"
 # ── Test file list ───────────────────────────────────────────────────────
 e2e_test_files=(
     "$TEST_DIR/tests/test_api_keys.py"
+    "$TEST_DIR/tests/test_x_api_key_auth.py"
     "$TEST_DIR/tests/test_namespace_scoping.py"
     "$TEST_DIR/tests/test_negative_security.py"
     "$TEST_DIR/tests/test_subscription.py"

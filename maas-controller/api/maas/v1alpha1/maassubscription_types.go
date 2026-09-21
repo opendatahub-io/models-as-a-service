@@ -38,6 +38,18 @@ type MaaSSubscriptionSpec struct {
 	// +optional
 	// +kubebuilder:default=0
 	Priority int32 `json:"priority,omitempty"`
+
+	// InferencePriority is the scheduling priority applied to inference requests made under
+	// this subscription, published as InferenceObjective.spec.priority.
+	// Higher values are scheduled ahead of lower ones; negative values are scheduled below
+	// the scheduler default. Distinct from Priority, which selects among a user's
+	// subscriptions and has no effect on inference scheduling.
+	// When unset, no InferenceObjective is created and the scheduler applies priority 0.
+	// An explicit 0 creates an InferenceObjective with priority 0.
+	// +optional
+	// +kubebuilder:validation:Minimum=-2147483648
+	// +kubebuilder:validation:Maximum=2147483647
+	InferencePriority *int32 `json:"inferencePriority,omitempty"`
 }
 
 // OwnerSpec defines the owner of the subscription

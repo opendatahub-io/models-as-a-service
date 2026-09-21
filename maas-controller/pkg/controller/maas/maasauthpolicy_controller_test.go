@@ -1587,6 +1587,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"X-MaaS-Username", "X-MaaS-Username-Token",
 			"X-MaaS-Group", "X-MaaS-Group-Token",
 			"X-MaaS-Subscription",
+			"X-MaaS-KeyName",
 		}
 		for _, header := range requiredHeaders {
 			if _, exists := headers[header]; !exists {
@@ -1757,7 +1758,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-	if err != nil || !found || len(patterns) != 2 {
+	if err != nil || !found || len(patterns) != 3 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1774,10 +1775,13 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		got = append(got, pred)
 	}
 
-	wantUsername := `!("x-maas-username" in request.headers)`
-	wantGroup := `!("x-maas-group" in request.headers)`
-	if got[0] != wantUsername || got[1] != wantGroup {
-		t.Fatalf("deny-client-identity-headers predicates = %#v, want [%q, %q]", got, wantUsername, wantGroup)
+	want := []string{
+		`!("x-maas-username" in request.headers)`,
+		`!("x-maas-group" in request.headers)`,
+		`!("x-maas-keyname" in request.headers)`,
+	}
+	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
 	}
 }
 
