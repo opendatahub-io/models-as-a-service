@@ -1114,6 +1114,7 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 }
 
 func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *maasv1alpha1.AITenant) (bool, error) {
+	log := oteljson.FromContext(ctx)
 	tenantNamespace := r.tenantNamespaceName(aitenant)
 
 	var tenant maasv1alpha1.MaasTenantConfig
@@ -1128,6 +1129,19 @@ func (r *AITenantReconciler) deleteTenantConfig(ctx context.Context, aitenant *m
 		return true, nil
 	}
 	if !tenant.DeletionTimestamp.IsZero() {
+		// MaasTenantConfig is already pending deletion. If it's stuck for >2min, force-remove its finalizer.
+		deletionAge := time.Since(tenant.DeletionTimestamp.Time)
+		if deletionAge > 2*time.Minute && len(tenant.Finalizers) > 0 {
+			log.Info("MaasTenantConfig stuck in deletion for >2min; force-removing finalizers", "name", tenant.Name, "namespace", tenant.Namespace, "age", deletionAge)
+			tenant.Finalizers = nil
+			if err := r.Update(ctx, &tenant); err != nil && !apierrors.IsNotFound(err) {
+				log.Error(err, "failed to force-remove MaasTenantConfig finalizers", "name", tenant.Name)
+				return false, fmt.Errorf("failed to force-remove MaasTenantConfig %s/%s finalizers: %w", key.Namespace, key.Name, err)
+			}
+			log.Info("Force-removed MaasTenantConfig finalizers", "name", tenant.Name, "namespace", tenant.Namespace)
+		} else if deletionAge <= 2*time.Minute {
+			log.V(1).Info("MaasTenantConfig pending deletion, waiting", "name", tenant.Name, "namespace", tenant.Namespace, "age", deletionAge)
+		}
 		return false, nil
 	}
 	if !controllerutil.ContainsFinalizer(&tenant, tenantFinalizer) {

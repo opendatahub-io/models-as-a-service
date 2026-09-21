@@ -209,6 +209,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(tenant, tenantFinalizer) {
+		log.Info("MaasTenantConfig deletion in progress, processing finalizer", "name", tenant.Name, "namespace", tenant.Namespace)
+
 		subscriptionsDeleted, err := r.cleanupMaaSSubscriptions(ctx, log, tenant)
 		if err != nil {
 			log.Error(err, "failed to cleanup MaaSSubscriptions")
@@ -221,6 +223,7 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 			return ctrl.Result{}, err
 		}
 		if !subscriptionsDeleted || !authPoliciesDeleted {
+			log.V(1).Info("waiting for MaaSSubscriptions or MaaSAuthPolicies to be deleted", "subscriptionsDeleted", subscriptionsDeleted, "authPoliciesDeleted", authPoliciesDeleted)
 			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
 		}
 
@@ -229,10 +232,13 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 			return ctrl.Result{}, err
 		}
 
+		log.Info("finalizer cleanup complete, removing finalizer", "name", tenant.Name, "namespace", tenant.Namespace)
 		controllerutil.RemoveFinalizer(tenant, tenantFinalizer)
 		if err := r.Update(ctx, tenant); err != nil {
+			log.Error(err, "failed to remove finalizer", "name", tenant.Name, "namespace", tenant.Namespace)
 			return ctrl.Result{}, err
 		}
+		log.Info("MaasTenantConfig deletion complete", "name", tenant.Name, "namespace", tenant.Namespace)
 	}
 	return ctrl.Result{}, nil
 }
@@ -790,6 +796,7 @@ func (r *TenantReconciler) cleanupTenantResources(ctx context.Context, log logr.
 
 // cleanupMaaSSubscriptions deletes all MaaSSubscription CRs in the tenant namespace.
 // MaaSSubscription finalizers clean up generated TokenRateLimitPolicies.
+// If CRs are stuck with finalizers (controller offline), force-remove them after waiting.
 func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	log.Info("Cleaning up MaaSSubscription CRs", "namespace", tenant.Namespace)
 
@@ -800,14 +807,35 @@ func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log log
 
 	for i := range subscriptionList.Items {
 		subscription := &subscriptionList.Items[i]
-		log.Info("Deleting MaaSSubscription", "name", subscription.Name, "namespace", subscription.Namespace)
-		if err := r.Delete(ctx, subscription); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("failed to delete MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+		if subscription.DeletionTimestamp == nil {
+			log.Info("Deleting MaaSSubscription", "name", subscription.Name, "namespace", subscription.Namespace)
+			if err := r.Delete(ctx, subscription); err != nil && !apierrors.IsNotFound(err) {
+				return false, fmt.Errorf("failed to delete MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+			}
+		} else {
+			// Already pending deletion; if it's been stuck for >2min, force-remove finalizers to unblock
+			if subscription.DeletionTimestamp != nil {
+				deletionAge := time.Since(subscription.DeletionTimestamp.Time)
+				if deletionAge > 2*time.Minute {
+					log.Info("MaaSSubscription stuck in deletion for >2min; force-removing finalizers", "name", subscription.Name, "age", deletionAge)
+					if len(subscription.Finalizers) > 0 {
+						subscription.Finalizers = nil
+						if err := r.Update(ctx, subscription); err != nil && !apierrors.IsNotFound(err) {
+							log.Error(err, "failed to force-remove MaaSSubscription finalizers", "name", subscription.Name)
+							return false, fmt.Errorf("failed to force-remove MaaSSubscription %s/%s finalizers: %w", subscription.Namespace, subscription.Name, err)
+						}
+						log.Info("Force-removed MaaSSubscription finalizers", "name", subscription.Name)
+					}
+				} else {
+					log.V(1).Info("MaaSSubscription pending deletion", "name", subscription.Name, "age", deletionAge)
+					return false, nil
+				}
+			}
 		}
 	}
 
 	if len(subscriptionList.Items) > 0 {
-		log.Info("Waiting for MaaSSubscription finalizer cleanup", "count", len(subscriptionList.Items))
+		log.Info("Waiting for MaaSSubscription cleanup", "count", len(subscriptionList.Items))
 		return false, nil
 	}
 	return true, nil
@@ -816,6 +844,7 @@ func (r *TenantReconciler) cleanupMaaSSubscriptions(ctx context.Context, log log
 // cleanupMaaSAuthPolicies deletes all MaaSAuthPolicy CRs in the tenant namespace.
 // MaaSAuthPolicyReconciler's handleDeletion will clean up the gateway AuthPolicy
 // when the last MaaSAuthPolicy is deleted.
+// If CRs are stuck with finalizers (controller offline), force-remove them after waiting.
 func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (bool, error) {
 	log.Info("Cleaning up MaaSAuthPolicy CRs", "namespace", tenant.Namespace)
 
@@ -828,14 +857,35 @@ func (r *TenantReconciler) cleanupMaaSAuthPolicies(ctx context.Context, log logr
 	// Delete each MaaSAuthPolicy
 	for i := range policyList.Items {
 		policy := &policyList.Items[i]
-		log.Info("Deleting MaaSAuthPolicy", "name", policy.Name, "namespace", policy.Namespace)
-		if err := r.Delete(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
-			return false, fmt.Errorf("failed to delete MaaSAuthPolicy %s/%s: %w", policy.Namespace, policy.Name, err)
+		if policy.DeletionTimestamp == nil {
+			log.Info("Deleting MaaSAuthPolicy", "name", policy.Name, "namespace", policy.Namespace)
+			if err := r.Delete(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
+				return false, fmt.Errorf("failed to delete MaaSAuthPolicy %s/%s: %w", policy.Namespace, policy.Name, err)
+			}
+		} else {
+			// Already pending deletion; if it's been stuck for >2min, force-remove finalizers to unblock
+			if policy.DeletionTimestamp != nil {
+				deletionAge := time.Since(policy.DeletionTimestamp.Time)
+				if deletionAge > 2*time.Minute {
+					log.Info("MaaSAuthPolicy stuck in deletion for >2min; force-removing finalizers", "name", policy.Name, "age", deletionAge)
+					if len(policy.Finalizers) > 0 {
+						policy.Finalizers = nil
+						if err := r.Update(ctx, policy); err != nil && !apierrors.IsNotFound(err) {
+							log.Error(err, "failed to force-remove MaaSAuthPolicy finalizers", "name", policy.Name)
+							return false, fmt.Errorf("failed to force-remove MaaSAuthPolicy %s/%s finalizers: %w", policy.Namespace, policy.Name, err)
+						}
+						log.Info("Force-removed MaaSAuthPolicy finalizers", "name", policy.Name)
+					}
+				} else {
+					log.V(1).Info("MaaSAuthPolicy pending deletion", "name", policy.Name, "age", deletionAge)
+					return false, nil
+				}
+			}
 		}
 	}
 
 	if len(policyList.Items) > 0 {
-		log.Info("Waiting for MaaSAuthPolicy finalizer cleanup", "count", len(policyList.Items))
+		log.Info("Waiting for MaaSAuthPolicy cleanup", "count", len(policyList.Items))
 		return false, nil
 	}
 	return true, nil
