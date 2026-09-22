@@ -34,6 +34,11 @@ patches:
     name: maas-api-egress-restrict
   patch: |-
     - op: replace
+      path: /spec/egress/0/to/0/podSelector
+      value:
+        matchLabels:
+          dns.operator.openshift.io/daemonset-dns: default
+    - op: replace
       path: /spec/egress/2/to/0/podSelector
       value:
         matchLabels:
