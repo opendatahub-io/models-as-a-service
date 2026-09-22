@@ -443,6 +443,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
+	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
+		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -485,6 +487,118 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchMaaSAPIEgressRestrictNetworkPolicy allows postgres egress to the controller
+// namespace when infrastructure and controller namespaces differ (upgrade path:
+// postgres may remain in redhat-ods-applications/opendatahub while maas-api runs
+// in the derived infra namespace). Fresh installs colocate postgres with maas-api.
+func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	if params.AppNamespace == "" || params.ControllerNamespace == "" {
+		return nil
+	}
+	if params.AppNamespace == params.ControllerNamespace {
+		return nil
+	}
+
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api egress NP missing egress rules")
+	}
+
+	for i, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok || !networkPolicyRuleHasPort(rule, 5432) {
+			continue
+		}
+		to, ok := rule["to"].([]any)
+		if !ok {
+			continue
+		}
+		if networkPolicyHasPostgresPeerInNamespace(to, params.ControllerNamespace) {
+			return nil
+		}
+		to = append(to, map[string]any{
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"kubernetes.io/metadata.name": params.ControllerNamespace,
+				},
+			},
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		})
+		rule["to"] = to
+		egress[i] = rule
+		return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+	}
+
+	return errors.New("maas-api egress NP missing postgres egress rule (port 5432)")
+}
+
+func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
+	ports, ok := rule["ports"].([]any)
+	if !ok {
+		return false
+	}
+	for _, portRaw := range ports {
+		portObj, ok := portRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := portObj["port"].(type) {
+		case int64:
+			if v == port {
+				return true
+			}
+		case int:
+			if int64(v) == port {
+				return true
+			}
+		case float64:
+			if int64(v) == port {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func networkPolicyHasPostgresPeerInNamespace(to []any, namespace string) bool {
+	for _, peerRaw := range to {
+		peer, ok := peerRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+		if !ok {
+			continue
+		}
+		matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if matchLabels["kubernetes.io/metadata.name"] != namespace {
+			continue
+		}
+		podSelector, ok := peer["podSelector"].(map[string]any)
+		if !ok {
+			continue
+		}
+		podLabels, ok := podSelector["matchLabels"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if podLabels["app"] == "postgres" {
+			return true
+		}
+	}
+	return false
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use

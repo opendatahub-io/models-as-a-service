@@ -5,8 +5,9 @@
 # documented destinations only.
 #
 # In-cluster Postgres is deployed alongside maas-api in the infrastructure
-# namespace (app=postgres). Kubernetes API access is required for token
-# projection and subject access reviews.
+# namespace (app=postgres) on fresh installs. When infra and controller namespaces
+# differ (upgrade path), PostRender also allows postgres in the controller namespace.
+# Kubernetes API access is required for token projection and subject access reviews.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:

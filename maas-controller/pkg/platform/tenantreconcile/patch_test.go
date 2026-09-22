@@ -587,3 +587,116 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 	require.True(t, found)
 	assert.Equal(t, routerFilterName, anchor)
 }
+
+func sampleMaaSAPIEgressRestrictNetworkPolicy() *unstructured.Unstructured {
+	return &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "networking.k8s.io/v1",
+			"kind":       "NetworkPolicy",
+			"metadata": map[string]any{
+				"name": baseMaaSAPIEgressRestrictNetworkPolicyName,
+			},
+			"spec": map[string]any{
+				"egress": []any{
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(53), "protocol": "UDP"},
+						},
+					},
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(443), "protocol": "TCP"},
+						},
+					},
+					map[string]any{
+						"ports": []any{
+							map[string]any{"port": int64(5432), "protocol": "TCP"},
+						},
+						"to": []any{
+							map[string]any{
+								"podSelector": map[string]any{
+									"matchLabels": map[string]any{
+										"app": "postgres",
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		},
+	}
+}
+
+func TestPatchMaaSAPIEgressRestrictPostgres_skipsWhenSameNamespace(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		AppNamespace:        "redhat-ai-gateway-infra",
+		ControllerNamespace: "redhat-ai-gateway-infra",
+	}
+
+	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
+	require.NoError(t, err)
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[2].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	assert.Len(t, to, 1)
+}
+
+func TestPatchMaaSAPIEgressRestrictPostgres_addsControllerNamespaceWhenSeparated(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		AppNamespace:        "redhat-ai-gateway-infra",
+		ControllerNamespace: "redhat-ods-applications",
+	}
+
+	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
+	require.NoError(t, err)
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[2].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	require.Len(t, to, 2)
+
+	peer, ok := to[1].(map[string]any)
+	require.True(t, ok)
+	nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+	require.True(t, ok)
+	matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "redhat-ods-applications", matchLabels["kubernetes.io/metadata.name"])
+	podSelector, ok := peer["podSelector"].(map[string]any)
+	require.True(t, ok)
+	podLabels, ok := podSelector["matchLabels"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "postgres", podLabels["app"])
+}
+
+func TestPatchMaaSAPIEgressRestrictPostgres_idempotent(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		AppNamespace:        "odh-ai-gateway-infra",
+		ControllerNamespace: "opendatahub",
+	}
+
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[2].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	assert.Len(t, to, 2)
+}
