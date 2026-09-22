@@ -41,12 +41,11 @@ spec:
           port: 5353
         - protocol: TCP
           port: 5353
-    # Kubernetes API server (in-cluster client uses kubernetes.default.svc)
-    - to:
-        - namespaceSelector:
-            matchLabels:
-              kubernetes.io/metadata.name: openshift-kube-apiserver
-      ports:
+    # Kubernetes API server. In-cluster clients use kubernetes.default (Service
+    # ClusterIP). OVN may evaluate egress against the VIP before apiserver
+    # endpoint DNAT, so namespaceSelector for openshift-kube-apiserver is not
+    # sufficient on all platforms (maas-group-test). Restrict by API ports only.
+    - ports:
         - protocol: TCP
           port: 443
         - protocol: TCP
