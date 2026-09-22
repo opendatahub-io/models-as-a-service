@@ -48,7 +48,7 @@ namespaces.
 * Replace MaaS authorization, subscription selection, token rate limits, or billing.
 * Introduce or change request `service_tier` handling. Its interaction with subscription selection, authorization, and
   pricing requires a separate proposal; this integration derives scheduling priority from the selected subscription's
-  `requestPriority`, without a `service_tier` override.
+  `inferencePriority`, without a `service_tier` override.
 * Introduce a new scheduler, per-user fairness, or per-model priority overrides within a subscription.
 * Provide a global capacity allocation across independent pools or scheduler instances, or guarantee latency or minimum
   capacity across priority bands.
@@ -59,25 +59,25 @@ namespaces.
 
 ### Subscription priority and fairness
 
-Add an optional `MaaSSubscription.spec.requestPriority` field as the desired `InferenceObjective.spec.priority`. Use a
+Add an optional `MaaSSubscription.spec.inferencePriority` field as the desired `InferenceObjective.spec.priority`. Use a
 signed `int32`, matching the objective API, and preserve the distinction between an omitted value and an explicit `0`
 (for example, using `*int32` in the Go API). Do not apply a CRD default that fills in this field. Higher values receive
 higher scheduling priority; negative values represent lower-than-default priority. Validate and preserve this value
 consistently across the subscription API and objective reconciliation.
 
-The existing `spec.priority` continues to control automatic subscription selection. `spec.requestPriority` controls
+The existing `spec.priority` continues to control automatic subscription selection. `spec.inferencePriority` controls
 request scheduling after a subscription has been selected. Updating either field does not change the other field's
 meaning, and request priority does not influence subscription selection. Explicit subscription selection and API-key
 subscription binding continue to follow the existing authorization rules.
 
-Subscriptions without `spec.requestPriority` create no `InferenceObjective`, but both canonical and legacy header pairs
+Subscriptions without `spec.inferencePriority` create no `InferenceObjective`, but both canonical and legacy header pairs
 are still injected. The objective header carries the generated name for the subscription/pool pair. With no matching
 objective, llm-d applies scheduler priority `0`, regardless of subscription-selection priority. An explicit
-`spec.requestPriority: 0` creates an objective with priority `0` under that same name, following the same path as any
+`spec.inferencePriority: 0` creates an objective with priority `0` under that same name, following the same path as any
 other explicit value.
 
 For example, a subscription can have `spec.priority: 100` to make it preferred during automatic selection and
-`spec.requestPriority: 10` to schedule its requests at priority `10`.
+`spec.inferencePriority: 10` to schedule its requests at priority `10`.
 
 The documented default objective header value is the generated subscription/pool objective name, even when request
 priority is omitted. In that case the resource is intentionally absent and the scheduler defaults to priority `0`. When
@@ -87,7 +87,7 @@ request priority is configured, the same header value matches the generated obje
 |------------------------------------|--------------------------------------------------------------------------|--------------------------------------------------------------------------------------------------------|
 | `x-llm-d-inference-fairness-id`    | Stable, unambiguous identity of the resolved `AITenant`                  | All callers and subscriptions of that tenant share a fairness identity.                                |
 | `x-llm-d-inference-objective`      | Generated objective name for the authorized subscription and target pool | Always injected; resolves the configured priority, or scheduler priority `0` when no objective exists. |
-| `InferenceObjective.spec.priority` | Explicit `MaaSSubscription.spec.requestPriority`                         | Applies the same request priority to every pool covered by the subscription.                           |
+| `InferenceObjective.spec.priority` | Explicit `MaaSSubscription.spec.inferencePriority`                         | Applies the same request priority to every pool covered by the subscription.                           |
 
 MaaS emits the canonical `x-llm-d-*` names defined by llm-d Router's `FlowFairnessIDKey` and `ObjectiveKey` constants
 alongside their legacy aliases to support older deployments. Each alias carries exactly the same trusted value as its
@@ -117,9 +117,9 @@ The MaaS subscription controller owns the desired objectives:
 3. Discover the active pool through `LLMInferenceService.status.router.scheduler.inferencePool`, including its group,
    kind, name, and namespace. Use this observed reference for both managed pools and explicitly referenced pools; do not
    infer a generated pool name from the service name or assume that the subscription and pool share a namespace.
-4. When `spec.requestPriority` is explicitly set, reconcile one objective per distinct `(subscription, pool)` pair in
+4. When `spec.inferencePriority` is explicitly set, reconcile one objective per distinct `(subscription, pool)` pair in
    the pool's namespace, with `spec.poolRef.name`
-   pointing to that pool and `spec.priority` copied from the subscription's `spec.requestPriority`. Multiple model
+   pointing to that pool and `spec.priority` copied from the subscription's `spec.inferencePriority`. Multiple model
    references resolving to the same pool share that objective.
 5. Reconcile changes to request priority, model membership, tenant association, and observed pool references. Remove
    obsolete objectives when request priority is cleared, a model leaves the subscription, its pool changes, or the
@@ -132,11 +132,11 @@ subscription, and pool names, with a collision-resistant hash of their full reso
 name portions as needed to respect Kubernetes naming limits while preserving the hash. The subscription remains the
 logical objective; the pool-specific name is its representation in the inference API.
 
-For example, a subscription with `spec.requestPriority: 10` produces an objective for each referenced pool:
+For example, a subscription with `spec.inferencePriority: 10` produces an objective for each referenced pool:
 The name below is a schematic placeholder; generated names include the pool-specific disambiguation described above.
 
 ```yaml
-apiVersion: inference.networking.x-k8s.io/v1alpha2
+apiVersion: llm-d.ai/v1alpha2
 kind: InferenceObjective
 metadata:
   # longer than 63 chars names need to be handled through hashing see kmeta.ChildName algorithm
@@ -226,7 +226,7 @@ backend.
 ### llm-d Scheduler Policy Controls
 
 The llm-d Router/Scheduler implementation and configuration are the authority for the behavior described here.
-`requestPriority` selects a band; the EPP's `flowControl` configuration determines dispatch eligibility, fairness,
+`inferencePriority` selects a band; the EPP's `flowControl` configuration determines dispatch eligibility, fairness,
 request ordering, and overload handling. Model owners own these controls. The initial MaaS API exposes request
 classification without adding subscription-level configuration for scheduler plugins.
 
@@ -245,7 +245,7 @@ classification without adding subscription-level configuration for scheduler plu
 
 `domain` is a parameter of the `priority-holdback-policy` plugin. It determines how numerical priorities are mapped to
 dispatch ceilings between `minCeiling` and `maxCeiling`. It is configured by the pool administrator in the scheduler,
-separately from a subscription's `requestPriority`.
+separately from a subscription's `inferencePriority`.
 
 A ceiling is a saturation threshold: when measured pool saturation reaches or exceeds a band's ceiling, dispatch from
 that band pauses and its requests remain queued. For example, a ceiling of `0.65` allows dispatch below saturation
@@ -284,7 +284,7 @@ telemetry can halt dispatch with the utilization detector.
 
 With in-flight eviction enabled, the existing sheddable filter admits only negative-priority victims, and reclamation
 requires victim priority to be below the blocked demand's priority. Victims are ordered by lowest priority, then newest
-dispatch time. Setting a negative `requestPriority` therefore permits interruption under that configuration; it does not
+dispatch time. Setting a negative `inferencePriority` therefore permits interruption under that configuration; it does not
 merely place requests later in the queue. This behavior must be explained to subscription operators.
 
 If SLO deadline ordering is enabled, `x-llm-d-slo-ttft-ms` and its legacy alias can influence scheduling order. A
@@ -295,7 +295,7 @@ request-priority ranges complement scheduler policies by restricting which bands
 ## Priority-Tier Pricing and Chargeback
 
 The existing per-model `billingRate.perToken` on a subscription can incorporate the price of its priority tier. For
-example, an online subscription with higher `requestPriority` can carry a higher per-token rate than a batch
+example, an online subscription with higher `inferencePriority` can carry a higher per-token rate than a batch
 subscription. This requires no additional priority-specific pricing field. MaaS does not automatically adjust the
 billing rate when request priority changes; administrators or a separate pricing policy must manage that relationship.
 
@@ -307,7 +307,7 @@ implementation.
 
 An optional follow-up could record the request priority observed by MaaS and the objective identity for auditing and
 troubleshooting. These values must come from trusted request-time metadata, and the existing subscription-selection
-`priority` must not be confused with `requestPriority`. Objective names remain stable across priority changes, so they
+`priority` must not be confused with `inferencePriority`. Objective names remain stable across priority changes, so they
 alone cannot reconstruct historical scheduling priority.
 
 If a future charging contract depends on the priority actually applied by EPP rather than the configured billing rate,
@@ -341,7 +341,7 @@ administrators. Internal headers and status mappings must not contain API keys o
 ## Follow-up: Tenant Request-Priority Ranges
 
 A future extension could let platform administrators configure an allowed request-priority range on `AITenant`, for
-example `spec.requestPriorityRange.min` and `spec.requestPriorityRange.max` (illustrative field names). Tenant
+example `spec.inferencePriorityRange.min` and `spec.inferencePriorityRange.max` (illustrative field names). Tenant
 administrators could then choose subscription request priorities within inclusive bounds set by the platform. This would
 constrain priority escalation on shared pools while preserving subscription-level control and the existing objective
 mapping. Managing the bounds must require platform-level authorization so tenant administrators cannot raise their own
@@ -352,7 +352,7 @@ subscription flexibility while restricting choices to a discrete set. The follow
 
 The follow-up should define validation of subscription creation and updates, reconciliation when tenant bounds change,
 and UI display of the allowed range. It must also decide how to handle existing subscriptions outside a newly narrowed
-range and the scheduler's effective priority `0` for subscriptions that omit `requestPriority`, particularly when `0`
+range and the scheduler's effective priority `0` for subscriptions that omit `inferencePriority`, particularly when `0`
 falls outside the range. Rejecting invalid values should provide actionable feedback rather than silently clamping them.
 These policy and migration choices are deferred; tenant-level ranges are not required for this design's initial
 implementation because sharing inference pools across AI tenants is not currently supported. Priority governance
@@ -361,7 +361,7 @@ should be addressed as part of the follow-up design for enabling cross-tenant po
 ### Allowed Priority Values Instead of Ranges
 
 For future cross-tenant pool sharing, platform administrators could grant each `AITenant` a discrete set of allowed
-`requestPriority` values instead of a continuous range. Tenant administrators would retain subscription-level control:
+`inferencePriority` values instead of a continuous range. Tenant administrators would retain subscription-level control:
 for example, a tenant allowed `-10`, `0`, and `10` could assign `-10` to a batch subscription and `10` to an online
 subscription. This does not impose one fixed priority on all of a tenant's subscriptions.
 
@@ -379,7 +379,7 @@ and how omitted request priority, with effective scheduler priority `0`, is hand
 | Use the subscription as the fairness key             | Gives tenants with more subscriptions more independent fairness shares at the same priority.                                                                                                                                                                                                                                                                     |
 | Use the AI tenant as both fairness and objective key | Cannot express different subscription priorities within one tenant.                                                                                                                                                                                                                                                                                              |
 | Use only token rate limits                           | Controls consumption over a time window but does not prioritize queued requests competing for inference capacity.                                                                                                                                                                                                                                                |
-| Reuse `spec.priority` for request scheduling         | Avoids a new field, but couples subscription selection with scheduling and changes the effect of existing nonzero priorities. Separate `spec.requestPriority` keeps these decisions independent.                                                                                                                                                                 |
+| Reuse `spec.priority` for request scheduling         | Avoids a new field, but couples subscription selection with scheduling and changes the effect of existing nonzero priorities. Separate `spec.inferencePriority` keeps these decisions independent.                                                                                                                                                                 |
 | Reference an operator-defined priority tier          | A named tier such as `premium` could map to a centrally governed numeric priority, limiting tenant self-escalation. It introduces another configuration resource and makes tier changes affect all referencing subscriptions. Consider if centrally managed tiers become a requirement.                                                                          |
 | Share objectives by pool and numeric priority        | Subscriptions with the same request priority could reuse one objective per pool while retaining tenant fairness headers. This reduces object count but requires shared ownership and cleanup, and priority changes must switch the subscription's objective mapping. Per-subscription objectives keep ownership direct and names stable across priority changes. |
 
@@ -397,7 +397,7 @@ models sharing a pool, request-priority and pool changes, subscription deletion,
 and both path-based and body-based model resolution. End-to-end tests must demonstrate tenant fairness within one
 priority band using an explicitly configured fairness policy, and priority ordering under contention with flow control
 enabled. Test the selected pool policy configuration, including dispatch gating and negative-priority interruption when
-eviction is enabled. Verify that omitted `spec.requestPriority` creates no objective, overwrites all four headers with
+eviction is enabled. Verify that omitted `spec.inferencePriority` creates no objective, overwrites all four headers with
 trusted values, and uses scheduler priority `0` while retaining tenant fairness. Test conflicting canonical/legacy
 values, spoofed values, duplicate headers, and case variants, with request priority both set and unset. Explicit `0`
 must create an objective and inject its name. Verify negative values, independence from subscription selection, and
