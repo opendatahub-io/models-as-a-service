@@ -23,11 +23,17 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-api:latest
+    value: quay.io/opendatahub/maas-api:odh-stable
   - name: dockerfile
     value: maas-api/Dockerfile
   - name: path-context
     value: maas-api
+  - name: build-platforms
+    value:
+    - linux/x86_64
+    - linux/arm64
+    - linux/ppc64le
+    - linux/s390x
   pipelineRef:
     resolver: git
     params:

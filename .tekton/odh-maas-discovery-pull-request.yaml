@@ -7,14 +7,14 @@ metadata:
     build.appstudio.redhat.com/target_branch: '{{target_branch}}'
     pipelinesascode.tekton.dev/cancel-in-progress: "false"
     pipelinesascode.tekton.dev/max-keep-runs: "3"
-    pipelinesascode.tekton.dev/on-cel-expression: event == "push" && target_branch
+    pipelinesascode.tekton.dev/on-cel-expression: event == "pull_request" && target_branch
       == "main"
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-maas-controller-ci
+    appstudio.openshift.io/component: odh-maas-discovery-ci
     pipelines.appstudio.openshift.io/type: build
-  name: odh-maas-controller-on-push
+  name: odh-maas-discovery-on-pull-request
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,17 +23,17 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-controller:odh-stable
+    value: quay.io/opendatahub/odh-maas-discovery:odh-pr
   - name: dockerfile
-    value: maas-controller/Dockerfile
+    value: Dockerfile
   - name: path-context
-    value: .
-  - name: build-platforms
+    value: maas-discovery
+  #add these additional params
+  - name: additional-tags
     value:
-    - linux/x86_64
-    - linux/arm64
-    - linux/ppc64le
-    - linux/s390x
+    - 'odh-pr-{{revision}}'
+  - name: pipeline-type
+    value: pull-request
   pipelineRef:
     resolver: git
     params:
@@ -44,7 +44,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-odh-maas-controller
+    serviceAccountName: build-pipeline-odh-maas-discovery-ci
   workspaces:
   - name: git-auth
     secret:

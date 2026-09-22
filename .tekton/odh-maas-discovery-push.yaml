@@ -1,5 +1,6 @@
 apiVersion: tekton.dev/v1
 kind: PipelineRun
+#
 metadata:
   annotations:
     build.appstudio.openshift.io/repo: https://github.com/opendatahub-io/models-as-a-service?rev={{revision}}
@@ -12,9 +13,9 @@ metadata:
   creationTimestamp: null
   labels:
     appstudio.openshift.io/application: opendatahub-builds
-    appstudio.openshift.io/component: odh-maas-controller-ci
+    appstudio.openshift.io/component: odh-maas-discovery-ci
     pipelines.appstudio.openshift.io/type: build
-  name: odh-maas-controller-on-push
+  name: odh-maas-discovery-on-push
   namespace: open-data-hub-tenant
 spec:
   params:
@@ -23,17 +24,11 @@ spec:
   - name: revision
     value: '{{revision}}'
   - name: output-image
-    value: quay.io/opendatahub/maas-controller:odh-stable
+    value: quay.io/opendatahub/odh-maas-discovery:odh-stable
   - name: dockerfile
-    value: maas-controller/Dockerfile
+    value: Dockerfile
   - name: path-context
-    value: .
-  - name: build-platforms
-    value:
-    - linux/x86_64
-    - linux/arm64
-    - linux/ppc64le
-    - linux/s390x
+    value: maas-discovery
   pipelineRef:
     resolver: git
     params:
@@ -44,7 +39,7 @@ spec:
     - name: pathInRepo
       value: pipeline/multi-arch-container-build.yaml
   taskRunTemplate:
-    serviceAccountName: build-pipeline-odh-maas-controller
+    serviceAccountName: build-pipeline-odh-maas-discovery-ci
   workspaces:
   - name: git-auth
     secret:
