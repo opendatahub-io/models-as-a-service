@@ -228,12 +228,16 @@ _default_api_key_cache: dict = {}
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Retry transient gateway/Authorino propagation responses."""
+    """Retry transient gateway/Authorino propagation responses.
+
+    Uses ``_is_transient_gateway_response`` so empty 401/403, AUTH_FAILURE,
+    and proxy-style 500s match ``test_helper``.
+    """
+    from test_helper import _is_transient_gateway_response
+
     for attempt in range(1, retries + 1):
         r = method(url, timeout=TIMEOUT, verify=TLS_VERIFY, **kwargs)
-        is_empty_403 = r.status_code == 403 and not r.text.strip()
-        is_auth_propagation_500 = r.status_code == 500 and "AUTH_FAILURE" in r.text
-        if (is_empty_403 or is_auth_propagation_500) and attempt < retries:
+        if _is_transient_gateway_response(r) and attempt < retries:
             log.info(
                 f"Gateway not ready (HTTP {r.status_code}, attempt {attempt}/{retries}), "
                 f"retrying in {GATEWAY_PROPAGATION_DELAY}s..."

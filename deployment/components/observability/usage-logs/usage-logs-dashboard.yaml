@@ -13,7 +13,7 @@ metadata:
     app.kubernetes.io/component: perses
 spec:
   display:
-    name: "Usage (logs)"
+    name: "My Usage"
     description: >-
       Personal view of model usage. Shows your token consumption, request
       counts, and rate limiting. Queries are automatically filtered to your
