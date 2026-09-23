@@ -1,7 +1,7 @@
 # Egress NetworkPolicy for the usage-logs OpenTelemetry Collector.
 #
 # Complements usage-logs-collector-allow-gateway (ingress). The collector
-# forwards logs to the tenancy proxy over HTTPS.
+# exports logs to the platform Loki gateway (usage-gateway-http) over HTTPS.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -38,7 +38,7 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app: usage-tenancy-proxy
+              app.kubernetes.io/name: usage-gateway-http
       ports:
         - protocol: TCP
-          port: 8443
+          port: 8080
