@@ -211,6 +211,22 @@ def list_json(kind: str, namespace: Optional[str] = None, *, labels: Optional[st
     raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
 
 
+def wait_until(check, timeout: int, what: str, interval: int = 5):
+    """Poll check() until it returns a truthy value. Assertion failures and transient
+    cluster or HTTP errors count as "not yet"; the last one ends up in the timeout message."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            result = check()
+            if result:
+                return result
+            last = result
+        except (AssertionError, subprocess.TimeoutExpired, requests.RequestException) as exc:
+            last = exc
+        assert time.time() < deadline, f"{what} within {timeout}s; last: {last}"
+        time.sleep(interval)
+
+
 def wait_for_json(
     kind: str,
     name: str,
