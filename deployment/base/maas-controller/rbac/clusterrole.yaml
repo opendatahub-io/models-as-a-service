@@ -163,6 +163,12 @@ rules:
   - list
   - watch
 - apiGroups:
+  - extensions.istio.io
+  resources:
+  - wasmplugins
+  verbs:
+  - get
+- apiGroups:
   - extensions.kuadrant.io
   resources:
   - telemetrypolicies

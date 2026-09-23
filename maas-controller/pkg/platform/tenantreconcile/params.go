@@ -73,6 +73,10 @@ type PlatformParams struct {
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
+
+	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
+	// and the Kuadrant anchors were kept.
+	KuadrantDetectionWarning string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -1051,7 +1055,7 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 	}
 
 	if params.PayloadProcessingRouterExtProcFallback {
-		// Router-only anchoring when kuadrant CRs are absent or wasmplugin RBAC denies GET.
+		// Router-only anchoring when kuadrant CRs are absent.
 		// Drop wasm-anchored patches to avoid duplicate ext_proc on RHCL gateways that
 		// inject envoy.filters.http.wasm without kuadrant-{gateway} CRs.
 		configPatches = append(append([]any{}, configPatches[routerStart:routerEnd]...), configPatches[routerEnd:]...)
