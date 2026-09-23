@@ -14,6 +14,8 @@ The total number of counters Limitador tracks is roughly:
 counters ≈ subscriptions × models × unique_users × rate_limit_windows
 ```
 
+Model references with `unlimited: true` add no counters. All unlimited subscriptions on a model share one limit without rates, so Limitador only records their usage metrics.
+
 For Prometheus, the cardinality of `authorized_hits`, `authorized_calls`, and `limited_calls` grows with the number of distinct `user` and `subscription` label values.
 
 ## Users vs Groups
