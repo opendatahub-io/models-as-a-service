@@ -18,7 +18,8 @@ spec:
     labels:
       gateway.networking.k8s.io/gateway-name: maas-default-gateway
   configPatches:
-    # Stage 1: must run BEFORE the WasmPlugin so auth sees X-Gateway-Model-Name.
+    # Stage 1: must run BEFORE the WasmPlugin so auth sees X-Gateway-Model-Name, and before
+    # Istio's InferencePool filter, which the last two patches move in front of the router.
     - applyTo: HTTP_FILTER
       match:
         context: GATEWAY
@@ -286,3 +287,62 @@ spec:
             envoy.filters.http.ext_proc.ipp:
               "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExtProcPerRoute
               disabled: true
+    # Move Istio's InferencePool filter (envoy.filters.http.ext_proc) in front of the router,
+    # giving ipp-pre -> auth -> ipp -> EPP -> router. The filter binds the EPP once, from the
+    # route matched in its own decodeHeaders, and KServe pool routes match on
+    # X-Gateway-Model-Name. Istio places it after the WasmPlugin phases, which is ahead of
+    # ipp-pre with RHCL's router-anchored wasm filter and with the router fallback: the EPP
+    # never runs and pool traffic silently falls back to round-robin. Moving ipp-pre ahead of
+    # it instead runs the EPP before auth and, with a TokenRateLimitPolicy, empties
+    # non-streaming responses on proxies without envoyproxy/envoy#45355.
+    # Must stay after the stage 2 inserts (patches apply in list order), REMOVE first. The
+    # REMOVE matches by name on every listener, so MaaS owns envoy.filters.http.ext_proc on
+    # its gateways; anchoring on the router rather than ipp re-inserts it on each of them,
+    # whichever auth anchor matched. The value copies the static filter Istio renders
+    # (pilot/pkg/xds/filters, unchanged from OSSM 1.26 through Istio 1.29) and replaces
+    # Istio's own, so an Istio change to it needs a matching change here. The per-route
+    # ExtProcPerRoute override is keyed on this exact name, and envoy.lb metadata carries the
+    # endpoint the EPP picked. On a gateway without an InferencePool the REMOVE matches
+    # nothing and the inserted copy stays inert (header modes SKIP, no per-route override).
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.ext_proc
+      patch:
+        operation: REMOVE
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: "envoy.filters.network.http_connection_manager"
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            grpc_service:
+              envoy_grpc:
+                cluster_name: dummy
+              timeout: 10s
+            failure_mode_allow: true
+            processing_mode:
+              request_header_mode: "SKIP"
+              response_header_mode: "SKIP"
+            message_timeout: 1000s
+            metadata_options:
+              forwarding_namespaces:
+                untyped:
+                  - envoy.lb
+              receiving_namespaces:
+                untyped:
+                  - envoy.lb
