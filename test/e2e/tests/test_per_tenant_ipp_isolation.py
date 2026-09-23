@@ -68,7 +68,13 @@ GATEWAY_PROPAGATION_DELAY = 5
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Retry transient gateway/auth propagation errors (empty 403, Authorino AUTH_FAILURE)."""
+    """Retry transient gateway/auth propagation errors.
+
+    Matches ``test_helper._is_transient_gateway_response``, plus the
+    Authorino "Access denied" 403 body seen on some tenant gateways.
+    """
+    from test_helper import _is_transient_gateway_response
+
     for attempt in range(1, retries + 1):
         response = method(
             url,
@@ -76,10 +82,8 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
             verify=kwargs.pop("verify", TLS_VERIFY),
             **kwargs,
         )
-        retryable = (response.status_code == 403 and not response.text.strip()) or (
+        retryable = _is_transient_gateway_response(response) or (
             response.status_code == 403 and "Access denied" in response.text
-        ) or (
-            response.status_code == 500 and "AUTH_FAILURE" in response.text
         )
         if retryable and attempt < retries:
             log.info(
