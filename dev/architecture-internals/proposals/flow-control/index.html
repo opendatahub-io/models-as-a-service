@@ -3422,7 +3422,7 @@ namespaces.</p>
 <li>Replace MaaS authorization, subscription selection, token rate limits, or billing.</li>
 <li>Introduce or change request <code>service_tier</code> handling. Its interaction with subscription selection, authorization, and
   pricing requires a separate proposal; this integration derives scheduling priority from the selected subscription's
-  <code>requestPriority</code>, without a <code>service_tier</code> override.</li>
+  <code>inferencePriority</code>, without a <code>service_tier</code> override.</li>
 <li>Introduce a new scheduler, per-user fairness, or per-model priority overrides within a subscription.</li>
 <li>Provide a global capacity allocation across independent pools or scheduler instances, or guarantee latency or minimum
   capacity across priority bands.</li>
@@ -3431,22 +3431,22 @@ namespaces.</p>
 </ul>
 <h2 id="proposed-design">Proposed Design</h2>
 <h3 id="subscription-priority-and-fairness">Subscription priority and fairness</h3>
-<p>Add an optional <code>MaaSSubscription.spec.requestPriority</code> field as the desired <code>InferenceObjective.spec.priority</code>. Use a
+<p>Add an optional <code>MaaSSubscription.spec.inferencePriority</code> field as the desired <code>InferenceObjective.spec.priority</code>. Use a
 signed <code>int32</code>, matching the objective API, and preserve the distinction between an omitted value and an explicit <code>0</code>
 (for example, using <code>*int32</code> in the Go API). Do not apply a CRD default that fills in this field. Higher values receive
 higher scheduling priority; negative values represent lower-than-default priority. Validate and preserve this value
 consistently across the subscription API and objective reconciliation.</p>
-<p>The existing <code>spec.priority</code> continues to control automatic subscription selection. <code>spec.requestPriority</code> controls
+<p>The existing <code>spec.priority</code> continues to control automatic subscription selection. <code>spec.inferencePriority</code> controls
 request scheduling after a subscription has been selected. Updating either field does not change the other field's
 meaning, and request priority does not influence subscription selection. Explicit subscription selection and API-key
 subscription binding continue to follow the existing authorization rules.</p>
-<p>Subscriptions without <code>spec.requestPriority</code> create no <code>InferenceObjective</code>, but both canonical and legacy header pairs
+<p>Subscriptions without <code>spec.inferencePriority</code> create no <code>InferenceObjective</code>, but both canonical and legacy header pairs
 are still injected. The objective header carries the generated name for the subscription/pool pair. With no matching
 objective, llm-d applies scheduler priority <code>0</code>, regardless of subscription-selection priority. An explicit
-<code>spec.requestPriority: 0</code> creates an objective with priority <code>0</code> under that same name, following the same path as any
+<code>spec.inferencePriority: 0</code> creates an objective with priority <code>0</code> under that same name, following the same path as any
 other explicit value.</p>
 <p>For example, a subscription can have <code>spec.priority: 100</code> to make it preferred during automatic selection and
-<code>spec.requestPriority: 10</code> to schedule its requests at priority <code>10</code>.</p>
+<code>spec.inferencePriority: 10</code> to schedule its requests at priority <code>10</code>.</p>
 <p>The documented default objective header value is the generated subscription/pool objective name, even when request
 priority is omitted. In that case the resource is intentionally absent and the scheduler defaults to priority <code>0</code>. When
 request priority is configured, the same header value matches the generated objective in the target pool's namespace.</p>
@@ -3471,7 +3471,7 @@ request priority is configured, the same header value matches the generated obje
 </tr>
 <tr>
 <td><code>InferenceObjective.spec.priority</code></td>
-<td>Explicit <code>MaaSSubscription.spec.requestPriority</code></td>
+<td>Explicit <code>MaaSSubscription.spec.inferencePriority</code></td>
 <td>Applies the same request priority to every pool covered by the subscription.</td>
 </tr>
 </tbody>
@@ -3517,9 +3517,9 @@ fairness; deployments requiring fair sharing must explicitly select an appropria
 <li>Discover the active pool through <code>LLMInferenceService.status.router.scheduler.inferencePool</code>, including its group,
    kind, name, and namespace. Use this observed reference for both managed pools and explicitly referenced pools; do not
    infer a generated pool name from the service name or assume that the subscription and pool share a namespace.</li>
-<li>When <code>spec.requestPriority</code> is explicitly set, reconcile one objective per distinct <code>(subscription, pool)</code> pair in
+<li>When <code>spec.inferencePriority</code> is explicitly set, reconcile one objective per distinct <code>(subscription, pool)</code> pair in
    the pool's namespace, with <code>spec.poolRef.name</code>
-   pointing to that pool and <code>spec.priority</code> copied from the subscription's <code>spec.requestPriority</code>. Multiple model
+   pointing to that pool and <code>spec.priority</code> copied from the subscription's <code>spec.inferencePriority</code>. Multiple model
    references resolving to the same pool share that objective.</li>
 <li>Reconcile changes to request priority, model membership, tenant association, and observed pool references. Remove
    obsolete objectives when request priority is cleared, a model leaves the subscription, its pool changes, or the
@@ -3531,9 +3531,9 @@ different tenant namespaces may share a name. Generate deterministic, DNS-compat
 subscription, and pool names, with a collision-resistant hash of their full resource identities. Truncate the readable
 name portions as needed to respect Kubernetes naming limits while preserving the hash. The subscription remains the
 logical objective; the pool-specific name is its representation in the inference API.</p>
-<p>For example, a subscription with <code>spec.requestPriority: 10</code> produces an objective for each referenced pool:
+<p>For example, a subscription with <code>spec.inferencePriority: 10</code> produces an objective for each referenced pool:
 The name below is a schematic placeholder; generated names include the pool-specific disambiguation described above.</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">inference.networking.x-k8s.io/v1alpha2</span>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">llm-d.ai/v1alpha2</span>
 <a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">InferenceObjective</span>
 <a id="__codelineno-0-3" name="__codelineno-0-3" href="#__codelineno-0-3"></a><span class="nt">metadata</span><span class="p">:</span>
 <a id="__codelineno-0-4" name="__codelineno-0-4" href="#__codelineno-0-4"></a><span class="w">  </span><span class="c1"># longer than 63 chars names need to be handled through hashing see kmeta.ChildName algorithm</span>
@@ -3606,7 +3606,7 @@ control should explicitly report unsupported or pending models rather than imply
 backend.</p>
 <h3 id="llm-d-scheduler-policy-controls">llm-d Scheduler Policy Controls</h3>
 <p>The llm-d Router/Scheduler implementation and configuration are the authority for the behavior described here.
-<code>requestPriority</code> selects a band; the EPP's <code>flowControl</code> configuration determines dispatch eligibility, fairness,
+<code>inferencePriority</code> selects a band; the EPP's <code>flowControl</code> configuration determines dispatch eligibility, fairness,
 request ordering, and overload handling. Model owners own these controls. The initial MaaS API exposes request
 classification without adding subscription-level configuration for scheduler plugins.</p>
 <table>
@@ -3663,7 +3663,7 @@ classification without adding subscription-level configuration for scheduler plu
 <h4 id="priority-holdback-what-domain-controls">Priority holdback: What <code>domain</code> Controls</h4>
 <p><code>domain</code> is a parameter of the <code>priority-holdback-policy</code> plugin. It determines how numerical priorities are mapped to
 dispatch ceilings between <code>minCeiling</code> and <code>maxCeiling</code>. It is configured by the pool administrator in the scheduler,
-separately from a subscription's <code>requestPriority</code>.</p>
+separately from a subscription's <code>inferencePriority</code>.</p>
 <p>A ceiling is a saturation threshold: when measured pool saturation reaches or exceeds a band's ceiling, dispatch from
 that band pauses and its requests remain queued. For example, a ceiling of <code>0.65</code> allows dispatch below saturation
 <code>0.65</code>. The value refers to the configured saturation detector's signal; it is not a reservation of 65% of GPU capacity.</p>
@@ -3720,7 +3720,7 @@ backend telemetry, while concurrency-based detection uses in-flight request or t
 telemetry can halt dispatch with the utilization detector.</p>
 <p>With in-flight eviction enabled, the existing sheddable filter admits only negative-priority victims, and reclamation
 requires victim priority to be below the blocked demand's priority. Victims are ordered by lowest priority, then newest
-dispatch time. Setting a negative <code>requestPriority</code> therefore permits interruption under that configuration; it does not
+dispatch time. Setting a negative <code>inferencePriority</code> therefore permits interruption under that configuration; it does not
 merely place requests later in the queue. This behavior must be explained to subscription operators.</p>
 <p>If SLO deadline ordering is enabled, <code>x-llm-d-slo-ttft-ms</code> and its legacy alias can influence scheduling order. A
 follow-up must define trusted derivation or validation and bounds for these values before exposing subscription SLO
@@ -3728,7 +3728,7 @@ controls. Protecting objective and fairness headers does not govern additional s
 request-priority ranges complement scheduler policies by restricting which bands a subscription may select.</p>
 <h2 id="priority-tier-pricing-and-chargeback">Priority-Tier Pricing and Chargeback</h2>
 <p>The existing per-model <code>billingRate.perToken</code> on a subscription can incorporate the price of its priority tier. For
-example, an online subscription with higher <code>requestPriority</code> can carry a higher per-token rate than a batch
+example, an online subscription with higher <code>inferencePriority</code> can carry a higher per-token rate than a batch
 subscription. This requires no additional priority-specific pricing field. MaaS does not automatically adjust the
 billing rate when request priority changes; administrators or a separate pricing policy must manage that relationship.</p>
 <p>For charges based on the configured rate, token usage and the applicable rate are sufficient; recording request
@@ -3738,7 +3738,7 @@ change. Durable rate attribution and charge calculation are separate billing con
 implementation.</p>
 <p>An optional follow-up could record the request priority observed by MaaS and the objective identity for auditing and
 troubleshooting. These values must come from trusted request-time metadata, and the existing subscription-selection
-<code>priority</code> must not be confused with <code>requestPriority</code>. Objective names remain stable across priority changes, so they
+<code>priority</code> must not be confused with <code>inferencePriority</code>. Objective names remain stable across priority changes, so they
 alone cannot reconstruct historical scheduling priority.</p>
 <p>If a future charging contract depends on the priority actually applied by EPP rather than the configured billing rate,
 it would additionally require scheduler-side priority reporting correlated with usage. Gateway metadata alone cannot
@@ -3766,7 +3766,7 @@ both the AI Gateway and ODH parent operators. Restrict direct objective edits to
 administrators. Internal headers and status mappings must not contain API keys or other credentials.</p>
 <h2 id="follow-up-tenant-request-priority-ranges">Follow-up: Tenant Request-Priority Ranges</h2>
 <p>A future extension could let platform administrators configure an allowed request-priority range on <code>AITenant</code>, for
-example <code>spec.requestPriorityRange.min</code> and <code>spec.requestPriorityRange.max</code> (illustrative field names). Tenant
+example <code>spec.inferencePriorityRange.min</code> and <code>spec.inferencePriorityRange.max</code> (illustrative field names). Tenant
 administrators could then choose subscription request priorities within inclusive bounds set by the platform. This would
 constrain priority escalation on shared pools while preserving subscription-level control and the existing objective
 mapping. Managing the bounds must require platform-level authorization so tenant administrators cannot raise their own
@@ -3775,14 +3775,14 @@ limits.</p>
 subscription flexibility while restricting choices to a discrete set. The follow-up should evaluate both approaches.</p>
 <p>The follow-up should define validation of subscription creation and updates, reconciliation when tenant bounds change,
 and UI display of the allowed range. It must also decide how to handle existing subscriptions outside a newly narrowed
-range and the scheduler's effective priority <code>0</code> for subscriptions that omit <code>requestPriority</code>, particularly when <code>0</code>
+range and the scheduler's effective priority <code>0</code> for subscriptions that omit <code>inferencePriority</code>, particularly when <code>0</code>
 falls outside the range. Rejecting invalid values should provide actionable feedback rather than silently clamping them.
 These policy and migration choices are deferred; tenant-level ranges are not required for this design's initial
 implementation because sharing inference pools across AI tenants is not currently supported. Priority governance
 should be addressed as part of the follow-up design for enabling cross-tenant pool sharing.</p>
 <h3 id="allowed-priority-values-instead-of-ranges">Allowed Priority Values Instead of Ranges</h3>
 <p>For future cross-tenant pool sharing, platform administrators could grant each <code>AITenant</code> a discrete set of allowed
-<code>requestPriority</code> values instead of a continuous range. Tenant administrators would retain subscription-level control:
+<code>inferencePriority</code> values instead of a continuous range. Tenant administrators would retain subscription-level control:
 for example, a tenant allowed <code>-10</code>, <code>0</code>, and <code>10</code> could assign <code>-10</code> to a batch subscription and <code>10</code> to an online
 subscription. This does not impose one fixed priority on all of a tenant's subscriptions.</p>
 <p>A discrete set limits the priority bands tenants can introduce, making holdback behavior easier to govern, particularly
@@ -3817,7 +3817,7 @@ and how omitted request priority, with effective scheduler priority <code>0</cod
 </tr>
 <tr>
 <td>Reuse <code>spec.priority</code> for request scheduling</td>
-<td>Avoids a new field, but couples subscription selection with scheduling and changes the effect of existing nonzero priorities. Separate <code>spec.requestPriority</code> keeps these decisions independent.</td>
+<td>Avoids a new field, but couples subscription selection with scheduling and changes the effect of existing nonzero priorities. Separate <code>spec.inferencePriority</code> keeps these decisions independent.</td>
 </tr>
 <tr>
 <td>Reference an operator-defined priority tier</td>
@@ -3843,7 +3843,7 @@ models sharing a pool, request-priority and pool changes, subscription deletion,
 and both path-based and body-based model resolution. End-to-end tests must demonstrate tenant fairness within one
 priority band using an explicitly configured fairness policy, and priority ordering under contention with flow control
 enabled. Test the selected pool policy configuration, including dispatch gating and negative-priority interruption when
-eviction is enabled. Verify that omitted <code>spec.requestPriority</code> creates no objective, overwrites all four headers with
+eviction is enabled. Verify that omitted <code>spec.inferencePriority</code> creates no objective, overwrites all four headers with
 trusted values, and uses scheduler priority <code>0</code> while retaining tenant fairness. Test conflicting canonical/legacy
 values, spoofed values, duplicate headers, and case variants, with request priority both set and unset. Explicit <code>0</code>
 must create an objective and inject its name. Verify negative values, independence from subscription selection, and
@@ -3927,7 +3927,7 @@ fairness identity, including when request priority is unset, and EPP applies the
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 14, 2026 13:40:15 UTC">September 14, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 23, 2026 01:33:04 UTC">September 23, 2026</span>
   </span>
 
     
