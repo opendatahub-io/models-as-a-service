@@ -49,6 +49,19 @@ spec:
           spec:
             description: MaaSSubscriptionSpec defines the desired state of MaaSSubscription
             properties:
+              inferencePriority:
+                description: |-
+                  InferencePriority is the scheduling priority applied to inference requests made under
+                  this subscription, published as InferenceObjective.spec.priority.
+                  Higher values are scheduled ahead of lower ones; negative values are scheduled below
+                  the scheduler default. Distinct from Priority, which selects among a user's
+                  subscriptions and has no effect on inference scheduling.
+                  When unset, no InferenceObjective is created and the scheduler applies priority 0.
+                  An explicit 0 creates an InferenceObjective with priority 0.
+                format: int32
+                maximum: 2147483647
+                minimum: -2147483648
+                type: integer
               modelRefs:
                 description: ModelRefs defines which models are included with per-model
                   token rate limits

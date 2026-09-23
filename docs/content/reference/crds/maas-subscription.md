@@ -10,6 +10,7 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | modelRefs | []ModelSubscriptionRef | Yes | Models included with per-model token rate limits (each specifies `name` and `namespace`) |
 | tokenMetadata | TokenMetadata | No | Metadata for token attribution and metering |
 | priority | int32 | No | Subscription priority when user has multiple (higher = higher priority; default: 0) |
+| inferencePriority | int32 | No | Scheduling priority for inference requests made under this subscription (signed; higher = scheduled first, negative = below the scheduler default). Independent of `priority`, which only selects among subscriptions. Omitting the field creates no InferenceObjective and the scheduler applies priority `0`; setting it explicitly to `0` creates an InferenceObjective with priority `0`. |
 
 ## OwnerSpec
 
