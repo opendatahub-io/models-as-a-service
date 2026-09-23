@@ -133,6 +133,7 @@ spec:
 |-------|------|----------|---------|-------------|
 | enabled | bool | No | `true` | Whether telemetry collection is enabled |
 | metrics | TenantMetricsConfig | No | - | Fine-grained control over metric dimensions |
+| logs | TenantLogsConfig | No | - | Fine-grained control over usage-log identity fields |
 
 ### TenantMetricsConfig
 
@@ -142,6 +143,12 @@ spec:
 | captureUser | bool | No | `false` | Add a "user" dimension containing the authenticated user ID. May have privacy implications; ensure compliance before enabling. |
 | captureGroup | bool | No | `false` | Add a "group" dimension to telemetry metrics |
 | captureModelUsage | bool | No | `true` | Capture per-model usage metrics |
+
+### TenantLogsConfig
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| captureUser | bool | No | `false` | Include the authenticated user ID as `user_id` on usage logs. Independent of `metrics.captureUser`. May have privacy implications; ensure compliance before enabling. |
 
 ---
 
@@ -236,6 +243,8 @@ spec:
       captureUser: false
       captureGroup: false
       captureModelUsage: true
+    logs:
+      captureUser: false
 ```
 
 ---
