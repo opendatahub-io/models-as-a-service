@@ -358,6 +358,106 @@ func TestTenantEnsureUsageLogsEnvoyFilter(t *testing.T) {
 	})
 }
 
+func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
+	findUserIDAttr := func(ef *unstructured.Unstructured) bool {
+		hasUserIDAttr := false
+		identityFilters := 0
+		identityWithUsername := 0
+		patches, _, _ := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
+		for _, p := range patches {
+			patch, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			switch patch["applyTo"] {
+			case "NETWORK_FILTER":
+				patchVal, _ := patch["patch"].(map[string]any)
+				value, _ := patchVal["value"].(map[string]any)
+				typedConfig, _ := value["typed_config"].(map[string]any)
+				accessLogs, _ := typedConfig["access_log"].([]any)
+				for _, al := range accessLogs {
+					alMap, _ := al.(map[string]any)
+					alTC, _ := alMap["typed_config"].(map[string]any)
+					attrs, _ := alTC["attributes"].(map[string]any)
+					values, _ := attrs["values"].([]any)
+					for _, v := range values {
+						entry, _ := v.(map[string]any)
+						if entry["key"] == "user_id" {
+							hasUserIDAttr = true
+						}
+					}
+				}
+			case "HTTP_FILTER":
+				name, _, _ := unstructured.NestedString(patch, "patch", "value", "name")
+				if name != "envoy.filters.http.header_to_metadata.identity" {
+					continue
+				}
+				identityFilters++
+				rules, _, _ := unstructured.NestedSlice(patch, "patch", "value", "typed_config", "request_rules")
+				for _, r := range rules {
+					rule, ok := r.(map[string]any)
+					if !ok {
+						continue
+					}
+					if rule["header"] == "X-MaaS-Username" {
+						identityWithUsername++
+						break
+					}
+				}
+			}
+		}
+		return hasUserIDAttr && identityFilters > 0 && identityFilters == identityWithUsername
+	}
+
+	t.Run("captureUser false omits user_id from filter", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := usageLogsConfig(true)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		// Telemetry nil → captureUser defaults to false
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		_, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
+		g.Expect(findUserIDAttr(ef)).To(BeFalse(), "user_id attribute and X-MaaS-Username request_rule should be absent when captureUser is false")
+	})
+
+	t.Run("captureUser true includes user_id in filter", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := usageLogsConfig(true)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Metrics: &maasv1alpha1.TenantMetricsConfig{
+				CaptureUser: ptr.To(true),
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		_, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
+		g.Expect(findUserIDAttr(ef)).To(BeTrue(), "user_id attribute and X-MaaS-Username request_rule should be present when captureUser is true")
+	})
+}
+
 func TestTenantCleanup_RemovesUsageLogsEnvoyFilter(t *testing.T) {
 	g := NewWithT(t)
 	s := tenantTestScheme(t)
