@@ -67,7 +67,9 @@ type ModelRefInfo struct {
 	Description     string           `json:"description,omitempty"`
 	Source          string           `json:"source,omitempty"`
 	TokenRateLimits []TokenRateLimit `json:"token_rate_limits,omitempty"`
-	BillingRate     *BillingRate     `json:"billing_rate,omitempty"`
+	// Unlimited means no token budget is enforced for this model; usage is still metered.
+	Unlimited   bool         `json:"unlimited,omitempty"`
+	BillingRate *BillingRate `json:"billing_rate,omitempty"`
 }
 
 // TokenRateLimit defines a token rate limit.

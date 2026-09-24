@@ -991,6 +991,10 @@ components:
                         required:
                             - limit
                             - window
+                unlimited:
+                    type: boolean
+                    description: No token budget is enforced for this model; usage is still metered. Mutually exclusive with token_rate_limits.
+                    example: false
                 billing_rate:
                     type: object
                     properties:

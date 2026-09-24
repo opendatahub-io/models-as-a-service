@@ -826,6 +826,265 @@ class TestMultipleSubscriptionsPerModel:
             _wait_for_cr_absent("maassubscription", "e2e-extra-sub")
 
 
+UNLIMITED_LIMIT_NAME = "tokens-unlimited"
+
+
+def _subscription_key(subscription_name, model_ref):
+    """auth.identity.selected_subscription_key the TRLP predicates match on."""
+    return f"{_ns()}/{subscription_name}@{MODEL_NAMESPACE}/{model_ref}"
+
+
+def _server_dry_run_subscription(name, model_ref_budget):
+    """Apply a MaaSSubscription with --dry-run=server and return the completed process."""
+    cr = {
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSSubscription",
+        "metadata": {"name": name, "namespace": _ns()},
+        "spec": {
+            "owner": {"groups": [{"name": "system:authenticated"}]},
+            "modelRefs": [{"name": UNCONFIGURED_MODEL_REF, "namespace": MODEL_NAMESPACE, **model_ref_budget}],
+        },
+    }
+    return subprocess.run(
+        ["oc", "apply", "--dry-run=server", "-f", "-"],
+        input=json.dumps(cr), capture_output=True, text=True,
+    )
+
+
+def _wait_for_trlp_limits(model_ref, predicate_fn, timeout=90):
+    """Poll the model's TRLP until predicate_fn(spec.limits) holds and Kuadrant enforces it."""
+    trlp_name = f"maas-trlp-{model_ref}"
+    deadline = time.time() + timeout
+    limits = None
+    while time.time() < deadline:
+        trlp = _get_cr("tokenratelimitpolicy", trlp_name, namespace=MODEL_NAMESPACE)
+        if trlp:
+            limits = trlp.get("spec", {}).get("limits", {})
+            status = trlp.get("status", {})
+            # Enforced may still describe the previous generation of the spec.
+            observed = status.get("observedGeneration")
+            current = observed is None or observed == trlp["metadata"].get("generation")
+            enforced = current and any(
+                c.get("type") == "Enforced" and c.get("status") == "True"
+                for c in status.get("conditions", [])
+            )
+            if enforced and predicate_fn(limits):
+                return limits
+        time.sleep(3)
+    raise TimeoutError(f"TokenRateLimitPolicy {trlp_name} did not reach the expected limits within {timeout}s: {limits}")
+
+
+def _gateway_wasm_plugin_config():
+    """Return the pluginConfig of the gateway's Kuadrant WasmPlugin, or skip when there is none."""
+    from multitenancy_helpers import DEFAULT_GATEWAY_NAME
+
+    plugin = _get_cr("wasmplugin", f"kuadrant-{DEFAULT_GATEWAY_NAME}", namespace=test_helper.GATEWAY_NAMESPACE)
+    if not plugin:
+        pytest.skip(f"no Kuadrant WasmPlugin for gateway {DEFAULT_GATEWAY_NAME}")
+    return plugin["spec"]["pluginConfig"]
+
+
+def _wait_for_wasm_plugin_config_containing(text, timeout=120):
+    """Poll the gateway's WasmPlugin until its pluginConfig mentions text."""
+    deadline = time.time() + timeout
+    plugin_config = _gateway_wasm_plugin_config()
+    while text not in json.dumps(plugin_config) and time.time() < deadline:
+        time.sleep(3)
+        plugin_config = _gateway_wasm_plugin_config()
+    assert text in json.dumps(plugin_config), f"WasmPlugin never picked up {text}"
+    return plugin_config
+
+
+def _trlp_actions_per_action_set(plugin_config, model_ref):
+    """Count the wasm actions each ActionSet carries for the model's TRLP."""
+    source_suffix = f":{MODEL_NAMESPACE}/maas-trlp-{model_ref}"
+    counts = set()
+    for action_set in plugin_config.get("actionSets", []):
+        n = sum(
+            1 for action in action_set.get("actions", [])
+            if any(s.startswith("tokenratelimitpolicy") and s.endswith(source_suffix) for s in action.get("sources", []))
+        )
+        if n:
+            counts.add(n)
+    return counts
+
+
+def _limitador_authorized_hits(subscription_name):
+    """Sum Limitador's authorized_hits for a subscription, or skip when they are not observable."""
+    result = subprocess.run(["oc", "get", "limitador", "-A", "-o", "json"], capture_output=True, text=True)
+    if result.returncode != 0 or not json.loads(result.stdout).get("items"):
+        pytest.skip(f"Limitador CR not readable: {result.stderr.strip()}")
+    limitador = json.loads(result.stdout)["items"][0]["metadata"]
+    metrics = subprocess.run(
+        ["oc", "get", "--raw",
+         f"/api/v1/namespaces/{limitador['namespace']}/services/limitador-{limitador['name']}:8080/proxy/metrics"],
+        capture_output=True, text=True,
+    )
+    if metrics.returncode != 0:
+        pytest.skip(f"Limitador metrics not reachable: {metrics.stderr.strip()}")
+
+    hits = [line for line in metrics.stdout.splitlines() if line.startswith("authorized_hits{")]
+    if not any('subscription="' in line for line in hits):
+        pytest.skip("authorized_hits carry no subscription label (maas-telemetry TelemetryPolicy not deployed)")
+    return sum(float(line.rsplit(" ", 1)[1]) for line in hits if f'subscription="{subscription_name}"' in line)
+
+
+class TestUnlimitedSubscription:
+    """modelRefs[].unlimited: access without a token budget that still meters usage.
+
+    Unlimited subscriptions share one rate-less TRLP limit per model, so each adds a
+    predicate clause to the gateway's WasmPlugin instead of a whole limit.
+    Runs on the unconfigured model so no other subscription shares its TRLP.
+    """
+
+    AUTH_POLICY = "e2e-unlimited-auth"
+    LIMITED_SUB = "e2e-unlimited-limited"
+    UNLIMITED_SUB = "e2e-unlimited-unl-a"
+    SECOND_UNLIMITED_SUB = "e2e-unlimited-unl-b"
+
+    @pytest.fixture(scope="class")
+    def mixed_model(self):
+        """A limited (10 tokens/1m) and an unlimited subscription on one model, with a key each."""
+        model_ref = UNCONFIGURED_MODEL_REF
+        try:
+            _create_test_auth_policy(self.AUTH_POLICY, model_refs=[model_ref], groups=["system:authenticated"])
+            _wait_for_maas_auth_policy_phase(self.AUTH_POLICY, require_enforced=False)
+            _create_test_subscription(self.LIMITED_SUB, [model_ref], groups=["system:authenticated"], token_limit=10)
+            _create_test_subscription(self.UNLIMITED_SUB, [model_ref], groups=["system:authenticated"], unlimited=True)
+            _wait_for_maas_subscription_phase(self.LIMITED_SUB)
+            _wait_for_maas_subscription_phase(self.UNLIMITED_SUB)
+
+            unlimited_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
+            _wait_for_trlp_limits(
+                model_ref,
+                lambda limits: unlimited_key in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
+            )
+
+            oc_token = _get_cluster_token()
+            keys = {
+                sub: _create_api_key(oc_token, name=f"{sub}-{uuid.uuid4().hex[:6]}", subscription=sub)
+                for sub in (self.LIMITED_SUB, self.UNLIMITED_SUB)
+            }
+            yield model_ref, keys
+        finally:
+            for sub in (self.LIMITED_SUB, self.UNLIMITED_SUB, self.SECOND_UNLIMITED_SUB):
+                _delete_cr("maassubscription", sub)
+            _delete_cr("maasauthpolicy", self.AUTH_POLICY)
+            for sub in (self.LIMITED_SUB, self.UNLIMITED_SUB, self.SECOND_UNLIMITED_SUB):
+                _wait_for_cr_absent("maassubscription", sub)
+
+    @pytest.mark.serial
+    def test_unlimited_and_token_rate_limits_are_mutually_exclusive(self):
+        limits = {"tokenRateLimits": [{"limit": 100, "window": "1m"}]}
+
+        both = _server_dry_run_subscription("e2e-unlimited-both", {"unlimited": True, **limits})
+        assert both.returncode != 0, "a modelRef with unlimited and tokenRateLimits must be rejected"
+        assert "tokenRateLimits must not be set when unlimited is true" in both.stderr, both.stderr
+
+        neither = _server_dry_run_subscription("e2e-unlimited-neither", {})
+        assert neither.returncode != 0, "a modelRef without a token budget must be rejected"
+        assert "tokenRateLimits is required unless unlimited is true" in neither.stderr, neither.stderr
+
+        unlimited = _server_dry_run_subscription("e2e-unlimited-only", {"unlimited": True})
+        assert unlimited.returncode == 0, unlimited.stderr
+
+    @pytest.mark.serial
+    def test_unlimited_key_is_not_rate_limited(self, mixed_model):
+        model_ref, keys = mixed_model
+        limits = _get_cr("tokenratelimitpolicy", f"maas-trlp-{model_ref}", namespace=MODEL_NAMESPACE)["spec"]["limits"]
+        assert not any(self.UNLIMITED_SUB in name for name in limits), \
+            f"unlimited subscription must not get its own limit: {list(limits)}"
+        assert "rates" not in limits[UNLIMITED_LIMIT_NAME], limits[UNLIMITED_LIMIT_NAME]
+
+        # Exhaust the limited subscription first: both keys belong to the same user,
+        # so this also proves the unlimited key does not share the limited counter.
+        # Reaching 200 first rules out auth propagation and gateway-default-deny as
+        # the source of the 429.
+        _poll_status(keys[self.LIMITED_SUB], 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+        statuses = []
+        for _ in range(15):
+            statuses.append(_inference(keys[self.LIMITED_SUB], path=UNCONFIGURED_MODEL_PATH, max_tokens=1).status_code)
+            if statuses[-1] == 429:
+                break
+            time.sleep(0.1)
+        assert statuses[-1] == 429 and set(statuses[:-1]) <= {200}, \
+            f"limited key should get 200s until its 10 tokens/1m budget runs out: {statuses}"
+
+        _poll_status(keys[self.UNLIMITED_SUB], 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+        for i in range(15):
+            r = _inference(keys[self.UNLIMITED_SUB], path=UNCONFIGURED_MODEL_PATH, max_tokens=1)
+            assert r.status_code == 200, f"unlimited key got {r.status_code} on request {i + 1}: {r.text[:200]}"
+
+    @pytest.mark.serial
+    def test_unlimited_subscriptions_share_one_wasm_limit(self, mixed_model):
+        model_ref, _ = mixed_model
+        first_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
+        second_key = _subscription_key(self.SECOND_UNLIMITED_SUB, model_ref)
+
+        plugin_config = _wait_for_wasm_plugin_config_containing(first_key)
+        before = _trlp_actions_per_action_set(plugin_config, model_ref)
+        if not before:
+            pytest.skip("WasmPlugin actions carry no policy sources (Kuadrant < 1.4)")
+        before_bytes = len(json.dumps(plugin_config))
+
+        _create_test_subscription(self.SECOND_UNLIMITED_SUB, [model_ref], groups=["system:authenticated"], unlimited=True)
+        _wait_for_maas_subscription_phase(self.SECOND_UNLIMITED_SUB)
+        plugin_config = _wait_for_wasm_plugin_config_containing(second_key)
+
+        after = _trlp_actions_per_action_set(plugin_config, model_ref)
+        log.info("WasmPlugin pluginConfig: %d -> %d bytes after a second unlimited subscription",
+                 before_bytes, len(json.dumps(plugin_config)))
+        assert after == before, f"a second unlimited subscription must not add wasm actions: {before} -> {after}"
+
+    @pytest.mark.serial
+    def test_unlimited_usage_is_metered(self, mixed_model):
+        _, keys = mixed_model
+        before = _limitador_authorized_hits(self.UNLIMITED_SUB)
+
+        r = _poll_status(keys[self.UNLIMITED_SUB], 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+        log.info("unlimited inference -> %s", r.status_code)
+
+        deadline = time.time() + 60
+        after = before
+        while after <= before and time.time() < deadline:
+            time.sleep(3)
+            after = _limitador_authorized_hits(self.UNLIMITED_SUB)
+        assert after > before, f"authorized_hits for {self.UNLIMITED_SUB} did not grow: {before} -> {after}"
+
+
+class TestAllUnlimitedModel:
+    """A model whose only subscriptions are unlimited.
+
+    Kept apart from TestUnlimitedSubscription: its class fixture keeps a limited
+    subscription on the same model until that class finishes.
+    """
+
+    @pytest.mark.serial
+    def test_all_unlimited_model_is_not_denied(self):
+        """With only unlimited subscriptions the model's TRLP must still override gateway-default-deny."""
+        model_ref = UNCONFIGURED_MODEL_REF
+        auth_policy = "e2e-unlimited-only-auth"
+        sub = "e2e-unlimited-only"
+        try:
+            _create_test_auth_policy(auth_policy, model_refs=[model_ref], groups=["system:authenticated"])
+            _wait_for_maas_auth_policy_phase(auth_policy, require_enforced=False)
+            _create_test_subscription(sub, [model_ref], groups=["system:authenticated"], unlimited=True)
+            _wait_for_maas_subscription_phase(sub)
+
+            limits = _wait_for_trlp_limits(model_ref, lambda limits: list(limits) == [UNLIMITED_LIMIT_NAME])
+            assert "rates" not in limits[UNLIMITED_LIMIT_NAME], limits[UNLIMITED_LIMIT_NAME]
+
+            api_key = _create_api_key(_get_cluster_token(), name=f"{sub}-{uuid.uuid4().hex[:6]}", subscription=sub)
+            _poll_status(api_key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+            for i in range(15):
+                r = _inference(api_key, path=UNCONFIGURED_MODEL_PATH, max_tokens=1)
+                assert r.status_code == 200, f"got {r.status_code} on request {i + 1}: {r.text[:200]}"
+        finally:
+            _delete_cr("maassubscription", sub)
+            _delete_cr("maasauthpolicy", auth_policy)
+            _wait_for_cr_absent("maassubscription", sub)
+
+
 class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 

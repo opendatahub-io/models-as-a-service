@@ -964,6 +964,7 @@ def _create_test_subscription(
     namespace=None,
     priority=None,
     model_namespace=MODEL_NAMESPACE,
+    unlimited=False,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -977,6 +978,7 @@ def _create_test_subscription(
         namespace: Namespace for the subscription (defaults to _ns())
         priority: Optional spec.priority (higher wins for default API key binding)
         model_namespace: Namespace containing the referenced MaaSModelRefs
+        unlimited: Grant access without a token budget; token_limit and window are ignored
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -984,6 +986,7 @@ def _create_test_subscription(
 
     groups_formatted = [{"name": g} for g in (groups or [])]
 
+    budget = {"unlimited": True} if unlimited else {"tokenRateLimits": [{"limit": token_limit, "window": window}]}
     spec = {
         "owner": {
             "users": users or [],
@@ -993,7 +996,7 @@ def _create_test_subscription(
             {
                 "name": ref,
                 "namespace": model_namespace,
-                "tokenRateLimits": [{"limit": token_limit, "window": window}],
+                **budget,
             }
             for ref in model_refs
         ],
