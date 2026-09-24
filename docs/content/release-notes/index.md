@@ -8,6 +8,7 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 
 | RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
 |---------------|--------------|-----------------|--------|-------|
+| 3.6           | TBD          | `v3.6`          | Planned | Short subscription rate-limit IDs in TRLP; see [Upgrade Guide](../migration/upgrade-to-3.6.md) |
 | 3.5           | v0.2.1       | `v3.5`          | GA     | Multi-tenancy; body-based routing; xKS support; see [Upgrade Guide](../migration/upgrade-to-3.5.md) |
 | 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
 | 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
@@ -19,6 +20,24 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 - **Downstream (RHOAI):** `registry.redhat.io/rhoai/odh-maas-api-rhel9:<tag>`, `registry.redhat.io/rhoai/odh-maas-controller-rhel9:<tag>`
 
 For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Version Compatibility](../install/prerequisites.md#version-compatibility).
+
+---
+
+## Unreleased (RHOAI 3.6)
+
+**Release Date:** TBD
+
+### Upgrade notes
+
+See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
+
+- **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
+- **Token rate-limit counters reset** on upgrade (TRLP limit keys rename to `rl-<id>`). Limitador enforcement budgets start fresh for the current window.
+- **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
+
+### Key Fixes
+
+- **Short subscription rate-limit IDs in TokenRateLimitPolicy:** TRLP `when` predicates and limit map keys use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id` / `rl-<id>`) so Kuadrant WASM / EnvoyFilter size no longer scales with long subscription strings. Human-readable `selected_subscription_key` remains for telemetry.
 
 ---
 
