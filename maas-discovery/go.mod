@@ -4,6 +4,7 @@ go 1.26.6
 
 require (
 	github.com/gin-gonic/gin v1.10.0
+	github.com/google/uuid v1.6.0
 	github.com/openshift/api v0.0.0-20260603130340-1ad2ac3eb53d
 	github.com/openshift/client-go v0.0.0-20260603140539-6892dc3e1ffc
 	github.com/openshift/library-go v0.0.0-20260603103329-d8750ed2813e
@@ -32,7 +33,6 @@ require (
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/josharian/intern v1.0.0 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
