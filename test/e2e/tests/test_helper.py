@@ -964,6 +964,7 @@ def _create_test_subscription(
     namespace=None,
     priority=None,
     model_namespace=MODEL_NAMESPACE,
+    unlimited=False,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -977,6 +978,7 @@ def _create_test_subscription(
         namespace: Namespace for the subscription (defaults to _ns())
         priority: Optional spec.priority (higher wins for default API key binding)
         model_namespace: Namespace containing the referenced MaaSModelRefs
+        unlimited: Grant access without a token budget; token_limit and window are ignored
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -984,6 +986,7 @@ def _create_test_subscription(
 
     groups_formatted = [{"name": g} for g in (groups or [])]
 
+    budget = {"unlimited": True} if unlimited else {"tokenRateLimits": [{"limit": token_limit, "window": window}]}
     spec = {
         "owner": {
             "users": users or [],
@@ -993,7 +996,7 @@ def _create_test_subscription(
             {
                 "name": ref,
                 "namespace": model_namespace,
-                "tokenRateLimits": [{"limit": token_limit, "window": window}],
+                **budget,
             }
             for ref in model_refs
         ],
@@ -1106,10 +1109,15 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
-def chat(prompt: str, model_v1: str, headers: dict, model_name: str):
+def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
+         stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
     body = {"model": model_name, "messages": [{"role": "user", "content": prompt}]}
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    if stream:
+        body["stream"] = True
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
 
 
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
@@ -1761,6 +1769,7 @@ def _create_llmis(
     gateway_name: str,
     gateway_namespace: str = "openshift-ingress",
     model_name: str = "facebook/opt-125m",
+    scheduler: bool = False,
 ):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
@@ -1772,8 +1781,10 @@ def _create_llmis(
         model_name: spec.model.name (the model identity used for BBR/ResolvedModelAlias).
             Defaults to "facebook/opt-125m"; override to test model-identity-collision
             scenarios where two LLMISs intentionally share a model name.
+        scheduler: Serve the model through an InferencePool and its endpoint picker
+            instead of a plain Service.
     """
-    _apply_cr({
+    llmis = {
         "apiVersion": "serving.kserve.io/v1alpha1",
         "kind": "LLMInferenceService",
         "metadata": {
@@ -1841,7 +1852,10 @@ def _create_llmis(
                 ]
             },
         },
-    })
+    }
+    if scheduler:
+        llmis["spec"]["router"]["scheduler"] = {}
+    _apply_cr(llmis)
 
 
 def _create_maas_model_ref(name: str, namespace: str, llmis_name: str, *, tenant_ref: Optional[str] = None):
