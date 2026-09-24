@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"sort"
 	"strings"
 	"testing"
 
@@ -286,11 +287,11 @@ func TestMaaSSubscriptionReconciler_AllUnlimited_ActivePhase(t *testing.T) {
 // The predicate must not depend on the order subscriptions are listed in, or
 // the TRLP would be rewritten between reconciles.
 func TestUnlimitedTokenLimit_PredicateOrderIsStable(t *testing.T) {
-	key := func(sub string) string {
-		return fmt.Sprintf("%s/%s@%s/%s", unlimitedTestNamespace, sub, unlimitedTestNamespace, unlimitedTestModel)
+	id := func(sub string) string {
+		return SubscriptionRateLimitID(ModelScopedSubscriptionKey(unlimitedTestNamespace, sub, unlimitedTestNamespace, unlimitedTestModel))
 	}
 
-	got := firstPredicate(t, unlimitedTokenLimit([]string{key("unl-b"), key("unl-a")}))
+	got := firstPredicate(t, unlimitedTokenLimit([]string{id("unl-b"), id("unl-a")}))
 
 	if want := unlimitedTestPredicate("unl-a", "unl-b"); got != want {
 		t.Errorf("predicate = %q, want %q", got, want)
@@ -300,9 +301,10 @@ func TestUnlimitedTokenLimit_PredicateOrderIsStable(t *testing.T) {
 func unlimitedTestPredicate(subs ...string) string {
 	matches := make([]string, 0, len(subs))
 	for _, s := range subs {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s"`,
-			unlimitedTestNamespace, s, unlimitedTestNamespace, unlimitedTestModel))
+		id := SubscriptionRateLimitID(ModelScopedSubscriptionKey(unlimitedTestNamespace, s, unlimitedTestNamespace, unlimitedTestModel))
+		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
 	}
+	sort.Strings(matches)
 	return fmt.Sprintf(`(%s) && !request.path.endsWith("/v1/models")`, strings.Join(matches, " || "))
 }
 

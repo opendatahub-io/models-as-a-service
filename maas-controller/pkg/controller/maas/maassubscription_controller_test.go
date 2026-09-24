@@ -18,7 +18,6 @@ package maas
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"testing"
 
@@ -771,7 +770,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
 	}
 	// Sub1 (100/1m) and sub2 (200/1m) have distinct rates, so each gets its own
-	// group; limit keys are now derived from the rate, not the subscription.
+	// group; limit keys are derived from the rate, not the subscription.
 	sub2Key := "tokens-200-per-1m"
 	if _, exists := limits[sub2Key]; !exists {
 		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Key)
@@ -880,9 +879,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Fatalf("predicate not a string: %T", predMap["predicate"])
 	}
 
-	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-	// and exempts /v1/models endpoint from rate limiting
-	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, maasSubName, namespace, modelName)
+	// Predicate uses short selected_subscription_id and exempts /v1/models
+	expected := trlpRateLimitPredicate(namespace, maasSubName, namespace, modelName)
 	if pred != expected {
 		t.Errorf("predicate = %q, want %q", pred, expected)
 	}
@@ -949,6 +947,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 
 	// sub-a (100/1m) and sub-b (200/1m) have distinct rates, so each gets its own
 	// group; limit keys are derived from the rate, not the subscription.
+	// Predicates match short selected_subscription_id values.
 	subAKey := "tokens-100-per-1m"
 	if limitA, ok := limitsMap[subAKey]; ok {
 		limitAMap, ok := limitA.(map[string]any)
@@ -972,7 +971,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
 		// and exempts /v1/models endpoint from rate limiting
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
+		expected := trlpRateLimitPredicate(namespace, "sub-a", namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
@@ -1007,7 +1006,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
 		// and exempts /v1/models endpoint from rate limiting
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
+		expected := trlpRateLimitPredicate(namespace, "sub-b", namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}

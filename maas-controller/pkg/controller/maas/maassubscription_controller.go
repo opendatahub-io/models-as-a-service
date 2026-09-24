@@ -175,7 +175,7 @@ func modelRefTokenRates(mRef maasv1alpha1.ModelSubscriptionRef) (rates []any, un
 const unlimitedLimitName = "tokens-unlimited"
 
 // unlimitedTokenLimit returns the TRLP limit matching the given
-// selected_subscription_key values of unlimited subscriptions.
+// selected_subscription_id values of unlimited subscriptions.
 //
 // Without rates, Limitador enforces nothing and keeps no counters, but the
 // wasm-shim still sends check and report calls for matching requests, and
@@ -188,11 +188,11 @@ const unlimitedLimitName = "tokens-unlimited"
 //
 // rates and counters stay unset: a nil slice is written as null, which the API
 // server drops, so the no-op update check would never match.
-func unlimitedTokenLimit(keys []string) map[string]any {
-	sort.Strings(keys)
-	matches := make([]string, 0, len(keys))
-	for _, k := range keys {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, k))
+func unlimitedTokenLimit(rateLimitIDs []string) map[string]any {
+	sort.Strings(rateLimitIDs)
+	matches := make([]string, 0, len(rateLimitIDs))
+	for _, id := range rateLimitIDs {
+		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
 	}
 	return map[string]any{
 		"when": []any{
@@ -636,24 +636,18 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return r.deleteModelTRLP(ctx, log, modelNamespace, modelName)
 	}
 
-	// Trust auth.identity.selected_subscription_key from AuthPolicy.
-	// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
-	// which handles:
-	//  - Validating subscription exists and user has access (groups/users match)
-	//  - Auto-selecting if user has exactly one subscription
-	//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
-	// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
-	//
-	// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
-	// This ensures proper isolation between subscriptions in different namespaces and across models.
+	// Trust auth.identity.selected_subscription_id from AuthPolicy (16-hex SHA-256 of
+	// {subNS}/{subName}@{modelNS}/{modelName}). The long selected_subscription_key
+	// stays on the identity for telemetry; TRLP matches the short ID so the Kuadrant
+	// WASM shim stays compact.
 	//
 	// Subscriptions sharing identical rates share one limit instead of one each, so the TRLP
 	// (and the EnvoyFilter/WasmPlugin Kuadrant renders from it, which repeats every limit per
 	// route match) grows with the number of distinct rate sets, not with the number of
 	// subscriptions behind them (RHOAIENG-95277). The predicate lists every subscription in
-	// the group; counters key on selected_subscription_key as well as userid so subscriptions
-	// sharing a limit still get independent budgets. Unlimited subscriptions share the
-	// rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
+	// the group by short ID; counters key on selected_subscription_id as well as userid so
+	// subscriptions sharing a limit still get independent budgets. Unlimited subscriptions
+	// share the rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
 	limitsMap, subNames := buildGroupedLimits(subs)
 
 	// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)

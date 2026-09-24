@@ -42,6 +42,7 @@ Environment variables:
 """
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -350,13 +351,13 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     )
 
 
-def _trlp_limits_matching(limits, subscription_key):
-    """Names of the TRLP limits whose predicate matches subscription_key.
+def _trlp_limits_matching(limits, rate_limit_id):
+    """Names of the TRLP limits whose predicate matches rate_limit_id.
 
     Limits are grouped by rate and named after it (tokens-<limit>-per-<window>),
-    so a subscription is found by its selected_subscription_key clause.
+    so a subscription is found by its selected_subscription_id clause.
     """
-    clause = f'auth.identity.selected_subscription_key == "{subscription_key}"'
+    clause = f'auth.identity.selected_subscription_id == "{rate_limit_id}"'
     return sorted(
         name for name, limit in limits.items()
         if any(clause in (w.get("predicate") or "") for w in limit.get("when") or [])
@@ -849,8 +850,13 @@ UNLIMITED_LIMIT_NAME = "tokens-unlimited"
 
 
 def _subscription_key(subscription_name, model_ref):
-    """auth.identity.selected_subscription_key the TRLP predicates match on."""
+    """Human-readable model-scoped subscription key (auth.identity.selected_subscription_key)."""
     return f"{_ns()}/{subscription_name}@{MODEL_NAMESPACE}/{model_ref}"
+
+
+def _subscription_rate_limit_id(subscription_name, model_ref):
+    """Short SHA-256 ID used in TRLP when-predicates (auth.identity.selected_subscription_id)."""
+    return hashlib.sha256(_subscription_key(subscription_name, model_ref).encode()).hexdigest()[:16]
 
 
 def _server_dry_run_subscription(name, model_ref_budget):
@@ -983,10 +989,10 @@ class TestUnlimitedSubscription:
                 timeout=180,
             )
 
-            unlimited_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
+            unlimited_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
             _wait_for_trlp_limits(
                 model_ref,
-                lambda limits: unlimited_key in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
+                lambda limits: unlimited_id in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
             )
 
             oc_token = _get_cluster_token()
@@ -1053,10 +1059,10 @@ class TestUnlimitedSubscription:
     @pytest.mark.serial
     def test_unlimited_subscriptions_share_one_wasm_limit(self, mixed_model):
         model_ref, _ = mixed_model
-        first_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
-        second_key = _subscription_key(self.SECOND_UNLIMITED_SUB, model_ref)
+        first_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
+        second_id = _subscription_rate_limit_id(self.SECOND_UNLIMITED_SUB, model_ref)
 
-        plugin_config = _wait_for_wasm_plugin_config_containing(first_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(first_id)
         before = _trlp_actions_per_action_set(plugin_config, model_ref)
         if not before:
             pytest.skip("WasmPlugin actions carry no policy sources (Kuadrant < 1.4)")
@@ -1069,7 +1075,7 @@ class TestUnlimitedSubscription:
             model_namespace=MODEL_NAMESPACE,
             timeout=180,
         )
-        plugin_config = _wait_for_wasm_plugin_config_containing(second_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(second_id)
 
         after = _trlp_actions_per_action_set(plugin_config, model_ref)
         log.info("WasmPlugin pluginConfig: %d -> %d bytes after a second unlimited subscription",
@@ -1296,15 +1302,14 @@ class TestCascadeDeletion:
             limits = trlp_with_both.get("spec", {}).get("limits", {})
             assert limits, f"TRLP {trlp_name} has no limits defined"
 
-            # Look for both subscriptions in the TRLP limit predicates
-            # Key format: {namespace}/{subscription-name}@{model-namespace}/{model-name}
-            simulator_sub_key = f"{ns}/{SIMULATOR_SUBSCRIPTION}@{MODEL_NAMESPACE}/{MODEL_REF}"
-            second_sub_key = f"{ns}/e2e-second-sub@{MODEL_NAMESPACE}/{MODEL_REF}"
+            # Look for both subscriptions in the TRLP limit predicates (short IDs)
+            simulator_sub_id = _subscription_rate_limit_id(SIMULATOR_SUBSCRIPTION, MODEL_REF)
+            second_sub_id = _subscription_rate_limit_id("e2e-second-sub", MODEL_REF)
 
-            assert _trlp_limits_matching(limits, simulator_sub_key), \
-                f"Original subscription '{simulator_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
-            assert _trlp_limits_matching(limits, second_sub_key), \
-                f"Second subscription '{second_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, simulator_sub_id), \
+                f"Original subscription '{simulator_sub_id}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, second_sub_id), \
+                f"Second subscription '{second_sub_id}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
 
             log.info(f"✅ TRLP contains both subscriptions: {list(limits.keys())}")
 
@@ -1324,12 +1329,12 @@ class TestCascadeDeletion:
             assert limits_after, f"TRLP {trlp_name} has no limits after 2nd subscription deletion"
 
             # Verify original subscription still in TRLP, second subscription removed
-            assert _trlp_limits_matching(limits_after, simulator_sub_key), \
-                f"Original subscription '{simulator_sub_key}' missing after 2nd sub deletion. " \
+            assert _trlp_limits_matching(limits_after, simulator_sub_id), \
+                f"Original subscription '{simulator_sub_id}' missing after 2nd sub deletion. " \
                 f"Available: {list(limits_after.keys())}"
-            assert not _trlp_limits_matching(limits_after, second_sub_key), \
-                f"Deleted subscription '{second_sub_key}' still matched by TRLP limits " \
-                f"{_trlp_limits_matching(limits_after, second_sub_key)}"
+            assert not _trlp_limits_matching(limits_after, second_sub_id), \
+                f"Deleted subscription '{second_sub_id}' still matched by TRLP limits " \
+                f"{_trlp_limits_matching(limits_after, second_sub_id)}"
 
             log.info(f"✅ TRLP rebuilt in-place with only original subscription: {list(limits_after.keys())}")
 
