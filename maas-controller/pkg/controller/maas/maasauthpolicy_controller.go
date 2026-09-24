@@ -864,6 +864,9 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					map[string]any{
 						"predicate": `!("x-maas-keyname" in request.headers)`,
 					},
+					map[string]any{
+						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
+					},
 				},
 			},
 		},
@@ -1154,8 +1157,8 @@ allow {
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
-								// namespace/name after BBR alias resolution) so TRLP when
-								// predicates match for both path and body-based routing.
+								// namespace/name after BBR alias resolution). Kept for telemetry
+								// and debugging; TRLP when-predicates match selected_subscription_id.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
