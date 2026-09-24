@@ -65,6 +65,10 @@ def _selector_ends(query):
         if ch == '"':
             _, i = _read_string(query, i)
             continue
+        if ch == "`":
+            # Loki lexes backtick raw strings. The scanner cannot track them,
+            # so a `"` inside one could hide a live selector.
+            raise QueryError("raw strings are not supported")
         if ch == "#":
             # Loki discards `#` through end-of-line. A commented `{...}` or `"`
             # must not be treated as a selector or string, or user_id can land

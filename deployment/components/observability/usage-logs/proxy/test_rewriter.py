@@ -69,5 +69,13 @@ class InjectUserFilterTest(unittest.TestCase):
             inject_user_filter(query, "alice")
 
 
+    def test_raw_string_hiding_selector_is_rejected(self):
+        query = (
+            'sum by (user_id) (count_over_time({service_name="models-as-a-service"} |= `"` [1h]))'
+            ' or sum by (user_id) (count_over_time({service_name=`models-as-a-service`} |= `"` [1h]))'
+        )
+        with self.assertRaises(QueryError):
+            inject_user_filter(query, "alice")
+
 if __name__ == "__main__":
     unittest.main()
