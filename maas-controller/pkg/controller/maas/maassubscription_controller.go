@@ -169,12 +169,12 @@ func modelRefTokenRates(mRef maasv1alpha1.ModelSubscriptionRef) (rates []any, un
 }
 
 // unlimitedLimitName is the TRLP limit key shared by the unlimited
-// subscriptions of a model. Per-subscription keys end in "-tokens", so it
+// subscriptions of a model. Per-subscription keys use the "rl-" prefix, so it
 // cannot collide with one.
 const unlimitedLimitName = "tokens-unlimited"
 
 // unlimitedTokenLimit returns the TRLP limit matching the given
-// selected_subscription_key values of unlimited subscriptions.
+// selected_subscription_id values of unlimited subscriptions.
 //
 // Without rates, Limitador enforces nothing and keeps no counters, but the
 // wasm-shim still sends check and report calls for matching requests, and
@@ -187,11 +187,11 @@ const unlimitedLimitName = "tokens-unlimited"
 //
 // rates and counters stay unset: a nil slice is written as null, which the API
 // server drops, so the no-op update check would never match.
-func unlimitedTokenLimit(keys []string) map[string]any {
-	sort.Strings(keys)
-	matches := make([]string, 0, len(keys))
-	for _, k := range keys {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, k))
+func unlimitedTokenLimit(rateLimitIDs []string) map[string]any {
+	sort.Strings(rateLimitIDs)
+	matches := make([]string, 0, len(rateLimitIDs))
+	for _, id := range rateLimitIDs {
+		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
 	}
 	return map[string]any{
 		"when": []any{
@@ -637,42 +637,34 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return r.deleteModelTRLP(ctx, log, modelNamespace, modelName)
 	}
 
-	// Trust auth.identity.selected_subscription_key from AuthPolicy.
-	// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
-	// which handles:
-	//  - Validating subscription exists and user has access (groups/users match)
-	//  - Auto-selecting if user has exactly one subscription
-	//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
-	// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
+	// Trust auth.identity.selected_subscription_id from AuthPolicy (16-hex SHA-256 of
+	// {subNS}/{subName}@{modelNS}/{modelName}). The long selected_subscription_key
+	// stays on the identity for telemetry; TRLP matches the short ID so the Kuadrant
+	// WASM shim stays compact.
 	//
-	// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
-	// This ensures proper isolation between subscriptions in different namespaces and across models.
-	var unlimitedKeys []string
+	// AuthPolicy has already validated subscription selection via /v1/subscriptions/select.
+	var unlimitedIDs []string
 	for _, si := range subs {
 		// Unlimited subscriptions are listed too: cleanupStaleTRLPs relies on this
 		// annotation to rebuild the TRLP when a subscription drops the model.
 		subNames = append(subNames, qualifiedName(si.sub.Namespace, si.sub.Name))
 
-		// Build subscription reference: namespace/name
-		subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
-		// Build model-scoped reference: subscription@model
-		modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, si.mRef.Namespace, si.mRef.Name)
+		modelScopedRef := ModelScopedSubscriptionKey(si.sub.Namespace, si.sub.Name, si.mRef.Namespace, si.mRef.Name)
+		rateLimitID := SubscriptionRateLimitID(modelScopedRef)
 
 		if si.unlimited {
-			unlimitedKeys = append(unlimitedKeys, modelScopedRef)
+			unlimitedIDs = append(unlimitedIDs, rateLimitID)
 			continue
 		}
 
-		// TRLP limit key must be safe for YAML (no slashes)
-		safeKey := strings.ReplaceAll(subRef, "/", "-")
-		limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]any{
+		limitsMap[fmt.Sprintf("rl-%s", rateLimitID)] = map[string]any{
 			"rates": si.rates,
 			"when": []any{
 				map[string]any{
 					// Exempt /v1/models endpoint from token rate limiting.
 					// This endpoint is used for model discovery/metadata and does not consume inference tokens.
 					// Users should be able to query model capabilities even when their token quota is exhausted.
-					"predicate": fmt.Sprintf(`auth.identity.selected_subscription_key == "%s" && !request.path.endsWith("/v1/models")`, modelScopedRef),
+					"predicate": fmt.Sprintf(`auth.identity.selected_subscription_id == "%s" && !request.path.endsWith("/v1/models")`, rateLimitID),
 				},
 			},
 			"counters": []any{
@@ -680,8 +672,8 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 			},
 		}
 	}
-	if len(unlimitedKeys) > 0 {
-		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimitedKeys)
+	if len(unlimitedIDs) > 0 {
+		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimitedIDs)
 	}
 
 	// Sort subscription names for stable annotation value across reconciles

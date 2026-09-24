@@ -42,6 +42,7 @@ Environment variables:
 """
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -830,8 +831,18 @@ UNLIMITED_LIMIT_NAME = "tokens-unlimited"
 
 
 def _subscription_key(subscription_name, model_ref):
-    """auth.identity.selected_subscription_key the TRLP predicates match on."""
+    """Human-readable model-scoped subscription key (auth.identity.selected_subscription_key)."""
     return f"{_ns()}/{subscription_name}@{MODEL_NAMESPACE}/{model_ref}"
+
+
+def _subscription_rate_limit_id(subscription_name, model_ref):
+    """Short SHA-256 ID used in TRLP when-predicates (auth.identity.selected_subscription_id)."""
+    return hashlib.sha256(_subscription_key(subscription_name, model_ref).encode()).hexdigest()[:16]
+
+
+def _trlp_limit_map_key(subscription_name, model_ref):
+    """TokenRateLimitPolicy spec.limits map key for a subscription+model."""
+    return f"rl-{_subscription_rate_limit_id(subscription_name, model_ref)}"
 
 
 def _server_dry_run_subscription(name, model_ref_budget):
@@ -954,10 +965,10 @@ class TestUnlimitedSubscription:
             _wait_for_maas_subscription_phase(self.LIMITED_SUB)
             _wait_for_maas_subscription_phase(self.UNLIMITED_SUB)
 
-            unlimited_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
+            unlimited_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
             _wait_for_trlp_limits(
                 model_ref,
-                lambda limits: unlimited_key in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
+                lambda limits: unlimited_id in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
             )
 
             oc_token = _get_cluster_token()
@@ -1018,10 +1029,10 @@ class TestUnlimitedSubscription:
     @pytest.mark.serial
     def test_unlimited_subscriptions_share_one_wasm_limit(self, mixed_model):
         model_ref, _ = mixed_model
-        first_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
-        second_key = _subscription_key(self.SECOND_UNLIMITED_SUB, model_ref)
+        first_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
+        second_id = _subscription_rate_limit_id(self.SECOND_UNLIMITED_SUB, model_ref)
 
-        plugin_config = _wait_for_wasm_plugin_config_containing(first_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(first_id)
         before = _trlp_actions_per_action_set(plugin_config, model_ref)
         if not before:
             pytest.skip("WasmPlugin actions carry no policy sources (Kuadrant < 1.4)")
@@ -1029,7 +1040,7 @@ class TestUnlimitedSubscription:
 
         _create_test_subscription(self.SECOND_UNLIMITED_SUB, [model_ref], groups=["system:authenticated"], unlimited=True)
         _wait_for_maas_subscription_phase(self.SECOND_UNLIMITED_SUB)
-        plugin_config = _wait_for_wasm_plugin_config_containing(second_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(second_id)
 
         after = _trlp_actions_per_action_set(plugin_config, model_ref)
         log.info("WasmPlugin pluginConfig: %d -> %d bytes after a second unlimited subscription",
@@ -1235,10 +1246,9 @@ class TestCascadeDeletion:
             limits = trlp_with_both.get("spec", {}).get("limits", {})
             assert limits, f"TRLP {trlp_name} has no limits defined"
 
-            # Look for both subscription references in TRLP limits
-            # Format: {namespace}-{subscription-name}-{model-name}-tokens
-            simulator_limit_key = f"{ns.replace('/', '-')}-{SIMULATOR_SUBSCRIPTION}-{MODEL_REF}-tokens"
-            second_limit_key = f"{ns.replace('/', '-')}-e2e-second-sub-{MODEL_REF}-tokens"
+            # Look for both subscription references in TRLP limits (rl-<sha256[:16]>)
+            simulator_limit_key = _trlp_limit_map_key(SIMULATOR_SUBSCRIPTION, MODEL_REF)
+            second_limit_key = _trlp_limit_map_key("e2e-second-sub", MODEL_REF)
 
             assert simulator_limit_key in limits, \
                 f"Original subscription limit key '{simulator_limit_key}' not found in TRLP. Available keys: {list(limits.keys())}"

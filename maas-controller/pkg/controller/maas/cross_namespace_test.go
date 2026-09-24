@@ -528,10 +528,11 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
 	}
 
-	// CRITICAL: Verify both subscriptions have UNIQUE limit entries
-	// Format: "{namespace}-{name}-{model}-tokens"
-	keyA := namespaceA + "-" + subscriptionName + "-" + modelName + "-tokens"
-	keyB := namespaceB + "-" + subscriptionName + "-" + modelName + "-tokens"
+	// CRITICAL: Verify both subscriptions have UNIQUE limit entries (hashed IDs).
+	idA := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceA, subscriptionName, modelNamespace, modelName))
+	idB := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceB, subscriptionName, modelNamespace, modelName))
+	keyA := "rl-" + idA
+	keyB := "rl-" + idB
 
 	if keyA == keyB {
 		t.Fatalf("SECURITY BUG: Limit keys are identical (%q), this would cause quota isolation bypass!", keyA)
@@ -547,8 +548,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Errorf("Limit entry for tenant-b subscription not found, expected key %q, got keys: %v", keyB, getMapKeys(limitsMap))
 	}
 
-	// Verify predicate includes namespace to prevent cross-tenant matching
-	// Format: auth.identity.selected_subscription_key == "{namespace}/{name}@{modelNamespace}/{modelName}"
+	// Verify predicates use distinct short IDs (namespace is hashed in, not literal).
 	if hasA {
 		limitAMap, ok := limitA.(map[string]any)
 		if !ok {
@@ -564,13 +564,15 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 			if !ok {
 				t.Fatal("predicate is not string")
 			}
-			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
+			expectedPredA := trlpRateLimitPredicate(namespaceA, subscriptionName, modelNamespace, modelName)
 			if pred != expectedPredA {
 				t.Errorf("Tenant-a predicate = %q, want %q", pred, expectedPredA)
 			}
-			// CRITICAL: Predicate must NOT match tenant-b's subscription
-			if !containsString(pred, namespaceA) {
-				t.Errorf("SECURITY BUG: Tenant-a predicate doesn't include namespace: %s", pred)
+			if !containsString(pred, idA) {
+				t.Errorf("SECURITY BUG: Tenant-a predicate missing idA: %s", pred)
+			}
+			if containsString(pred, idB) {
+				t.Errorf("SECURITY BUG: Tenant-a predicate includes tenant-b id: %s", pred)
 			}
 		}
 	}
@@ -590,13 +592,15 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 			if !ok {
 				t.Fatal("predicate is not string")
 			}
-			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
+			expectedPredB := trlpRateLimitPredicate(namespaceB, subscriptionName, modelNamespace, modelName)
 			if pred != expectedPredB {
 				t.Errorf("Tenant-b predicate = %q, want %q", pred, expectedPredB)
 			}
-			// CRITICAL: Predicate must NOT match tenant-a's subscription
-			if !containsString(pred, namespaceB) {
-				t.Errorf("SECURITY BUG: Tenant-b predicate doesn't include namespace: %s", pred)
+			if !containsString(pred, idB) {
+				t.Errorf("SECURITY BUG: Tenant-b predicate missing idB: %s", pred)
+			}
+			if containsString(pred, idA) {
+				t.Errorf("SECURITY BUG: Tenant-b predicate includes tenant-a id: %s", pred)
 			}
 		}
 	}

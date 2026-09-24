@@ -1611,6 +1611,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"userid",
 			"groups",
 			"selected_subscription_key",
+			"selected_subscription_id",
 			"selected_subscription",
 			"subscription_info",
 		}

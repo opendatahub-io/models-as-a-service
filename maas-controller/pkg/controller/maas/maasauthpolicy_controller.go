@@ -1106,6 +1106,20 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// Short rate-limit identity for TokenRateLimitPolicy (does not replace
+					// X-MaaS-Subscription). Populated from maas-api subscription select.
+					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `has(auth.metadata["subscription-info"].rateLimitId) && auth.metadata["subscription-info"].rateLimitId != ""`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `auth.metadata["subscription-info"].rateLimitId`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
 					"X-MaaS-KeyName": map[string]any{
 						"when": []any{
 							map[string]any{
@@ -1150,6 +1164,12 @@ allow {
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
 										celResolvedModelIdentity,
 									),
+								},
+								// Short hash of selected_subscription_key from maas-api
+								// (subscription-info.rateLimitId). TokenRateLimitPolicy when
+								// predicates match this field to keep the WASM shim compact.
+								"selected_subscription_id": map[string]any{
+									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
 								},
 								"subscription_info": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
