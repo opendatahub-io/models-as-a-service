@@ -274,16 +274,19 @@ func registerHandlers(
 	v1Routes := router.Group("/v1")
 
 	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
-		subscription.WithTenantName(cfg.TenantName),
-		subscription.WithSubscriptionNamespace(cfg.MaaSSubscriptionNamespace),
-		subscription.WithGuardrailPlanResolver(subscription.NewGuardrailPlanResolver(
-			cfg.AITenantNamespace,
-			cfg.AITenantName,
-			cluster.AITenantGetter,
-			cluster.MaasTenantConfigGetter,
-			cluster.AIGuardrailGetter,
-		)))
+	var subscriptionSelector *subscription.Selector
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		subscriptionSelector = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker,
+			subscription.WithTenantName(cfg.TenantName),
+			subscription.WithSubscriptionNamespace(cfg.MaaSSubscriptionNamespace),
+			subscription.WithGuardrailPlanResolver(subscription.NewGuardrailPlanResolver(
+				cfg.AITenantNamespace,
+				cfg.AITenantName,
+				cluster.AITenantGetter,
+				cluster.MaasTenantConfigGetter,
+				cluster.AIGuardrailGetter,
+			)))
+	}
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
 	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
