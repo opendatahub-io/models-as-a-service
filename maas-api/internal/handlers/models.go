@@ -447,7 +447,9 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 			if h.subscriptionSelector == nil {
 				// Legacy case: no subscription system configured
 				h.logger.Debug("No subscription system configured, filtering models without subscription header")
-				modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
+				if h.modelMgr != nil {
+					modelList = h.modelMgr.FilterModelsByAccess(c.Request.Context(), list, authHeader, "")
+				}
 			} else {
 				// User has zero accessible subscriptions - return empty list
 				h.logger.Debug("User has zero accessible subscriptions, returning empty model list")
