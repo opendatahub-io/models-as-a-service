@@ -1109,10 +1109,15 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
-def chat(prompt: str, model_v1: str, headers: dict, model_name: str):
+def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
+         stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
     body = {"model": model_name, "messages": [{"role": "user", "content": prompt}]}
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    if stream:
+        body["stream"] = True
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
 
 
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
@@ -1764,6 +1769,7 @@ def _create_llmis(
     gateway_name: str,
     gateway_namespace: str = "openshift-ingress",
     model_name: str = "facebook/opt-125m",
+    scheduler: bool = False,
 ):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
@@ -1775,8 +1781,10 @@ def _create_llmis(
         model_name: spec.model.name (the model identity used for BBR/ResolvedModelAlias).
             Defaults to "facebook/opt-125m"; override to test model-identity-collision
             scenarios where two LLMISs intentionally share a model name.
+        scheduler: Serve the model through an InferencePool and its endpoint picker
+            instead of a plain Service.
     """
-    _apply_cr({
+    llmis = {
         "apiVersion": "serving.kserve.io/v1alpha1",
         "kind": "LLMInferenceService",
         "metadata": {
@@ -1844,7 +1852,10 @@ def _create_llmis(
                 ]
             },
         },
-    })
+    }
+    if scheduler:
+        llmis["spec"]["router"]["scheduler"] = {}
+    _apply_cr(llmis)
 
 
 def _create_maas_model_ref(name: str, namespace: str, llmis_name: str, *, tenant_ref: Optional[str] = None):

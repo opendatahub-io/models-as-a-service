@@ -73,6 +73,10 @@ type PlatformParams struct {
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
+
+	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
+	// and the Kuadrant anchors were kept.
+	KuadrantDetectionWarning string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -1033,6 +1037,10 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
 		routeDisablePatchCount   = 5
+		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
+		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
+		// every gateway, so no mode rewrites them.
+		eppReorderPatchCount = 2
 	)
 	if !found {
 		return errors.New("EnvoyFilter configPatches not found")
@@ -1040,14 +1048,14 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 
 	routerStart := wasmFilterPatchCount
 	routerEnd := wasmFilterPatchCount + routerFallbackPatchCount
-	minPatchCount := routerEnd + routeDisablePatchCount
+	minPatchCount := routerEnd + routeDisablePatchCount + eppReorderPatchCount
 	if len(configPatches) < minPatchCount {
 		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
 			minPatchCount, len(configPatches))
 	}
 
 	if params.PayloadProcessingRouterExtProcFallback {
-		// Router-only anchoring when kuadrant CRs are absent or wasmplugin RBAC denies GET.
+		// Router-only anchoring when kuadrant CRs are absent.
 		// Drop wasm-anchored patches to avoid duplicate ext_proc on RHCL gateways that
 		// inject envoy.filters.http.wasm without kuadrant-{gateway} CRs.
 		configPatches = append(append([]any{}, configPatches[routerStart:routerEnd]...), configPatches[routerEnd:]...)
@@ -1055,9 +1063,9 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		configPatches = append(append([]any{}, configPatches[:routerStart]...), configPatches[routerEnd:]...)
 	}
 
-	filterPatchCount := len(configPatches) - routeDisablePatchCount
+	filterPatchCount := len(configPatches) - routeDisablePatchCount - eppReorderPatchCount
 	routeDisablePatchBase := filterPatchCount
-	totalConfigPatches := len(configPatches)
+	routeDisablePatchEnd := routeDisablePatchBase + routeDisablePatchCount
 
 	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster, beforeCluster, afterCluster}
 	wasmSubFilters := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
@@ -1110,10 +1118,11 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 			wasmFilterPatchCount, routerFallbackPatchCount, filterPatchCount)
 	}
 
-	// Final patches disable ext_proc on all non-inference maas-api routes.
+	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
+	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*, 4=/maas-api/health
+	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)

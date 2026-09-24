@@ -1,6 +1,7 @@
 # User-scoped usage dashboard — queries go through loki-query-proxy which
 # injects user_id filtering based on the logged-in user's Kubernetes token.
-# CEL filter restricts logs to inference-only paths; no probe traffic to filter.
+# Subscription/model dropdowns use LokiLogQLVariable (not /label/values):
+# the tenancy proxy cannot user-scope label-values requests.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. user_id when capturing is disabled). Do not remove.
 apiVersion: perses.dev/v1alpha1
@@ -31,14 +32,13 @@ spec:
         customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
-          kind: LokiLabelValuesVariable
+          kind: LokiLogQLVariable
           spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-multi-tenancy
+            expr: 'count by (subscription) (count_over_time({service_name="models-as-a-service", subscription!="-"} [$__range]))'
             labelName: subscription
-            matchers:
-              - '{service_name="models-as-a-service", subscription!="-"}'
     - kind: ListVariable
       spec:
         name: model
@@ -49,14 +49,13 @@ spec:
         customAllValue: ".*"
         defaultValue: "$__all"
         plugin:
-          kind: LokiLabelValuesVariable
+          kind: LokiLogQLVariable
           spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-multi-tenancy
+            expr: 'count by (model) (count_over_time({service_name="models-as-a-service", model!="-"} [$__range]))'
             labelName: model
-            matchers:
-              - '{service_name="models-as-a-service", model!="-"}'
     - kind: ListVariable
       spec:
         name: view_by
@@ -417,7 +416,9 @@ spec:
             secret: usage-logs-multi-tenancy-secret
             url: https://usage-logs-tenancy-proxy:8443
             allowedEndpoints:
-              - endpointPattern: "/loki/api/v1/.*"
+              - endpointPattern: "/loki/api/v1/query"
+                method: GET
+              - endpointPattern: "/loki/api/v1/query_range"
                 method: GET
   client:
     kubernetesAuth:

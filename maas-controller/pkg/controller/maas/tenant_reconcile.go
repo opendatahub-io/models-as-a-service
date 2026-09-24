@@ -399,6 +399,7 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	var allWarnings []string
 	hasPrereqWarnings := len(prereqReport.Warnings) > 0
 	hasPlatformWarnings := runRes != nil && len(runRes.Warnings) > 0
+	hasKuadrantWarning := runRes != nil && runRes.KuadrantDetectionWarning != ""
 	hasUsageLogsWarning := usageLogsWarning != ""
 
 	if hasPrereqWarnings {
@@ -406,6 +407,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	}
 	if hasPlatformWarnings {
 		allWarnings = append(allWarnings, runRes.Warnings...)
+	}
+	if hasKuadrantWarning {
+		allWarnings = append(allWarnings, runRes.KuadrantDetectionWarning)
 	}
 	if hasUsageLogsWarning {
 		allWarnings = append(allWarnings, usageLogsWarning)
@@ -417,6 +421,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 			warningKinds++
 		}
 		if hasPlatformWarnings {
+			warningKinds++
+		}
+		if hasKuadrantWarning {
 			warningKinds++
 		}
 		if hasUsageLogsWarning {
@@ -431,6 +438,8 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 			reason = "PrerequisitesWarning"
 		case hasPlatformWarnings:
 			reason = "InvalidReplicaAnnotation"
+		case hasKuadrantWarning:
+			reason = "KuadrantDetectionUnverified"
 		default:
 			reason = "UsageLoggingNotProvided"
 		}

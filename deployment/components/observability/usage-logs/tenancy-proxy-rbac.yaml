@@ -11,7 +11,7 @@ metadata:
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
-  name: usage-tenancy-proxy-pods-log-read
+  name: usage-tenancy-proxy
   labels:
     app: usage-tenancy-proxy
     app.kubernetes.io/managed-by: maas-controller
@@ -23,81 +23,31 @@ rules:
   - pods/log
   verbs:
   - get
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: usage-tenancy-proxy-pods-log-read
-  namespace: opendatahub
-  labels:
-    app: usage-tenancy-proxy
-    app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: usage-tenancy-proxy-pods-log-read
-subjects:
-- kind: ServiceAccount
-  name: usage-tenancy-proxy
-  namespace: opendatahub
----
-kind: ClusterRole
-apiVersion: rbac.authorization.k8s.io/v1
-metadata:
-  name: usage-tenancy-proxy-application-logs-read
-  labels:
-    app: usage-tenancy-proxy
-    app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
-rules:
-  - verbs:
-      - get
-    apiGroups:
-      - loki.grafana.com
-    resources:
-      - application
-    resourceNames:
-      - logs
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: RoleBinding
-metadata:
-  name: usage-tenancy-proxy-application-logs-read
-  namespace: opendatahub
-  labels:
-    app: usage-tenancy-proxy
-    app.kubernetes.io/component: usage-tenancy-proxy
-    app.kubernetes.io/managed-by: maas-controller
-subjects:
-  - kind: ServiceAccount
-    name: usage-tenancy-proxy
-    namespace: opendatahub
-roleRef:
-  apiGroup: rbac.authorization.k8s.io
-  kind: ClusterRole
-  name: usage-tenancy-proxy-application-logs-read
----
-apiVersion: rbac.authorization.k8s.io/v1
-kind: ClusterRole
-metadata:
-  name: usage-tenancy-proxy-tokenreview
-  labels:
-    app: usage-tenancy-proxy
-    app.kubernetes.io/managed-by: maas-controller
-    app.kubernetes.io/component: usage-tenancy-proxy
-rules:
+- apiGroups:
+  - ''
+  resources:
+  - namespaces
+  verbs:
+  - get
 - apiGroups:
   - authentication.k8s.io
   resources:
   - tokenreviews
   verbs:
   - create
+- apiGroups:
+  - loki.grafana.com
+  resources:
+  - application
+  resourceNames:
+  - logs
+  verbs:
+  - get
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding
 metadata:
-  name: usage-tenancy-proxy-tokenreview
+  name: usage-tenancy-proxy
   labels:
     app: usage-tenancy-proxy
     app.kubernetes.io/managed-by: maas-controller
@@ -105,7 +55,7 @@ metadata:
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: usage-tenancy-proxy-tokenreview
+  name: usage-tenancy-proxy
 subjects:
 - kind: ServiceAccount
   name: usage-tenancy-proxy
