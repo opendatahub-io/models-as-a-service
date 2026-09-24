@@ -64,6 +64,13 @@ func NewHandler(log *logger.Logger, selector *Selector, metrics MetricsRecorder)
 func (h *Handler) SelectSubscription(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.selector == nil {
+		c.JSON(http.StatusServiceUnavailable, SelectResponse{
+			Error:   "subscription_system_disabled",
+			Message: "subscription system is disabled in standalone mode",
+		})
+		return
+	}
 	h.logger.Debug("Subscription selection request received",
 		"path", c.Request.URL.Path,
 		"method", c.Request.Method,
@@ -206,6 +213,13 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 func (h *Handler) ListSubscriptions(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.selector == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+			"message": "subscription system is disabled in standalone mode",
+			"type":    "service_unavailable",
+		}})
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
@@ -253,6 +267,13 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
 	h = h.withContext(c)
 
+	if h.selector == nil {
+		c.JSON(http.StatusServiceUnavailable, gin.H{"error": gin.H{
+			"message": "subscription system is disabled in standalone mode",
+			"type":    "service_unavailable",
+		}})
+		return
+	}
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {

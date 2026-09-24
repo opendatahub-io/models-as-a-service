@@ -6,11 +6,11 @@ package api_keys
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
-	"encoding/json"
 
 	"github.com/lib/pq"
 
@@ -63,9 +63,6 @@ func (s *PostgresStore) AddKey(
 	if keyHash == "" {
 		return errors.New("key hash is required")
 	}
-	if subscription == "" {
-		return errors.New("subscription is required")
-	}
 	if ephemeral && expiresAt == nil {
 		return errors.New("ephemeral keys must have an expiration time")
 	}
@@ -77,27 +74,27 @@ func (s *PostgresStore) AddKey(
 		userGroups = []string{}
 	}
 
-    // Marshal labels to JSONB (NULL if empty)
-    var labelsJSON []byte
-    var err error
-    if len(labels) > 0 {
-        labelsJSON, err = json.Marshal(labels)
-        if err != nil {
-            return fmt.Errorf("failed to marshal labels: %w", err)
-        }
-    }
+	// Marshal labels to JSONB (NULL if empty)
+	var labelsJSON []byte
+	var err error
+	if len(labels) > 0 {
+		labelsJSON, err = json.Marshal(labels)
+		if err != nil {
+			return fmt.Errorf("failed to marshal labels: %w", err)
+		}
+	}
 
 	query := `
 		INSERT INTO api_keys (id, username, name, description, key_hash, user_groups, subscription, tenant, status, created_at, expires_at, ephemeral, labels)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10, $11, $12)
 	`
 
-    var labelsParam any
-    if labelsJSON != nil {
-        labelsParam = labelsJSON
-    } else {
-        labelsParam = nil
-    }
+	var labelsParam any
+	if labelsJSON != nil {
+		labelsParam = labelsJSON
+	} else {
+		labelsParam = nil
+	}
 
 	// Use pq.Array to handle PostgreSQL TEXT[] type
 	_, err = s.db.ExecContext(ctx, query, keyID, username, name, description, keyHash, pq.Array(userGroups), subscription, tenant, time.Now().UTC(), expiresAt, ephemeral, labelsParam)
@@ -279,17 +276,17 @@ func (s *PostgresStore) Search(
 		argPos++
 	}
 
-    // Add labels containment filter
-    if len(filters.LabelsContain) > 0 {
-        // Convert filter to JSONB for @> containment operator
-        filterJSON, err := json.Marshal(filters.LabelsContain)
-        if err != nil {
-            return nil, fmt.Errorf("failed to marshal labels filter: %w", err)
-        }
-        whereClauses = append(whereClauses, fmt.Sprintf("labels @> $%d::jsonb", argPos))
-        args = append(args, filterJSON)
-        argPos++
-    }
+	// Add labels containment filter
+	if len(filters.LabelsContain) > 0 {
+		// Convert filter to JSONB for @> containment operator
+		filterJSON, err := json.Marshal(filters.LabelsContain)
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal labels filter: %w", err)
+		}
+		whereClauses = append(whereClauses, fmt.Sprintf("labels @> $%d::jsonb", argPos))
+		args = append(args, filterJSON)
+		argPos++
+	}
 
 	// Build final WHERE clause
 	whereClause := ""
@@ -426,7 +423,7 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 	var createdAt time.Time
 	var expiresAt, lastUsedAt sql.NullTime
 	var description sql.NullString
-    var labelsJSON []byte
+	var labelsJSON []byte
 
 	if err := row.Scan(&k.ID, &k.Name, &description, &k.Username, &k.Subscription, &k.Tenant, &createdAt, &expiresAt, &k.Status, &lastUsedAt, &k.Ephemeral, &labelsJSON); err != nil {
 		if err == sql.ErrNoRows {
@@ -446,13 +443,13 @@ func (s *PostgresStore) Get(ctx context.Context, keyID string) (*ApiKey, error) 
 		k.LastUsedAt = lastUsedAt.Time.UTC().Format(time.RFC3339)
 	}
 
-    // Parse labels JSONB
-    if labelsJSON != nil {
-        if err := json.Unmarshal(labelsJSON, &k.Labels); err != nil {
-            s.logger.Warn("Failed to unmarshal labels", "keyId", keyID, "error", err)
-            k.Labels = nil // Set to a safe value (empty map) on unmarshal error (defensive)
-        }
-    }
+	// Parse labels JSONB
+	if labelsJSON != nil {
+		if err := json.Unmarshal(labelsJSON, &k.Labels); err != nil {
+			s.logger.Warn("Failed to unmarshal labels", "keyId", keyID, "error", err)
+			k.Labels = nil // Set to a safe value (empty map) on unmarshal error (defensive)
+		}
+	}
 
 	return &k, nil
 }
