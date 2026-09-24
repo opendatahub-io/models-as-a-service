@@ -81,6 +81,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 	allEnvVars := []string{
 		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
 		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
+		"MAAS_SUBSCRIPTION_MODE",
 		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 		"METRICS_PORT", "METRICS_SECURE", "METRICS_CERT_DIR",
@@ -104,6 +105,16 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 			cfg := Load()
 			tt.check(t, cfg)
 		})
+	}
+}
+
+func TestLoad_SubscriptionMode(t *testing.T) {
+	resetGlobalFlags()
+	t.Setenv("MAAS_SUBSCRIPTION_MODE", string(SubscriptionModeStandalone))
+
+	cfg := Load()
+	if cfg.SubscriptionMode != SubscriptionModeStandalone {
+		t.Fatalf("expected standalone subscription mode, got %q", cfg.SubscriptionMode)
 	}
 }
 

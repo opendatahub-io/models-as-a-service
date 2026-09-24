@@ -247,7 +247,10 @@ func registerHandlers(
 	v1Routes := router.Group("/v1")
 
 	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
+	var subscriptionSelector *subscription.Selector
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		subscriptionSelector = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
+	}
 
 	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
 	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
