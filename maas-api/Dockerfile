@@ -1,4 +1,5 @@
 ARG GOLANG_VERSION=1.26
+# CI: rebuild trigger for must-gather validation (odh-konflux-central#688 / models-as-a-service#1553)
 
 ARG BUILDPLATFORM
 ARG TARGETPLATFORM
