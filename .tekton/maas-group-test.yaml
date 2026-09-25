@@ -22,13 +22,19 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
+  # Optional: override RHOAI must-gather tag (pipeline default is v3.5.0).
+  # Example: - name: rhoai-must-gather-tag
+  #            value: v3.5.1
   pipelineRef:
     resolver: git
     params:
+    # TEMP: validate RHOAI must-gather change before odh-konflux-central merges.
+    # Revert to opendatahub-io/odh-konflux-central@main after:
+    # https://github.com/opendatahub-io/odh-konflux-central/pull/688
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/jland-redhat/odh-konflux-central.git
     - name: revision
-      value: main
+      value: ci/maas-rhoai-must-gather
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
