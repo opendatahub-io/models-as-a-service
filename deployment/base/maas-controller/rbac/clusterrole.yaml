@@ -257,6 +257,18 @@ rules:
   - patch
   - watch
 - apiGroups:
+  - llm-d.ai
+  resources:
+  - inferenceobjectives
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
   - loki.grafana.com
   resourceNames:
   - logs
