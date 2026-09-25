@@ -75,7 +75,7 @@ func TestBuildTenantInfos_SingleTenantWithGateway(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -104,7 +104,7 @@ func TestBuildTenantInfos_MultipleTenants(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -118,7 +118,7 @@ func TestBuildTenantInfos_GatewayNotFound(t *testing.T) {
 		makeTenant("team-a", "missing-gw"),
 	}
 
-	result := cache.BuildTenantInfos(tenants, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, nil, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "team-a", result[0].Name)
@@ -140,7 +140,7 @@ func TestBuildTenantInfos_GatewayWithoutStatus(t *testing.T) {
 		}},
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "broken-gw", result[0].Gateway.Name)
@@ -159,7 +159,7 @@ func TestBuildTenantInfos_TenantWithoutGatewayRef(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "default-gw-tenant", result[0].Gateway.Name,
@@ -168,7 +168,7 @@ func TestBuildTenantInfos_TenantWithoutGatewayRef(t *testing.T) {
 }
 
 func TestBuildTenantInfos_NoTenants(t *testing.T) {
-	result := cache.BuildTenantInfos(nil, nil, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(nil, nil, nil, "gw-ns", testLog)
 	assert.Empty(t, result)
 }
 
@@ -185,7 +185,7 @@ func TestBuildTenantInfos_SharedGateway(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 2)
 	assert.Equal(t, "https://shared.example.com", result[0].Gateway.ExternalURL)
@@ -204,10 +204,36 @@ func TestBuildTenantInfos_GatewayWithStatusAddresses(t *testing.T) {
 		),
 	}
 
-	result := cache.BuildTenantInfos(tenants, gateways, "gw-ns", testLog)
+	result := cache.BuildTenantInfos(tenants, gateways, nil, "gw-ns", testLog)
 
 	require.Len(t, result, 1)
 	assert.Equal(t, "https://lb.example.com", result[0].Gateway.ExternalURL)
+}
+
+func TestBuildTenantInfos_RouteHostFallback(t *testing.T) {
+	tenants := []unstructured.Unstructured{
+		makeTenant("team-a", "internal-gw"),
+	}
+	gateways := []unstructured.Unstructured{
+		makeGatewayObj("internal-gw",
+			[]any{specListener("HTTPS", "", 443)},
+			[]any{statusListenerReady("HTTPS", 1)},
+			[]any{map[string]any{"value": "internal-gw-svc.gw-ns.svc.cluster.local"}},
+		),
+	}
+	routes := []unstructured.Unstructured{
+		{Object: map[string]any{
+			"spec": map[string]any{
+				"host": "maas.apps.example.com",
+				"to":   map[string]any{"kind": "Service", "name": "internal-gw-svc"},
+			},
+		}},
+	}
+
+	result := cache.BuildTenantInfos(tenants, gateways, routes, "gw-ns", testLog)
+
+	require.Len(t, result, 1)
+	assert.Equal(t, "https://maas.apps.example.com", result[0].Gateway.ExternalURL)
 }
 
 func TestInformerCache_Synced(t *testing.T) {

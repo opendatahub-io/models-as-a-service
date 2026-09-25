@@ -5,6 +5,10 @@ const (
 	// Can be overridden via RELATED_IMAGE_ODH_PYTHON_312_IMAGE for disconnected environments.
 	DefaultUsageLogsTenancyProxyImage = "registry.redhat.io/ubi9/python-312@sha256:f6713d327d37e654a443752e6654b5aab88f31690e1161eed9c34dd837870172"
 
+	// DefaultMaaSDiscoveryImage is the default image for the maas-discovery container.
+	// Can be overridden via RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE for disconnected environments.
+	DefaultMaaSDiscoveryImage = "quay.io/opendatahub/odh-maas-discovery@sha256:678af94dfbdbb92c0f4f29ea5719603d55eddc485136ad723f85d2261d0075ec"
+
 	// DefaultAITenantBootstrappedAnnotation records that the default AITenant was
 	// bootstrapped successfully and must not be recreated after an intentional deletion.
 	DefaultAITenantBootstrappedAnnotation = "maas.opendatahub.io/default-aitenant-bootstrapped"
