@@ -25,10 +25,13 @@ spec:
   pipelineRef:
     resolver: git
     params:
+    # TEMP: validate RHOAI must-gather change before odh-konflux-central merges.
+    # Revert to opendatahub-io/odh-konflux-central@main after:
+    # https://github.com/opendatahub-io/odh-konflux-central/pull/688
     - name: url
-      value: https://github.com/opendatahub-io/odh-konflux-central.git
+      value: https://github.com/jland-redhat/odh-konflux-central.git
     - name: revision
-      value: main
+      value: ci/maas-rhoai-must-gather
     - name: pathInRepo
       value: integration-tests/models-as-a-service/pr-group-testing-pipeline.yaml
   taskRunTemplate:
