@@ -985,7 +985,7 @@ components:
                                 example: 100
                             window:
                                 type: string
-                                description: "Time window (e.g., 1m, 1h, 24h). Allowed units: s, m, h (1-9999)."
+                                description: "Time window (e.g., 1m, 1h, 24h). Allowed units: s, m, h (1-9999), up to 366 days (8784h). Subscriptions stored before that cap may still report a longer window."
                                 pattern: "^[1-9]\\d{0,3}(s|m|h)$"
                                 example: 1m
                         required:

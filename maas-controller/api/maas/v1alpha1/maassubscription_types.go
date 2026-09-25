@@ -101,13 +101,18 @@ type TokenRateLimit struct {
 	// +kubebuilder:validation:Maximum=1000000000
 	Limit int64 `json:"limit"`
 
+	// The pattern carries the 366-day cap for hours (1-999, 1000-7999, 8000-8699,
+	// 8700-8779, 8780-8784) instead of a CEL rule: API servers before Kubernetes 1.33
+	// check CEL rules against unchanged fields on status writes, which would stop the
+	// controller from marking a subscription stored before the cap as Degraded.
+
 	// Window is the time window for rate limiting (e.g., "1m", "1h", "24h").
 	// Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
 	// supported; use hours instead (e.g., "24h" for one day).
-	// The numeric part must be between 1 and 9999.
+	// Seconds and minutes take 1-9999; hours take 1-8784 (366 days).
 	// +kubebuilder:validation:MinLength=2
 	// +kubebuilder:validation:MaxLength=5
-	// +kubebuilder:validation:Pattern=`^[1-9]\d{0,3}(s|m|h)$`
+	// +kubebuilder:validation:Pattern=`^([1-9]\d{0,3}[sm]|([1-9]\d{0,2}|[1-7]\d{3}|8[0-6]\d{2}|87[0-7]\d|878[0-4])h)$`
 	Window string `json:"window"`
 }
 

@@ -95,8 +95,8 @@ const (
 	maxTokenRateLimit int64 = 1_000_000_000 // 1 billion tokens
 
 	// maxWindowSeconds caps the window duration to 366 days (one leap year) to prevent
-	// unreasonably large windows from reaching Kuadrant. 8784h fits the CRD pattern
-	// ^[1-9]\d{0,3}(s|m|h)$.
+	// unreasonably large windows from reaching Kuadrant. The CRD's window pattern enforces
+	// the same bound (8784h); objects stored before it did can still carry larger windows.
 	maxWindowSeconds int64 = 366 * 24 * 3600 // 366 days (leap year) in seconds
 )
 
@@ -203,6 +203,30 @@ func unlimitedTokenLimit(keys []string) map[string]any {
 	}
 }
 
+// errModelNotReferenced reports a subscription with no modelRefs entry for the model.
+var errModelNotReferenced = errors.New("subscription does not reference the model")
+
+// enforcedModelRef returns the TRLP rates of the modelRefs entry that
+// reconcileTRLPForModel enforces for model namespace/name: the first one with a valid
+// token budget (see modelRefTokenRates). A subscription can list the same model more than
+// once. If no entry is valid it returns the first entry's error.
+func enforcedModelRef(refs []maasv1alpha1.ModelSubscriptionRef, namespace, name string) (rates []any, unlimited bool, err error) {
+	firstErr := errModelNotReferenced
+	for _, ref := range refs {
+		if ref.Namespace != namespace || ref.Name != name {
+			continue
+		}
+		rates, unlimited, err := modelRefTokenRates(ref)
+		if err == nil {
+			return rates, unlimited, nil
+		}
+		if errors.Is(firstErr, errModelNotReferenced) {
+			firstErr = err
+		}
+	}
+	return nil, false, firstErr
+}
+
 // ConditionSpecPriorityDuplicate is set True when another MaaSSubscription in the same namespace shares the same spec.priority
 // (API key mint and selector use deterministic tie-break; admins should set distinct priorities).
 const ConditionSpecPriorityDuplicate = "SpecPriorityDuplicate"
@@ -284,6 +308,16 @@ func (r *MaaSSubscriptionReconciler) checkTokenRateLimitHealth(ctx context.Conte
 		}
 		status.Namespace = httpRouteNS
 
+		// reconcileTRLPForModel leaves a subscription with no valid entry for this model out
+		// of the policy, so the policy being accepted says nothing about this subscription.
+		if _, _, err := enforcedModelRef(subscription.Spec.ModelRefs, ref.Namespace, ref.Name); err != nil {
+			status.Ready = false
+			status.Reason = maasv1alpha1.ReasonInvalidSpec
+			status.Message = fmt.Sprintf("rate limits are not enforced for this subscription: %v", err)
+			statuses = append(statuses, status)
+			continue
+		}
+
 		trlp := &unstructured.Unstructured{}
 		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
 
@@ -364,18 +398,26 @@ func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses 
 	// Check TRLP health
 	// Also detect race condition: model reported as valid by validateModelRefs but
 	// deleted before checkTokenRateLimitHealth ran (TRLP reports BackendNotReady)
-	var healthyTRLPs, unhealthyTRLPs, modelsWithBackendIssues int
+	var modelsWithBackendIssues, unenforceableBudgets, notAcceptedPolicies int
 	for _, s := range trlpStatuses {
 		if s.Ready {
-			healthyTRLPs++
-		} else {
-			unhealthyTRLPs++
+			continue
+		}
+		_, validModel := validModelSet[s.Model]
+		switch s.Reason {
+		case maasv1alpha1.ReasonBackendNotReady:
 			// Only count as backend issue if the model was reported as valid
 			// (avoids double-counting models already marked as invalid)
-			if s.Reason == maasv1alpha1.ReasonBackendNotReady {
-				if _, wasValid := validModelSet[s.Model]; wasValid {
-					modelsWithBackendIssues++
-				}
+			if validModel {
+				modelsWithBackendIssues++
+			}
+		case maasv1alpha1.ReasonInvalidSpec:
+			// The policy itself may be accepted; this subscription's budget is left out of it.
+			unenforceableBudgets++
+		default:
+			// An invalid model's policy status is unhealthy too; count valid models only.
+			if validModel {
+				notAcceptedPolicies++
 			}
 		}
 	}
@@ -389,15 +431,19 @@ func deriveFinalPhase(modelStatuses []maasv1alpha1.ModelRefStatus, trlpStatuses 
 		return maasv1alpha1.PhaseFailed, fmt.Sprintf("all %d model references are invalid or unavailable", len(modelStatuses))
 	}
 
-	// Partial model failure -> Degraded
+	// Partial model failure, or TRLPs unhealthy for valid models -> Degraded
+	var issues []string
 	if effectiveInvalidModels > 0 {
-		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d model references are invalid or unavailable", effectiveInvalidModels, len(modelStatuses))
+		issues = append(issues, fmt.Sprintf("%d of %d model references are invalid or unavailable", effectiveInvalidModels, len(modelStatuses)))
 	}
-
-	// All models valid but some TRLPs unhealthy (not due to backend issues) -> Degraded
-	trlpOnlyIssues := unhealthyTRLPs - modelsWithBackendIssues
-	if trlpOnlyIssues > 0 {
-		return maasv1alpha1.PhaseDegraded, fmt.Sprintf("%d of %d TokenRateLimitPolicies not accepted", trlpOnlyIssues, len(trlpStatuses))
+	if unenforceableBudgets > 0 {
+		issues = append(issues, fmt.Sprintf("%d of %d model references have a token budget that cannot be enforced", unenforceableBudgets, len(trlpStatuses)))
+	}
+	if notAcceptedPolicies > 0 {
+		issues = append(issues, fmt.Sprintf("%d of %d TokenRateLimitPolicies not accepted", notAcceptedPolicies, len(trlpStatuses)))
+	}
+	if len(issues) > 0 {
+		return maasv1alpha1.PhaseDegraded, strings.Join(issues, "; ")
 	}
 
 	return maasv1alpha1.PhaseActive, "successfully reconciled"
@@ -608,26 +654,24 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 
 	type subInfo struct {
 		sub       maasv1alpha1.MaaSSubscription
-		mRef      maasv1alpha1.ModelSubscriptionRef
 		rates     []any
 		unlimited bool
 	}
 	var subs []subInfo
 	for _, sub := range allSubs {
-		for _, mRef := range sub.Spec.ModelRefs {
-			if mRef.Namespace != modelNamespace || mRef.Name != modelName {
-				continue
-			}
-			rates, unlimited, err := modelRefTokenRates(mRef)
-			if err != nil {
-				// Skip this subscription to prevent poisoning the aggregated TRLP.
-				log.Error(err, "Skipping subscription with invalid token budget - fix the spec to include it in TRLP",
-					"subscription", sub.Name, "model", modelNamespace+"/"+modelName)
-				continue
-			}
-			subs = append(subs, subInfo{sub: sub, mRef: mRef, rates: rates, unlimited: unlimited})
-			break
+		rates, unlimited, err := enforcedModelRef(sub.Spec.ModelRefs, modelNamespace, modelName)
+		if err != nil {
+			// Skip this subscription to prevent poisoning the aggregated TRLP.
+			// checkTokenRateLimitHealth reports this model's TRLP as not ready for the
+			// subscription (InvalidSpec), which keeps it Degraded and makes maas-api
+			// deny inference on the model instead of serving it without a limit.
+			// The CRD rejects such budgets; this covers objects stored before it did.
+			// The status carries the cause, so this stays out of the error log.
+			log.V(1).Info("Skipping subscription with invalid token budget - fix the spec to include it in TRLP",
+				"subscription", sub.Name, "model", modelNamespace+"/"+modelName, "reason", err.Error())
+			continue
 		}
+		subs = append(subs, subInfo{sub: sub, rates: rates, unlimited: unlimited})
 	}
 
 	// If all subscriptions were skipped due to invalid limits, treat as no effective
@@ -657,7 +701,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		// Build subscription reference: namespace/name
 		subRef := fmt.Sprintf("%s/%s", si.sub.Namespace, si.sub.Name)
 		// Build model-scoped reference: subscription@model
-		modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, si.mRef.Namespace, si.mRef.Name)
+		modelScopedRef := fmt.Sprintf("%s@%s/%s", subRef, modelNamespace, modelName)
 
 		if si.unlimited {
 			unlimitedKeys = append(unlimitedKeys, modelScopedRef)
@@ -666,7 +710,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 
 		// TRLP limit key must be safe for YAML (no slashes)
 		safeKey := strings.ReplaceAll(subRef, "/", "-")
-		limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, si.mRef.Name)] = map[string]any{
+		limitsMap[fmt.Sprintf("%s-%s-tokens", safeKey, modelName)] = map[string]any{
 			"rates": si.rates,
 			"when": []any{
 				map[string]any{

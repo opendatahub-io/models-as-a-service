@@ -109,10 +109,10 @@ spec:
                               Window is the time window for rate limiting (e.g., "1m", "1h", "24h").
                               Allowed units: s (seconds), m (minutes), h (hours). Days (d) are not
                               supported; use hours instead (e.g., "24h" for one day).
-                              The numeric part must be between 1 and 9999.
+                              Seconds and minutes take 1-9999; hours take 1-8784 (366 days).
                             maxLength: 5
                             minLength: 2
-                            pattern: ^[1-9]\d{0,3}(s|m|h)$
+                            pattern: ^([1-9]\d{0,3}[sm]|([1-9]\d{0,2}|[1-7]\d{3}|8[0-6]\d{2}|87[0-7]\d|878[0-4])h)$
                             type: string
                         required:
                         - limit

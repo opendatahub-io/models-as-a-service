@@ -986,6 +986,10 @@ func createSubscriptionWithModelRefs(subName string, groups []string, modelRefs 
 
 	modelRefsSlice := make([]any, len(modelRefs))
 	for i, ref := range modelRefs {
+		// The CRD requires a token budget; give refs that don't set one a valid limit.
+		if _, limited := ref["tokenRateLimits"]; !limited && ref["unlimited"] != true {
+			ref["tokenRateLimits"] = []any{map[string]any{"limit": defaultTestTokenRateLimit, "window": "1m"}}
+		}
 		modelRefsSlice[i] = ref
 	}
 

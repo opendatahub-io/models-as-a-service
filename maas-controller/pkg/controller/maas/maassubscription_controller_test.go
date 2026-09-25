@@ -70,6 +70,18 @@ func newPreexistingTRLP(name, namespace, modelName string, annotations map[strin
 	return p
 }
 
+// newAcceptedTRLP builds a TokenRateLimitPolicy that Kuadrant has accepted.
+func newAcceptedTRLP(t *testing.T, name, namespace, modelName string) *unstructured.Unstructured {
+	t.Helper()
+	trlp := newPreexistingTRLP(name, namespace, modelName, nil)
+	if err := unstructured.SetNestedSlice(trlp.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("SetNestedSlice status.conditions: %v", err)
+	}
+	return trlp
+}
+
 // TestMaaSSubscriptionReconciler_ManagedAnnotation verifies the opt-out behaviour of the
 // "opendatahub.io/managed" annotation on generated Kuadrant TokenRateLimitPolicy resources.
 //
@@ -1444,6 +1456,413 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 			}
 			if gotLimit != 500 {
 				t.Errorf("TRLP limit = %d, want 500", gotLimit)
+			}
+		})
+	}
+}
+
+// TestMaaSSubscriptionReconciler_UnenforceableWindowOnSharedModel covers a window stored
+// before the CRD pattern capped hours, which validateTokenRateLimit rejects. Such a
+// subscription is left out of the model's TRLP, so it must not report that TRLP as ready:
+// maas-api authorizes inference for Active subscriptions without looking at rate limits,
+// and no TRLP limit would match it.
+//
+// The subscription also references a same-named model in another namespace with a valid
+// limit, which must keep its place in that model's TRLP.
+func TestMaaSSubscriptionReconciler_UnenforceableWindowOnSharedModel(t *testing.T) {
+	const (
+		subNamespace   = "default"
+		nsA            = "ns-a"
+		nsB            = "ns-b"
+		modelName      = "llm"
+		httpRouteName  = "maas-" + modelName
+		trlpName       = "maas-trlp-" + modelName
+		validSubName   = "sub-valid"
+		invalidSubName = "sub-invalid"
+		invalidWindow  = "9999h"
+	)
+
+	if err := validateTokenRateLimit(1000, invalidWindow); err == nil {
+		t.Fatalf("validateTokenRateLimit(1000, %q) = nil, want error", invalidWindow)
+	}
+
+	// sub-valid keeps the TRLP for ns-b/llm in place. sub-invalid has a valid limit on
+	// ns-a/llm and an unenforceable one on ns-b/llm.
+	validSub := newMaaSSubscription(validSubName, subNamespace, "team-a", modelName, 1000)
+	validSub.Spec.ModelRefs[0].Namespace = nsB
+	invalidSub := &maasv1alpha1.MaaSSubscription{
+		ObjectMeta: metav1.ObjectMeta{Name: invalidSubName, Namespace: subNamespace},
+		Spec: maasv1alpha1.MaaSSubscriptionSpec{
+			Owner: maasv1alpha1.OwnerSpec{Groups: []maasv1alpha1.GroupReference{{Name: "team-b"}}},
+			ModelRefs: []maasv1alpha1.ModelSubscriptionRef{
+				{Name: modelName, Namespace: nsA, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 1000, Window: "1h"}}},
+				{Name: modelName, Namespace: nsB, TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 1000, Window: invalidWindow}}},
+			},
+		},
+	}
+
+	objs := []client.Object{validSub, invalidSub}
+	for _, ns := range []string{nsA, nsB} {
+		// Kuadrant has accepted both TRLPs.
+		trlp := newAcceptedTRLP(t, trlpName, ns, modelName)
+		objs = append(objs, newMaaSModelRef(modelName, ns, "ExternalModel", modelName), newHTTPRoute(httpRouteName, ns), trlp)
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(objs...).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: invalidSubName, Namespace: subNamespace}}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	limitKeys := func(ns string) map[string]any {
+		t.Helper()
+		trlp := &unstructured.Unstructured{}
+		trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+		if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: ns}, trlp); err != nil {
+			t.Fatalf("Get TokenRateLimitPolicy %s/%s: %v", ns, trlpName, err)
+		}
+		limits, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+		if err != nil || !found {
+			t.Fatalf("%s/%s spec.limits not found: found=%v err=%v", ns, trlpName, found, err)
+		}
+		return limits
+	}
+	validKey := subNamespace + "-" + validSubName + "-" + modelName + "-tokens"
+	invalidKey := subNamespace + "-" + invalidSubName + "-" + modelName + "-tokens"
+	if limits := limitKeys(nsB); len(limits) != 1 || limits[validKey] == nil {
+		t.Errorf("%s TRLP limit keys = %v, want only %q", nsB, getKeys(limits), validKey)
+	}
+	if limits := limitKeys(nsA); limits[invalidKey] == nil {
+		t.Errorf("%s TRLP limit keys = %v, want %q", nsA, getKeys(limits), invalidKey)
+	}
+
+	sub := &unstructured.Unstructured{}
+	sub.SetGroupVersionKind(maasv1alpha1.GroupVersion.WithKind("MaaSSubscription"))
+	if err := c.Get(t.Context(), req.NamespacedName, sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+	if phase, _, _ := unstructured.NestedString(sub.Object, "status", "phase"); phase != string(maasv1alpha1.PhaseDegraded) {
+		t.Errorf("phase = %q, want %q", phase, maasv1alpha1.PhaseDegraded)
+	}
+	statuses, _, err := unstructured.NestedSlice(sub.Object, "status", "tokenRateLimitStatuses")
+	if err != nil {
+		t.Fatalf("status.tokenRateLimitStatuses: %v", err)
+	}
+	byModel := map[string]any{}
+	for _, raw := range statuses {
+		s, ok := raw.(map[string]any)
+		if !ok {
+			t.Fatalf("tokenRateLimitStatus is %T, want map", raw)
+		}
+		// The policy namespace: each HTTPRoute, and so its TRLP, is in its model's namespace here.
+		ns, _ := s["namespace"].(string)
+		name, _ := s["model"].(string)
+		byModel[ns+"/"+name] = s
+	}
+	wants := map[string]struct {
+		ready  bool
+		reason maasv1alpha1.ConditionReason
+	}{
+		nsA + "/" + modelName: {ready: true, reason: maasv1alpha1.ReasonAccepted},
+		nsB + "/" + modelName: {ready: false, reason: maasv1alpha1.ReasonInvalidSpec},
+	}
+	for key, want := range wants {
+		got, ok := byModel[key].(map[string]any)
+		if !ok {
+			t.Errorf("no tokenRateLimitStatus for model %s, got models %v", key, getKeys(byModel))
+			continue
+		}
+		if got["ready"] != want.ready || got["reason"] != string(want.reason) {
+			t.Errorf("tokenRateLimitStatus for %s = {ready: %v, reason: %v}, want {ready: %v, reason: %q}",
+				key, got["ready"], got["reason"], want.ready, want.reason)
+		}
+	}
+}
+
+// TestMaaSSubscriptionReconciler_NoTokenBudgetOnSharedModel covers a model reference with
+// neither tokenRateLimits nor unlimited, which subscriptions stored before tokenRateLimits
+// became required can still hold. It gets no limit in the model's TRLP, so like an
+// unenforceable window it must not report that TRLP as ready.
+func TestMaaSSubscriptionReconciler_NoTokenBudgetOnSharedModel(t *testing.T) {
+	const (
+		namespace     = "default"
+		modelName     = "llm"
+		httpRouteName = "maas-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+		subName       = "sub-no-budget"
+	)
+
+	validSub := newMaaSSubscription("sub-valid", namespace, "team-a", modelName, 1000)
+	noBudget := newMaaSSubscription(subName, namespace, "team-b", modelName, 1000)
+	noBudget.Spec.ModelRefs[0].TokenRateLimits = nil
+
+	// The valid subscription keeps the TRLP in place, and Kuadrant has accepted it.
+	trlp := newAcceptedTRLP(t, trlpName, namespace, modelName)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(newMaaSModelRef(modelName, namespace, "ExternalModel", modelName), newHTTPRoute(httpRouteName, namespace), validSub, noBudget, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(t.Context(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+	if sub.Status.Phase != maasv1alpha1.PhaseDegraded {
+		t.Errorf("phase = %q, want %q", sub.Status.Phase, maasv1alpha1.PhaseDegraded)
+	}
+	if len(sub.Status.TokenRateLimitStatuses) != 1 {
+		t.Fatalf("expected 1 tokenRateLimitStatus, got %d", len(sub.Status.TokenRateLimitStatuses))
+	}
+	if got := sub.Status.TokenRateLimitStatuses[0]; got.Ready || got.Reason != maasv1alpha1.ReasonInvalidSpec {
+		t.Errorf("tokenRateLimitStatus = {Ready: %v, Reason: %q}, want {Ready: false, Reason: %q}",
+			got.Ready, got.Reason, maasv1alpha1.ReasonInvalidSpec)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_DuplicateModelRefWindows covers a subscription listing the
+// same model more than once. The TRLP enforces the first entry with a valid token budget, and
+// the rate limit status must describe that same entry: an invalid entry next to a valid one
+// must not report the enforced limit as unenforced.
+func TestMaaSSubscriptionReconciler_DuplicateModelRefWindows(t *testing.T) {
+	const (
+		namespace     = "default"
+		modelName     = "llm"
+		httpRouteName = "maas-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+		subName       = "sub-dup"
+	)
+	window := func(w string) maasv1alpha1.ModelSubscriptionRef {
+		return maasv1alpha1.ModelSubscriptionRef{Name: modelName, Namespace: namespace,
+			TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 1000, Window: w}}}
+	}
+	noBudget := maasv1alpha1.ModelSubscriptionRef{Name: modelName, Namespace: namespace}
+	unlimited := maasv1alpha1.ModelSubscriptionRef{Name: modelName, Namespace: namespace, Unlimited: true}
+	const unenforceable = "1 of 1 model references have a token budget that cannot be enforced"
+
+	tests := []struct {
+		name          string
+		entries       []maasv1alpha1.ModelSubscriptionRef
+		wantWindow    string // window of the subscription's own TRLP limit, "" for none
+		wantUnlimited bool   // the subscription is in the shared unlimited limit
+		wantReady     bool
+		wantReason    maasv1alpha1.ConditionReason
+		wantPhase     maasv1alpha1.Phase
+		wantMsg       string // substring of the Ready condition message
+	}{
+		{name: "invalid entry first", entries: []maasv1alpha1.ModelSubscriptionRef{window("9999h"), window("1h")},
+			wantWindow: "1h", wantReady: true, wantReason: maasv1alpha1.ReasonAccepted, wantPhase: maasv1alpha1.PhaseActive},
+		{name: "invalid entry last", entries: []maasv1alpha1.ModelSubscriptionRef{window("1h"), window("9999h")},
+			wantWindow: "1h", wantReady: true, wantReason: maasv1alpha1.ReasonAccepted, wantPhase: maasv1alpha1.PhaseActive},
+		{name: "all entries invalid", entries: []maasv1alpha1.ModelSubscriptionRef{window("9999h"), window("8785h")},
+			wantReason: maasv1alpha1.ReasonInvalidSpec, wantPhase: maasv1alpha1.PhaseDegraded, wantMsg: unenforceable},
+		{name: "no budget", entries: []maasv1alpha1.ModelSubscriptionRef{noBudget},
+			wantReason: maasv1alpha1.ReasonInvalidSpec, wantPhase: maasv1alpha1.PhaseDegraded, wantMsg: unenforceable},
+		{name: "no budget then unlimited", entries: []maasv1alpha1.ModelSubscriptionRef{noBudget, unlimited},
+			wantUnlimited: true, wantReady: true, wantReason: maasv1alpha1.ReasonAccepted, wantPhase: maasv1alpha1.PhaseActive},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			sub := newMaaSSubscription(subName, namespace, "team-a", modelName, 1000)
+			sub.Spec.ModelRefs = tc.entries
+
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(newMaaSModelRef(modelName, namespace, "ExternalModel", modelName), newHTTPRoute(httpRouteName, namespace), sub,
+					newAcceptedTRLP(t, trlpName, namespace, modelName)).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("Reconcile: unexpected error: %v", err)
+			}
+
+			// The subscription is the model's only one, so a TRLP exists only while it is enforced.
+			got := &unstructured.Unstructured{}
+			got.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+			err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, got)
+			if !tc.wantUnlimited && tc.wantWindow == "" {
+				if !apierrors.IsNotFound(err) {
+					t.Errorf("Get TokenRateLimitPolicy = %v, want it deleted", err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+				}
+				limits, _, _ := unstructured.NestedMap(got.Object, "spec", "limits")
+				limitKey := namespace + "-" + subName + "-" + modelName + "-tokens"
+				var window any
+				if rates, _, _ := unstructured.NestedSlice(limits, limitKey, "rates"); len(rates) == 1 {
+					if rate, ok := rates[0].(map[string]any); ok {
+						window = rate["window"]
+					}
+				}
+				if tc.wantWindow != "" && window != tc.wantWindow {
+					t.Errorf("TRLP limits = %v, want %s with window %q", limits, limitKey, tc.wantWindow)
+				}
+				if tc.wantUnlimited {
+					key := namespace + "/" + subName + "@" + namespace + "/" + modelName
+					unlimitedLimit, _ := limits[unlimitedLimitName].(map[string]any)
+					if _, limited := limits[limitKey]; limited || unlimitedLimit == nil || !strings.Contains(firstPredicate(t, unlimitedLimit), key) {
+						t.Errorf("TRLP limits = %v, want only %q matching %q", limits, unlimitedLimitName, key)
+					}
+				}
+			}
+
+			var s maasv1alpha1.MaaSSubscription
+			if err := c.Get(t.Context(), req.NamespacedName, &s); err != nil {
+				t.Fatalf("Get MaaSSubscription: %v", err)
+			}
+			if s.Status.Phase != tc.wantPhase {
+				t.Errorf("phase = %q, want %q", s.Status.Phase, tc.wantPhase)
+			}
+			if len(s.Status.TokenRateLimitStatuses) != 1 {
+				t.Fatalf("expected 1 tokenRateLimitStatus, got %d", len(s.Status.TokenRateLimitStatuses))
+			}
+			if st := s.Status.TokenRateLimitStatuses[0]; st.Ready != tc.wantReady || st.Reason != tc.wantReason {
+				t.Errorf("tokenRateLimitStatus = {Ready: %v, Reason: %q}, want {Ready: %v, Reason: %q}",
+					st.Ready, st.Reason, tc.wantReady, tc.wantReason)
+			}
+			if tc.wantMsg != "" {
+				ready := apimeta.FindStatusCondition(s.Status.Conditions, "Ready")
+				if ready == nil || !strings.Contains(ready.Message, tc.wantMsg) {
+					t.Errorf("Ready condition = %+v, want message containing %q", ready, tc.wantMsg)
+				}
+			}
+		})
+	}
+}
+
+// sharedModelWithBadWindow returns a model shared by sub-valid (1m) and sub-bad (9999h),
+// with an accepted TRLP, and a client builder holding them.
+func sharedModelWithBadWindow(t *testing.T) *fake.ClientBuilder {
+	t.Helper()
+	const namespace, modelName = "default", "llm"
+	validSub := newMaaSSubscription("sub-valid", namespace, "team-a", modelName, 1000)
+	badSub := newMaaSSubscription("sub-bad", namespace, "team-b", modelName, 1000)
+	badSub.Spec.ModelRefs[0].TokenRateLimits[0].Window = "9999h"
+	return fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(newMaaSModelRef(modelName, namespace, "ExternalModel", modelName), newHTTPRoute("maas-"+modelName, namespace),
+			validSub, badSub, newAcceptedTRLP(t, "maas-trlp-"+modelName, namespace, modelName)).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer)
+}
+
+// TestMaaSSubscriptionReconciler_UnenforceableBudgetRecovers covers fixing the window: the
+// subscription goes back into the TRLP and back to Active.
+func TestMaaSSubscriptionReconciler_UnenforceableBudgetRecovers(t *testing.T) {
+	c := sharedModelWithBadWindow(t).Build()
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-bad", Namespace: "default"}}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile: unexpected error: %v", err)
+	}
+
+	var sub maasv1alpha1.MaaSSubscription
+	if err := c.Get(t.Context(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+	if sub.Status.Phase != maasv1alpha1.PhaseDegraded {
+		t.Fatalf("phase before the fix = %q, want %q", sub.Status.Phase, maasv1alpha1.PhaseDegraded)
+	}
+	sub.Spec.ModelRefs[0].TokenRateLimits[0].Window = "1h"
+	if err := c.Update(t.Context(), &sub); err != nil {
+		t.Fatalf("Update MaaSSubscription: %v", err)
+	}
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("Reconcile after the fix: unexpected error: %v", err)
+	}
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(t.Context(), types.NamespacedName{Name: "maas-trlp-llm", Namespace: "default"}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+	}
+	limits, _, _ := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if _, ok := limits["default-sub-bad-llm-tokens"]; !ok {
+		t.Errorf("TRLP limit keys = %v, want default-sub-bad-llm-tokens back", getKeys(limits))
+	}
+	if err := c.Get(t.Context(), req.NamespacedName, &sub); err != nil {
+		t.Fatalf("Get MaaSSubscription: %v", err)
+	}
+	if sub.Status.Phase != maasv1alpha1.PhaseActive || len(sub.Status.TokenRateLimitStatuses) != 1 || !sub.Status.TokenRateLimitStatuses[0].Ready {
+		t.Errorf("status after the fix = %+v, want Active with a ready rate limit status", sub.Status)
+	}
+}
+
+func modelStatus(ns, name string, ready bool, reason maasv1alpha1.ConditionReason) maasv1alpha1.ModelRefStatus {
+	return maasv1alpha1.ModelRefStatus{ResourceRefStatus: maasv1alpha1.ResourceRefStatus{Name: name, Namespace: ns, Ready: ready, Reason: reason}}
+}
+
+func policyStatus(ns, name string, ready bool, reason maasv1alpha1.ConditionReason) maasv1alpha1.TokenRateLimitStatus {
+	return maasv1alpha1.TokenRateLimitStatus{
+		ResourceRefStatus: maasv1alpha1.ResourceRefStatus{Name: "maas-trlp-" + name, Namespace: ns, Ready: ready, Reason: reason},
+		Model:             name,
+	}
+}
+
+// TestDeriveFinalPhase_ReportsEveryIssue covers a subscription with more than one kind of
+// problem: the phase message names each of them, not only the first one found.
+func TestDeriveFinalPhase_ReportsEveryIssue(t *testing.T) {
+	tests := []struct {
+		name     string
+		models   []maasv1alpha1.ModelRefStatus
+		policies []maasv1alpha1.TokenRateLimitStatus
+		wantMsgs []string
+	}{
+		{
+			name:     "invalid model and unenforceable limits are both reported",
+			models:   []maasv1alpha1.ModelRefStatus{modelStatus("ns-a", "llm", true, maasv1alpha1.ReasonValid), modelStatus("ns-b", "other", false, maasv1alpha1.ReasonNotFound)},
+			policies: []maasv1alpha1.TokenRateLimitStatus{policyStatus("ns-a", "llm", false, maasv1alpha1.ReasonInvalidSpec), policyStatus("ns-b", "other", false, maasv1alpha1.ReasonBackendNotReady)},
+			wantMsgs: []string{
+				"1 of 2 model references are invalid or unavailable",
+				"1 of 2 model references have a token budget that cannot be enforced",
+			},
+		},
+		{
+			name:     "policy not accepted for a valid model is reported next to an invalid model",
+			models:   []maasv1alpha1.ModelRefStatus{modelStatus("ns-a", "llm", true, maasv1alpha1.ReasonValid), modelStatus("ns-b", "other", false, maasv1alpha1.ReasonNotFound)},
+			policies: []maasv1alpha1.TokenRateLimitStatus{policyStatus("ns-a", "llm", false, maasv1alpha1.ReasonNotAccepted), policyStatus("ns-b", "other", false, maasv1alpha1.ReasonBackendNotReady)},
+			wantMsgs: []string{
+				"1 of 2 model references are invalid or unavailable",
+				"1 of 2 TokenRateLimitPolicies not accepted",
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			phase, msg := deriveFinalPhase(tc.models, tc.policies)
+			if phase != maasv1alpha1.PhaseDegraded {
+				t.Errorf("phase = %q (%s), want %q", phase, msg, maasv1alpha1.PhaseDegraded)
+			}
+			for _, want := range tc.wantMsgs {
+				if !strings.Contains(msg, want) {
+					t.Errorf("message = %q, want it to contain %q", msg, want)
+				}
 			}
 		})
 	}

@@ -34,7 +34,15 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | limit | int64 | Yes | Maximum number of tokens allowed |
-| window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s`, `m`, `h` (1–9999). Pattern: `^[1-9]\d{0,3}(s\|m\|h)$`. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). |
+| window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s` and `m` (1–9999), `h` (1–8784, i.e. 366 days); no leading zeros. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). Hours above `8784h` are no longer accepted either; see the note below for subscriptions that already hold one. |
+
+!!! note "Subscriptions stored before these limits"
+    A subscription can still hold a window or limit that the schema now rejects, for example `9999h` or `1d` (days were dropped), or a model reference with neither `tokenRateLimits` nor `unlimited`. Rate limits for that model cannot be enforced, so the subscription is `Degraded` and inference on that model is denied until the value is fixed; its other models keep working. Callers get a 403 saying the model's token rate limits are invalid in the subscription.
+
+    - A reference with no token budget was served at 100 tokens per minute up to v0.2.x. Set `tokenRateLimits: [{limit: 100, window: 1m}]` to keep that, or `unlimited: true`.
+    - This also applies when the model's TokenRateLimitPolicy is managed by hand (`opendatahub.io/managed: "false"`).
+    - Edits outside `modelRefs` are still accepted, but any change to `modelRefs` must make every window and limit valid.
+    - For a reference with no token budget, API servers before Kubernetes 1.33 also reject the controller's status update, so its phase may still read `Active`. Inference on the affected model is denied regardless.
 
 ## Annotations
 

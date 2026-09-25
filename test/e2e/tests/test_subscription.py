@@ -41,6 +41,7 @@ Environment variables:
   None — premium path/name constants live in test_helper.py.
 """
 
+import contextlib
 import copy
 import json
 import logging
@@ -1050,6 +1051,163 @@ class TestUnlimitedSubscription:
             time.sleep(3)
             after = _limitador_authorized_hits(self.UNLIMITED_SUB)
         assert after > before, f"authorized_hits for {self.UNLIMITED_SUB} did not grow: {before} -> {after}"
+
+
+SUBSCRIPTION_CRD = "maassubscriptions.maas.opendatahub.io"
+_SUBSCRIPTION_CRD_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "deployment",
+                                      "base", "maas-controller", "crd", "bases",
+                                      "maas.opendatahub.io_maassubscriptions.yaml")
+_CRD_SPEC = "/spec/versions/0/schema/openAPIV3Schema/properties/spec/properties"
+_WINDOW_PATTERN = _CRD_SPEC + "/modelRefs/items/properties/tokenRateLimits/items/properties/window/pattern"
+_MODEL_REF_RULES = _CRD_SPEC + "/modelRefs/items/x-kubernetes-validations"
+
+
+def _json_pointer_get(obj, pointer):
+    for part in pointer.strip("/").split("/"):
+        obj = obj[int(part)] if isinstance(obj, list) else obj.get(part)
+        if obj is None:
+            return None
+    return obj
+
+
+def _patch_crd(ops):
+    subprocess.run(["oc", "patch", "crd", SUBSCRIPTION_CRD, "--type=json", "-p", json.dumps(ops)],
+                   capture_output=True, text=True, check=True)
+
+
+def _crd_json(*args):
+    return json.loads(subprocess.run(["oc", *args, "-o", "json"], capture_output=True, text=True, check=True).stdout)
+
+
+@contextlib.contextmanager
+def _subscription_crd_without_budget_checks():
+    """Drop the CRD checks on token budgets while the block runs, then restore them.
+
+    Lets a test store what the CRD now rejects but older CRDs admitted: a window past
+    366 days, or a model reference with no token budget. The checks come back from this
+    checkout's CRD, not from the live one: a run killed inside the block would otherwise
+    leave the next run restoring the relaxed CRD.
+    """
+    live = _crd_json("get", "crd", SUBSCRIPTION_CRD)
+    checkout = _crd_json("create", "--dry-run=client", "-f", _SUBSCRIPTION_CRD_FILE)
+    relax = [{"op": "replace", "path": _WINDOW_PATTERN, "value": r"^[1-9]\d{0,3}(s|m|h)$"}]
+    if _json_pointer_get(live, _MODEL_REF_RULES) is not None:
+        relax.append({"op": "remove", "path": _MODEL_REF_RULES})
+    restore = [
+        {"op": "replace", "path": _WINDOW_PATTERN, "value": _json_pointer_get(checkout, _WINDOW_PATTERN)},
+        {"op": "add", "path": _MODEL_REF_RULES, "value": _json_pointer_get(checkout, _MODEL_REF_RULES)},
+    ]
+    _patch_crd(relax)
+    try:
+        yield
+    finally:
+        _patch_crd(restore)
+
+
+def _store_subscription(name, model_ref, budget, timeout=30):
+    """Apply a subscription, retrying while the API server still validates against the previous CRD schema."""
+    cr = {
+        "apiVersion": "maas.opendatahub.io/v1alpha1",
+        "kind": "MaaSSubscription",
+        "metadata": {"name": name, "namespace": _ns()},
+        "spec": {
+            "owner": {"groups": [{"name": "system:authenticated"}]},
+            "modelRefs": [{"name": model_ref, "namespace": MODEL_NAMESPACE, **budget}],
+        },
+    }
+    deadline = time.time() + timeout
+    while True:
+        result = subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr), capture_output=True, text=True)
+        if result.returncode == 0:
+            return
+        if time.time() > deadline:
+            raise AssertionError(f"could not store MaaSSubscription {name}: {result.stderr}")
+        time.sleep(2)
+
+
+def _wait_for_subscription_reconciled(name, timeout=120):
+    """Wait until the controller has given the subscription an Active or Degraded phase."""
+    deadline = time.time() + timeout
+    phase = None
+    while time.time() < deadline:
+        phase = ((_get_cr("maassubscription", name) or {}).get("status") or {}).get("phase")
+        if phase in ("Active", "Degraded"):
+            return phase
+        time.sleep(3)
+    raise TimeoutError(f"MaaSSubscription {name} not reconciled within {timeout}s (phase {phase!r})")
+
+
+class TestUnenforceableTokenBudget:
+    """Token budgets the controller cannot enforce: a window past 366 days, or none at all.
+
+    Such a subscription gets no limit in the model's TokenRateLimitPolicy. When another
+    subscription keeps that policy in place it must be denied inference on the model,
+    not served without a limit, while the other subscription keeps its own limit.
+    Runs on the unconfigured model so no other subscription shares its TRLP.
+    """
+
+    AUTH_POLICY = "e2e-unenforceable-auth"
+    VALID_SUB = "e2e-unenforceable-valid"
+    WINDOW_SUB = "e2e-unenforceable-window"
+    NO_BUDGET_SUB = "e2e-unenforceable-no-budget"
+
+    @pytest.fixture(scope="class")
+    def shared_model(self):
+        """A valid subscription (10 tokens/1m) plus two stored unenforceable ones on one model, with a key each."""
+        model_ref = UNCONFIGURED_MODEL_REF
+        subs = (self.VALID_SUB, self.WINDOW_SUB, self.NO_BUDGET_SUB)
+        try:
+            _create_test_auth_policy(self.AUTH_POLICY, model_refs=[model_ref], groups=["system:authenticated"])
+            _wait_for_maas_auth_policy_phase(self.AUTH_POLICY, require_enforced=False)
+            _create_test_subscription(self.VALID_SUB, [model_ref], groups=["system:authenticated"], token_limit=10)
+            with _subscription_crd_without_budget_checks():
+                _store_subscription(self.WINDOW_SUB, model_ref, {"tokenRateLimits": [{"limit": 10, "window": "9999h"}]})
+                _store_subscription(self.NO_BUDGET_SUB, model_ref, {})
+            _wait_for_maas_subscription_phase(self.VALID_SUB)
+            for sub in (self.WINDOW_SUB, self.NO_BUDGET_SUB):
+                log.info("%s reconciled as %s", sub, _wait_for_subscription_reconciled(sub))
+
+            valid_limit = f"{_ns()}-{self.VALID_SUB}-{model_ref}-tokens"
+            _wait_for_trlp_limits(model_ref, lambda limits: valid_limit in limits)
+
+            oc_token = _get_cluster_token()
+            keys = {sub: _create_api_key(oc_token, name=f"{sub}-{uuid.uuid4().hex[:6]}", subscription=sub) for sub in subs}
+            yield keys
+        finally:
+            for sub in subs:
+                _delete_cr("maassubscription", sub)
+            _delete_cr("maasauthpolicy", self.AUTH_POLICY)
+            for sub in subs:
+                _wait_for_cr_absent("maassubscription", sub)
+
+    @pytest.mark.serial
+    def test_window_past_366_days_is_rejected(self):
+        for window in ("8785h", "9999h"):
+            result = _server_dry_run_subscription(f"e2e-unenforceable-{window}", {"tokenRateLimits": [{"limit": 100, "window": window}]})
+            assert result.returncode != 0, f"a {window} window must be rejected"
+            assert "window" in result.stderr, result.stderr
+        for window in ("8784h", "9999m"):
+            result = _server_dry_run_subscription(f"e2e-unenforceable-{window}", {"tokenRateLimits": [{"limit": 100, "window": window}]})
+            assert result.returncode == 0, result.stderr
+
+    @pytest.mark.serial
+    @pytest.mark.parametrize("sub", [WINDOW_SUB, NO_BUDGET_SUB])
+    def test_stored_unenforceable_budget_is_denied(self, shared_model, sub):
+        r = _poll_status(shared_model[sub], 403, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+        assert "token rate limits for this model are invalid" in r.text, r.text[:300]
+
+    @pytest.mark.serial
+    def test_valid_subscription_keeps_its_limit(self, shared_model):
+        key = shared_model[self.VALID_SUB]
+        _poll_status(key, 200, path=UNCONFIGURED_MODEL_PATH, timeout=90)
+        statuses = []
+        for _ in range(15):
+            statuses.append(_inference(key, path=UNCONFIGURED_MODEL_PATH, max_tokens=1).status_code)
+            if statuses[-1] == 429:
+                break
+            time.sleep(0.1)
+        assert statuses[-1] == 429 and set(statuses[:-1]) <= {200}, \
+            f"valid key should get 200s until its 10 tokens/1m budget runs out: {statuses}"
 
 
 class TestAllUnlimitedModel:

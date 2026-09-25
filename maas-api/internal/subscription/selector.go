@@ -691,16 +691,24 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		}
 	}
 
+	// Resolve the requested model ("namespace/name" or a body-routed raw model
+	// name) to its canonical subscription ref so alias requests get the same
+	// checks as namespace/name requests.
+	ref := findModelRef(sub, requestedModel)
+
+	// The controller leaves a model without a valid token budget out of the TRLP, so
+	// no limit would apply. Deny it from the spec in any phase: the Degraded status
+	// reporting it can lag during an upgrade, and API servers before Kubernetes 1.33
+	// reject that status write for a reference stored before the CRD required a budget.
+	if ref != nil && !enforceableModel(sub, ref) {
+		return unenforceableBudgetError(sub)
+	}
+
 	// Active subscriptions are allowed without TRLP checks (already validated above)
 	if sub.Phase != PhaseDegraded {
 		return nil
 	}
 
-	// For Degraded subscriptions, verify rate limits can be enforced (if defined).
-	// Resolve the requested model ("namespace/name" or a body-routed raw model
-	// name) to its canonical subscription ref so alias requests get the same
-	// TRLP check as namespace/name requests.
-	ref := findModelRef(sub, requestedModel)
 	if ref == nil {
 		return &ModelUnhealthyError{
 			Subscription: sub.Name,
@@ -710,16 +718,9 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		}
 	}
 
-	// Unlimited models depend on their TRLP too: without it the gateway default
-	// deny applies, which the user would see as an unexplained 429.
-	needsTRLP := ref.Unlimited || len(ref.TokenRateLimits) > 0
-
-	// If the model has no token budget at all, allow inference (no TRLP to check)
-	if !needsTRLP {
-		return nil
-	}
-
-	// Model is governed by a TRLP - verify it is ready
+	// Every model left here has a token budget, so its TRLP must be ready. An
+	// unlimited model needs it too: without it the gateway default deny applies,
+	// which the user would see as an unexplained 429.
 	for _, trlp := range sub.TokenRateLimitStatuses {
 		if trlp.Model == ref.Name {
 			if !trlp.Ready {
@@ -741,6 +742,18 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		Phase:        sub.Phase,
 		Reason:       "RateLimitNotEnforced",
 		Message:      "subscription rate limiting policies are not ready",
+	}
+}
+
+// unenforceableBudgetError reports a model whose token budget in the subscription the
+// controller cannot enforce. Unlike an unready TRLP it lasts until an administrator
+// fixes the spec, so the message says so.
+func unenforceableBudgetError(sub *subscription) error {
+	return &ModelUnhealthyError{
+		Subscription: sub.Name,
+		Phase:        sub.Phase,
+		Reason:       "RateLimitNotEnforced",
+		Message:      "token rate limits for this model are invalid in the subscription; an administrator must fix them",
 	}
 }
 

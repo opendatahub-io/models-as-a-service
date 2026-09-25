@@ -96,3 +96,101 @@ func TestCheckModelHealthBodyRoutedAlias(t *testing.T) {
 		})
 	}
 }
+
+// TestCheckModelHealthNoTokenBudget covers a Degraded subscription whose model has neither
+// tokenRateLimits nor unlimited. The controller leaves such a model out of the TRLP and
+// reports it not ready, so inference must be denied rather than allowed for having no
+// limit to check.
+func TestCheckModelHealthNoTokenBudget(t *testing.T) {
+	sub := &subscription{
+		Name:                   "degraded-sub",
+		Phase:                  PhaseDegraded,
+		ModelRefs:              []ModelRefInfo{{Name: "llm", Namespace: "ns"}},
+		TokenRateLimitStatuses: []TokenRateLimitStatus{{Model: "llm", Ready: false, Reason: "InvalidSpec"}},
+	}
+	err := checkModelHealth(sub, "ns/llm")
+	var unhealthy *ModelUnhealthyError
+	if !errors.As(err, &unhealthy) || unhealthy.Reason != "RateLimitNotEnforced" {
+		t.Fatalf("checkModelHealth(ns/llm) = %v, want RateLimitNotEnforced", err)
+	}
+}
+
+// TestCheckModelHealthUnenforceableSpec covers an Active subscription whose model has a
+// token budget the controller cannot enforce, as seen while the Degraded status has not
+// been written: during a rolling upgrade, or when the API server rejects the write.
+// maas-api must deny it from the spec rather than trust the phase.
+func TestCheckModelHealthUnenforceableSpec(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  ModelRefInfo
+	}{
+		{"window over 366 days", ModelRefInfo{Name: "llm", Namespace: "ns", TokenRateLimits: []TokenRateLimit{{Limit: 1000, Window: "9999h"}}}},
+		{"no token budget", ModelRefInfo{Name: "llm", Namespace: "ns"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sub := &subscription{
+				Name:                   "active-sub",
+				Phase:                  PhaseActive,
+				ModelRefs:              []ModelRefInfo{tt.ref},
+				TokenRateLimitStatuses: []TokenRateLimitStatus{{Model: "llm", Ready: true, Reason: "Accepted"}},
+			}
+			err := checkModelHealth(sub, "ns/llm")
+			var unhealthy *ModelUnhealthyError
+			if !errors.As(err, &unhealthy) || unhealthy.Reason != "RateLimitNotEnforced" {
+				t.Fatalf("checkModelHealth(ns/llm) = %v, want RateLimitNotEnforced", err)
+			}
+		})
+	}
+}
+
+func TestValidTokenBudget(t *testing.T) {
+	limits := func(windows ...string) []TokenRateLimit {
+		out := make([]TokenRateLimit, 0, len(windows))
+		for _, w := range windows {
+			out = append(out, TokenRateLimit{Limit: 1000, Window: w})
+		}
+		return out
+	}
+	tests := []struct {
+		name string
+		ref  ModelRefInfo
+		want bool
+	}{
+		{"seconds at the pattern maximum", ModelRefInfo{TokenRateLimits: limits("9999s")}, true},
+		{"minutes at the pattern maximum", ModelRefInfo{TokenRateLimits: limits("9999m")}, true},
+		{"hours below the cap", ModelRefInfo{TokenRateLimits: limits("1000h")}, true},
+		{"366 days", ModelRefInfo{TokenRateLimits: limits("8784h")}, true},
+		{"one hour past 366 days", ModelRefInfo{TokenRateLimits: limits("8785h")}, false},
+		{"9999h", ModelRefInfo{TokenRateLimits: limits("9999h")}, false},
+		{"days unit", ModelRefInfo{TokenRateLimits: limits("1d")}, false},
+		{"leading zero", ModelRefInfo{TokenRateLimits: limits("01h")}, false},
+		{"one invalid limit among valid ones", ModelRefInfo{TokenRateLimits: limits("1m", "9999h")}, false},
+		{"zero limit", ModelRefInfo{TokenRateLimits: []TokenRateLimit{{Limit: 0, Window: "1m"}}}, false},
+		{"limit at the maximum", ModelRefInfo{TokenRateLimits: []TokenRateLimit{{Limit: maxTokenRateLimit, Window: "1m"}}}, true},
+		{"limit past the maximum", ModelRefInfo{TokenRateLimits: []TokenRateLimit{{Limit: maxTokenRateLimit + 1, Window: "1m"}}}, false},
+		{"no budget", ModelRefInfo{}, false},
+		{"unlimited", ModelRefInfo{Unlimited: true}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := validTokenBudget(tt.ref); got != tt.want {
+				t.Errorf("validTokenBudget(%+v) = %v, want %v", tt.ref, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestEnforceableModelDuplicateEntries(t *testing.T) {
+	sub := &subscription{ModelRefs: []ModelRefInfo{
+		{Name: "llm", Namespace: "ns", TokenRateLimits: []TokenRateLimit{{Limit: 1000, Window: "9999h"}}},
+		{Name: "llm", Namespace: "ns", TokenRateLimits: []TokenRateLimit{{Limit: 1000, Window: "1h"}}},
+		{Name: "llm", Namespace: "other"},
+	}}
+	if !enforceableModel(sub, &sub.ModelRefs[0]) {
+		t.Errorf("ns/llm: want enforceable through its second, valid entry")
+	}
+	if enforceableModel(sub, &sub.ModelRefs[2]) {
+		t.Errorf("other/llm: want unenforceable, it has no token budget")
+	}
+}
