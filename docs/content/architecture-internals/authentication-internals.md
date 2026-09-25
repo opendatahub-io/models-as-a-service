@@ -19,14 +19,18 @@ Today’s pipeline does **not** drive TokenRateLimitPolicy by splitting group me
 3. **AuthPolicy `filters.identity`** copies resolved fields onto **`auth.identity`**, including:
    - **`selected_subscription_key`** — model-scoped key of the form  
      `{subscriptionNamespace}/{subscriptionName}@{modelNamespace}/{modelName}`  
+     Kept for telemetry and debugging.
+   - **`selected_subscription_id`** — first 16 hex chars of SHA-256 over that key (from
+     maas-api `subscription-info.rateLimitId`). Also mirrored as response header
+     **`X-MaaS-Subscription-Rate-Limit-Id`** without replacing existing headers.
      This is the value **rate limiting** keys off.
 
 4. **TokenRateLimitPolicy** (aggregated per model by the MaaSSubscription reconciler) defines **one limit entry per subscription** that applies to that model. Each limit’s **`when`** predicate matches requests where  
-   `auth.identity.selected_subscription_key` equals that subscription’s scoped key (and inference paths are distinguished from discovery; `/v1/models` is exempt from token consumption limits where configured).
+   `auth.identity.selected_subscription_id` equals that subscription’s short ID (and inference paths are distinguished from discovery; `/v1/models` is exempt from token consumption limits where configured). Limit map keys use `rl-<id>` so Kuadrant’s WASM shim does not embed the long human-readable keys.
 
-So enforcement is: **subscription resolved in AuthPolicy → same key matched in TRLP**. Group-based **authorization** is resolved during subscription selection: **maas-api** evaluates **MaaSAuthPolicy** rules for the caller and returns `accessAllowed` in **`subscription-info`** metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. **Rate limit selection** follows the resolved subscription key, not a separate “group split” expression on TRLP.
+So enforcement is: **subscription resolved in AuthPolicy → same short ID matched in TRLP**. Group-based **authorization** is resolved during subscription selection: **maas-api** evaluates **MaaSAuthPolicy** rules for the caller and returns `accessAllowed` in **`subscription-info`** metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. **Rate limit selection** follows the resolved subscription ID, not a separate “group split” expression on TRLP.
 
-**TRLP predicates vs other identity:** TokenRateLimitPolicy **`when`** clauses use **`selected_subscription_key` only**—not `groups_str`, group arrays, or header mirrors. Anything else on `auth.identity` is **not** part of TRLP matching; it exists for **subscription selection** (inputs to maas-api), **Authorino cache/metadata**, and **telemetry** at the gateway/mesh. That matches post–EA2 behavior: limits follow the resolved subscription key; maintainers often describe the remaining decoration as **chiefly telemetry-facing**, aside from selection/caching.
+**TRLP predicates vs other identity:** TokenRateLimitPolicy **`when`** clauses use **`selected_subscription_id` only**—not `selected_subscription_key`, `groups_str`, group arrays, or header mirrors. Anything else on `auth.identity` is **not** part of TRLP matching; it exists for **subscription selection** (inputs to maas-api), **Authorino cache/metadata**, and **telemetry** at the gateway/mesh.
 
 ---
 
@@ -57,7 +61,7 @@ When a JWT carries a groups claim, Authorino may populate **`auth.identity.group
 
 ### TokenRateLimitPolicy (`maassubscription_controller.go`)
 
-TRLP **`when`** predicates match **`auth.identity.selected_subscription_key` only**. Using **`groups_str`** for rate limits is **obsolete**.
+TRLP **`when`** predicates match **`auth.identity.selected_subscription_id` only**. Using **`groups_str`** or the long **`selected_subscription_key`** for rate limits is **obsolete**.
 
 ### Troubleshooting: which field to inspect
 
@@ -66,7 +70,8 @@ TRLP **`when`** predicates match **`auth.identity.selected_subscription_key` onl
 | Raw groups after auth | **`auth.metadata.apiKeyValidation.groups`** | **`auth.identity.user.groups`** (from TokenReview **`status.user.groups`**) | **`auth.identity.groups`** if present, else **`auth.identity.user.groups`** |
 | Serialized **`groups_str` in `filters.identity`** | From **`apiKeyValidation.groups.join(",")`** | Not populated from TokenReview (still tied to apiKeyValidation expression) | Same—only apiKeyValidation drives that JSON property |
 | Subscription selection + Authorino cache inputs | **`celGroups`**, **`celUsername`**, **`celSubscription`** + **`auth.metadata["subscription-info"]`** after select | Same **`celGroups`** branch → **`auth.identity.user.groups`** | **`celGroups`** → **`auth.identity.groups`** when set |
-| Rate limiting | **`auth.identity.selected_subscription_key`** after successful select | Same | Same |
+| Rate limiting | **`auth.identity.selected_subscription_id`** after successful select | Same | Same |
+| Telemetry / debug subscription@model | **`auth.identity.selected_subscription_key`** | Same | Same |
 
 If you read older notes about a “string trick” solely for TRLP group matching, treat that as **obsolete**.
 

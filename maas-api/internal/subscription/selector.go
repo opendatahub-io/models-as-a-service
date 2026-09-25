@@ -879,6 +879,9 @@ func toResponse(sub *subscription) *SelectResponse {
 func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
 	resp := toResponse(sub)
 	resp.ResolvedModel = resolvedModel
+	if sub != nil {
+		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+	}
 	return resp
 }
 

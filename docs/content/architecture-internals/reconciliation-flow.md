@@ -132,9 +132,9 @@ metadata:
 **What it does:**
 - Creates one Kuadrant **TokenRateLimitPolicy** per model (aggregating every **MaaSSubscription** that references that model)
 - For each subscription that applies to the model, adds a **limit** entry with rates from the CR and a **`when`** predicate that matches  
-  `auth.identity.selected_subscription_key` to the model-scoped key  
-  `{subNamespace}/{subName}@{modelNamespace}/{modelName}`  
-  AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see [Authentication Internals](./authentication-internals.md).
+  `auth.identity.selected_subscription_id` (16-hex SHA-256 of the model-scoped key  
+  `{subNamespace}/{subName}@{modelNamespace}/{modelName}`). Limit map keys use `rl-<id>`.  
+  AuthPolicy is responsible for resolving subscription selection (via maas-api) and setting that short ID before TRLP runs; see [Authentication Internals](./authentication-internals.md).
 - Exempts `/v1/models` from token consumption limits where configured so discovery still works when quotas are exhausted
 
 **Watch triggers:**
