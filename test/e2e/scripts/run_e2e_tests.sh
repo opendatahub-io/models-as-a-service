@@ -153,18 +153,59 @@ fi
 parallel_rc=0
 serial_rc=0
 
-if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
-    echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+# pytest exit 5 = no tests collected (e.g. -k matched only the other marker pass).
+run_pytest_pass() {
+    local pass_label="$1"
+    shift
+    local rc=0
+    set +e
+    "$@"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+        echo "Note: ${pass_label} collected no tests (pytest exit 5), treating as success"
+        return 0
+    fi
+    return 1
+}
+
+run_serial_pass() {
+    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
+    if ! run_pytest_pass "pass 2 (serial)" \
+        env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
+        -m serial \
+        --junitxml="$xml_serial" \
+        --html="${html%.html}-serial.html" --self-contained-html \
+        "${pytest_common_args[@]}"; then
+        serial_rc=1
+    fi
+}
+
+if [[ "$serial_only" == "true" ]]; then
+    echo "Running E2E tests (serial pass only, -m serial)"
+    run_serial_pass
+elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
+    # Single worker: still split by marker so module-scoped worker fixtures never
+    # see both serial and parallel tests from the same file in one session.
+    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial')"
+    if ! run_pytest_pass "pass 1 (non-serial)" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail=5 \
+        -m "not serial" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
+    run_serial_pass
 else
     echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! run_pytest_pass "pass 1 (non-serial)" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
         -m "not serial" \
@@ -173,16 +214,7 @@ else
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
-
-    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
-        -m serial \
-        --junitxml="$xml_serial" \
-        --html="${html%.html}-serial.html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
-        serial_rc=1
-    fi
+    run_serial_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────
