@@ -2,6 +2,7 @@ package tenantreconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/url"
 	"strings"
@@ -20,7 +21,7 @@ func postgresHostFromConnectionURL(rawURL string) (string, error) {
 	}
 	host := u.Hostname()
 	if host == "" {
-		return "", fmt.Errorf("connection URL missing hostname")
+		return "", errors.New("connection URL missing hostname")
 	}
 	return host, nil
 }
