@@ -683,20 +683,6 @@ func sampleMaaSAPIEgressRestrictNetworkPolicy() *unstructured.Unstructured {
 							map[string]any{"port": int64(443), "protocol": "TCP"},
 						},
 					},
-					map[string]any{
-						"ports": []any{
-							map[string]any{"port": int64(5432), "protocol": "TCP"},
-						},
-						"to": []any{
-							map[string]any{
-								"podSelector": map[string]any{
-									"matchLabels": map[string]any{
-										"app": "postgres",
-									},
-								},
-							},
-						},
-					},
 				},
 			},
 		},
@@ -708,6 +694,7 @@ func TestPatchMaaSAPIEgressRestrictPostgres_skipsWhenSameNamespace(t *testing.T)
 	params := PlatformParams{
 		AppNamespace:        "redhat-ai-gateway-infra",
 		ControllerNamespace: "redhat-ai-gateway-infra",
+		BundledPostgres:     true,
 	}
 
 	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
@@ -716,6 +703,7 @@ func TestPatchMaaSAPIEgressRestrictPostgres_skipsWhenSameNamespace(t *testing.T)
 	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
 	require.NoError(t, err)
 	require.True(t, found)
+	require.Len(t, egress, 3)
 	rule, ok := egress[2].(map[string]any)
 	require.True(t, ok)
 	to, ok := rule["to"].([]any)
@@ -728,6 +716,7 @@ func TestPatchMaaSAPIEgressRestrictPostgres_addsControllerNamespaceWhenSeparated
 	params := PlatformParams{
 		AppNamespace:        "redhat-ai-gateway-infra",
 		ControllerNamespace: "redhat-ods-applications",
+		BundledPostgres:     true,
 	}
 
 	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
@@ -756,11 +745,33 @@ func TestPatchMaaSAPIEgressRestrictPostgres_addsControllerNamespaceWhenSeparated
 	assert.Equal(t, "postgres", podLabels["app"])
 }
 
+func TestPatchMaaSAPIEgressRestrictPostgres_omitsPostgresWhenExternal(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		AppNamespace:        "redhat-ai-gateway-infra",
+		ControllerNamespace: "redhat-ods-applications",
+		BundledPostgres:     false,
+	}
+
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	assert.Len(t, egress, 2)
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		require.True(t, ok)
+		assert.False(t, networkPolicyRuleHasPort(rule, 5432))
+	}
+}
+
 func TestPatchMaaSAPIEgressRestrictPostgres_idempotent(t *testing.T) {
 	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	params := PlatformParams{
 		AppNamespace:        "odh-ai-gateway-infra",
 		ControllerNamespace: "opendatahub",
+		BundledPostgres:     true,
 	}
 
 	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))

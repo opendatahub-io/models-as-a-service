@@ -77,6 +77,10 @@ type PlatformParams struct {
 	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
 	// and the Kuadrant anchors were kept.
 	KuadrantDetectionWarning string
+
+	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
+	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
+	BundledPostgres bool
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -493,18 +497,12 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
 }
 
-// patchMaaSAPIEgressRestrictNetworkPolicy allows postgres egress to the controller
-// namespace when infrastructure and controller namespaces differ (upgrade path:
-// postgres may remain in redhat-ods-applications/opendatahub while maas-api runs
-// in the derived infra namespace). Fresh installs colocate postgres with maas-api.
+// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
+// maas-db-config targets in-cluster Postgres. External databases are omitted so
+// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
+// and controller namespaces differ (upgrade path), postgres in the controller namespace
+// is also allowed.
 func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
-	if params.AppNamespace == "" || params.ControllerNamespace == "" {
-		return nil
-	}
-	if params.AppNamespace == params.ControllerNamespace {
-		return nil
-	}
-
 	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
 	if err != nil {
 		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
@@ -513,18 +511,41 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		return errors.New("maas-api egress NP missing egress rules")
 	}
 
-	for i, ruleRaw := range egress {
+	egress = removePostgresEgressRules(egress)
+	if params.BundledPostgres {
+		egress = append(egress, bundledPostgresEgressRule(params))
+	}
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func removePostgresEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
 		rule, ok := ruleRaw.(map[string]any)
-		if !ok || !networkPolicyRuleHasPort(rule, 5432) {
-			continue
-		}
-		to, ok := rule["to"].([]any)
 		if !ok {
+			filtered = append(filtered, ruleRaw)
 			continue
 		}
-		if networkPolicyHasPostgresPeerInNamespace(to, params.ControllerNamespace) {
-			return nil
+		if networkPolicyRuleHasPort(rule, 5432) {
+			continue
 		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+func bundledPostgresEgressRule(params PlatformParams) map[string]any {
+	to := []any{
+		map[string]any{
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		},
+	}
+	if params.AppNamespace != "" && params.ControllerNamespace != "" &&
+		params.AppNamespace != params.ControllerNamespace {
 		to = append(to, map[string]any{
 			"namespaceSelector": map[string]any{
 				"matchLabels": map[string]any{
@@ -537,12 +558,16 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 				},
 			},
 		})
-		rule["to"] = to
-		egress[i] = rule
-		return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
 	}
-
-	return errors.New("maas-api egress NP missing postgres egress rule (port 5432)")
+	return map[string]any{
+		"to": to,
+		"ports": []any{
+			map[string]any{
+				"protocol": "TCP",
+				"port":     int64(5432),
+			},
+		},
+	}
 }
 
 func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
@@ -568,38 +593,6 @@ func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
 			if int64(v) == port {
 				return true
 			}
-		}
-	}
-	return false
-}
-
-func networkPolicyHasPostgresPeerInNamespace(to []any, namespace string) bool {
-	for _, peerRaw := range to {
-		peer, ok := peerRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
-		if !ok {
-			continue
-		}
-		matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if matchLabels["kubernetes.io/metadata.name"] != namespace {
-			continue
-		}
-		podSelector, ok := peer["podSelector"].(map[string]any)
-		if !ok {
-			continue
-		}
-		podLabels, ok := podSelector["matchLabels"].(map[string]any)
-		if !ok {
-			continue
-		}
-		if podLabels["app"] == "postgres" {
-			return true
 		}
 	}
 	return false

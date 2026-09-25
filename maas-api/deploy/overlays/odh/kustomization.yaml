@@ -38,11 +38,6 @@ patches:
       value:
         matchLabels:
           dns.operator.openshift.io/daemonset-dns: default
-    - op: replace
-      path: /spec/egress/2/to/0/podSelector
-      value:
-        matchLabels:
-          app: postgres
 
 labels:
 - pairs:

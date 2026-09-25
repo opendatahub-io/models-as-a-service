@@ -4,10 +4,10 @@
 # operand NetworkPolicy contract, sensitive workloads must restrict egress to
 # documented destinations only.
 #
-# In-cluster Postgres is deployed alongside maas-api in the infrastructure
-# namespace (app=postgres) on fresh installs. When infra and controller namespaces
-# differ (upgrade path), PostRender also allows postgres in the controller namespace.
-# Kubernetes API access is required for token projection and subject access reviews.
+# Postgres egress is added at reconcile time only when maas-db-config targets bundled
+# in-cluster Postgres (app=postgres). External databases require a companion egress
+# policy (see maas-setup.md). Kubernetes API access is required for token projection
+# and subject access reviews.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -51,11 +51,3 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
-    # Postgres in the infrastructure namespace
-    - to:
-        - podSelector:
-            matchLabels:
-              app: postgres
-      ports:
-        - protocol: TCP
-          port: 5432
