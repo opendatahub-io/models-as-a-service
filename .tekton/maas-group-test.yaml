@@ -22,6 +22,9 @@ spec:
   params:
   - name: group-components
     value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
+  # Optional: override RHOAI must-gather tag (pipeline default is v3.5.0).
+  # Example: - name: rhoai-must-gather-tag
+  #            value: v3.5.1
   pipelineRef:
     resolver: git
     params:
