@@ -460,7 +460,9 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Publish per-model InferencePool and InferenceObjective mappings for request priority.
 	// Resolved before TokenRateLimitPolicy reconciliation so they are published even when it
 	// fails. Flow control is optional, so these statuses do not affect the subscription phase.
-	subscription.Status.FlowControlStatuses = r.resolveFlowControlStatuses(ctx, subscription)
+	// Transient lookup errors are returned after the status update so the request is retried.
+	flowControlStatuses, flowControlErr := r.resolveFlowControlStatuses(ctx, subscription)
+	subscription.Status.FlowControlStatuses = flowControlStatuses
 
 	// Check if we have any valid models to proceed with TRLP reconciliation
 	hasValidModels := false
@@ -521,6 +523,10 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
 	r.updateStatus(ctx, subscription, phase, message, statusSnapshot)
 
+	if flowControlErr != nil {
+		log.Error(flowControlErr, "failed to resolve flow-control statuses, will retry")
+		return ctrl.Result{}, flowControlErr
+	}
 	return ctrl.Result{}, nil
 }
 

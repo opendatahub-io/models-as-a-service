@@ -20,6 +20,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -118,9 +119,11 @@ func flowControlTenantName(ctx context.Context, c client.Reader, namespace strin
 // resolveFlowControlStatuses reports, for each referenced model, the observed InferencePool,
 // the generated InferenceObjective name, and the request-priority reconciliation state.
 // A failure for one model is reported on that model and does not affect the others.
-func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) []maasv1alpha1.ModelFlowControlStatus {
+// Transient lookup errors are also returned so the caller can retry.
+func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) ([]maasv1alpha1.ModelFlowControlStatus, error) {
 	statuses := make([]maasv1alpha1.ModelFlowControlStatus, 0, len(subscription.Spec.ModelRefs))
 	seen := make(map[string]struct{}, len(subscription.Spec.ModelRefs))
+	var errs []error
 
 	// Resolved lazily: only models with an observed pool need the tenant name.
 	var tenantName string
@@ -135,7 +138,10 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 		seen[key] = struct{}{}
 
 		status := maasv1alpha1.ModelFlowControlStatus{Name: ref.Name, Namespace: ref.Namespace}
-		pool, state, message := r.resolveModelInferencePool(ctx, ref.Namespace, ref.Name)
+		pool, state, message, err := r.resolveModelInferencePool(ctx, ref.Namespace, ref.Name)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("model %s: %w", key, err))
+		}
 		status.InferencePool = pool
 		status.State = state
 		status.Message = message
@@ -161,38 +167,42 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 		}
 		statuses = append(statuses, status)
 	}
-	return statuses
+	return statuses, errors.Join(errs...)
 }
 
 // resolveModelInferencePool returns the InferencePool observed for a MaaSModelRef. When no
-// pool is returned, state and message explain why.
-func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*maasv1alpha1.InferencePoolReference, maasv1alpha1.FlowControlState, string) {
+// pool is returned, state and message explain why. A non-nil error is a transient lookup
+// failure that should be retried; missing resources are reported as Pending without an error
+// because the MaaSModelRef and LLMInferenceService watches re-trigger reconciliation.
+func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*maasv1alpha1.InferencePoolReference, maasv1alpha1.FlowControlState, string, error) {
 	model := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: modelNamespace, Name: modelName}, model); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("MaaSModelRef %s/%s not found", modelNamespace, modelName)
+			return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("MaaSModelRef %s/%s not found", modelNamespace, modelName), nil
 		}
-		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get MaaSModelRef: %v", err)
+		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get MaaSModelRef: %v", err),
+			fmt.Errorf("failed to get MaaSModelRef %s/%s: %w", modelNamespace, modelName, err)
 	}
 	if model.Spec.ModelRef.Kind != "LLMInferenceService" {
 		return nil, maasv1alpha1.FlowControlStateNotApplicable,
-			fmt.Sprintf("model kind %s is not served through an inference scheduler", model.Spec.ModelRef.Kind)
+			fmt.Sprintf("model kind %s is not served through an inference scheduler", model.Spec.ModelRef.Kind), nil
 	}
 
 	llmisvc := &kservev1alpha2.LLMInferenceService{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.ModelRef.Name}, llmisvc); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil, maasv1alpha1.FlowControlStatePending,
-				fmt.Sprintf("LLMInferenceService %s/%s not found", model.Namespace, model.Spec.ModelRef.Name)
+				fmt.Sprintf("LLMInferenceService %s/%s not found", model.Namespace, model.Spec.ModelRef.Name), nil
 		}
-		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get LLMInferenceService: %v", err)
+		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get LLMInferenceService: %v", err),
+			fmt.Errorf("failed to get LLMInferenceService %s/%s: %w", model.Namespace, model.Spec.ModelRef.Name, err)
 	}
 
 	router := llmisvc.Status.Router
 	if router != nil && router.Group != nil && activeRoutingGroupMembers(router.Group) > 1 {
 		return nil, maasv1alpha1.FlowControlStateUnsupported,
 			fmt.Sprintf("LLMInferenceService %s/%s splits traffic across routing group %s; flow control requires a single InferencePool",
-				llmisvc.Namespace, llmisvc.Name, router.Group.Name)
+				llmisvc.Namespace, llmisvc.Name, router.Group.Name), nil
 	}
 	if router != nil && router.Scheduler != nil && router.Scheduler.InferencePool != nil {
 		observed := router.Scheduler.InferencePool
@@ -205,17 +215,17 @@ func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Conte
 		if observed.Namespace != nil && *observed.Namespace != "" {
 			pool.Namespace = string(*observed.Namespace)
 		}
-		return pool, "", ""
+		return pool, "", "", nil
 	}
 
 	// The scheduler can come from the service spec or from a referenced config, so rely on
 	// the observed status: a ready service without a pool is served without a scheduler.
 	if llmisvcReadyStatus(llmisvc) != string(corev1.ConditionTrue) {
 		return nil, maasv1alpha1.FlowControlStatePending,
-			fmt.Sprintf("waiting for LLMInferenceService %s/%s to report an InferencePool", llmisvc.Namespace, llmisvc.Name)
+			fmt.Sprintf("waiting for LLMInferenceService %s/%s to report an InferencePool", llmisvc.Namespace, llmisvc.Name), nil
 	}
 	return nil, maasv1alpha1.FlowControlStateNotApplicable,
-		fmt.Sprintf("LLMInferenceService %s/%s is not served through an inference scheduler", llmisvc.Namespace, llmisvc.Name)
+		fmt.Sprintf("LLMInferenceService %s/%s is not served through an inference scheduler", llmisvc.Namespace, llmisvc.Name), nil
 }
 
 // activeRoutingGroupMembers counts routing group members that receive traffic.

@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"regexp"
 	"strings"
 	"testing"
@@ -31,6 +32,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -206,7 +208,10 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(append(objects, sub)...).Build()
 			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
 
-			statuses := r.resolveFlowControlStatuses(context.Background(), sub)
+			statuses, err := r.resolveFlowControlStatuses(context.Background(), sub)
+			if err != nil {
+				t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
+			}
 			if len(statuses) != len(allModels) {
 				t.Fatalf("got %d statuses, want %d: %+v", len(statuses), len(allModels), statuses)
 			}
@@ -274,7 +279,11 @@ func TestResolveFlowControlStatuses_NameStableAcrossPriorityChanges(t *testing.T
 			sub,
 		).Build()
 		r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
-		names = append(names, r.resolveFlowControlStatuses(context.Background(), sub)[0].ObjectiveName)
+		statuses, err := r.resolveFlowControlStatuses(context.Background(), sub)
+		if err != nil {
+			t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
+		}
+		names = append(names, statuses[0].ObjectiveName)
 	}
 	if names[0] == "" || names[0] != names[1] || names[1] != names[2] {
 		t.Errorf("objective name changed across priority set/change: %v", names)
@@ -302,7 +311,11 @@ func TestResolveFlowControlStatuses_UsesAITenantName(t *testing.T) {
 	).Build()
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
 
-	got := r.resolveFlowControlStatuses(context.Background(), sub)[0]
+	statuses, err := r.resolveFlowControlStatuses(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
+	}
+	got := statuses[0]
 	want := inferenceObjectiveName("acme", types.NamespacedName{Namespace: ns, Name: "gold"}, testPool(ns, "pool"))
 	if got.ObjectiveName != want {
 		t.Errorf("objectiveName = %q, want %q", got.ObjectiveName, want)
@@ -329,12 +342,86 @@ func TestResolveFlowControlStatuses_TenantErrorFailsOnlyPoolModels(t *testing.T)
 	).Build()
 	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
 
-	statuses := r.resolveFlowControlStatuses(context.Background(), sub)
+	statuses, err := r.resolveFlowControlStatuses(context.Background(), sub)
+	if err != nil {
+		t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
+	}
 	if s := flowControlStatusFor(t, statuses, "llama"); s.State != maasv1alpha1.FlowControlStateFailed || s.ObjectiveName != "" {
 		t.Errorf("llama: state = %s, objectiveName = %q; want Failed with no name", s.State, s.ObjectiveName)
 	}
 	if s := flowControlStatusFor(t, statuses, "external"); s.State != maasv1alpha1.FlowControlStateNotApplicable {
 		t.Errorf("external: state = %s, want NotApplicable", s.State)
+	}
+}
+
+// failLLMISvcGets returns interceptor funcs that fail Get for the named LLMInferenceService.
+func failLLMISvcGets(name string) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*kservev1alpha2.LLMInferenceService); ok && key.Name == name {
+				return errors.New("simulated API server error")
+			}
+			return cl.Get(ctx, key, obj, opts...)
+		},
+	}
+}
+
+func TestResolveFlowControlStatuses_TransientErrorIsReturned(t *testing.T) {
+	const ns = "default"
+	sub := newFlowControlSubscription("gold", ns, nil, "flaky", "llama")
+	c := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(
+			newMaaSModelRef("flaky", ns, "LLMInferenceService", "flaky-svc"),
+			newLLMISvcWithPool("flaky-svc", ns, "pool", ""),
+			newMaaSModelRef("llama", ns, "LLMInferenceService", "llama-svc"),
+			newLLMISvcWithPool("llama-svc", ns, "pool", ""),
+			sub,
+		).
+		WithInterceptorFuncs(failLLMISvcGets("flaky-svc")).
+		Build()
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+
+	statuses, err := r.resolveFlowControlStatuses(context.Background(), sub)
+	if err == nil {
+		t.Fatal("expected transient lookup error to be returned for retry")
+	}
+	if s := flowControlStatusFor(t, statuses, "flaky"); s.State != maasv1alpha1.FlowControlStatePending {
+		t.Errorf("flaky: state = %s, want Pending", s.State)
+	}
+	if s := flowControlStatusFor(t, statuses, "llama"); s.State != maasv1alpha1.FlowControlStateNotRequired || s.ObjectiveName == "" {
+		t.Errorf("llama: state = %s, objectiveName = %q; want NotRequired with a name", s.State, s.ObjectiveName)
+	}
+}
+
+// TestMaaSSubscriptionReconciler_TransientFlowControlErrorRequeues verifies Reconcile publishes
+// status and returns the transient error so the request is retried.
+func TestMaaSSubscriptionReconciler_TransientFlowControlErrorRequeues(t *testing.T) {
+	const ns = "default"
+	sub := newFlowControlSubscription("gold", ns, nil, "flaky")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(
+			newMaaSModelRef("flaky", ns, "LLMInferenceService", "flaky-svc"),
+			newLLMISvcWithPool("flaky-svc", ns, "pool", ""),
+			sub,
+		).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
+		WithInterceptorFuncs(failLLMISvcGets("flaky-svc")).
+		Build()
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "gold", Namespace: ns}}
+
+	if _, err := r.Reconcile(context.Background(), req); err == nil {
+		t.Fatal("Reconcile: expected error so the transient lookup failure is retried")
+	}
+	got := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(context.Background(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(got.Status.FlowControlStatuses) != 1 || got.Status.FlowControlStatuses[0].State != maasv1alpha1.FlowControlStatePending {
+		t.Errorf("flowControlStatuses = %+v, want one Pending entry", got.Status.FlowControlStatuses)
 	}
 }
 
