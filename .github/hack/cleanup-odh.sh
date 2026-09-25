@@ -3,15 +3,18 @@
 # cleanup-odh.sh - Remove OpenDataHub/RHOAI MaaS resources and related operators
 #
 # This script removes:
+# - Helm releases (rhoai-deps, openshift-gateway-istiod)
 # - DataScienceCluster and DSCInitialization custom resources
 # - ODH operator Subscription and CSV
 # - Custom CatalogSource (odh-custom-catalog)
-# - ODH operator namespace (odh-operator)
+# - ODH operator namespaces (odh-operator, opendatahub-operator-system, rhoai-deps)
 # - OpenDataHub application namespace (opendatahub)
 # - MaaS resources from RHOAI namespace (redhat-ods-applications)
 # - Cluster-scoped MaaS anchor CR (Config/default; legacy ClusterTenant/default if present)
 # - MaaS subscription namespace (models-as-a-service)
 # - Policy engine artifacts (Kuadrant/RHCL OLM resources, AuthConfig CRs)
+# - Gateway resources (maas-default-gateway, openshift-ai-inference, GatewayClasses)
+# - Cert-manager and LWS operator resources
 # - MaaS validating webhook configuration
 # - Keycloak identity provider (if deployed)
 # - ODH CRDs (optional)
@@ -44,6 +47,23 @@ fi
 echo "Connected to cluster. Starting cleanup..."
 echo ""
 
+# 0. Uninstall Helm releases (covers chart-based installs via setup-shared-deps.sh)
+echo "0. Uninstalling Helm releases..."
+if command -v helm &>/dev/null; then
+    for release_info in $(helm list -A --no-headers 2>/dev/null | awk '{print $1 ":" $2}'); do
+        release="${release_info%%:*}"
+        ns="${release_info##*:}"
+        case "$release" in
+            rhoai-deps|odh|openshift-gateway-istiod)
+                echo "   Uninstalling helm release $release (namespace: $ns)..."
+                helm uninstall "$release" -n "$ns" --wait --timeout 2m 2>/dev/null || true
+                ;;
+        esac
+    done
+else
+    echo "   helm not found, skipping helm release cleanup"
+fi
+
 # 1. Delete DataScienceCluster instances
 echo "1. Deleting DataScienceCluster instances..."
 kubectl delete datasciencecluster --all -A --ignore-not-found --timeout=120s 2>/dev/null || true
@@ -52,18 +72,19 @@ kubectl delete datasciencecluster --all -A --ignore-not-found --timeout=120s 2>/
 echo "2. Deleting DSCInitialization instances..."
 kubectl delete dscinitialization --all -A --ignore-not-found --timeout=120s 2>/dev/null || true
 
-# 3. Delete ODH Subscription (check both possible namespaces)
+# 3. Delete ODH Subscription (check all possible namespaces)
 echo "3. Deleting ODH Subscriptions..."
 kubectl delete subscription opendatahub-operator -n odh-operator --ignore-not-found 2>/dev/null || true
 kubectl delete subscription opendatahub-operator -n openshift-operators --ignore-not-found 2>/dev/null || true
+kubectl delete subscription opendatahub-operator -n opendatahub-operator-system --ignore-not-found 2>/dev/null || true
 
 # 4. Delete ODH CSVs
 echo "4. Deleting ODH CSVs..."
 # Delete by label if possible
 kubectl delete csv -n odh-operator -l operators.coreos.com/opendatahub-operator.odh-operator --ignore-not-found 2>/dev/null || true
 kubectl delete csv -n openshift-operators -l operators.coreos.com/opendatahub-operator.openshift-operators --ignore-not-found 2>/dev/null || true
-# Also try by name prefix
-for ns in odh-operator openshift-operators; do
+# Also try by name prefix (check all possible namespaces including helm-based installs)
+for ns in odh-operator openshift-operators opendatahub-operator-system; do
     for csv in $(kubectl get csv -n "$ns" -o name 2>/dev/null | grep opendatahub-operator || true); do
         echo "   Deleting $csv in $ns..."
         kubectl delete "$csv" -n "$ns" --ignore-not-found 2>/dev/null || true
@@ -78,9 +99,11 @@ kubectl delete catalogsource odh-custom-catalog -n openshift-marketplace --ignor
 echo "6. Deleting ODH OperatorGroup..."
 kubectl delete operatorgroup odh-operator-group -n odh-operator --ignore-not-found 2>/dev/null || true
 
-# 7. Delete odh-operator namespace
-echo "7. Deleting odh-operator namespace..."
+# 7. Delete operator namespaces
+echo "7. Deleting operator namespaces..."
 kubectl delete ns odh-operator --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete ns opendatahub-operator-system --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete ns rhoai-deps --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # 8a. Clean MaaS resources from application namespaces
 cleanup_maas_resources() {
@@ -119,9 +142,11 @@ echo "8a-infra. Cleaning MaaS resources from infrastructure namespaces (if prese
 cleanup_maas_resources "redhat-ai-gateway-infra"  # derived from redhat-ods-applications
 cleanup_maas_resources "odh-ai-gateway-infra"     # derived from opendatahub
 
-# 8b. Delete opendatahub namespace
-echo "8b. Deleting opendatahub namespace..."
+# 8b. Delete application and infrastructure namespaces
+echo "8b. Deleting opendatahub and infrastructure namespaces..."
 kubectl delete ns opendatahub --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete ns odh-ai-gateway-infra --ignore-not-found --timeout=120s 2>/dev/null || true
+kubectl delete ns redhat-ai-gateway-infra --ignore-not-found --timeout=120s 2>/dev/null || true
 
 force_delete_namespace() {
     local ns=$1
@@ -273,16 +298,39 @@ force_delete_namespace "llm" "llminferenceservice" "inferenceservice" "maasmodel
 # 15. Delete gateway resources in openshift-ingress
 echo "15. Deleting gateway resources..."
 kubectl delete gateway maas-default-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete gateway openshift-ai-inference -n openshift-ingress --ignore-not-found 2>/dev/null || true
+kubectl delete gateway data-science-gateway -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter -n openshift-ingress -l kuadrant.io/managed=true --ignore-not-found 2>/dev/null || true
 kubectl delete envoyfilter kuadrant-auth-tls-fix -n openshift-ingress --ignore-not-found 2>/dev/null || true
 kubectl delete authpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete ratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete tokenratelimitpolicy -n openshift-ingress --all --ignore-not-found 2>/dev/null || true
 kubectl delete gatewayclass openshift-default --ignore-not-found 2>/dev/null || true
+kubectl delete gatewayclass maas-gateway-class --ignore-not-found 2>/dev/null || true
+kubectl delete gatewayclass openshift-ai-inference --ignore-not-found 2>/dev/null || true
+kubectl delete gatewayclass data-science-gateway-class --ignore-not-found 2>/dev/null || true
+
+# 15b. Delete cert-manager and LWS operator resources (installed by Helm chart)
+echo "15b. Deleting cert-manager operator..."
+for cert_ns in openshift-cert-manager-operator cert-manager-operator; do
+    kubectl delete subscription --all -n "$cert_ns" --ignore-not-found 2>/dev/null || true
+    kubectl delete csv -n "$cert_ns" --all --ignore-not-found --timeout=60s 2>/dev/null || true
+    kubectl delete ns "$cert_ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+done
+for cert_ns in openshift-cert-manager cert-manager; do
+    kubectl delete ns "$cert_ns" --ignore-not-found --timeout=120s 2>/dev/null || true
+done
+
+echo "15c. Deleting LWS operator..."
+kubectl delete subscription leader-worker-set -n openshift-lws-operator --ignore-not-found 2>/dev/null || true
+kubectl delete csv -n openshift-lws-operator --all --ignore-not-found --timeout=60s 2>/dev/null || true
+kubectl delete ns openshift-lws-operator --ignore-not-found --timeout=120s 2>/dev/null || true
 
 # 16. Delete MaaS cluster-scoped resources (webhook configuration, ClusterRoles, ClusterRoleBindings)
 echo "16. Deleting MaaS cluster-scoped resources..."
 kubectl delete validatingwebhookconfiguration maas-validating-webhook-configuration --ignore-not-found 2>/dev/null || true
+kubectl delete validatingwebhookconfiguration llminferenceservice.serving.kserve.io --ignore-not-found 2>/dev/null || true
+kubectl delete validatingwebhookconfiguration llminferenceserviceconfig.serving.kserve.io --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrolebinding maas-api maas-controller-rolebinding --ignore-not-found 2>/dev/null || true
 kubectl delete clusterrole maas-api maas-controller-role --ignore-not-found 2>/dev/null || true
 # Extra operator-safe binding for Config API (and legacy ClusterTenant binding/role if present)
@@ -315,7 +363,7 @@ echo ""
 echo "=== Cleanup Complete ==="
 echo ""
 echo "Verify cleanup with:"
-echo "  kubectl get subscription -A | grep -i odh"
-echo "  kubectl get csv -A | grep -i odh"
-echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm'
-  kubectl get deployment maas-api maas-controller postgres -n redhat-ods-applications 2>/dev/null || echo '  (no MaaS resources in redhat-ods-applications)'"
+echo "  kubectl get subscription -A | grep -iE 'odh|cert-manager|leader-worker|rhcl|kuadrant'"
+echo "  kubectl get csv -A | grep -iE 'odh|cert-manager|leader-worker|rhcl|kuadrant'"
+echo "  helm list -A"
+echo "  kubectl get ns | grep -E 'odh|opendatahub|models-as-a-service|kuadrant|rh-connectivity-link|keycloak-system|llm|rhoai-deps|cert-manager|lws'"

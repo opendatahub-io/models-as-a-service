@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
@@ -235,6 +236,13 @@ func (r *MaaSModelRefReconciler) Reconcile(ctx context.Context, req ctrl.Request
 		model.Status.Endpoint = ""
 	}
 	r.updateStatus(ctx, model, phase, message, statusSnapshot)
+	if governed && !runtimeReady {
+		// Governed but backend not yet ready (e.g. LLMInferenceService's Ready
+		// condition hasn't been observed as True yet, or a watch event on it was
+		// missed/coalesced). Requeue so we keep polling backend readiness instead
+		// of waiting indefinitely for another watch event that may never arrive.
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
