@@ -18,6 +18,7 @@ package v1alpha1
 
 import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 // MaaSSubscriptionSpec defines the desired state of MaaSSubscription
@@ -168,33 +169,18 @@ const (
 	FlowControlStateNotRequired FlowControlState = "NotRequired"
 )
 
-// InferencePoolReference identifies the InferencePool observed for a model.
-type InferencePoolReference struct {
-	// Group of the InferencePool
-	// +kubebuilder:validation:MaxLength=253
-	Group string `json:"group"`
-	// Kind of the InferencePool
-	// +kubebuilder:validation:MaxLength=63
-	Kind string `json:"kind"`
-	// Name of the InferencePool
-	// +kubebuilder:validation:MaxLength=253
-	Name string `json:"name"`
-	// Namespace of the InferencePool
-	// +kubebuilder:validation:MaxLength=63
-	Namespace string `json:"namespace"`
-}
-
 // ModelFlowControlStatus maps a referenced model to its InferencePool and InferenceObjective.
 type ModelFlowControlStatus struct {
 	// Name of the MaaSModelRef
 	// +kubebuilder:validation:MaxLength=253
 	Name string `json:"name"`
-	// Namespace of the MaaSModelRef
+	// Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+	// namespace, alongside the model's LLMInferenceService.
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 	// InferencePool is the pool observed in the model's LLMInferenceService status
 	// +optional
-	InferencePool *InferencePoolReference `json:"inferencePool,omitempty"`
+	InferencePool *gwapiv1.LocalObjectReference `json:"inferencePool,omitempty"`
 	// ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
 	// namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
 	// and no InferenceObjective is created.

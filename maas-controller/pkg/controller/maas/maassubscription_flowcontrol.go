@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
@@ -52,14 +53,15 @@ const (
 )
 
 // inferenceObjectiveName returns the deterministic InferenceObjective name for a
-// subscription and InferencePool. The readable tenant, subscription, and pool parts are
-// truncated as needed; the hash of their full identities keeps names unique. The name
-// does not depend on spec.inferencePriority, so it is stable across priority changes.
-func inferenceObjectiveName(tenantName string, subscription types.NamespacedName, pool maasv1alpha1.InferencePoolReference) string {
+// subscription and the InferencePool in poolNamespace. The readable tenant, subscription,
+// and pool parts are truncated as needed; the hash of their full identities keeps names
+// unique. The name does not depend on spec.inferencePriority, so it is stable across
+// priority changes.
+func inferenceObjectiveName(tenantName string, subscription types.NamespacedName, poolNamespace string, pool gwapiv1.LocalObjectReference) string {
 	identity := strings.Join([]string{
 		tenantName,
 		subscription.Namespace, subscription.Name,
-		pool.Group, pool.Kind, pool.Namespace, pool.Name,
+		string(pool.Group), string(pool.Kind), poolNamespace, string(pool.Name),
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
@@ -67,7 +69,7 @@ func inferenceObjectiveName(tenantName string, subscription types.NamespacedName
 	parts := []string{
 		dnsLabelPart(tenantName),
 		dnsLabelPart(subscription.Name),
-		dnsLabelPart(pool.Name),
+		dnsLabelPart(string(pool.Name)),
 	}
 	// Budget for the readable parts and the separators between them.
 	budget := inferenceObjectiveNameMaxLength - len(inferenceObjectiveNamePrefix) - len(hash) - 2
@@ -156,11 +158,11 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 				status.State = maasv1alpha1.FlowControlStateFailed
 				status.Message = fmt.Sprintf("failed to resolve tenant for namespace %s: %v", subscription.Namespace, tenantErr)
 			case subscription.Spec.InferencePriority == nil:
-				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), *pool)
+				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
 				status.State = maasv1alpha1.FlowControlStateNotRequired
 				status.Message = "spec.inferencePriority is unset; no InferenceObjective is required and the scheduler applies priority 0"
 			default:
-				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), *pool)
+				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
 				status.State = maasv1alpha1.FlowControlStatePending
 				status.Message = "waiting for InferenceObjective reconciliation"
 			}
@@ -170,11 +172,12 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 	return statuses, errors.Join(errs...)
 }
 
-// resolveModelInferencePool returns the InferencePool observed for a MaaSModelRef. When no
-// pool is returned, state and message explain why. A non-nil error is a transient lookup
-// failure that should be retried; missing resources are reported as Pending without an error
-// because the MaaSModelRef and LLMInferenceService watches re-trigger reconciliation.
-func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*maasv1alpha1.InferencePoolReference, maasv1alpha1.FlowControlState, string, error) {
+// resolveModelInferencePool returns the InferencePool observed for a MaaSModelRef. The pool
+// lives in the model's namespace, alongside its LLMInferenceService. When no pool is returned,
+// state and message explain why. A non-nil error is a transient lookup failure that should be
+// retried; missing resources are reported as Pending without an error because the MaaSModelRef
+// and LLMInferenceService watches re-trigger reconciliation.
+func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*gwapiv1.LocalObjectReference, maasv1alpha1.FlowControlState, string, error) {
 	model := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: modelNamespace, Name: modelName}, model); err != nil {
 		if apierrors.IsNotFound(err) {
@@ -206,16 +209,18 @@ func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Conte
 	}
 	if router != nil && router.Scheduler != nil && router.Scheduler.InferencePool != nil {
 		observed := router.Scheduler.InferencePool
-		pool := &maasv1alpha1.InferencePoolReference{
-			Group:     string(observed.Group),
-			Kind:      string(observed.Kind),
-			Name:      string(observed.Name),
-			Namespace: llmisvc.Namespace,
+		// An InferenceObjective can only reference a pool in its own namespace, and KServe
+		// creates or references pools in the LLMInferenceService namespace.
+		if observed.Namespace != nil && *observed.Namespace != "" && string(*observed.Namespace) != llmisvc.Namespace {
+			return nil, maasv1alpha1.FlowControlStateUnsupported,
+				fmt.Sprintf("InferencePool %s/%s is not in the LLMInferenceService namespace %s",
+					*observed.Namespace, observed.Name, llmisvc.Namespace), nil
 		}
-		if observed.Namespace != nil && *observed.Namespace != "" {
-			pool.Namespace = string(*observed.Namespace)
-		}
-		return pool, "", "", nil
+		return &gwapiv1.LocalObjectReference{
+			Group: observed.Group,
+			Kind:  observed.Kind,
+			Name:  observed.Name,
+		}, "", "", nil
 	}
 
 	// The scheduler can come from the service spec or from a referenced config, so rely on

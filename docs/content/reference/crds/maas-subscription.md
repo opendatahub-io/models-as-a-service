@@ -43,8 +43,8 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | Field | Type | Description |
 |-------|------|-------------|
 | name | string | Name of the MaaSModelRef |
-| namespace | string | Namespace of the MaaSModelRef |
-| inferencePool | InferencePoolReference | InferencePool (`group`, `kind`, `name`, `namespace`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
+| namespace | string | Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this namespace, alongside the LLMInferenceService. |
+| inferencePool | LocalObjectReference | InferencePool (`group`, `kind`, `name`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
 | objectiveName | string | InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when `inferencePriority` is unset. It does not change when `inferencePriority` changes. |
 | state | string | Reconciliation state (see below) |
 | message | string | Human-readable detail for the state |

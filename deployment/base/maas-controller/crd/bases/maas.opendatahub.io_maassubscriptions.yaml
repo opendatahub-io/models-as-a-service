@@ -261,26 +261,28 @@ spec:
                         LLMInferenceService status
                       properties:
                         group:
-                          description: Group of the InferencePool
+                          description: |-
+                            Group is the group of the referent. For example, "gateway.networking.k8s.io".
+                            When unspecified or empty string, core API group is inferred.
                           maxLength: 253
+                          pattern: ^$|^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
                           type: string
                         kind:
-                          description: Kind of the InferencePool
+                          description: Kind is kind of the referent. For example "HTTPRoute"
+                            or "Service".
                           maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-zA-Z]([-a-zA-Z0-9]*[a-zA-Z0-9])?$
                           type: string
                         name:
-                          description: Name of the InferencePool
+                          description: Name is the name of the referent.
                           maxLength: 253
-                          type: string
-                        namespace:
-                          description: Namespace of the InferencePool
-                          maxLength: 63
+                          minLength: 1
                           type: string
                       required:
                       - group
                       - kind
                       - name
-                      - namespace
                       type: object
                     message:
                       description: Message is a human-readable description of the
@@ -292,7 +294,9 @@ spec:
                       maxLength: 253
                       type: string
                     namespace:
-                      description: Namespace of the MaaSModelRef
+                      description: |-
+                        Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this
+                        namespace, alongside the model's LLMInferenceService.
                       maxLength: 63
                       type: string
                     objectiveName:

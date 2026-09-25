@@ -42,32 +42,31 @@ import (
 
 var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
 
-func testPool(namespace, name string) maasv1alpha1.InferencePoolReference {
-	return maasv1alpha1.InferencePoolReference{
-		Group:     "inference.networking.k8s.io",
-		Kind:      "InferencePool",
-		Name:      name,
-		Namespace: namespace,
+func testPool(name string) gatewayapiv1.LocalObjectReference {
+	return gatewayapiv1.LocalObjectReference{
+		Group: "inference.networking.k8s.io",
+		Kind:  "InferencePool",
+		Name:  gatewayapiv1.ObjectName(name),
 	}
 }
 
 func TestInferenceObjectiveName(t *testing.T) {
 	sub := types.NamespacedName{Namespace: "tenant-a", Name: "gold"}
-	pool := testPool("models", "llama-pool")
+	pool := testPool("llama-pool")
 
-	name := inferenceObjectiveName("acme", sub, pool)
+	name := inferenceObjectiveName("acme", sub, "models", pool)
 	if !strings.HasPrefix(name, "maas-acme-gold-llama-pool-") {
 		t.Errorf("name %q does not contain the readable tenant, subscription, and pool parts", name)
 	}
-	if got := inferenceObjectiveName("acme", sub, pool); got != name {
+	if got := inferenceObjectiveName("acme", sub, "models", pool); got != name {
 		t.Errorf("name is not deterministic: %q != %q", got, name)
 	}
 
 	distinct := map[string]string{
-		"same subscription name in another tenant namespace": inferenceObjectiveName("other", types.NamespacedName{Namespace: "tenant-b", Name: "gold"}, pool),
-		"another pool in the same namespace":                 inferenceObjectiveName("acme", sub, testPool("models", "mistral-pool")),
-		"same pool name in another namespace":                inferenceObjectiveName("acme", sub, testPool("models-2", "llama-pool")),
-		"another subscription":                               inferenceObjectiveName("acme", types.NamespacedName{Namespace: "tenant-a", Name: "silver"}, pool),
+		"same subscription name in another tenant namespace": inferenceObjectiveName("other", types.NamespacedName{Namespace: "tenant-b", Name: "gold"}, "models", pool),
+		"another pool in the same namespace":                 inferenceObjectiveName("acme", sub, "models", testPool("mistral-pool")),
+		"same pool name in another namespace":                inferenceObjectiveName("acme", sub, "models-2", pool),
+		"another subscription":                               inferenceObjectiveName("acme", types.NamespacedName{Namespace: "tenant-a", Name: "silver"}, "models", pool),
 	}
 	for desc, other := range distinct {
 		if other == name {
@@ -80,8 +79,8 @@ func TestInferenceObjectiveName_LongIdentitiesAreTruncated(t *testing.T) {
 	long := strings.Repeat("a", 60)
 	sub := types.NamespacedName{Namespace: "tenant-a", Name: long + "-sub"}
 
-	name := inferenceObjectiveName(long, sub, testPool("models", long+"-pool"))
-	other := inferenceObjectiveName(long, sub, testPool("models", long+"-pool2"))
+	name := inferenceObjectiveName(long, sub, "models", testPool(long+"-pool"))
+	other := inferenceObjectiveName(long, sub, "models", testPool(long+"-pool2"))
 
 	for _, n := range []string{name, other} {
 		if len(n) > inferenceObjectiveNameMaxLength {
@@ -98,7 +97,7 @@ func TestInferenceObjectiveName_LongIdentitiesAreTruncated(t *testing.T) {
 
 func TestInferenceObjectiveName_SanitizesDottedNames(t *testing.T) {
 	name := inferenceObjectiveName(tenantreconcile.DefaultAITenantName,
-		types.NamespacedName{Namespace: "tenant-a", Name: "gold.v2"}, testPool("models", "Pool.One"))
+		types.NamespacedName{Namespace: "tenant-a", Name: "gold.v2"}, "models", testPool("Pool.One"))
 	if !dnsLabelPattern.MatchString(name) {
 		t.Errorf("name %q is not a valid DNS label", name)
 	}
@@ -177,6 +176,8 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 		newLLMISvcWithPool("llama-svc", ns, "shared-pool", ""),
 		newMaaSModelRef("llama-alias", ns, "LLMInferenceService", "llama-alias-svc"),
 		newLLMISvcWithPool("llama-alias-svc", ns, "shared-pool", ""),
+		newMaaSModelRef("explicit-ns", ns, "LLMInferenceService", "explicit-ns-svc"),
+		newLLMISvcWithPool("explicit-ns-svc", ns, "explicit-pool", ns),
 		newMaaSModelRef("remote-pool", ns, "LLMInferenceService", "remote-pool-svc"),
 		newLLMISvcWithPool("remote-pool-svc", ns, "remote-pool", "pools"),
 		newMaaSModelRef("external", ns, "ExternalModel", "external"),
@@ -190,7 +191,7 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 		newMaaSModelRef("split", ns, "LLMInferenceService", "split-svc"),
 		splitGroupSvc,
 	}
-	allModels := []string{"llama", "llama-alias", "remote-pool", "external", "starting", "no-scheduler", "missing-svc", "missing-ref", "grouped", "split"}
+	allModels := []string{"llama", "llama-alias", "explicit-ns", "remote-pool", "external", "starting", "no-scheduler", "missing-svc", "missing-ref", "grouped", "split"}
 
 	tests := []struct {
 		name          string
@@ -220,11 +221,11 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 			tenant := tenantreconcile.DefaultAITenantName
 
 			// Models backed by a single observed pool get the pool and objective name.
-			for model, pool := range map[string]maasv1alpha1.InferencePoolReference{
-				"llama":       testPool(ns, "shared-pool"),
-				"llama-alias": testPool(ns, "shared-pool"),
-				"remote-pool": testPool("pools", "remote-pool"),
-				"grouped":     testPool(ns, "grouped-pool"),
+			for model, pool := range map[string]gatewayapiv1.LocalObjectReference{
+				"llama":       testPool("shared-pool"),
+				"llama-alias": testPool("shared-pool"),
+				"explicit-ns": testPool("explicit-pool"),
+				"grouped":     testPool("grouped-pool"),
 			} {
 				s := flowControlStatusFor(t, statuses, model)
 				if s.State != tc.wantPoolState {
@@ -233,7 +234,7 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 				if s.InferencePool == nil || *s.InferencePool != pool {
 					t.Errorf("%s: inferencePool = %+v, want %+v", model, s.InferencePool, pool)
 				}
-				if want := inferenceObjectiveName(tenant, subKey, pool); s.ObjectiveName != want {
+				if want := inferenceObjectiveName(tenant, subKey, ns, pool); s.ObjectiveName != want {
 					t.Errorf("%s: objectiveName = %q, want %q", model, s.ObjectiveName, want)
 				}
 			}
@@ -251,6 +252,7 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 				"missing-svc":  maasv1alpha1.FlowControlStatePending,
 				"missing-ref":  maasv1alpha1.FlowControlStatePending,
 				"split":        maasv1alpha1.FlowControlStateUnsupported,
+				"remote-pool":  maasv1alpha1.FlowControlStateUnsupported,
 			} {
 				s := flowControlStatusFor(t, statuses, model)
 				if s.State != want {
@@ -316,7 +318,7 @@ func TestResolveFlowControlStatuses_UsesAITenantName(t *testing.T) {
 		t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
 	}
 	got := statuses[0]
-	want := inferenceObjectiveName("acme", types.NamespacedName{Namespace: ns, Name: "gold"}, testPool(ns, "pool"))
+	want := inferenceObjectiveName("acme", types.NamespacedName{Namespace: ns, Name: "gold"}, ns, testPool("pool"))
 	if got.ObjectiveName != want {
 		t.Errorf("objectiveName = %q, want %q", got.ObjectiveName, want)
 	}
