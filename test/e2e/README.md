@@ -93,12 +93,14 @@ External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOK
 
 ## Parallel execution (pytest-xdist)
 
-By default, `run_e2e_tests.sh` runs tests in **two passes** when `E2E_PARALLEL_WORKERS > 1` (default: 7):
+By default, `run_e2e_tests.sh` runs tests in **two marker-filtered passes** (default: 7 xdist workers on pass 1):
 
-1. **Pass 1:** `-m "not serial"` — parallel across files (`--dist=loadgroup`)
+1. **Pass 1:** `-m "not serial"` — parallel across files when `E2E_PARALLEL_WORKERS > 1` (`--dist=loadgroup`), or single-worker serial execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2:** `-m serial` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests
 
-For fully serial debugging:
+Pass 1 and pass 2 must stay separate: several modules mix `@serial` tests with worker-tenant tests, and module-scoped fixtures reject a single session that selects both.
+
+For single-worker debugging (still two passes, no xdist):
 
 ```bash
 E2E_PARALLEL_WORKERS=1 ./run-tests-quick.sh
@@ -112,7 +114,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1. Pass 2 (`@serial`) always runs on one worker. Set to `1` to run everything serially in one pass. |
+| `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial"`). Pass 2 (`@serial`) always runs on one worker. Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
 | `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |

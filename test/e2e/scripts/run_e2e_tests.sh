@@ -152,18 +152,37 @@ fi
 parallel_rc=0
 serial_rc=0
 
-if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
-    echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+run_serial_pass() {
+    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
+    if ! E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
+        -m serial \
+        --junitxml="$xml_serial" \
+        --html="${html%.html}-serial.html" --self-contained-html \
+        "${pytest_common_args[@]}"; then
+        serial_rc=1
+    fi
+}
+
+if [[ "$serial_only" == "true" ]]; then
+    echo "Running E2E tests (serial pass only, -m serial)"
+    run_serial_pass
+elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
+    # Single worker: still split by marker so module-scoped worker fixtures never
+    # see both serial and parallel tests from the same file in one session.
+    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial')"
+    if ! E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail=5 \
+        -m "not serial" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
+    run_serial_pass
 else
     echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
         -m "not serial" \
@@ -172,16 +191,7 @@ else
         "${pytest_common_args[@]}"; then
         parallel_rc=1
     fi
-
-    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
-        -m serial \
-        --junitxml="$xml_serial" \
-        --html="${html%.html}-serial.html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
-        serial_rc=1
-    fi
+    run_serial_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────

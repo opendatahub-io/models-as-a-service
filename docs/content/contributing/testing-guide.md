@@ -170,18 +170,18 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `E2E_SKIP_TLS_VERIFY` | Set `true` to skip TLS verification |
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
-| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count (default `7`, one per group). Set to `1` for serial debugging. |
+| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`, one per group). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 
 ### Parallel E2E (pytest-xdist)
 
-The E2E suite runs in **two passes** with `E2E_PARALLEL_WORKERS=7` (default):
+The E2E suite always runs in **two marker-filtered passes** (default `E2E_PARALLEL_WORKERS=7`):
 
-1. **Pass 1 (parallel)**: `-m "not serial"` with `--dist=loadgroup -n 7` — tests distributed by `xdist_group` marker, one group per worker
+1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 7` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2 (serial)**: `-m serial` — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)
 
-Set `E2E_PARALLEL_WORKERS=1` for a single serial pass (useful for debugging).
+Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters).
 
 #### xdist Groups
 
