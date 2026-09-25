@@ -146,6 +146,69 @@ type TokenRateLimitStatus struct {
 	Model string `json:"model"`
 }
 
+// FlowControlState reports the request-priority reconciliation state of a model in a subscription.
+// +kubebuilder:validation:Enum=Pending;NotApplicable;Unsupported;Failed;Ready;NotRequired
+type FlowControlState string
+
+const (
+	// FlowControlStatePending indicates the model's InferencePool or InferenceObjective is not reconciled yet.
+	FlowControlStatePending FlowControlState = "Pending"
+	// FlowControlStateNotApplicable indicates the model is not served through an inference scheduler
+	// (for example, an ExternalModel), so flow control does not apply.
+	FlowControlStateNotApplicable FlowControlState = "NotApplicable"
+	// FlowControlStateUnsupported indicates flow control cannot be applied to the model, for example
+	// because its traffic is split across multiple InferencePools.
+	FlowControlStateUnsupported FlowControlState = "Unsupported"
+	// FlowControlStateFailed indicates reconciliation of the model's InferenceObjective failed.
+	FlowControlStateFailed FlowControlState = "Failed"
+	// FlowControlStateReady indicates the model's InferenceObjective matches spec.inferencePriority.
+	FlowControlStateReady FlowControlState = "Ready"
+	// FlowControlStateNotRequired indicates spec.inferencePriority is unset, so no InferenceObjective
+	// is created and the scheduler applies priority 0 to the objective name.
+	FlowControlStateNotRequired FlowControlState = "NotRequired"
+)
+
+// InferencePoolReference identifies the InferencePool observed for a model.
+type InferencePoolReference struct {
+	// Group of the InferencePool
+	// +kubebuilder:validation:MaxLength=253
+	Group string `json:"group"`
+	// Kind of the InferencePool
+	// +kubebuilder:validation:MaxLength=63
+	Kind string `json:"kind"`
+	// Name of the InferencePool
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Namespace of the InferencePool
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+}
+
+// ModelFlowControlStatus maps a referenced model to its InferencePool and InferenceObjective.
+type ModelFlowControlStatus struct {
+	// Name of the MaaSModelRef
+	// +kubebuilder:validation:MaxLength=253
+	Name string `json:"name"`
+	// Namespace of the MaaSModelRef
+	// +kubebuilder:validation:MaxLength=63
+	Namespace string `json:"namespace"`
+	// InferencePool is the pool observed in the model's LLMInferenceService status
+	// +optional
+	InferencePool *InferencePoolReference `json:"inferencePool,omitempty"`
+	// ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+	// namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+	// and no InferenceObjective is created.
+	// +kubebuilder:validation:MaxLength=63
+	// +optional
+	ObjectiveName string `json:"objectiveName,omitempty"`
+	// State is the request-priority reconciliation state for this model
+	State FlowControlState `json:"state"`
+	// Message is a human-readable description of the state
+	// +kubebuilder:validation:MaxLength=1024
+	// +optional
+	Message string `json:"message,omitempty"`
+}
+
 // MaaSSubscriptionStatus defines the observed state of MaaSSubscription
 type MaaSSubscriptionStatus struct {
 	// Phase represents the current phase of the subscription
@@ -162,6 +225,11 @@ type MaaSSubscriptionStatus struct {
 	// TokenRateLimitStatuses reports the status of each generated TokenRateLimitPolicy
 	// +optional
 	TokenRateLimitStatuses []TokenRateLimitStatus `json:"tokenRateLimitStatuses,omitempty"`
+
+	// FlowControlStatuses reports, for each referenced model, the InferencePool and
+	// InferenceObjective used for request priority, and their reconciliation state
+	// +optional
+	FlowControlStatuses []ModelFlowControlStatus `json:"flowControlStatuses,omitempty"`
 }
 
 //+kubebuilder:object:root=true

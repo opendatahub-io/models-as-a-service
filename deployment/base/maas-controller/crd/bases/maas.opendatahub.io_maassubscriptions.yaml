@@ -248,6 +248,77 @@ spec:
                   - type
                   type: object
                 type: array
+              flowControlStatuses:
+                description: |-
+                  FlowControlStatuses reports, for each referenced model, the InferencePool and
+                  InferenceObjective used for request priority, and their reconciliation state
+                items:
+                  description: ModelFlowControlStatus maps a referenced model to its
+                    InferencePool and InferenceObjective.
+                  properties:
+                    inferencePool:
+                      description: InferencePool is the pool observed in the model's
+                        LLMInferenceService status
+                      properties:
+                        group:
+                          description: Group of the InferencePool
+                          maxLength: 253
+                          type: string
+                        kind:
+                          description: Kind of the InferencePool
+                          maxLength: 63
+                          type: string
+                        name:
+                          description: Name of the InferencePool
+                          maxLength: 253
+                          type: string
+                        namespace:
+                          description: Namespace of the InferencePool
+                          maxLength: 63
+                          type: string
+                      required:
+                      - group
+                      - kind
+                      - name
+                      - namespace
+                      type: object
+                    message:
+                      description: Message is a human-readable description of the
+                        state
+                      maxLength: 1024
+                      type: string
+                    name:
+                      description: Name of the MaaSModelRef
+                      maxLength: 253
+                      type: string
+                    namespace:
+                      description: Namespace of the MaaSModelRef
+                      maxLength: 63
+                      type: string
+                    objectiveName:
+                      description: |-
+                        ObjectiveName is the InferenceObjective name for this subscription and pool, in the pool's
+                        namespace. It is set whenever the pool is known, including when spec.inferencePriority is unset
+                        and no InferenceObjective is created.
+                      maxLength: 63
+                      type: string
+                    state:
+                      description: State is the request-priority reconciliation state
+                        for this model
+                      enum:
+                      - Pending
+                      - NotApplicable
+                      - Unsupported
+                      - Failed
+                      - Ready
+                      - NotRequired
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  - state
+                  type: object
+                type: array
               modelRefStatuses:
                 description: ModelRefStatuses reports the status of each referenced
                   MaaSModelRef

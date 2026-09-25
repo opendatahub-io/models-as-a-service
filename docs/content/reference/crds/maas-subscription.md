@@ -36,6 +36,28 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | limit | int64 | Yes | Maximum number of tokens allowed |
 | window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s`, `m`, `h` (1–9999). Pattern: `^[1-9]\d{0,3}(s\|m\|h)$`. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). |
 
+## Status: flowControlStatuses
+
+`status.flowControlStatuses` lists, for each referenced model, the InferencePool and InferenceObjective used for `inferencePriority`. Flow control is optional, so these entries do not affect the subscription phase.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| name | string | Name of the MaaSModelRef |
+| namespace | string | Namespace of the MaaSModelRef |
+| inferencePool | InferencePoolReference | InferencePool (`group`, `kind`, `name`, `namespace`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
+| objectiveName | string | InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when `inferencePriority` is unset. It does not change when `inferencePriority` changes. |
+| state | string | Reconciliation state (see below) |
+| message | string | Human-readable detail for the state |
+
+| State | Meaning |
+|-------|---------|
+| `Pending` | The pool has not been observed yet, or the InferenceObjective is not reconciled yet |
+| `NotApplicable` | The model is not served through an inference scheduler (for example, an ExternalModel) |
+| `Unsupported` | Flow control cannot be applied, for example because traffic is split across a routing group |
+| `Failed` | Reconciling the InferenceObjective failed |
+| `Ready` | The InferenceObjective matches `inferencePriority` |
+| `NotRequired` | `inferencePriority` is unset: no InferenceObjective is created and the scheduler applies priority `0` |
+
 ## Annotations
 
 MaaSSubscription supports standard Kubernetes and OpenShift annotations for use by `kubectl`, the OpenShift console, and other tooling.
