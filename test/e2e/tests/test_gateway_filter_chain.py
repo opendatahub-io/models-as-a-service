@@ -7,7 +7,8 @@ from the route matched in its own decodeHeaders, and KServe pool routes match on
 X-Gateway-Model-Name, which ipp-pre produces. The EPP therefore has to run behind ipp-pre,
 auth and ipp. A wrong order still answers 200 through plain pool load balancing, so the
 chain is read from the live Envoy config of every gateway replica, and traffic through a
-pool is checked for the header the EPP adds to the responses it handled.
+pool is checked against the EPP's own log: every authenticated request reaches it, a
+rejected one does not.
 
 Environment Variables:
 - E2E_EPP_POOL_TIMEOUT: Seconds to wait for the pool backend and for the first response
@@ -16,10 +17,13 @@ Environment Variables:
   route to its EPP (default: 120)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os
 import uuid
+from dataclasses import dataclass
 
 import pytest
 
@@ -68,8 +72,16 @@ MODEL_HEADER = "x-gateway-model-name"
 # response header handling; upstream calls it a debugging aid, llm-d's own tests rely on
 # it). A 200 without it never reached the picker.
 EPP_RESPONSE_HEADER = "x-went-into-resp-headers"
+# Istio's per-route override on InferencePool routes (pilot/pkg/networking/core/route/route.go)
+# turns on what the listener-level SKIP leaves off: the EPP needs the request's headers and
+# body to pick an endpoint.
+EPP_ROUTE_PROCESSING = {"request_header_mode": "SEND", "request_body_mode": "FULL_DUPLEX_STREAMED"}
+# Logged by the EPP once per request whose headers reach it, at its default verbosity
+# (-v 2; llm-d-router pkg/epp/handlers/server.go).
+EPP_REQUEST_LOG = "EPP received request"
 POOL_READY_TIMEOUT = int(os.environ.get("E2E_EPP_POOL_TIMEOUT", "300"))
 ROUTE_BIND_TIMEOUT = int(os.environ.get("E2E_EPP_ROUTE_TIMEOUT", "120"))
+PICKER_LOG_TIMEOUT = 60
 
 log = logging.getLogger(__name__)
 
@@ -168,14 +180,22 @@ def _assert_chain(pod: str, listener: str, filters: list[dict]):
     )
 
 
-def _pool_route_model(gateway_name: str, picker_host: str) -> str:
-    """Model header value of the routes bound to the given endpoint picker, once every
-    gateway replica has them; "" until then."""
-    models = {pod: _pod_pool_route_model(pod, picker_host) for pod in _gateway_pods(gateway_name)}
-    return next(iter(models.values())) if all(models.values()) else ""
+@dataclass(frozen=True)
+class PoolRoute:
+    """A gateway replica's route to an InferencePool, as bound to its endpoint picker."""
+
+    model: str
+    processing_mode: dict
 
 
-def _pod_pool_route_model(pod: str, picker_host: str) -> str:
+def _pool_routes(gateway_name: str, picker_host: str) -> dict[str, PoolRoute]:
+    """Per gateway replica, the route bound to the given endpoint picker, once every replica
+    has one; empty until then."""
+    routes = {pod: _pod_pool_route(pod, picker_host) for pod in _gateway_pods(gateway_name)}
+    return routes if all(routes.values()) else {}
+
+
+def _pod_pool_route(pod: str, picker_host: str) -> PoolRoute | None:
     stack = [_config_dump(pod, "dynamic_route_configs")]
     while stack:
         node = stack.pop()
@@ -184,16 +204,35 @@ def _pod_pool_route_model(pod: str, picker_host: str) -> str:
             continue
         if not isinstance(node, dict):
             continue
-        override = (node.get("typed_per_filter_config") or {}).get(EPP) or {}
-        cluster = (((override.get("overrides") or {}).get("grpc_service") or {})
-                   .get("envoy_grpc") or {}).get("cluster_name", "")
+        overrides = ((node.get("typed_per_filter_config") or {}).get(EPP) or {}).get("overrides") or {}
+        cluster = ((overrides.get("grpc_service") or {}).get("envoy_grpc") or {}).get("cluster_name", "")
         if picker_host in cluster:
             for header in (node.get("match") or {}).get("headers") or []:
                 exact = (header.get("string_match") or {}).get("exact")
                 if header.get("name", "").lower() == MODEL_HEADER and exact:
-                    return exact
+                    return PoolRoute(exact, overrides.get("processing_mode") or {})
         stack.extend(node.values())
-    return ""
+    return None
+
+
+def _picker_deployment(llmis: str) -> str:
+    return f"{llmis}-kserve-router-scheduler"
+
+
+def _picker_selector(llmis: str) -> str:
+    """Label selector of the pool's endpoint picker pods."""
+    deployment = get_json_or_none("deployment", _picker_deployment(llmis), MODEL_NAMESPACE) or {}
+    labels = ((deployment.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
+    assert labels, f"no endpoint picker deployment for {llmis}"
+    return ",".join(f"{k}={v}" for k, v in labels.items())
+
+
+def _picker_request_count(selector: str) -> int:
+    """Requests the endpoint picker pods have taken in. A selector only returns the last
+    10 lines per pod unless told otherwise."""
+    result = _oc_run(["logs", "-n", MODEL_NAMESPACE, "-l", selector, "--tail=-1"], timeout=120)
+    assert result.returncode == 0, f"endpoint picker logs: {result.stderr}"
+    return result.stdout.count(EPP_REQUEST_LOG)
 
 
 def _skip_unless_maas_payload_processing():
@@ -212,7 +251,7 @@ def _log_pool_diagnostics(llmis: str):
             if item["metadata"]["name"].startswith(llmis):
                 log.error("%s %s status: %s", kind, item["metadata"]["name"], item.get("status"))
     log.error("scheduler logs:\n%s", deployment_log_snapshot(
-        f"{llmis}-kserve-router-scheduler", namespace=MODEL_NAMESPACE, since="10m"))
+        _picker_deployment(llmis), namespace=MODEL_NAMESPACE, since="10m"))
 
 
 def _chat(api_key, model_name, stream=False):
@@ -279,11 +318,15 @@ class TestEndpointPickerTraffic:
             _wait_for_model_ready(llmis, namespace=MODEL_NAMESPACE, timeout=120)
             api_key = _create_api_key(sa_token, name=f"e2e-epp-pool-{suffix}", subscription=subscription)
 
-            # Config: the pool route is bound to its picker, and the chain reaches it.
+            # Config: every replica binds the model's route to its picker and sends the picker
+            # the request, and the chain reaches it.
             log.info("Waiting for every %s replica to bind %s", DEFAULT_GATEWAY_NAME, picker_host)
-            bound = wait_until(lambda: _pool_route_model(DEFAULT_GATEWAY_NAME, picker_host), ROUTE_BIND_TIMEOUT,
+            routes = wait_until(lambda: _pool_routes(DEFAULT_GATEWAY_NAME, picker_host), ROUTE_BIND_TIMEOUT,
                                 f"not every {DEFAULT_GATEWAY_NAME} replica bound endpoint picker {picker_host}")
-            assert bound == model, f"picker-bound route matches model {bound!r}, expected {model!r}"
+            for pod, route in routes.items():
+                assert route.model == model, f"{pod}: picker-bound route matches model {route.model!r}, expected {model!r}"
+                sent = {mode: route.processing_mode.get(mode) for mode in EPP_ROUTE_PROCESSING}
+                assert sent == EPP_ROUTE_PROCESSING, f"{pod}: pool route does not send requests to the picker"
             for pod, (chains, rejected) in _listener_state(DEFAULT_GATEWAY_NAME).items():
                 assert not rejected, f"{pod}: Envoy rejected listener config: {rejected}"
                 for listener, filters in chains:
@@ -302,6 +345,17 @@ class TestEndpointPickerTraffic:
             log.info("Waiting for the first body-routed response picked by the EPP")
             wait_until(picked, POOL_READY_TIMEOUT, "endpoint picker never answered")
 
+            # Auth rejects ahead of the picker. The picker's response header proves nothing
+            # here: Envoy sends local replies through every encoder filter, so the picker sees
+            # the 401's headers without ever seeing the request. Its request log does: the
+            # picker logs a request before the response goes out, so by the time the two
+            # requests below have been answered and logged, a line for the rejected one sent
+            # first would be in the log too.
+            picker = _picker_selector(llmis)
+            baseline = _picker_request_count(picker)
+            rejected = _chat(None, model)
+            assert rejected.status_code == 401, f"no credentials: {response_summary(rejected)}"
+
             response = _chat(api_key, model)
             assert response.status_code == 200, f"completion: {response_summary(response)}"
             assert response.json().get("choices"), f"completion without choices: {response_summary(response)}"
@@ -318,11 +372,18 @@ class TestEndpointPickerTraffic:
             assert events and events[-1] == "data: [DONE]", f"stream did not finish: {events[-3:]}"
             assert any(e.startswith("data: {") for e in events[:-1]), f"stream carried no chunks: {events}"
 
-            # Auth still rejects ahead of the picker. The picker's response header proves
-            # nothing here: Envoy sends local replies through every encoder filter, so the
-            # picker sees the 401's headers without ever seeing the request.
-            rejected = _chat(None, model)
-            assert rejected.status_code == 401, f"no credentials: {response_summary(rejected)}"
+            authenticated = 2  # the plain and the streamed completion
+
+            def logged_authenticated():
+                seen = _picker_request_count(picker) - baseline
+                assert seen >= authenticated, f"endpoint picker logged {seen} of {authenticated} authenticated requests"
+                return seen
+
+            seen = wait_until(logged_authenticated, PICKER_LOG_TIMEOUT,
+                              "endpoint picker never logged the authenticated requests")
+            assert seen == authenticated, (
+                f"endpoint picker logged {seen} requests for {authenticated} authenticated and 1 rejected"
+            )
         except Exception:
             _log_pool_diagnostics(llmis)
             raise
