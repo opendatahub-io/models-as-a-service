@@ -64,6 +64,8 @@ type OwnerSpec struct {
 }
 
 // ModelSubscriptionRef defines a model reference with rate limits
+// +kubebuilder:validation:XValidation:rule="has(self.tokenRateLimits) || (has(self.unlimited) && self.unlimited)",message="tokenRateLimits is required unless unlimited is true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.unlimited) && self.unlimited && has(self.tokenRateLimits))",message="tokenRateLimits must not be set when unlimited is true"
 type ModelSubscriptionRef struct {
 	// Name is the name of the MaaSModelRef
 	// +kubebuilder:validation:MinLength=1
@@ -75,9 +77,16 @@ type ModelSubscriptionRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 
-	// TokenRateLimits defines token-based rate limits for this model
+	// TokenRateLimits defines token-based rate limits for this model.
+	// Required unless Unlimited is true.
+	// +optional
 	// +kubebuilder:validation:MinItems=1
-	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits"`
+	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits,omitempty"`
+
+	// Unlimited grants access to this model without a token budget.
+	// Token usage is still metered. Mutually exclusive with TokenRateLimits.
+	// +optional
+	Unlimited bool `json:"unlimited,omitempty"`
 
 	// BillingRate defines the cost per token
 	// +optional

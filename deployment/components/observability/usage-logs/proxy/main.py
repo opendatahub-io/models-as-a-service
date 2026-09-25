@@ -14,7 +14,7 @@ from threading import Lock
 from urllib.parse import urlparse, parse_qs, urlencode, urljoin
 
 from auth import extract_from_bearer_token, create_ssl_context
-from rewriter import inject_user_filter
+from rewriter import QueryError, inject_user_filter
 
 # Context variable for request ID
 request_id_var = contextvars.ContextVar('request_id', default='')
@@ -106,11 +106,7 @@ def is_allowed_path(path):
     """Check if path is allowed."""
     if ".." in path.split("/"):
         return False
-    if path in ALLOWED_PATHS:
-        return True
-    if path.startswith("/loki/api/v1/label/") and path.endswith("/values"):
-        return True
-    return False
+    return path in ALLOWED_PATHS
 
 
 class ProxyHandler(BaseHTTPRequestHandler):
@@ -186,17 +182,24 @@ class ProxyHandler(BaseHTTPRequestHandler):
 
         # Parse and rewrite query parameters
         query_params = parse_qs(parsed.query, keep_blank_values=True)
+        original_query = query_params.get("query", [""])[0]
+        if not original_query:
+            logger.warning(f"Rejected empty query for user={username}")
+            self.send_json_error("Bad request: empty query", 400)
+            return
 
-        if "query" in query_params:
-            original_query = query_params["query"][0]
-            # Label values endpoints only support label matchers, not pipeline filters
-            is_label_values = parsed.path.startswith("/loki/api/v1/label/") and parsed.path.endswith("/values")
-            rewritten_query = inject_user_filter(original_query, username, namespace, labels_only=is_label_values)
-            query_params["query"] = [rewritten_query]
-            logger.debug(
-                f"Query rewritten for user={username} (labels_only={is_label_values}): "
-                f"original={original_query} -> rewritten={rewritten_query}"
-            )
+        try:
+            rewritten_query = inject_user_filter(original_query, username)
+        except QueryError as e:
+            logger.warning(f"Rejected query for user={username}: {e}")
+            self.send_json_error("Bad request: invalid query", 400)
+            return
+
+        query_params["query"] = [rewritten_query]
+        logger.debug(
+            f"Query rewritten for user={username}: "
+            f"original={original_query} -> rewritten={rewritten_query}"
+        )
 
         # Build upstream URL
         upstream_parsed = urlparse(loki_upstream)
@@ -332,12 +335,12 @@ def initialize():
     """Initialize global configuration."""
     global loki_upstream, ssl_context, token_review_url, namespace
 
+    # NAMESPACE is only used to build the Loki upstream URL; it is not injected into LogQL.
     namespace = os.getenv("NAMESPACE")
     if not namespace:
         logger.fatal("NAMESPACE environment variable is required")
         sys.exit(1)
 
-    # Build Loki upstream URL from namespace
     loki_upstream = f"https://usage-gateway-http.{namespace}.svc:8080/api/logs/v1/application"
     logger.info(f"Loki upstream: {loki_upstream}")
 

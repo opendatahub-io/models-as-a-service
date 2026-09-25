@@ -1,6 +1,7 @@
 package tenantreconcile
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/go-logr/logr"
@@ -551,7 +552,7 @@ func TestPatchPayloadProcessingEnvoyFilterOmitsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 9)
+	require.Len(t, configPatches, 11)
 
 	for i := 4; i < 9; i++ {
 		cp, ok := configPatches[i].(map[string]any)
@@ -559,6 +560,7 @@ func TestPatchPayloadProcessingEnvoyFilterOmitsRouterFallback(t *testing.T) {
 		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
 		assert.Equal(t, "MERGE", op)
 	}
+	requireEPPReorderPatches(t, configPatches)
 }
 
 func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
@@ -577,13 +579,86 @@ func TestPatchPayloadProcessingEnvoyFilterKeepsRouterFallback(t *testing.T) {
 	configPatches, found, err := unstructured.NestedSlice(ef.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 7)
+	require.Len(t, configPatches, 9)
 
-	cp, ok := configPatches[0].(map[string]any)
+	wantClusters := []string{
+		grpcClusterName(PayloadPreProcessingDeploymentName(""), params.GatewayNamespace, 9004),
+		grpcClusterName(PayloadProcessingDeploymentName(""), params.GatewayNamespace, 9004),
+	}
+	for i, wantCluster := range wantClusters {
+		cp, ok := configPatches[i].(map[string]any)
+		require.True(t, ok)
+		anchor, _, _ := unstructured.NestedString(cp, "match", "listener", "filterChain", "filter", "subFilter", "name")
+		assert.Equal(t, routerFilterName, anchor, "configPatches[%d] subFilter.name", i)
+		cluster, _, _ := unstructured.NestedString(cp, "patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name")
+		assert.Equal(t, wantCluster, cluster, "configPatches[%d] grpc cluster_name", i)
+	}
+	for i := 2; i < 7; i++ {
+		cp, ok := configPatches[i].(map[string]any)
+		require.True(t, ok)
+		routeName, _, _ := unstructured.NestedString(cp, "match", "routeConfiguration", "vhost", "route", "name")
+		assert.Equal(t, fmt.Sprintf("tenant-ns.%s.%d", MaaSAPIRouteName(""), i-2), routeName, "configPatches[%d] route name", i)
+	}
+	requireEPPReorderPatches(t, configPatches)
+}
+
+// requireEPPReorderPatches asserts that configPatches ends with the pair moving Istio's
+// InferencePool filter in front of the router: REMOVE, then INSERT_BEFORE the router with
+// Istio's static filter config, both listed after every ipp insert (router-anchored in the
+// fallback, so list order decides) and untouched by the route rewrites.
+func requireEPPReorderPatches(t *testing.T, configPatches []any) {
+	t.Helper()
+	require.GreaterOrEqual(t, len(configPatches), 2)
+	removeIdx := len(configPatches) - 2
+	subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+
+	wantOps := []string{"REMOVE", "INSERT_BEFORE"}
+	wantAnchors := []string{"envoy.filters.http.ext_proc", routerFilterName}
+
+	for i, raw := range configPatches[:removeIdx] {
+		cp, ok := raw.(map[string]any)
+		require.True(t, ok, "configPatches[%d] should be a map", i)
+		name, _, _ := unstructured.NestedString(cp, "patch", "value", "name")
+		assert.NotEqual(t, "envoy.filters.http.ext_proc", name, "configPatches[%d] inserts the EPP filter before the reorder", i)
+	}
+	for j, raw := range configPatches[removeIdx:] {
+		i := removeIdx + j
+		cp, ok := raw.(map[string]any)
+		require.True(t, ok, "configPatches[%d] should be a map", i)
+
+		applyTo, _, _ := unstructured.NestedString(cp, "applyTo")
+		assert.Equal(t, "HTTP_FILTER", applyTo, "configPatches[%d] applyTo", i)
+		op, _, _ := unstructured.NestedString(cp, "patch", "operation")
+		assert.Equal(t, wantOps[j], op, "configPatches[%d] operation", i)
+		anchor, _, _ := unstructured.NestedString(cp, subFilterPath...)
+		assert.Equal(t, wantAnchors[j], anchor, "configPatches[%d] subFilter.name", i)
+		_, found, err := unstructured.NestedFieldNoCopy(cp, "match", "routeConfiguration")
+		require.NoError(t, err)
+		assert.False(t, found, "configPatches[%d] must not carry a route match", i)
+	}
+
+	insert, ok := configPatches[removeIdx+1].(map[string]any)
 	require.True(t, ok)
-	anchor, found, err := unstructured.NestedString(cp,
-		"match", "listener", "filterChain", "filter", "subFilter", "name")
+	name, _, _ := unstructured.NestedString(insert, "patch", "value", "name")
+	assert.Equal(t, "envoy.filters.http.ext_proc", name, "per-route EPP overrides are keyed on this name")
+	typedConfig, found, err := unstructured.NestedMap(insert, "patch", "value", "typed_config")
 	require.NoError(t, err)
 	require.True(t, found)
-	assert.Equal(t, routerFilterName, anchor)
+	assert.Equal(t, map[string]any{
+		"@type": "type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor",
+		"grpc_service": map[string]any{
+			"envoy_grpc": map[string]any{"cluster_name": "dummy"},
+			"timeout":    "10s",
+		},
+		"failure_mode_allow": true,
+		"processing_mode": map[string]any{
+			"request_header_mode":  "SKIP",
+			"response_header_mode": "SKIP",
+		},
+		"message_timeout": "1000s",
+		"metadata_options": map[string]any{
+			"forwarding_namespaces": map[string]any{"untyped": []any{"envoy.lb"}},
+			"receiving_namespaces":  map[string]any{"untyped": []any{"envoy.lb"}},
+		},
+	}, typedConfig, "typed_config must stay the copy of Istio's static InferencePool filter")
 }

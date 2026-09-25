@@ -16,7 +16,7 @@ metadata:
     app.kubernetes.io/component: perses
 spec:
   display:
-    name: "All usage (logs)"
+    name: "Usage"
     description: >-
       Admin view of model usage. Shows token consumption, request counts,
       rate limiting, and per-user breakdown across all users and subscriptions.
