@@ -27,6 +27,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -83,6 +84,7 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/finalizers,verbs=update
 //+kubebuilder:rbac:groups=llm-d.ai,resources=inferenceobjectives,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
 
 const (
 	maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
@@ -455,6 +457,13 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	modelStatuses := r.validateModelRefs(ctx, subscription)
 	subscription.Status.ModelRefStatuses = modelStatuses
 
+	// Publish per-model InferencePool and InferenceObjective mappings for request priority.
+	// Resolved before TokenRateLimitPolicy reconciliation so they are published even when it
+	// fails. Flow control is optional, so these statuses do not affect the subscription phase.
+	// Transient lookup errors are returned after the status update so the request is retried.
+	flowControlStatuses, flowControlErr := r.resolveFlowControlStatuses(ctx, subscription)
+	subscription.Status.FlowControlStatuses = flowControlStatuses
+
 	// Check if we have any valid models to proceed with TRLP reconciliation
 	hasValidModels := false
 	for _, s := range modelStatuses {
@@ -514,6 +523,10 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
 	r.updateStatus(ctx, subscription, phase, message, statusSnapshot)
 
+	if flowControlErr != nil {
+		log.Error(flowControlErr, "failed to resolve flow-control statuses, will retry")
+		return ctrl.Result{}, flowControlErr
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -1176,6 +1189,17 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		ctrl.Log.Info("TokenRateLimitPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
 
+	// Watch LLMInferenceServices so InferencePool changes refresh flow-control statuses.
+	// If the KServe CRD is not registered at startup, the watch is added when it appears.
+	const llmisvcCRD = "llminferenceservices.serving.kserve.io"
+	llmisvcExists := crdExists(context.Background(), mgr.GetAPIReader(), llmisvcCRD)
+	if llmisvcExists {
+		b = b.Watches(&kservev1alpha2.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSSubscriptions),
+			builder.WithPredicates(llmisvcRouterStatusChangedPredicate{}),
+		)
+	}
+
 	if r.TenantNamespaceDiscoveryEnabled {
 		// Watch Namespaces so that subscriptions in newly labeled tenant
 		// namespaces are discovered without a controller restart.
@@ -1221,6 +1245,18 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for TokenRateLimitPolicy: %w", err)
+		}
+	}
+	if !llmisvcExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
+			llmisvc := &unstructured.Unstructured{}
+			llmisvc.SetGroupVersionKind(kservev1alpha2.SchemeGroupVersion.WithKind("LLMInferenceService"))
+			return source.Kind(mgr.GetCache(), client.Object(llmisvc),
+				handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSSubscriptions),
+				llmisvcRouterStatusChangedPredicate{},
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
 		}
 	}
 	return nil

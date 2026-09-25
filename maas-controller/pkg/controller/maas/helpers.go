@@ -191,6 +191,17 @@ func (t *tenantForNamespaceResult) identifier() (string, error) {
 	}
 }
 
+func (t *tenantForNamespaceResult) name() (string, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.TenantNameFor(t.config)
+	case t.legacy != nil:
+		return tenantreconcile.TenantNameFor(t.legacy)
+	default:
+		return "", errors.New("tenant config lookup result is empty")
+	}
+}
+
 func (t *tenantForNamespaceResult) platformContext(
 	ctx context.Context,
 	c client.Reader,
