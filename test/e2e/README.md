@@ -60,7 +60,7 @@ pytest tests/<file>.py -v
 | `test_tenant_rate_limit_isolation.py` | Tenant-scoped rate-limit isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_config_tenant.py` | Cluster `Config/default`: anchor present, owner refs on Tenant and `maas-controller` Deployment (skips if Config CRD missing) |
 
-Modules outside the explicit smoke list (for example `test_subscription_list_endpoints.py`) can be run directly or via `smoke.sh`, which executes all tests under `tests/`.
+The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
@@ -118,7 +118,7 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 
-**19 `@serial` tests** (pass 2): verify with `pytest -m serial tests/ --collect-only -q`.
+`@serial` tests run in pass 2; verify the current set with `pytest -m serial tests/ --collect-only -q`.
 
 **Worker tenant (Phase 3 pilot):** each xdist worker (`gw0`, `gw1`, …) bootstraps its own AITenant namespace with baseline `simulator-subscription` / `simulator-access` CRs. Non-serial tests in opted-in modules route `MAAS_SUBSCRIPTION_NAMESPACE`, `GATEWAY_HOST`, and `MAAS_API_BASE_URL` to that tenant for the duration of the test.
 

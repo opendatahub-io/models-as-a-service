@@ -335,18 +335,7 @@ func TestMyReconciler_Succeeds(t *testing.T) {
 
 5. **Add test resources if needed** — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under `test/e2e/fixtures/` and include it in the base `kustomization.yaml`.
 
-6. **Register new modules in CI** — `prow_run_smoke_test.sh` runs an **explicit file list**. If you create a new test module, add it to the `e2e_test_files` array in `run_e2e_tests()`:
-
-    ```bash
-    # In test/e2e/scripts/prow_run_smoke_test.sh, inside run_e2e_tests()
-    local -a e2e_test_files=(
-        ...
-        "$test_dir/tests/test_my_new_feature.py"  # ← add here
-    )
-    ```
-
-    !!! warning
-        `run-tests-quick.sh` auto-discovers all files under `tests/`, but `prow_run_smoke_test.sh` does **not**. Your new module will not run in Konflux CI unless you add it to the `e2e_test_files` array.
+6. **Use pytest discovery for CI** — `run_e2e_tests.sh` collects every `test_*.py` module under `test/e2e/tests/`. New modules do not need a separate CI registration step. Give the module an appropriate `xdist_group` marker and mark cluster-wide mutations as `serial`.
 
 7. **Use skip markers for optional features** — if your test depends on optional infrastructure (e.g., external OIDC, IPP ExternalModel CRD), gate it with `pytest.mark.skipif` so the same module runs cleanly in all environments.
 
@@ -386,7 +375,7 @@ If your change affects how MaaS integrates with the ODH operator or other ODH co
 - [ ] **xdist group**: Ensure the test file has a `pytestmark = pytest.mark.xdist_group("group_name")` marker (see [group assignment rules](#group-assignment-rules))
 - [ ] **Serial marker**: Add `@pytest.mark.serial` if the test mutates shared fixtures or scales operators
 - [ ] **Test fixtures**: If new CRs are needed, add a kustomize overlay in `test/e2e/fixtures/`
-- [ ] **CI registration**: Add new E2E modules to the `e2e_test_files` array in `prow_run_smoke_test.sh`
+- [ ] **Pytest discovery**: Confirm the new module follows the `test_*.py` naming convention and is collected with `pytest tests/ --collect-only -q`
 - [ ] **Skip markers**: Use `pytest.mark.skipif` for tests requiring optional infrastructure
 - [ ] **Local validation**: Run `make test` and/or `./test/e2e/run-tests-quick.sh` before pushing
 - [ ] **Integration tests**: If your change affects ODH operator integration, update tests in [opendatahub-tests](https://github.com/opendatahub-io/opendatahub-tests)
