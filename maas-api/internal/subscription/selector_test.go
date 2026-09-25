@@ -1190,6 +1190,109 @@ func TestSelect_AccessAllowed(t *testing.T) {
 	}
 }
 
+func TestSelect_FiltersModelRefsByAuthPolicy(t *testing.T) {
+	log := logger.New(false)
+
+	tests := []struct {
+		name                  string
+		subscriptions         []*unstructured.Unstructured
+		groups                []string
+		requestedSubscription string
+		accessChecker         subscription.ModelAccessChecker
+		wantModelRefs         int
+	}{
+		{
+			name: "bare name: unauthorized model filtered from response",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"system:authenticated"}, []map[string]any{
+					{"name": "premium-model", "namespace": "llm"},
+				}),
+			},
+			groups:                []string{"system:authenticated"},
+			requestedSubscription: "sub1",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{},
+			},
+			wantModelRefs: 0,
+		},
+		{
+			name: "bare name: authorized model kept in response",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"system:authenticated"}, []map[string]any{
+					{"name": "premium-model", "namespace": "llm"},
+				}),
+			},
+			groups:                []string{"system:authenticated"},
+			requestedSubscription: "sub1",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{
+					{Namespace: "llm", Name: "premium-model"}: true,
+				},
+			},
+			wantModelRefs: 1,
+		},
+		{
+			name: "qualified name: unauthorized model filtered from response",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"system:authenticated"}, []map[string]any{
+					{"name": "premium-model", "namespace": "llm"},
+				}),
+			},
+			groups:                []string{"system:authenticated"},
+			requestedSubscription: "test-ns/sub1",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{},
+			},
+			wantModelRefs: 0,
+		},
+		{
+			name: "partial access: only authorized models kept",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"system:authenticated"}, []map[string]any{
+					{"name": "free-model", "namespace": "llm"},
+					{"name": "premium-model", "namespace": "llm"},
+				}),
+			},
+			groups:                []string{"system:authenticated"},
+			requestedSubscription: "sub1",
+			accessChecker: &fakeAccessChecker{
+				authorized: map[authpolicy.ModelKey]bool{
+					{Namespace: "llm", Name: "free-model"}: true,
+				},
+			},
+			wantModelRefs: 1,
+		},
+		{
+			name: "nil access checker: no filtering applied",
+			subscriptions: []*unstructured.Unstructured{
+				createSubscriptionWithModelRefs("sub1", []string{"system:authenticated"}, []map[string]any{
+					{"name": "model-a", "namespace": "llm"},
+				}),
+			},
+			groups:                []string{"system:authenticated"},
+			requestedSubscription: "sub1",
+			accessChecker:         nil,
+			wantModelRefs:         1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			lister := &fakeLister{subscriptions: tt.subscriptions}
+			selector := subscription.NewSelector(log, lister, nil, tt.accessChecker)
+
+			result, err := selector.Select(tt.groups, "", tt.requestedSubscription, "")
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(result.ModelRefs) != tt.wantModelRefs {
+				t.Errorf("ModelRefs count = %d, want %d; refs = %v",
+					len(result.ModelRefs), tt.wantModelRefs, result.ModelRefs)
+			}
+		})
+	}
+}
+
 func TestListAccessibleForModel_MultiNamespace(t *testing.T) {
 	log := logger.New(false)
 

@@ -221,6 +221,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				}
 				resp := toResponseWithResolvedModel(&sub, requestedModel)
 				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
+				if s.accessChecker != nil {
+					authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
+					resp.ModelRefs = filterAuthorizedModels(resp.ModelRefs, authorizedSet)
+				}
 				return resp, nil
 			}
 		}
@@ -243,6 +247,10 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 				}
 				resp := toResponseWithResolvedModel(&sub, requestedModel)
 				resp.AccessAllowed = s.isModelAccessAllowed(groups, username, &sub, requestedModel)
+				if s.accessChecker != nil {
+					authorizedSet := s.accessChecker.AuthorizedModels(groups, username)
+					resp.ModelRefs = filterAuthorizedModels(resp.ModelRefs, authorizedSet)
+				}
 				return resp, nil
 			}
 		}
