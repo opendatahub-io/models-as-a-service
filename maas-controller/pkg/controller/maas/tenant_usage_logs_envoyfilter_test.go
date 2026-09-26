@@ -415,7 +415,7 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 
 		cfg := usageLogsConfig(true)
 		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
-		// Telemetry nil → captureUser defaults to false
+		// Telemetry nil → logs.captureUser defaults to false
 
 		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
 		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
@@ -428,10 +428,10 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 		ef := &unstructured.Unstructured{}
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
-		g.Expect(findUserIDAttr(ef)).To(BeFalse(), "user_id attribute and X-MaaS-Username request_rule should be absent when captureUser is false")
+		g.Expect(findUserIDAttr(ef)).To(BeFalse(), "user_id attribute and X-MaaS-Username request_rule should be absent when logs.captureUser is false")
 	})
 
-	t.Run("captureUser true includes user_id in filter", func(t *testing.T) {
+	t.Run("metrics captureUser true does not enable log user_id", func(t *testing.T) {
 		g := NewWithT(t)
 		s := tenantTestScheme(t)
 
@@ -454,7 +454,33 @@ func TestTenantEnsureUsageLogsEnvoyFilter_CaptureUser(t *testing.T) {
 		ef := &unstructured.Unstructured{}
 		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
-		g.Expect(findUserIDAttr(ef)).To(BeTrue(), "user_id attribute and X-MaaS-Username request_rule should be present when captureUser is true")
+		g.Expect(findUserIDAttr(ef)).To(BeFalse(), "metrics.captureUser must not inject user_id into usage logs")
+	})
+
+	t.Run("logs captureUser true includes user_id in filter", func(t *testing.T) {
+		g := NewWithT(t)
+		s := tenantTestScheme(t)
+
+		cfg := usageLogsConfig(true)
+		tenant := usageLogsTenantConfig(usageLogsTestDefaultTenant, tenantreconcile.DefaultAITenantName, usageLogsTestAITenantNS)
+		tenant.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{
+			Logs: &maasv1alpha1.TenantLogsConfig{
+				CaptureUser: ptr.To(true),
+			},
+		}
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithObjects(cfg, tenant).Build()
+		r := newUsageLogsReconciler(t, s, cl, func(r *TenantReconciler) {
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+		})
+
+		_, err := r.ensureUsageLogsEnvoyFilter(context.Background(), ctrl.Log, tenant, defaultUsageLogsPlatformContext(), cfg)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenantreconcile.UsageLogsEnvoyFilterName(""), Namespace: usageLogsTestGatewayNS}, ef)).To(Succeed())
+		g.Expect(findUserIDAttr(ef)).To(BeTrue(), "user_id attribute and X-MaaS-Username request_rule should be present when logs.captureUser is true")
 	})
 }
 

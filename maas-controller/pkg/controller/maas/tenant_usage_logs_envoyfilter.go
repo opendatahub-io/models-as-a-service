@@ -141,9 +141,10 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	}
 
 	captureUser := tenant.Spec.Telemetry != nil &&
-		tenant.Spec.Telemetry.Metrics != nil &&
-		ptr.Deref(tenant.Spec.Telemetry.Metrics.CaptureUser, false)
+		tenant.Spec.Telemetry.Logs != nil &&
+		ptr.Deref(tenant.Spec.Telemetry.Logs.CaptureUser, false)
 	if captureUser {
+		log.Info("WARNING: User identity usage logs enabled - ensure GDPR/privacy compliance", "field", "logs.captureUser", "value", true)
 		if err := tenantreconcile.PatchUsageLogsUserID(ef); err != nil {
 			return false, fmt.Errorf("patch user_id into EnvoyFilter: %w", err)
 		}
