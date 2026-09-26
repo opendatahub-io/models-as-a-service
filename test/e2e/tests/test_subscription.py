@@ -347,6 +347,19 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     )
 
 
+def _trlp_limits_matching(limits, subscription_key):
+    """Names of the TRLP limits whose predicate matches subscription_key.
+
+    Limits are grouped by rate and named after it (tokens-<limit>-per-<window>),
+    so a subscription is found by its selected_subscription_key clause.
+    """
+    clause = f'auth.identity.selected_subscription_key == "{subscription_key}"'
+    return sorted(
+        name for name, limit in limits.items()
+        if any(clause in (w.get("predicate") or "") for w in limit.get("when") or [])
+    )
+
+
 
 # ---------------------------------------------------------------------------
 # Tests
@@ -1235,15 +1248,15 @@ class TestCascadeDeletion:
             limits = trlp_with_both.get("spec", {}).get("limits", {})
             assert limits, f"TRLP {trlp_name} has no limits defined"
 
-            # Look for both subscription references in TRLP limits
-            # Format: {namespace}-{subscription-name}-{model-name}-tokens
-            simulator_limit_key = f"{ns.replace('/', '-')}-{SIMULATOR_SUBSCRIPTION}-{MODEL_REF}-tokens"
-            second_limit_key = f"{ns.replace('/', '-')}-e2e-second-sub-{MODEL_REF}-tokens"
+            # Look for both subscriptions in the TRLP limit predicates
+            # Key format: {namespace}/{subscription-name}@{model-namespace}/{model-name}
+            simulator_sub_key = f"{ns}/{SIMULATOR_SUBSCRIPTION}@{MODEL_NAMESPACE}/{MODEL_REF}"
+            second_sub_key = f"{ns}/e2e-second-sub@{MODEL_NAMESPACE}/{MODEL_REF}"
 
-            assert simulator_limit_key in limits, \
-                f"Original subscription limit key '{simulator_limit_key}' not found in TRLP. Available keys: {list(limits.keys())}"
-            assert second_limit_key in limits, \
-                f"Second subscription limit key '{second_limit_key}' not found in TRLP. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, simulator_sub_key), \
+                f"Original subscription '{simulator_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, second_sub_key), \
+                f"Second subscription '{second_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
 
             log.info(f"✅ TRLP contains both subscriptions: {list(limits.keys())}")
 
@@ -1263,12 +1276,12 @@ class TestCascadeDeletion:
             assert limits_after, f"TRLP {trlp_name} has no limits after 2nd subscription deletion"
 
             # Verify original subscription still in TRLP, second subscription removed
-            assert simulator_limit_key in limits_after, \
-                f"Original subscription limit '{simulator_limit_key}' missing after 2nd sub deletion. " \
+            assert _trlp_limits_matching(limits_after, simulator_sub_key), \
+                f"Original subscription '{simulator_sub_key}' missing after 2nd sub deletion. " \
                 f"Available: {list(limits_after.keys())}"
-            assert second_limit_key not in limits_after, \
-                f"Deleted subscription limit '{second_limit_key}' still present in TRLP. " \
-                f"Available: {list(limits_after.keys())}"
+            assert not _trlp_limits_matching(limits_after, second_sub_key), \
+                f"Deleted subscription '{second_sub_key}' still matched by TRLP limits " \
+                f"{_trlp_limits_matching(limits_after, second_sub_key)}"
 
             log.info(f"✅ TRLP rebuilt in-place with only original subscription: {list(limits_after.keys())}")
 

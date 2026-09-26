@@ -770,13 +770,14 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
 	}
-	// Check that sub2's limit exists (map keys use namespace-name format)
-	sub2Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub2Name, modelName)
+	// Sub1 (100/1m) and sub2 (200/1m) have distinct rates, so each gets its own
+	// group; limit keys are now derived from the rate, not the subscription.
+	sub2Key := "tokens-200-per-1m"
 	if _, exists := limits[sub2Key]; !exists {
 		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Key)
 	}
 	// Check that sub1's limit is removed
-	sub1Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub1Name, modelName)
+	sub1Key := "tokens-100-per-1m"
 	if _, exists := limits[sub1Key]; exists {
 		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Key)
 	}
@@ -849,8 +850,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Errorf("expected 1 limit entry, got %d: %v", len(limitsMap), limitsMap)
 	}
 
-	// Check the limit entry key (now includes namespace: "namespace-name-model-tokens")
-	expectedKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+	// Limit keys are grouped by rate, not by subscription: sub-a is alone at 100/1m.
+	expectedKey := "tokens-100-per-1m"
 	limitEntry, ok := limitsMap[expectedKey]
 	if !ok {
 		t.Fatalf("expected limit entry %q not found, got keys: %v", expectedKey, getKeys(limitsMap))
@@ -946,8 +947,9 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Errorf("expected 2 limit entries, got %d: %v", len(limitsMap), getKeys(limitsMap))
 	}
 
-	// Verify sub-a limit entry (now includes namespace in key)
-	subAKey := namespace + "-sub-a-" + modelName + "-tokens"
+	// sub-a (100/1m) and sub-b (200/1m) have distinct rates, so each gets its own
+	// group; limit keys are derived from the rate, not the subscription.
+	subAKey := "tokens-100-per-1m"
 	if limitA, ok := limitsMap[subAKey]; ok {
 		limitAMap, ok := limitA.(map[string]any)
 		if !ok {
@@ -982,8 +984,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Errorf("sub-a limit entry not found, got keys: %v", getKeys(limitsMap))
 	}
 
-	// Verify sub-b limit entry (now includes namespace in key)
-	subBKey := namespace + "-sub-b-" + modelName + "-tokens"
+	subBKey := "tokens-200-per-1m"
 	if limitB, ok := limitsMap[subBKey]; ok {
 		limitBMap, ok := limitB.(map[string]any)
 		if !ok {
@@ -1411,9 +1412,9 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 			}
 
 			// Navigate into spec.limits.<key>.rates to find the rate entry produced
-			// from the subscription's TokenRateLimit. The key format is
-			// "<namespace>-<subName>-<modelName>-tokens".
-			limitKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+			// from the subscription's TokenRateLimit. Limits are keyed by rate, not
+			// by subscription: "tokens-<limit>-per-<window>".
+			limitKey := fmt.Sprintf("tokens-500-per-%s", tc.window)
 			ratesRaw, found, err := unstructured.NestedSlice(trlp.Object, "spec", "limits", limitKey, "rates")
 			if err != nil || !found {
 				t.Fatalf("spec.limits.%s.rates not found: found=%v err=%v", limitKey, found, err)

@@ -6,17 +6,42 @@ This guide explains the cardinality dimensions in MaaS, when they become a probl
 
 ## How Cardinality Arises
 
-Every MaaSSubscription generates a Kuadrant **TokenRateLimitPolicy** (TRLP) per model reference. Limitador maintains a separate counter for each unique combination of labels on that policy. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
+The controller generates one Kuadrant **TokenRateLimitPolicy** (TRLP) per model, shared by every MaaSSubscription that references it. The TRLP has one limit per distinct set of `tokenRateLimits` on that model, so subscriptions with identical rates share a limit. Each limit counts per subscription and per user (counters `selected_subscription_key` and `userid`), so sharing a limit never means sharing a budget. Limitador maintains a separate counter for each unique combination of those values. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
 
-The total number of counters Limitador tracks is roughly:
+Limits and counters scale differently:
 
 ```
-counters ≈ subscriptions × models × unique_users × rate_limit_windows
+limits per model = distinct rate sets among the subscriptions on that model
+counters         ≈ subscriptions × models × unique_users × rate_limit_windows
 ```
 
 Model references with `unlimited: true` add no counters. All unlimited subscriptions on a model share one limit without rates, so Limitador only records their usage metrics.
 
 For Prometheus, the cardinality of `authorized_hits`, `authorized_calls`, and `limited_calls` grows with the number of distinct `user` and `subscription` label values.
+
+## Gateway Config Size
+
+Kuadrant renders every TRLP limit into one wasm config object per gateway, `kuadrant-{gateway-name}` in the gateway namespace (an `EnvoyFilter` on Kuadrant 1.5 and later, a `WasmPlugin` on 1.4.x). Each limit becomes two actions, a request-time check and a response-time token report, in every route-match ActionSet, so the object grows roughly with:
+
+```
+size ≈ limits × route_matches × listeners × hostnames × 2 actions
+```
+
+At 19 route matches, one limit costs about 27 KB per listener. Before RHOAIENG-95277 every subscription and model pair got its own limit, and the object grew until it hit the etcd object size limit (1.5 MiB by default). Now a subscription at an existing rate adds one clause to that limit's predicate: about 80 bytes in the TRLP and about 3 KB per listener in the gateway config. A subscription at a new rate still adds a whole limit.
+
+To keep the object small, reuse a small set of standard rates across subscriptions instead of giving each subscription its own numbers. Spell them the same way too: `100/1m` and `100/60s` are different rate sets.
+
+```bash
+# Gateway wasm config size in bytes, as compact JSON. Kuadrant 1.5+ writes an EnvoyFilter:
+kubectl get envoyfilter kuadrant-maas-default-gateway -n openshift-ingress -o json | jq -c . | wc -c
+
+# Kuadrant 1.4.x writes a WasmPlugin with the same name instead:
+kubectl get wasmplugin kuadrant-maas-default-gateway -n openshift-ingress -o json | jq -c . | wc -c
+
+# Limits per model TRLP
+kubectl get tokenratelimitpolicy -A -o json | \
+  jq -r '.items[] | "\(.metadata.namespace)/\(.metadata.name): \(.spec.limits | length) limits"'
+```
 
 ## Users vs Groups
 
@@ -138,7 +163,7 @@ count({__name__=~"authorized_hits|authorized_calls|limited_calls"})
 kubectl get maassubscription -n models-as-a-service -o json | \
   jq -r '.items[] | "\(.metadata.name): groups=\(.spec.owner.groups // [] | length), users=\(.spec.owner.users // [] | length), models=\(.spec.modelRefs | length)"'
 
-# Count total TokenRateLimitPolicies (one per subscription × model)
+# Count total TokenRateLimitPolicies (one per model)
 kubectl get tokenratelimitpolicy -A --no-headers | wc -l
 ```
 
@@ -195,6 +220,7 @@ kubectl get tokenratelimitpolicy -A -o json | \
 3. **Monitor counter growth** — periodically check the number of TokenRateLimitPolicies and Prometheus time series for MaaS metrics.
 4. **Use Redis for Limitador** in production — persistent storage prevents counter resets on pod restarts and provides better visibility into counter counts. See [Limitador Persistence](limitador-persistence.md).
 5. **Use dedicated routes per model** — avoids TRLP conflicts and simplifies cardinality accounting.
+6. **Reuse a small set of rates** - every distinct rate set on a model adds a limit to the gateway wasm config, while another subscription at an existing rate adds only a predicate clause. See [Gateway Config Size](#gateway-config-size).
 
 ## Related Documentation
 

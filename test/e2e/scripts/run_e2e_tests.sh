@@ -92,6 +92,7 @@ e2e_test_files=(
     "$TEST_DIR/tests/test_namespace_scoping.py"
     "$TEST_DIR/tests/test_negative_security.py"
     "$TEST_DIR/tests/test_subscription.py"
+    "$TEST_DIR/tests/test_trlp_rate_grouping.py"
     "$TEST_DIR/tests/test_model_identity_conflict.py"
     "$TEST_DIR/tests/test_subscription_list_endpoints.py"
     "$TEST_DIR/tests/test_models_endpoint.py"
