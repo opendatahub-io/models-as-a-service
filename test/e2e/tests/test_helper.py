@@ -81,6 +81,7 @@ MODEL_NAMESPACE = os.environ.get("E2E_MODEL_NAMESPACE", "llm")
 # Clients must use this form in the "model" field when targeting the BBR gateway endpoint.
 MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODEL_NAMESPACE}/models/{MODEL_NAME}")
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
+CONTROLLER_DEPLOYMENT_NAME = os.environ.get("CONTROLLER_DEPLOYMENT_NAME", "maas-controller")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
 # Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500 while Envoy catches up.
@@ -1639,11 +1640,11 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     """
     namespace = namespace or os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 
-    log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
+    log.info(f"Scaling {CONTROLLER_DEPLOYMENT_NAME} to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
     result = subprocess.run(
-        ["oc", "scale", "deployment", "maas-controller",
+        ["oc", "scale", "deployment", CONTROLLER_DEPLOYMENT_NAME,
          f"--replicas={replicas}", "-n", namespace],
         check=True,
         capture_output=True,
@@ -1654,29 +1655,29 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     # Wait for pods to reach desired state
     if replicas == 0:
         # Wait for all pods to terminate
-        log.debug(f"Waiting for maas-controller pods to terminate (timeout: {timeout}s)...")
+        log.debug(f"Waiting for {CONTROLLER_DEPLOYMENT_NAME} pods to terminate (timeout: {timeout}s)...")
         subprocess.run(
             ["oc", "wait", "--for=delete", "pod",
-             "-l", "app=maas-controller", "-n", namespace,
+             "-l", f"app={CONTROLLER_DEPLOYMENT_NAME}", "-n", namespace,
              f"--timeout={timeout}s"],
             check=False,  # Don't fail if no pods exist
             capture_output=True,
             text=True
         )
-        log.info("✓ maas-controller scaled down to 0 replicas")
+        log.info(f"✓ {CONTROLLER_DEPLOYMENT_NAME} scaled down to 0 replicas")
     else:
         # Wait for pods to become ready
-        log.debug(f"Waiting for maas-controller pods to become ready (timeout: {timeout}s)...")
+        log.debug(f"Waiting for {CONTROLLER_DEPLOYMENT_NAME} pods to become ready (timeout: {timeout}s)...")
         try:
             subprocess.run(
                 ["oc", "wait", "--for=condition=ready", "pod",
-                 "-l", "app=maas-controller", "-n", namespace,
+                 "-l", f"app={CONTROLLER_DEPLOYMENT_NAME}", "-n", namespace,
                  f"--timeout={timeout}s"],
                 check=True,
                 capture_output=True,
                 text=True
             )
-            log.info(f"✓ maas-controller scaled to {replicas} replica(s)")
+            log.info(f"✓ {CONTROLLER_DEPLOYMENT_NAME} scaled to {replicas} replica(s)")
         except subprocess.CalledProcessError as e:
             # Log but don't fail - sometimes pods need extra time
             log.warning(f"Pods may not be ready yet: {e.stderr}")

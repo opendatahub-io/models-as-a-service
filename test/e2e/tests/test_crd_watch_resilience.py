@@ -28,10 +28,12 @@ pytestmark = [
     pytest.mark.serial,
 ]
 
+from test_helper import CONTROLLER_DEPLOYMENT_NAME
+
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 KSERVE_CRD = "llminferenceservices.serving.kserve.io"
 KUADRANT_AUTHPOLICY_CRD = "authpolicies.kuadrant.io"
-CONTROLLER_DEPLOYMENT = "maas-controller"
+CONTROLLER_DEPLOYMENT = CONTROLLER_DEPLOYMENT_NAME
 # KServe CRD is embedded as a constant to avoid network dependency in tests.
 # Source: kserve/kserve v0.19.0 serving.kserve.io_llminferenceservices CRD (truncated to metadata only).
 # Full CRD installed via local go module cache when available, else minimal stub.
@@ -76,7 +78,7 @@ def _current_pod_uid():
     """Return UID of the current maas-controller pod (for detecting restarts)."""
     result = _oc(
         "get", "pods", "-n", DEPLOYMENT_NAMESPACE,
-        "-l", "app.kubernetes.io/name=maas-controller",
+        "-l", f"app.kubernetes.io/name={CONTROLLER_DEPLOYMENT}",
         "-o", "jsonpath={.items[0].metadata.uid}",
         check=False,
     )
@@ -87,7 +89,7 @@ def _pod_restart_count():
     """Return the restart count of the current maas-controller container."""
     result = _oc(
         "get", "pods", "-n", DEPLOYMENT_NAMESPACE,
-        "-l", "app.kubernetes.io/name=maas-controller",
+        "-l", f"app.kubernetes.io/name={CONTROLLER_DEPLOYMENT}",
         "-o", "jsonpath={.items[0].status.containerStatuses[0].restartCount}",
         check=False,
     )
@@ -186,7 +188,7 @@ def skip_if_not_ready():
     """Skip module if controller or Kuadrant CRDs are not present."""
     if _oc("get", "deployment", CONTROLLER_DEPLOYMENT,
            "-n", DEPLOYMENT_NAMESPACE, check=False).returncode != 0:
-        pytest.skip(f"maas-controller not found in {DEPLOYMENT_NAMESPACE}")
+        pytest.skip(f"{CONTROLLER_DEPLOYMENT} not found in {DEPLOYMENT_NAMESPACE}")
     if not _crd_exists(KUADRANT_AUTHPOLICY_CRD):
         pytest.skip("Kuadrant AuthPolicy CRD not installed — required for controller")
 

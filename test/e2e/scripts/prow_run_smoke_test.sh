@@ -37,7 +37,8 @@
 #   EXTERNAL_OIDC - Enable external OIDC e2e coverage (default: false)
 #   OIDC_ISSUER_URL, OIDC_TOKEN_URL, OIDC_CLIENT_ID, OIDC_USERNAME, OIDC_PASSWORD
 #   OIDC_READINESS_STRICT - Exit if OIDC gateway readiness fails (default: true)
-#   DEPLOYMENT_NAMESPACE - Namespace of maas-controller (default: opendatahub)
+#   DEPLOYMENT_NAMESPACE - Namespace of controller (default: opendatahub)
+#   CONTROLLER_DEPLOYMENT_NAME - Controller deployment name (default: maas-controller; auto-set to ai-gateway-operator in operator mode)
 #   MAAS_SUBSCRIPTION_NAMESPACE - Namespace of MaaS CRs (default: models-as-a-service)
 #   ENABLE_TENANT_NAMESPACE_DISCOVERY - Patch maas-controller before pytest (default: true)
 #   AITENANT_NAMESPACE - Namespace for AITenant CRs (default: ai-tenants)
@@ -85,6 +86,12 @@ AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "$POLI
 export AUTHORINO_NAMESPACE
 
 DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
+if [[ "${DEPLOY_MODE}" == "operator" ]]; then
+  CONTROLLER_DEPLOYMENT_NAME="${CONTROLLER_DEPLOYMENT_NAME:-ai-gateway-operator}"
+else
+  CONTROLLER_DEPLOYMENT_NAME="${CONTROLLER_DEPLOYMENT_NAME:-maas-controller}"
+fi
+export CONTROLLER_DEPLOYMENT_NAME
 MAAS_SUBSCRIPTION_NAMESPACE="${MAAS_SUBSCRIPTION_NAMESPACE:-models-as-a-service}"
 MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
