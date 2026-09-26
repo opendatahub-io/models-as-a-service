@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -46,9 +47,14 @@ func run() error {
 	kubeconfig := flag.String("kubeconfig", "", "path to kubeconfig file (out-of-cluster only)")
 	tenantNamespace := flag.String("aitenant-namespace", "ai-tenants", "namespace where AITenant CRs are created")
 	gatewayNamespace := flag.String("gateway-namespace", "openshift-ingress", "namespace of Gateway resources")
+	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	flag.Parse()
 
-	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
+	level, err := parseLogLevel(*logLevel)
+	if err != nil {
+		return err
+	}
+	log := slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -76,7 +82,7 @@ func run() error {
 		return fmt.Errorf("creating cache: %w", err)
 	}
 
-	h := handler.New(tc)
+	h := handler.NewWithLogger(tc, log)
 
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
@@ -129,6 +135,21 @@ func run() error {
 	}
 	log.Info("server stopped")
 	return nil
+}
+
+func parseLogLevel(raw string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "", "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid --log-level %q: use debug, info, warn, or error", raw)
+	}
 }
 
 //nolint:ireturn // returns Stub or InformerCache depending on environment

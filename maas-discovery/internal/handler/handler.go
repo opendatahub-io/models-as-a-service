@@ -2,7 +2,11 @@
 package handler
 
 import (
+	"encoding/json"
+	"errors"
+	"log/slog"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -10,23 +14,93 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/types"
 )
 
+const (
+	usernameHeader = "X-MaaS-Username"
+	groupHeader    = "X-MaaS-Group"
+)
+
 // Handler serves tenant discovery endpoints.
 type Handler struct {
 	cache cache.TenantCache
+	log   *slog.Logger
 }
 
 // New creates a Handler backed by the given TenantCache.
 func New(tc cache.TenantCache) *Handler {
-	return &Handler{cache: tc}
+	return NewWithLogger(tc, nil)
+}
+
+// NewWithLogger creates a Handler backed by the given TenantCache and logger.
+func NewWithLogger(tc cache.TenantCache, log *slog.Logger) *Handler {
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Handler{cache: tc, log: log}
 }
 
 // ListTenants handles GET /v1/tenants.
 func (h *Handler) ListTenants(c *gin.Context) {
-	tenants := h.cache.List()
+	username, groups, err := extractIdentity(c)
+	if err != nil {
+		h.log.Warn("invalid discovery identity headers", "error", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "auth identity headers are missing or invalid"})
+		return
+	}
+
+	tenants := h.cache.ListForSubjects(username, groups)
 	if tenants == nil {
 		tenants = []types.TenantInfo{}
 	}
+	h.log.Debug("resolved visible tenants",
+		"username_present", username != "",
+		"groups_count", len(groups),
+		"tenant_count", len(tenants),
+	)
 	c.JSON(http.StatusOK, types.TenantsResponse{Tenants: tenants})
+}
+
+func extractIdentity(c *gin.Context) (string, []string, error) {
+	username := strings.TrimSpace(c.GetHeader(usernameHeader))
+	rawGroups := c.GetHeader(groupHeader)
+	if username == "" || rawGroups == "" {
+		return "", nil, errors.New("missing identity headers")
+	}
+
+	groups, err := parseGroupsHeader(rawGroups)
+	if err != nil {
+		return "", nil, err
+	}
+
+	return username, groups, nil
+}
+
+func parseGroupsHeader(header string) ([]string, error) {
+	if strings.TrimSpace(header) == "" {
+		return nil, errors.New("header is empty")
+	}
+
+	var parsed []string
+	if err := json.Unmarshal([]byte(header), &parsed); err != nil {
+		trimmed := strings.TrimSpace(header)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			parsed = strings.Fields(trimmed[1 : len(trimmed)-1])
+		} else {
+			return nil, errors.New("unsupported group header format")
+		}
+	}
+
+	groups := make([]string, 0, len(parsed))
+	for _, g := range parsed {
+		g = strings.TrimSpace(g)
+		if g != "" {
+			groups = append(groups, g)
+		}
+	}
+	if len(groups) == 0 {
+		return nil, errors.New("no groups found")
+	}
+
+	return groups, nil
 }
 
 // Healthz handles GET /healthz.

@@ -5,6 +5,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/gateway"
 )
@@ -218,6 +219,65 @@ func TestExtractMetadata_Float64Port(t *testing.T) {
 	meta, err := gateway.ExtractMetadata(gw, "gw", "ns")
 	require.NoError(t, err)
 	assert.Equal(t, int64(8443), meta.Port)
+}
+
+func TestExtractMetadata_RouteHostFallback(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string]string{
+		"my-gw-svc": "maas.apps.example.com",
+	}
+
+	meta, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	require.NoError(t, err)
+	assert.Equal(t, "https://maas.apps.example.com", meta.ExternalURL)
+}
+
+func TestExtractMetadata_RouteHostFallbackNoMatch(t *testing.T) {
+	gw := makeGateway(
+		[]any{httpsListener("", int64(443))},
+		[]any{readyStatus("https", int64(1))},
+		[]any{map[string]any{"value": "my-gw-svc.gw-ns.svc.cluster.local"}},
+	)
+
+	routeHosts := map[string]string{
+		"other-svc": "other.apps.example.com",
+	}
+
+	_, err := gateway.ExtractMetadata(gw, "my-gw", "gw-ns", routeHosts)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal service name")
+}
+
+func TestBuildRouteHostMap(t *testing.T) {
+	routes := []unstructured.Unstructured{
+		{Object: map[string]any{
+			"spec": map[string]any{
+				"host": "maas.apps.example.com",
+				"to":   map[string]any{"kind": "Service", "name": "maas-gw-svc"},
+			},
+		}},
+		{Object: map[string]any{
+			"spec": map[string]any{
+				"host": "other.apps.example.com",
+				"to":   map[string]any{"kind": "Service", "name": "other-svc"},
+			},
+		}},
+	}
+
+	m := gateway.BuildRouteHostMap(routes)
+	assert.Equal(t, "maas.apps.example.com", m["maas-gw-svc"])
+	assert.Equal(t, "other.apps.example.com", m["other-svc"])
+	assert.Len(t, m, 2)
+}
+
+func TestBuildRouteHostMap_Empty(t *testing.T) {
+	m := gateway.BuildRouteHostMap(nil)
+	assert.Empty(t, m)
 }
 
 func TestExtractMetadata_TLSListener(t *testing.T) {

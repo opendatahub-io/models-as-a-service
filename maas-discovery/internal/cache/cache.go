@@ -9,6 +9,7 @@ import (
 // TenantCache provides read access to tenant metadata.
 type TenantCache interface {
 	List() []types.TenantInfo
+	ListForSubjects(username string, groups []string) []types.TenantInfo
 	Synced() bool
 }
 
@@ -23,6 +24,11 @@ func NewStub() *Stub {
 
 // List returns an empty tenant list.
 func (s *Stub) List() []types.TenantInfo {
+	return nil
+}
+
+// ListForSubjects returns an empty tenant list.
+func (s *Stub) ListForSubjects(string, []string) []types.TenantInfo {
 	return nil
 }
 

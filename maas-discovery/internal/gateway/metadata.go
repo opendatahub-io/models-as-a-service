@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/types"
 )
 
@@ -18,7 +20,7 @@ const (
 // On success it returns a fully populated GatewayMetadata. If the gateway is missing
 // status, listeners, or an external hostname, it returns an error. Callers should
 // degrade gracefully by keeping name/namespace and omitting externalUrl.
-func ExtractMetadata(gateway map[string]any, name, namespace string) (*types.GatewayMetadata, error) {
+func ExtractMetadata(gateway map[string]any, name, namespace string, routeHosts ...map[string]string) (*types.GatewayMetadata, error) {
 	spec, ok := gateway["spec"].(map[string]any)
 	if !ok {
 		return nil, errors.New("gateway spec not found")
@@ -69,8 +71,19 @@ func ExtractMetadata(gateway map[string]any, name, namespace string) (*types.Gat
 	}
 
 	if strings.HasSuffix(externalHost, ".svc.cluster.local") {
-		return nil, fmt.Errorf("gateway %s/%s has internal service name %s instead of external hostname",
-			namespace, name, externalHost)
+		svcName, _, _ := strings.Cut(externalHost, ".")
+		var resolved bool
+		for _, rh := range routeHosts {
+			if host, ok := rh[svcName]; ok {
+				externalHost = host
+				resolved = true
+				break
+			}
+		}
+		if !resolved {
+			return nil, fmt.Errorf("gateway %s/%s has internal service name %s instead of external hostname",
+				namespace, name, externalHost)
+		}
 	}
 
 	scheme := "https"
@@ -90,6 +103,32 @@ func ExtractMetadata(gateway map[string]any, name, namespace string) (*types.Gat
 		ExternalURL: externalURL,
 		Port:        port,
 	}, nil
+}
+
+// BuildRouteHostMap builds a map from Kubernetes Service name to external hostname
+// by inspecting OpenShift Route objects. Returns an empty map if no routes are provided.
+func BuildRouteHostMap(routes []unstructured.Unstructured) map[string]string {
+	m := make(map[string]string, len(routes))
+	for i := range routes {
+		spec, ok := routes[i].Object["spec"].(map[string]any)
+		if !ok {
+			continue
+		}
+		host, _ := spec["host"].(string)
+		if host == "" {
+			continue
+		}
+		to, ok := spec["to"].(map[string]any)
+		if !ok {
+			continue
+		}
+		svcName, _ := to["name"].(string)
+		if svcName == "" {
+			continue
+		}
+		m[svcName] = host
+	}
+	return m
 }
 
 // selectBestListener picks the best ready listener from a Gateway spec.

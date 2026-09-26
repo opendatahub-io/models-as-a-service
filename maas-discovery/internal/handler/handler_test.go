@@ -28,6 +28,8 @@ func TestListTenants(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -96,12 +98,27 @@ func TestMethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, w.Code)
 }
 
+func TestListTenants_MissingIdentityHeaders(t *testing.T) {
+	r := newTestRouter()
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusInternalServerError, w.Code)
+	assert.Contains(t, w.Body.String(), "auth identity headers")
+}
+
 type fakeTenantCache struct {
 	tenants []types.TenantInfo
 	synced  bool
 }
 
 func (f *fakeTenantCache) List() []types.TenantInfo {
+	return f.tenants
+}
+
+func (f *fakeTenantCache) ListForSubjects(string, []string) []types.TenantInfo {
 	return f.tenants
 }
 
@@ -132,6 +149,8 @@ func TestListTenantsWithData(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -168,6 +187,8 @@ func TestContract_ResponseSchema(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -202,6 +223,8 @@ func TestContract_EmptyTenants(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -229,6 +252,8 @@ func TestContract_PartialGateway(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -244,7 +269,9 @@ func TestContract_PartialGateway(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "missing-gw", gw["name"])
 	assert.Equal(t, "openshift-ingress", gw["namespace"])
-	assert.Empty(t, gw["protocol"], "zero-value fields must be present, not omitted")
+	require.Contains(t, gw, "protocol", "zero-value fields must be present, not omitted")
+	assert.Empty(t, gw["protocol"])
+	require.Contains(t, gw, "externalUrl", "zero-value fields must be present, not omitted")
 	assert.Empty(t, gw["externalUrl"])
 	assert.InDelta(t, float64(0), gw["port"], 0)
 }
@@ -282,6 +309,8 @@ func TestContract_MultiTenant(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	req.Header.Set("X-MaaS-Username", "alice")
+	req.Header.Set("X-MaaS-Group", `["team-a"]`)
 	r.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
