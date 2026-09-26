@@ -368,6 +368,55 @@ kubectl delete aitenant team-red -n ai-tenants
 
 Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
 
+## Operand NetworkPolicies
+
+MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md). `maas-controller` reconciles operand policies (server-side apply) and recreates them if deleted. The operator bundle policy `maas-controller-allow-monitoring` is managed separately by the platform operator.
+
+| Policy | Workload | Direction | Allowed peers |
+| ------ | -------- | --------- | ------------- |
+| `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
+| `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
+| `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres`) when `maas-db-config` targets in-cluster Postgres |
+| `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; `usage-gateway-http` → `:8080` (when `usageLogging=true`) |
+| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` (when `usageLogging=true`) |
+| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; `usage-gateway-http` → `:8080` |
+
+### External PostgreSQL
+
+When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-api-egress-external-postgres
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/16   # replace with your database subnet/CIDR
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+Per [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md), external destinations with stable address ranges use the narrowest applicable CIDR; DNS-named endpoints cannot be selected by standard NetworkPolicy.
+
+### Kubernetes API egress (port-only rule)
+
+`maas-api-egress-restrict` and `usage-tenancy-proxy-egress-restrict` allow egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
+
 ## Next steps
 
 * **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.

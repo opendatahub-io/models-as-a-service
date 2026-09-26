@@ -393,6 +393,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - opentelemetry.io

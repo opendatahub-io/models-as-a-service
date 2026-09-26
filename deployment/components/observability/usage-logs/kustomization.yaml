@@ -4,8 +4,10 @@ kind: Kustomization
 resources:
   - otel-collector.yaml
   - otel-collector-rbac.yaml
+  - usage-logs-collector-egress-networkpolicy.yaml
   - tenancy-proxy-rbac.yaml
   - tenancy-proxy.yaml
+  - usage-tenancy-proxy-networkpolicy.yaml
   - usage-logs-admin-dashboard.yaml
   - usage-logs-dashboard.yaml
 
