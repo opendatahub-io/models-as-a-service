@@ -3530,13 +3530,19 @@
 <a id="__codelineno-0-5" name="__codelineno-0-5" href="#__codelineno-0-5"></a><span class="w">    </span><span class="nt">opendatahub.io/managed</span><span class="p">:</span><span class="w"> </span><span class="s">&quot;false&quot;</span><span class="w">  </span><span class="c1"># Controller won&#39;t overwrite or delete</span>
 </code></pre></div></p>
 <h3 id="maassubscription-reconciler">MaaSSubscription Reconciler</h3>
-<p><strong>What it does:</strong>
-- Creates one Kuadrant <strong>TokenRateLimitPolicy</strong> per model (aggregating every <strong>MaaSSubscription</strong> that references that model)
-- For each subscription that applies to the model, adds a <strong>limit</strong> entry with rates from the CR and a <strong><code>when</code></strong> predicate that matches<br />
-<code>auth.identity.selected_subscription_key</code> to the model-scoped key<br />
-<code>{subNamespace}/{subName}@{modelNamespace}/{modelName}</code><br />
-  AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see <a href="../authentication-internals/">Authentication Internals</a>.
-- Exempts <code>/v1/models</code> from token consumption limits where configured so discovery still works when quotas are exhausted</p>
+<p><strong>What it does:</strong></p>
+<ul>
+<li>Creates one Kuadrant <strong>TokenRateLimitPolicy</strong> per model (aggregating every <strong>MaaSSubscription</strong> that references that model)</li>
+<li>Adds one <strong>limit</strong> entry per distinct set of <code>tokenRateLimits</code> among those subscriptions, so subscriptions with identical rates share an entry:<ul>
+<li>The limit is named after its rates: <code>tokens-{limit}-per-{window}</code>, with one <code>-{limit}-per-{window}</code> segment per rate, deduplicated and sorted as strings (for example <code>tokens-1000-per-1h-99999-per-1s</code>). Windows are compared as written, so <code>1m</code> and <code>60s</code> are different rate sets.</li>
+<li>Its <strong><code>when</code></strong> predicate matches <code>auth.identity.selected_subscription_key</code> against the model-scoped key <code>{subNamespace}/{subName}@{modelNamespace}/{modelName}</code> of every subscription in the group, keys sorted and OR-ed, for example <code>(auth.identity.selected_subscription_key == "ns/sub-a@llm/model" || auth.identity.selected_subscription_key == "ns/sub-b@llm/model") &amp;&amp; !request.path.endsWith("/v1/models")</code>. A group of one gets the single equality without parentheses.</li>
+<li>Its <strong><code>counters</code></strong> are <code>auth.identity.selected_subscription_key</code> and <code>auth.identity.userid</code>, so each subscription and each user keep their own budget even when the limit is shared.</li>
+</ul>
+</li>
+<li>AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see <a href="../authentication-internals/">Authentication Internals</a>.</li>
+<li>Exempts <code>/v1/models</code> from token consumption limits where configured so discovery still works when quotas are exhausted</li>
+</ul>
+<p>Kuadrant copies every limit into every route-match ActionSet of the gateway's wasm config (<code>kuadrant-{gateway-name}</code>, an <code>EnvoyFilter</code> on Kuadrant 1.5+ or a <code>WasmPlugin</code> on 1.4.x), so the number of limits drives that object's size (RHOAIENG-95277). Grouping by rate means a subscription at an existing rate adds one clause to a predicate instead of a whole limit. See <a href="../../advanced-administration/subscription-cardinality/#gateway-config-size">Subscription Cardinality</a>.</p>
 <p><strong>Watch triggers:</strong>
 - MaaSSubscription changes
 - MaaSModelRef changes (re-reconcile when model created/deleted)
@@ -3597,7 +3603,7 @@ An opted-out policy (<code>opendatahub.io/managed: "false"</code>) can become pe
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="July 10, 2026 21:37:28 UTC">July 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 26, 2026 01:54:46 UTC">September 26, 2026</span>
   </span>
 
     

@@ -3460,8 +3460,8 @@
      This is the value <strong>rate limiting</strong> keys off.</p>
 </li>
 <li>
-<p><strong>TokenRateLimitPolicy</strong> (aggregated per model by the MaaSSubscription reconciler) defines <strong>one limit entry per subscription</strong> that applies to that model. Each limit’s <strong><code>when</code></strong> predicate matches requests where<br />
-<code>auth.identity.selected_subscription_key</code> equals that subscription’s scoped key (and inference paths are distinguished from discovery; <code>/v1/models</code> is exempt from token consumption limits where configured).</p>
+<p><strong>TokenRateLimitPolicy</strong> (aggregated per model by the MaaSSubscription reconciler) defines <strong>one limit entry per distinct rate set</strong> among the subscriptions that apply to that model. Each limit’s <strong><code>when</code></strong> predicate matches requests where
+   <code>auth.identity.selected_subscription_key</code> equals the scoped key of any subscription in that group (and inference paths are distinguished from discovery; <code>/v1/models</code> is exempt from token consumption limits where configured). Its counters are <code>selected_subscription_key</code> and <code>userid</code>, so subscriptions sharing a limit keep separate budgets; see <a href="../reconciliation-flow/#maassubscription-reconciler">Reconciliation Flow</a>.</p>
 </li>
 </ol>
 <p>So enforcement is: <strong>subscription resolved in AuthPolicy → same key matched in TRLP</strong>. Group-based <strong>authorization</strong> is resolved during subscription selection: <strong>maas-api</strong> evaluates <strong>MaaSAuthPolicy</strong> rules for the caller and returns <code>accessAllowed</code> in <strong><code>subscription-info</code></strong> metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. <strong>Rate limit selection</strong> follows the resolved subscription key, not a separate “group split” expression on TRLP.</p>
@@ -3569,7 +3569,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="August 13, 2026 11:35:15 UTC">August 13, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 26, 2026 01:54:46 UTC">September 26, 2026</span>
   </span>
 
     
