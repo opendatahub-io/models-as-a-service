@@ -22,6 +22,13 @@ const (
 	DefaultInsecureAddr = ":8080"
 )
 
+type SubscriptionMode string
+
+const (
+	SubscriptionModeEnforced   SubscriptionMode = "enforced"
+	SubscriptionModeStandalone SubscriptionMode = "standalone"
+)
+
 type Config struct {
 	Name      string
 	Namespace string
@@ -30,6 +37,7 @@ type Config struct {
 	GatewayNamespace string
 
 	MaaSSubscriptionNamespace string
+	SubscriptionMode          SubscriptionMode
 
 	// TenantName is the tenant identifier for this maas-api instance.
 	// Set to "models-as-a-service" for default tenant, or AITenant name (e.g., "redteam") for other tenants.
@@ -116,6 +124,7 @@ func Load() *Config {
 	accessCheckTimeoutSeconds, _ := env.GetInt("ACCESS_CHECK_TIMEOUT_SECONDS", 15)
 	sarCacheMaxSize, _ := env.GetInt("SAR_CACHE_MAX_SIZE", constant.DefaultSARCacheMaxSize)
 	lastUsedDebounceSecs, _ := env.GetInt("LAST_USED_DEBOUNCE_SECS", 60)
+	subscriptionMode := SubscriptionMode(env.GetString("MAAS_SUBSCRIPTION_MODE", string(SubscriptionModeEnforced)))
 	metricsPort, _ := env.GetInt("METRICS_PORT", constant.DefaultMetricsPort)
 	metricsSecure, _ := env.GetBool("METRICS_SECURE", true)
 	metricsCertDir := env.GetString("METRICS_CERT_DIR", constant.DefaultMetricsCertDir)
@@ -143,6 +152,7 @@ func Load() *Config {
 		GatewayName:               gatewayName,
 		GatewayNamespace:          env.GetString("GATEWAY_NAMESPACE", constant.DefaultGatewayNamespace),
 		MaaSSubscriptionNamespace: env.GetString("MAAS_SUBSCRIPTION_NAMESPACE", constant.DefaultMaaSSubscriptionNamespace),
+		SubscriptionMode:          subscriptionMode,
 		TenantName:                tenantName,
 		AITenantName:              aitenantName,
 		AITenantNamespace:         aitenantNamespace,
@@ -245,6 +255,12 @@ func (c *Config) Validate() error {
 
 	if strings.TrimSpace(c.MaaSSubscriptionNamespace) == "" {
 		return errors.New("MAAS_SUBSCRIPTION_NAMESPACE must be non-empty")
+	}
+	if c.SubscriptionMode == "" {
+		c.SubscriptionMode = SubscriptionModeEnforced
+	}
+	if c.SubscriptionMode != SubscriptionModeEnforced && c.SubscriptionMode != SubscriptionModeStandalone {
+		return fmt.Errorf("MAAS_SUBSCRIPTION_MODE %q is invalid: must be %q or %q", c.SubscriptionMode, SubscriptionModeEnforced, SubscriptionModeStandalone)
 	}
 	if errs := validation.IsDNS1123Label(c.MaaSSubscriptionNamespace); len(errs) > 0 {
 		return fmt.Errorf("MAAS_SUBSCRIPTION_NAMESPACE %q is invalid: %v", c.MaaSSubscriptionNamespace, errs)

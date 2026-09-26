@@ -38,6 +38,28 @@ func createTestService(t *testing.T) (*api_keys.Service, *api_keys.MockStore) {
 	return svc, store
 }
 
+func TestStandaloneModeCreatesAndValidatesUnboundKey(t *testing.T) {
+	ctx := context.Background()
+	store := api_keys.NewMockStore()
+	cfg := &config.Config{
+		APIKeyMaxExpirationDays: 30,
+		SubscriptionMode:        config.SubscriptionModeStandalone,
+	}
+	svc := api_keys.NewServiceWithLogger(store, cfg, nil, logger.Development())
+
+	created, err := svc.CreateAPIKey(ctx, "alice", []string{"enmaas-testing"}, "standalone-key", "", nil, false, "", "", nil)
+	require.NoError(t, err)
+	require.NotEmpty(t, created.Key)
+	assert.Empty(t, created.Subscription)
+
+	validated, err := svc.ValidateAPIKey(ctx, created.Key)
+	require.NoError(t, err)
+	assert.True(t, validated.Valid)
+	assert.Equal(t, "alice", validated.Username)
+	assert.Equal(t, []string{"enmaas-testing"}, validated.Groups)
+	assert.Empty(t, validated.Subscription)
+}
+
 // ============================================================
 // VALIDATE API KEY TESTS (CRITICAL - Security Function)
 // ============================================================
