@@ -2,6 +2,12 @@
 
 This guide covers administrative operations for managing API keys across the MaaS platform.
 
+## Lifecycle Cleanup
+
+Deleting an `AITenant` invalidates all of its API keys. Deleting a `MaaSSubscription` invalidates only keys bound to that subscription. These operations are performed through internal maas-api endpoints and are gated by Kubernetes finalizers, so a transient maas-api outage causes deletion to retry instead of leaving credentials usable.
+
+Lifecycle-invalidated rows, including regular and ephemeral keys, are soft-deleted with a 90-day retention period by default, matching the tenancy architecture decision record. Set `spec.apiKeys.deletionRetentionDays` on `MaasTenantConfig` for an operator-managed tenant, or set `API_KEY_DELETION_RETENTION_DAYS` on a standalone maas-api deployment. The regular internal cleanup CronJob still removes expired ephemeral keys after its 30-minute grace period, but never removes lifecycle-invalidated rows; those rows are physically removed only after the configured retention period. Active regular keys remain until manually revoked. Each lifecycle cleanup emits a structured audit log containing the tenant, scope, deleted-key count, timestamp, and controller initiator.
+
 ## Bulk Key Revocation
 
 Platform administrators can bulk revoke API keys by **user**, by **subscription**, or both. A **dry-run** mode is available to preview how many keys would be revoked before committing.
@@ -128,7 +134,7 @@ Expired ephemeral keys are automatically deleted from the database by a **CronJo
 
 ### How It Works
 
-1. The CronJob sends `POST /internal/v1/api-keys/cleanup` to the maas-api Service
+1. The CronJob reads its projected `maas-api-cleanup` ServiceAccount token and sends an authenticated `POST /internal/v1/api-keys/cleanup` request to the maas-api Service
 2. The endpoint deletes ephemeral keys that expired **more than 30 minutes ago** (grace period)
 3. Regular (non-ephemeral) keys are **never** deleted by cleanup — they remain until manually revoked
 

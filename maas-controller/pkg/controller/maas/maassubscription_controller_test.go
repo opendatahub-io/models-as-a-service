@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 
+	batcv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -153,6 +155,76 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 				t.Errorf("spec.targetRef.name = %q: expected sentinel %q (managed=false opt-out)", targetRefName, "sentinel-route")
 			}
 		})
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_CreatesScopedJob(t *testing.T) {
+	const (
+		tenantNamespace = "team-a-maas"
+		appNamespace    = "odh-ai-gateway-infra"
+	)
+
+	subscription := newMaaSSubscription("sub-delete", tenantNamespace, "team-a", "llm", 100)
+	subscription.UID = types.UID("subscription-uid")
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: tenantNamespace,
+			Labels: map[string]string{
+				"maas.opendatahub.io/managed-by-aitenant": "true",
+				"maas.opendatahub.io/tenant-name":         "team-a",
+				"maas.opendatahub.io/tenant-namespace":    tenantNamespace,
+			},
+		},
+	}
+
+	c := fake.NewClientBuilder().WithScheme(scheme).WithStatusSubresource(&batcv1.Job{}).WithObjects(subscription, tenant).Build()
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme, AppNamespace: appNamespace}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked: %v", err)
+	}
+	if complete {
+		t.Fatal("new cleanup Job must not be reported complete")
+	}
+
+	job := subscriptionAPIKeyRevocationJob(subscription, "team-a", "team-a", appNamespace)
+	var created batcv1.Job
+	if err := c.Get(context.Background(), client.ObjectKeyFromObject(job), &created); err != nil {
+		t.Fatalf("get cleanup Job: %v", err)
+	}
+	args := created.Spec.Template.Spec.Containers[0].Args
+	if !strings.Contains(strings.Join(args, " "), "/internal/v1/tenants/team-a/subscriptions/sub-delete/api-keys") {
+		t.Fatalf("cleanup Job args = %v, want subscription-scoped endpoint", args)
+	}
+	if created.Annotations["maas.opendatahub.io/cleanup-scope"] != "subscription" {
+		t.Fatalf("cleanup scope annotation = %q, want subscription", created.Annotations["maas.opendatahub.io/cleanup-scope"])
+	}
+
+	created.Status.Conditions = []batcv1.JobCondition{{Type: batcv1.JobComplete, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(context.Background(), &created); err != nil {
+		t.Fatalf("mark cleanup Job complete: %v", err)
+	}
+	complete, err = r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err != nil {
+		t.Fatalf("ensure completed cleanup: %v", err)
+	}
+	if !complete {
+		t.Fatal("completed cleanup Job must be reported complete")
+	}
+}
+
+func TestEnsureSubscriptionAPIKeysRevoked_RequiresApplicationNamespace(t *testing.T) {
+	subscription := newMaaSSubscription("sub-delete", "models-as-a-service", "team-a", "llm", 100)
+	r := &MaaSSubscriptionReconciler{Client: fake.NewClientBuilder().WithScheme(scheme).Build(), Scheme: scheme}
+
+	complete, err := r.ensureSubscriptionAPIKeysRevoked(context.Background(), ctrl.Log, subscription)
+	if err == nil || !strings.Contains(err.Error(), "application namespace is required") {
+		t.Fatalf("ensureSubscriptionAPIKeysRevoked error = %v, want missing namespace error", err)
+	}
+	if complete {
+		t.Fatal("cleanup must not be reported complete when namespace wiring is missing")
 	}
 }
 
@@ -428,11 +500,17 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 			// Create MaaSSubscription with finalizer so handleDeletion processes it.
 			maasSub := newMaaSSubscription(maasSubName, namespace, "team-a", modelName, 100)
 			maasSub.Finalizers = []string{maasSubscriptionFinalizer}
+			tenant := &maasv1alpha1.MaasTenantConfig{
+				ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace},
+			}
+			cleanupJob := subscriptionAPIKeyRevocationJob(maasSub, "models-as-a-service", "", "odh-ai-gateway-infra")
+			cleanupJob.Status.Conditions = []batcv1.JobCondition{{Type: batcv1.JobComplete, Status: corev1.ConditionTrue}}
 
 			c := fake.NewClientBuilder().
 				WithScheme(scheme).
 				WithRESTMapper(testRESTMapper()).
-				WithObjects(maasSub, existingTRLP).
+				WithStatusSubresource(&batcv1.Job{}).
+				WithObjects(maasSub, tenant, existingTRLP, cleanupJob).
 				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
@@ -442,7 +520,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSSubscription: %v", err)
 			}
 
-			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -722,15 +800,24 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 		},
 	}
 
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: subNS},
+	}
+	cleanupJob1 := subscriptionAPIKeyRevocationJob(sub1, "models-as-a-service", "", "odh-ai-gateway-infra")
+	cleanupJob1.Status.Conditions = []batcv1.JobCondition{{Type: batcv1.JobComplete, Status: corev1.ConditionTrue}}
+	cleanupJob2 := subscriptionAPIKeyRevocationJob(sub2, "models-as-a-service", "", "odh-ai-gateway-infra")
+	cleanupJob2.Status.Conditions = []batcv1.JobCondition{{Type: batcv1.JobComplete, Status: corev1.ConditionTrue}}
+
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
-		WithObjects(model, route, sub1, sub2).
+		WithStatusSubresource(&batcv1.Job{}).
+		WithObjects(model, route, sub1, sub2, tenant, cleanupJob1, cleanupJob2).
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
 
 	// Reconcile both subscriptions to create the aggregated TokenRateLimitPolicy
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub1Name, Namespace: subNS}}
