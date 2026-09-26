@@ -24,6 +24,9 @@
 #     inference-externalproviders.yaml - ExternalProvider (inference group)
 #     aigateways.yaml            - AIGateway (cluster-scoped) definitions
 #     llmbatchgateways.yaml      - LLMBatchGateway definitions
+#     kuadrant-authpolicies.yaml - Kuadrant AuthPolicies managed by maas-controller
+#     kuadrant-tokenratelimitpolicies.yaml - Kuadrant TokenRateLimitPolicies
+#     kserve-llminferenceservices.yaml - KServe LLMInferenceService definitions
 #   pod-logs/                  - Per-pod logs from the deployment namespace
 #
 # Usage:
@@ -113,7 +116,8 @@ MAAS_API_DEPLOYMENT_NAMESPACE="${MAAS_API_DEPLOYMENT_NAMESPACE:-$(_auth_debug_re
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
 
 # -----------------------------------------------------------------------------
-# Redact token-like values from log output (JWT, Bearer tokens, token fields)
+# Redact token-like values from log output (JWT, Bearer tokens, token fields,
+# and common secret environment variable values in YAML/JSON)
 # -----------------------------------------------------------------------------
 redact_tokens() {
   sed -E \
@@ -123,6 +127,9 @@ redact_tokens() {
     -e 's/(Bearer )[^[:space:]]+/\1****/g' \
     -e 's/("spec":\s*\{[^}]*"token":\s*)"[^"]*"/\1"****"/g' \
     -e 's/token=[A-Za-z0-9_-]+\.?[A-Za-z0-9_-]*\.?[A-Za-z0-9_-]*/token=****/g' \
+    -e 's/(name:\s*(HF_TOKEN|HUGGING_FACE_HUB_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_CLIENT_SECRET|API_KEY|SECRET_KEY|PASSWORD|CREDENTIALS)[[:space:]]*$)/\1/g' \
+    -e '/name:\s*(HF_TOKEN|HUGGING_FACE_HUB_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_CLIENT_SECRET|API_KEY|SECRET_KEY|PASSWORD|CREDENTIALS)/{n;s/(value:\s*).+/\1****REDACTED****/;}' \
+    -e 's/(password|secret|apikey|api_key|credentials|client_secret):\s*[^[:space:]]+/\1: ****REDACTED****/gI' \
     2>/dev/null || cat
 }
 
@@ -186,11 +193,22 @@ INFERENCE_CRDS=(
   "externalmodels.inference.opendatahub.io"
   "externalproviders.inference.opendatahub.io"
 )
+# External CRDs — not owned by this repo but may be present on the cluster
+# (installed by ODH operator / ai-gateway-operator).
 AIGATEWAY_CRDS=(
   "aigateways.components.platform.opendatahub.io"
   "llmbatchgateways.batch.llm-d.ai"
 )
-ALL_CRDS=("${MAAS_CRDS[@]}" "${INFERENCE_CRDS[@]}" "${AIGATEWAY_CRDS[@]}")
+# Kuadrant policy CRDs managed by maas-controller
+KUADRANT_CRDS=(
+  "authpolicies.kuadrant.io"
+  "tokenratelimitpolicies.kuadrant.io"
+)
+# KServe CRDs — LLMInferenceService is the primary internal model backend
+KSERVE_CRDS=(
+  "llminferenceservices.serving.kserve.io"
+)
+ALL_CRDS=("${MAAS_CRDS[@]}" "${INFERENCE_CRDS[@]}" "${AIGATEWAY_CRDS[@]}" "${KUADRANT_CRDS[@]}" "${KSERVE_CRDS[@]}")
 
 _crd_artifact_name() {
   local crd="$1"
@@ -201,6 +219,8 @@ _crd_artifact_name() {
     inference.opendatahub.io)     echo "inference-${resource}" ;;
     components.platform.opendatahub.io) echo "$resource" ;;
     batch.llm-d.ai)               echo "$resource" ;;
+    kuadrant.io)                  echo "kuadrant-${resource}" ;;
+    serving.kserve.io)            echo "kserve-${resource}" ;;
     *)                            echo "${resource}-${group%%.*}" ;;
   esac
 }
@@ -290,6 +310,23 @@ collect_cluster_state() {
     echo "--- AI Gateway CRs ---"
     kubectl get aigateways.components.platform.opendatahub.io -o wide 2>/dev/null || true
     kubectl get llmbatchgateways.batch.llm-d.ai -A -o wide 2>/dev/null || true
+    echo ""
+    echo "--- KServe Resources ---"
+    kubectl get llminferenceservices.serving.kserve.io -A -o wide 2>/dev/null || true
+    echo ""
+    echo "--- Kuadrant Policies (managed by maas-controller) ---"
+    kubectl get authpolicies.kuadrant.io -A -l 'app.kubernetes.io/managed-by=maas-controller' -o wide 2>/dev/null || true
+    kubectl get tokenratelimitpolicies.kuadrant.io -A -l 'app.kubernetes.io/managed-by=maas-controller' -o wide 2>/dev/null || true
+    echo ""
+    echo "--- Payload Processing / IPP ($GATEWAY_NAMESPACE) ---"
+    kubectl get deployments -n "$GATEWAY_NAMESPACE" -l 'app.kubernetes.io/part-of=payload-processing' -o wide 2>/dev/null || true
+    kubectl get services -n "$GATEWAY_NAMESPACE" -l 'app.kubernetes.io/part-of=payload-processing' -o wide 2>/dev/null || true
+    kubectl get envoyfilters -n "$GATEWAY_NAMESPACE" 2>/dev/null || true
+    kubectl get configmaps -n "$GATEWAY_NAMESPACE" -l 'app.kubernetes.io/part-of=payload-processing' 2>/dev/null || true
+    kubectl get serviceaccounts -n "$GATEWAY_NAMESPACE" -l 'app.kubernetes.io/part-of=payload-processing' 2>/dev/null || true
+    echo ""
+    echo "--- NetworkPolicies ($GATEWAY_NAMESPACE) ---"
+    kubectl get networkpolicies -n "$GATEWAY_NAMESPACE" -o wide 2>/dev/null || true
     echo ""
     echo "--- HTTPRoutes ---"
     kubectl get httproutes -A 2>/dev/null | head -30 || true
@@ -424,6 +461,26 @@ run_auth_debug_report() {
   _section "AI Gateway CRs"
   _run "AIGateways (cluster-scoped)" "kubectl get aigateways.components.platform.opendatahub.io -o wide 2>/dev/null || true"
   _run "LLMBatchGateways (all namespaces)" "kubectl get llmbatchgateways.batch.llm-d.ai -A -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "KServe Resources"
+  _run "LLMInferenceServices (all namespaces)" "kubectl get llminferenceservices.serving.kserve.io -A -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "Kuadrant Policies (managed by maas-controller)"
+  _run "AuthPolicies (managed)" "kubectl get authpolicies.kuadrant.io -A -l 'app.kubernetes.io/managed-by=maas-controller' -o wide 2>/dev/null || true"
+  _run "TokenRateLimitPolicies (managed)" "kubectl get tokenratelimitpolicies.kuadrant.io -A -l 'app.kubernetes.io/managed-by=maas-controller' -o wide 2>/dev/null || true"
+  _append ""
+
+  _section "Payload Processing / IPP"
+  _run "IPP Deployments ($GATEWAY_NAMESPACE)" "kubectl get deployments -n \"$GATEWAY_NAMESPACE\" -l 'app.kubernetes.io/part-of=payload-processing' -o wide 2>/dev/null || true"
+  _run "IPP Services ($GATEWAY_NAMESPACE)" "kubectl get services -n \"$GATEWAY_NAMESPACE\" -l 'app.kubernetes.io/part-of=payload-processing' -o wide 2>/dev/null || true"
+  _run "EnvoyFilters ($GATEWAY_NAMESPACE)" "kubectl get envoyfilters -n \"$GATEWAY_NAMESPACE\" -o wide 2>/dev/null || true"
+  _run "IPP ConfigMaps ($GATEWAY_NAMESPACE)" "kubectl get configmaps -n \"$GATEWAY_NAMESPACE\" -l 'app.kubernetes.io/part-of=payload-processing' 2>/dev/null || true"
+  _append ""
+
+  _section "NetworkPolicies"
+  _run "NetworkPolicies ($GATEWAY_NAMESPACE)" "kubectl get networkpolicies -n \"$GATEWAY_NAMESPACE\" -o wide 2>/dev/null || true"
   _append ""
 
   _section "Test User Information"
@@ -585,21 +642,32 @@ EOF
   _append ""
   local total_models total_subs total_authpolicies total_kuadrant_authpolicies
   local total_aitenants total_inference_models total_inference_providers
+  local total_kuadrant_trlps total_llmisvc total_envoyfilters total_ipp_deployments total_networkpolicies
   total_models=$(echo "$models_json" | jq '. | length' 2>/dev/null || echo "0")
   total_subs=$(echo "$subscriptions_json" | jq '. | length' 2>/dev/null || echo "0")
   total_authpolicies=$(kubectl get maasauthpolicies -n $MAAS_SUBSCRIPTION_NAMESPACE -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
   total_kuadrant_authpolicies=$(kubectl get authpolicies -A -l 'app.kubernetes.io/managed-by=maas-controller' -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_kuadrant_trlps=$(kubectl get tokenratelimitpolicies -A -l 'app.kubernetes.io/managed-by=maas-controller' -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_llmisvc=$(kubectl get llminferenceservices.serving.kserve.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
   total_aitenants=$(kubectl get aitenants.maas.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
   total_inference_models=$(kubectl get externalmodels.inference.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
   total_inference_providers=$(kubectl get externalproviders.inference.opendatahub.io -A -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_envoyfilters=$(kubectl get envoyfilters -n "$GATEWAY_NAMESPACE" -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_ipp_deployments=$(kubectl get deployments -n "$GATEWAY_NAMESPACE" -l 'app.kubernetes.io/part-of=payload-processing' -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
+  total_networkpolicies=$(kubectl get networkpolicies -n "$GATEWAY_NAMESPACE" -o json 2>/dev/null | jq -r '.items | length' 2>/dev/null || echo "0")
 
   _append "  AITenants (all namespaces): $total_aitenants"
   _append "  MaaSModelRefs (all namespaces): $total_models"
   _append "  MaaSSubscriptions ($MAAS_SUBSCRIPTION_NAMESPACE): $total_subs"
   _append "  MaaSAuthPolicies ($MAAS_SUBSCRIPTION_NAMESPACE): $total_authpolicies"
   _append "  Generated Kuadrant AuthPolicies: $total_kuadrant_authpolicies"
+  _append "  Generated Kuadrant TokenRateLimitPolicies: $total_kuadrant_trlps"
+  _append "  LLMInferenceServices (all namespaces): $total_llmisvc"
   _append "  ExternalModels - inference (all namespaces): $total_inference_models"
   _append "  ExternalProviders - inference (all namespaces): $total_inference_providers"
+  _append "  EnvoyFilters ($GATEWAY_NAMESPACE): $total_envoyfilters"
+  _append "  IPP Deployments ($GATEWAY_NAMESPACE): $total_ipp_deployments"
+  _append "  NetworkPolicies ($GATEWAY_NAMESPACE): $total_networkpolicies"
   _append ""
   _append "  Subscription selector URL: $sub_select_url"
   _append "  Test user: $(oc whoami 2>/dev/null || echo 'N/A')"
