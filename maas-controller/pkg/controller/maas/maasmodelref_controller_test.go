@@ -58,10 +58,11 @@ var (
 type fakeHandler struct {
 	endpoint string
 	ready    bool
+	routeErr error
 }
 
 func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
-	return nil
+	return f.routeErr
 }
 func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
 	return f.endpoint, f.ready, nil
@@ -173,6 +174,58 @@ func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, clien
 		GatewayNamespace:  testGatewayNamespace,
 		AITenantNamespace: testAITenantNamespace,
 	}, c
+}
+
+type failingModelRefStatusClient struct {
+	client.Client
+	err error
+}
+
+func (c *failingModelRefStatusClient) Status() client.SubResourceWriter {
+	return &failingModelRefStatusWriter{SubResourceWriter: c.Client.Status(), err: c.err}
+}
+
+type failingModelRefStatusWriter struct {
+	client.SubResourceWriter
+	err error
+}
+
+func (w *failingModelRefStatusWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+	return w.err
+}
+
+func TestMaaSModelRef_StatusWriteFailureReturned(t *testing.T) {
+	conflict := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasmodelrefs"}, "no-spec", errors.New("stale resource version"))
+	for _, statusErr := range []error{conflict, errors.New("status unavailable")} {
+		t.Run(statusErr.Error(), func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModelRef{ObjectMeta: metav1.ObjectMeta{Name: "no-spec", Namespace: "default"}}
+			r, backing := newTestReconciler(model)
+			r.Client = &failingModelRefStatusClient{Client: backing, err: statusErr}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)})
+			if !errors.Is(err, statusErr) {
+				t.Fatalf("Reconcile error = %v, want status error %v", err, statusErr)
+			}
+		})
+	}
+}
+
+func TestMaaSModelRef_ReconcileErrorPreservedOnStatusFailure(t *testing.T) {
+	const kind = "_test_route_error_status_failure"
+	reconcileErr := errors.New("route reconciliation failed")
+	statusErr := errors.New("status write failed")
+	backendHandlerFactories[kind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{routeErr: reconcileErr}
+	}
+	defer delete(backendHandlerFactories, kind)
+
+	model := newMaaSModelRef("route-failure", "default", kind, "backend")
+	model.Finalizers = []string{maasModelFinalizer}
+	r, backing := newTestReconciler(model)
+	r.Client = &failingModelRefStatusClient{Client: backing, err: statusErr}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)})
+	if !errors.Is(err, reconcileErr) || errors.Is(err, statusErr) {
+		t.Fatalf("Reconcile error = %v, want original error %v", err, reconcileErr)
+	}
 }
 
 // assertReadyCondition checks that the conditions slice contains a Ready condition
@@ -1701,5 +1754,54 @@ func TestEnqueueSiblingsWithAlias(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMaaSModelRef_AliasChangeConvergesSiblingConditions(t *testing.T) {
+	const namespace = "default"
+	const previousAlias = "models/previous"
+	const newAlias = "models/new"
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "changed", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: previousAlias},
+	}
+	previousSibling := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "previous-sibling", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: previousAlias},
+	}
+	newSibling := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "new-sibling", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: newAlias},
+	}
+	r, backing := newTestReconciler(model, previousSibling, newSibling)
+	if err := backing.Get(context.Background(), client.ObjectKeyFromObject(model), model); err != nil {
+		t.Fatal(err)
+	}
+	model.Status.ResolvedModelAlias = newAlias
+	if err := backing.Status().Update(context.Background(), model); err != nil {
+		t.Fatal(err)
+	}
+	queue := &fakeQueue{}
+	r.enqueueSiblingsWithAlias(context.Background(), model, queue, previousAlias)
+	if len(queue.items) != 2 {
+		t.Fatalf("enqueued %v, want both alias siblings", queue.items)
+	}
+	for _, request := range queue.items {
+		sibling := &maasv1alpha1.MaaSModelRef{}
+		if err := backing.Get(context.Background(), request.NamespacedName, sibling); err != nil {
+			t.Fatal(err)
+		}
+		r.checkModelIdentityConflict(context.Background(), logr.Discard(), sibling)
+		condition := findCondition(sibling.Status.Conditions, ConditionModelIdentityUnique)
+		if condition == nil {
+			t.Fatalf("missing collision condition for %s", sibling.Name)
+		}
+		want := metav1.ConditionTrue
+		if sibling.Name == newSibling.Name {
+			want = metav1.ConditionFalse
+		}
+		if condition.Status != want {
+			t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+		}
 	}
 }
