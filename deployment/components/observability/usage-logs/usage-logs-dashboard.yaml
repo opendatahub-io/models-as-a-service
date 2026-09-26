@@ -4,6 +4,8 @@
 # the tenancy proxy cannot user-scope label-values requests.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. user_id when capturing is disabled). Do not remove.
+# API key uses LokiLogQLVariable: key_name is structured metadata (not a stream
+# label), and the tenancy proxy can user-scope /query and /query_range.
 apiVersion: perses.dev/v1alpha1
 kind: PersesDashboard
 metadata:
@@ -58,6 +60,23 @@ spec:
             labelName: model
     - kind: ListVariable
       spec:
+        name: api_key
+        display:
+          name: "API key"
+        allowMultiple: true
+        allowAllValue: true
+        customAllValue: ".*"
+        defaultValue: "$__all"
+        plugin:
+          kind: LokiLogQLVariable
+          spec:
+            datasource:
+              kind: LokiDatasource
+              name: usage-logs-multi-tenancy
+            expr: 'count by (key_name) (count_over_time({service_name="models-as-a-service"} | key_name!="" | key_name!="-" | keep key_name [$__range]))'
+            labelName: key_name
+    - kind: ListVariable
+      spec:
         name: view_by
         display:
           name: "View by"
@@ -72,6 +91,8 @@ spec:
                 label: By model
               - value: "subscription"
                 label: By subscription
+              - value: "key_name"
+                label: By API key
 
   panels:
     totalTokens:
@@ -100,6 +121,8 @@ spec:
                   query: >-
                     sum(sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
@@ -129,7 +152,8 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model"}
-                    [$__range]))
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     or vector(0)
 
     totalRateLimited:
@@ -158,7 +182,8 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    [$__range]))
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     or vector(0)
 
     successRate:
@@ -188,13 +213,15 @@ spec:
                       (
                         sum(count_over_time({service_name="models-as-a-service",
                         subscription=~"$subscription", model=~"$model", response_type="hit"}
-                        [$__range]))
+                        | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                         or vector(0)
                       )
                       /
                       sum(count_over_time({service_name="models-as-a-service",
                       subscription=~"$subscription", model=~"$model"}
-                      [$__range]))
+                      | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     )
                     or vector(1)
 
@@ -206,7 +233,8 @@ spec:
           # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
           # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
-            Tokens from successful requests (2xx) over time by model or subscription.
+            Tokens from successful requests (2xx) over time by model, subscription,
+            or API key. **View by** drives the chart grouping.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -238,6 +266,8 @@ spec:
                   query: >-
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
                     | unwrap tokens_total [2h]))
 
     tokenConsumptionTable:
@@ -246,7 +276,7 @@ spec:
         display:
           name: "Usage breakdown"
           description: >-
-            All model/subscription pairs. **View by** changes the chart; table always shows full detail.
+            All model/subscription/API key pairs. **View by** changes the chart only.
         plugin:
           kind: Table
           spec:
@@ -305,6 +335,8 @@ spec:
                     sum by (model, subscription, key_name) (sum_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
                     | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
@@ -318,7 +350,8 @@ spec:
                     sum by (model, subscription, key_name) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    [$__range]))
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -331,12 +364,14 @@ spec:
                     sum by (model, subscription, key_name) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    [$__range]))
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     or
                     (sum by (model, subscription, key_name) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    [$__range])) * 0)
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .key_name)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range])) * 0)
 
   layouts:
     - kind: Grid

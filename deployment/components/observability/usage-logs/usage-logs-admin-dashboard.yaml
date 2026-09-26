@@ -1,9 +1,10 @@
 # Admin usage dashboard — queries Loki structured logs via LogQL.
 # Uses $__range to bind LogQL windows to the native time picker.
-# All three dropdowns (user, subscription, model) follow the dashboard time
-# picker. User filter uses LokiLogQLVariable with [$__range] — auto-populates
-# from structured metadata via count by (user_id), bypassing /label/values
-# (which requires stream labels). Subscription/model use LokiLabelValuesVariable.
+# All four dropdowns (user, subscription, model, API key) follow the dashboard time
+# picker. User and API key use LokiLogQLVariable with [$__range] — auto-populates
+# from structured metadata via count by (...), bypassing /label/values
+# (which requires stream labels). API key values are "key_name (user_id)".
+# Subscription/model use LokiLabelValuesVariable.
 # customAllValue: ".*" on ListVariables ensures "All" matches entries with
 # absent labels (e.g. subscription when capturing is disabled). Do not remove.
 apiVersion: perses.dev/v1alpha1
@@ -78,6 +79,24 @@ spec:
               - '{service_name="models-as-a-service", model!="-"}'
     - kind: ListVariable
       spec:
+        name: api_key
+        display:
+          name: "API key"
+          description: "Filter by API key. Shown as name (user)."
+        allowMultiple: true
+        allowAllValue: true
+        customAllValue: ".*"
+        defaultValue: "$__all"
+        plugin:
+          kind: LokiLogQLVariable
+          spec:
+            datasource:
+              kind: LokiDatasource
+              name: usage-logs-all
+            expr: 'count by (api_key) (count_over_time({service_name="models-as-a-service"} | user_id=~"$user" | key_name!="" | key_name!="-" | label_format api_key=`{{.key_name}} ({{.user_id}})` | keep api_key [$__range]))'
+            labelName: api_key
+    - kind: ListVariable
+      spec:
         name: view_by
         display:
           name: "View by"
@@ -92,6 +111,9 @@ spec:
                 label: By model
               - value: "subscription"
                 label: By subscription
+              # api_key is "key_name (user_id)"; grouping by key_name would merge users.
+              - value: "api_key"
+                label: By API key
 
   panels:
     totalTokens:
@@ -121,6 +143,9 @@ spec:
                     sum(sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
                     | unwrap tokens_total [$__range]))
                     or vector(0)
 
@@ -150,7 +175,10 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     or vector(0)
 
     totalRateLimited:
@@ -179,7 +207,10 @@ spec:
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     or vector(0)
 
     successRate:
@@ -209,13 +240,19 @@ spec:
                       (
                         sum(count_over_time({service_name="models-as-a-service",
                         subscription=~"$subscription", model=~"$model", response_type="hit"}
-                        | user_id=~"$user" [$__range]))
+                        | user_id=~"$user"
+                        | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                        | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                         or vector(0)
                       )
                       /
                       sum(count_over_time({service_name="models-as-a-service",
                       subscription=~"$subscription", model=~"$model"}
-                      | user_id=~"$user" [$__range]))
+                      | user_id=~"$user"
+                      | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                      | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true" [$__range]))
                     )
                     or vector(1)
 
@@ -244,7 +281,11 @@ spec:
                   query: >-
                     count(sum by (user_id) (count_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model"}
-                    | user_id=~"$user" | user_id!="" | user_id!="-" [$__range])))
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | user_id!="" | user_id!="-" [$__range])))
                     or vector(0)
 
     tokenConsumptionOverTime:
@@ -255,8 +296,8 @@ spec:
           # [2h] is the minimal stable step. Loki split_queries_by_interval is 30m; 1h still produces
           # gaps at chunk boundaries. 2h is the lowest value that returns consistent results.
           description: >-
-            Tokens from successful requests (2xx) over time by model or subscription.
-            **View by** drives the chart grouping.
+            Tokens from successful requests (2xx) over time by model, subscription,
+            or API key. **View by** drives the chart grouping.
         plugin:
           kind: TimeSeriesChart
           spec:
@@ -289,6 +330,9 @@ spec:
                     sum by (${view_by:raw}) (sum_over_time({service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
                     | unwrap tokens_total [2h]))
 
     tokenConsumptionTable:
@@ -297,7 +341,9 @@ spec:
         display:
           name: "Usage breakdown"
           description: >-
-            All model/subscription pairs. **View by** changes the chart; table always shows full detail.
+            All user/model/subscription pairs. **View by** changes the chart;
+            **By API key** also splits table rows per key and shows
+            `username (key name)` in the User column.
         plugin:
           kind: Table
           spec:
@@ -357,6 +403,10 @@ spec:
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
                     | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}"
                     | unwrap tokens_total [$__range]))
           - kind: TimeSeriesQuery
             spec:
@@ -370,7 +420,11 @@ spec:
                     sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}" [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -383,12 +437,20 @@ spec:
                     sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
-                    | user_id=~"$user" [$__range]))
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}" [$__range]))
                     or
                     (sum by (user_id, model, subscription) (count_over_time(
                     {service_name="models-as-a-service",
                     subscription=~"$subscription", model=~"$model", response_type="hit"}
-                    | user_id=~"$user" [$__range])) * 0)
+                    | user_id=~"$user"
+                    | label_format api_key=`{{.key_name}} ({{.user_id}})`
+                    | label_format __ak_keep="{{if eq `${api_key:regexliteral}` `(\\.\\*)`}}true{{else if (count (printf `^%s$` `${api_key:regexliteral}`) .api_key)}}true{{else}}false{{end}}"
+                    | __ak_keep="true"
+                    | label_format user_id="{{.user_id}}{{if eq \"${view_by:raw}\" \"api_key\"}} ({{.key_name}}){{end}}" [$__range])) * 0)
 
   layouts:
     - kind: Grid

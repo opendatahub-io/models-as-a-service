@@ -3,7 +3,7 @@
 import unittest
 from pathlib import Path
 
-from rewriter import QueryError, inject_user_filter
+from rewriter import QueryError, _read_string, inject_user_filter
 
 _DASHBOARD = Path(__file__).resolve().parent.parent / "usage-logs-dashboard.yaml"
 
@@ -58,6 +58,18 @@ class InjectUserFilterTest(unittest.TestCase):
                 self.assertEqual(
                     rewritten.count("| user_id="), query.count("{service_name=")
                 )
+                # The in-cluster proxy rejects top-level LogQL raw strings.
+                i, n = 0, len(query)
+                while i < n:
+                    if query[i] == '"':
+                        _, i = _read_string(query, i)
+                        continue
+                    self.assertNotEqual(
+                        query[i],
+                        "`",
+                        "dashboard query must not use top-level LogQL raw strings",
+                    )
+                    i += 1
 
     def test_comment_hiding_selector_is_rejected(self):
         query = """# {fake="x"}
@@ -69,11 +81,26 @@ class InjectUserFilterTest(unittest.TestCase):
             inject_user_filter(query, "alice")
 
 
-    def test_raw_string_hiding_selector_is_rejected(self):
+    def test_quote_inside_raw_string_does_not_hide_selector(self):
+        query = (
+            'count_over_time({service_name="models-as-a-service"}'
+            ' | label_format x=`{{if eq "a" "b"}}`'
+            ' [1h])'
+        )
+        rewritten = inject_user_filter(query, "alice")
+        self.assertIn('| user_id="alice"', rewritten)
+        self.assertEqual(rewritten.count("| user_id="), 1)
+
+    def test_backtick_matcher_value_is_rejected(self):
         query = (
             'sum by (user_id) (count_over_time({service_name="models-as-a-service"} |= `"` [1h]))'
             ' or sum by (user_id) (count_over_time({service_name=`models-as-a-service`} |= `"` [1h]))'
         )
+        with self.assertRaises(QueryError):
+            inject_user_filter(query, "alice")
+
+    def test_unterminated_raw_string_is_rejected(self):
+        query = '{service_name="models-as-a-service"} | label_format x=`oops'
         with self.assertRaises(QueryError):
             inject_user_filter(query, "alice")
 

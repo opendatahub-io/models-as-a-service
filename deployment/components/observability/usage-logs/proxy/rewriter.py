@@ -66,9 +66,9 @@ def _selector_ends(query):
             _, i = _read_string(query, i)
             continue
         if ch == "`":
-            # Loki lexes backtick raw strings. The scanner cannot track them,
-            # so a `"` inside one could hide a live selector.
-            raise QueryError("raw strings are not supported")
+            # Skip Loki raw strings so a `"` inside one cannot hide a selector.
+            i = _read_raw_string(query, i)
+            continue
         if ch == "#":
             # Loki discards `#` through end-of-line. A commented `{...}` or `"`
             # must not be treated as a selector or string, or user_id can land
@@ -161,6 +161,18 @@ class _Scan:
         self.skip_ws()
         value, self.i = _read_string(self.text, self.i)
         return name, op, value
+
+
+def _read_raw_string(text, i):
+    """Skip a Loki backtick raw string. Returns the index after the closing `."""
+    if i >= len(text) or text[i] != "`":
+        raise QueryError("expected raw string")
+    i += 1
+    while i < len(text):
+        if text[i] == "`":
+            return i + 1
+        i += 1
+    raise QueryError("unterminated raw string")
 
 
 def _read_string(text, i):
