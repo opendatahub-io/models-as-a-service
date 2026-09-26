@@ -313,23 +313,18 @@ class TestExternalModelDiscovery:
 class TestExternalModelAuth:
     """Verify auth enforcement for external model routes."""
 
-    def test_invalid_key_returns_401(self, external_models_setup):
-        """Invalid API key returns 401/403."""
-        setup = external_models_setup
-        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer sk-oai-invalid-key-12345",
-        }
-        body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
-
-        _poll_auth_denied(url, headers, body)
-
-    def test_no_key_returns_401(self, external_models_setup):
-        """No API key returns 401/403."""
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Bearer sk-oai-invalid-key-12345", None],
+        ids=["invalid-key", "missing-key"],
+    )
+    def test_missing_or_invalid_key_returns_401(self, external_models_setup, authorization):
+        """Missing and invalid API keys are rejected with 401/403."""
         setup = external_models_setup
         url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if authorization:
+            headers["Authorization"] = authorization
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 
         _poll_auth_denied(url, headers, body)
@@ -540,12 +535,10 @@ class TestExternalModelBodyRouting:
     IMPORTANT CAVEAT: every request here hits ``/{ns}/{model}/v1/...``, a
     path that already encodes a valid model name, so Kuadrant's AuthPolicy
     authorizes from the path alone and the plugin silently no-ops (rather
-    than rejecting) on an unresolvable body model. Only
-    test_correct_model_in_body_succeeds is a meaningful assertion today
-    (proves a legitimately provisioned model's body isn't blocked); the
-    "wrong"/"missing" model tests are smoke checks only — see their
-    docstrings. Genuine path-agnostic body-only enforcement is future work
-    (RHAISTRAT-1540).
+    than rejecting) on an unresolvable body model. The valid-body forwarding
+    contract is covered by TestExternalModelEgress; the "wrong"/"missing"
+    cases below are smoke checks only. Genuine path-agnostic body-only
+    enforcement is future work (RHAISTRAT-1540).
     """
 
     def _post_chat(self, gateway_url, model_path, api_key, body):
@@ -556,35 +549,23 @@ class TestExternalModelBodyRouting:
         }
         return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
-    def test_correct_model_in_body_succeeds(self, external_models_setup):
+    @pytest.mark.parametrize(
+        "body, case_name",
+        [
+            (
+                {"model": "nonexistent-model", "messages": [{"role": "user", "content": "hello"}]},
+                "wrong-model",
+            ),
+            (
+                {"messages": [{"role": "user", "content": "hello"}]},
+                "missing-model",
+            ),
+        ],
+        ids=["wrong-model", "missing-model"],
+    )
+    def test_unresolvable_model_body_does_not_error(self, external_models_setup, body, case_name):
         """
-        Correct model name in body passes through IPP and reaches the
-        external endpoint.
-
-        Unlike the tenant/LLMInferenceService path, the backend here is an
-        uncontrolled external endpoint (httpbin.org by default), which does
-        not implement /v1/chat/completions and may not return 200. As with
-        TestExternalModelEgress.test_request_forwarded_returns_200, any
-        non-auth response confirms the body model field was accepted and the
-        request was forwarded rather than rejected by the
-        model-provider-resolver plugin.
-        """
-        setup = external_models_setup
-        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "model": EXTERNAL_MODEL_NAME,
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code not in (401, 403), (
-            f"Expected correct model in body to be forwarded, got {r.status_code}. "
-            f"Body routing may be rejecting a legitimately provisioned model."
-        )
-        log.info("Body routing (correct model): HTTP %d", r.status_code)
-
-    def test_wrong_model_in_body_does_not_error(self, external_models_setup):
-        """
-        Wrong model name in body does not crash the request pipeline.
+        An unresolvable or missing model field does not crash the request pipeline.
 
         NOTE: This is a smoke check, not an enforcement check. The URL path
         already contains a valid model name, so Kuadrant's AuthPolicy
@@ -601,33 +582,9 @@ class TestExternalModelBodyRouting:
         """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "model": "nonexistent-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
+        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], body)
         assert r.status_code != 200, (
-            f"Expected non-200 for wrong model in body, got 200. "
-            f"Body routing may not be active — request succeeded via path routing alone."
+            f"Expected non-200 for {case_name} body, got 200. "
+            "Body routing may not be active — request succeeded via path routing alone."
         )
-        log.info("Body routing (wrong model): HTTP %d", r.status_code)
-
-    def test_missing_model_in_body_does_not_error(self, external_models_setup):
-        """
-        Missing model field in body does not crash the request pipeline.
-
-        NOTE: Same caveat as test_wrong_model_in_body_does_not_error — this
-        is a smoke check, not proof that a missing model is rejected. See
-        that test's docstring for why no enforcement path currently exists.
-        """
-        setup = external_models_setup
-        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected non-200 for missing model in body, got 200. "
-            f"Body routing may not be active — request succeeded without model field."
-        )
-        log.info("Body routing (missing model): HTTP %d", r.status_code)
+        log.info("Body routing (%s): HTTP %d", case_name, r.status_code)

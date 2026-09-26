@@ -248,6 +248,64 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
     return r
 
 
+def _wait_for_central_models_in_subscription(
+    api_key,
+    subscription_name,
+    *,
+    timeout=90,
+    poll_interval=5,
+):
+    """Poll central /v1/models until the subscription appears in model metadata."""
+    headers = {"Authorization": f"Bearer {api_key}"}
+    deadline = time.time() + timeout
+    last_status = None
+    last_model_ids = []
+
+    while time.time() < deadline:
+        response = _request_with_gateway_retry(
+            requests.get,
+            f"{_maas_api_url()}/v1/models",
+            headers=headers,
+        )
+        last_status = response.status_code
+        if response.status_code != 200:
+            time.sleep(poll_interval)
+            continue
+
+        try:
+            models_data = response.json()
+        except (json.JSONDecodeError, ValueError):
+            time.sleep(poll_interval)
+            continue
+
+        if not isinstance(models_data, dict):
+            time.sleep(poll_interval)
+            continue
+
+        models = models_data.get("data") or []
+        if not isinstance(models, list):
+            time.sleep(poll_interval)
+            continue
+
+        if any(
+            subscription_name in {
+                sub.get("name")
+                for model in models
+                for sub in model.get("subscriptions", [])
+            }
+        ):
+            return models_data
+
+        last_model_ids = [model.get("id") for model in models]
+        time.sleep(poll_interval)
+
+    raise AssertionError(
+        f"Expected central /v1/models to include subscription '{subscription_name}' "
+        f"within {timeout}s, but found none. Last HTTP status: {last_status}, "
+        f"returned model IDs: {last_model_ids}"
+    )
+
+
 def _get_default_api_key() -> str:
     """Get or create an API key for the authenticated user.
     
@@ -518,6 +576,7 @@ class TestSubscriptionEnforcement:
         r = _poll_status(api_key, 200, timeout=90)
         log.info(f"Subscribed API key -> {r.status_code}")
 
+    @pytest.mark.serial
     def test_auth_pass_no_subscription_gets_403(self):
         """API key with auth pass but no matching subscription should get 403.
 
@@ -682,7 +741,8 @@ class TestSubscriptionEnforcement:
     @pytest.mark.serial
     def test_models_endpoint_exempt_from_rate_limiting(self):
         """
-        Test that /v1/models endpoint remains accessible when token quota is exhausted.
+        Test that both model-specific and central /v1/models endpoints remain
+        accessible when token quota is exhausted.
 
         This verifies that users can discover model capabilities even when they've
         used all their inference tokens. The /v1/models endpoint is a discovery/metadata
@@ -694,7 +754,9 @@ class TestSubscriptionEnforcement:
         1. Create subscription with very low token limit (15 tokens)
         2. Exhaust the limit with inference requests (5 requests × 3 tokens = 15)
         3. Verify inference requests get 429 (rate limited)
-        4. Verify /v1/models endpoint still returns 200 (not rate limited)
+        4. Verify the model-specific /v1/models endpoint still returns 200
+        5. Verify the central MaaS API /v1/models endpoint still returns the
+           subscription-scoped model list
         """
         # Use unconfigured model to isolate this test
         model_ref = UNCONFIGURED_MODEL_REF
@@ -709,7 +771,6 @@ class TestSubscriptionEnforcement:
         # (even if each request uses exactly 1 token: 5 requests > 3 token limit)
         token_limit = 3
         window = "1m"
-        max_tokens = 1
 
         try:
             # 1. Create auth policy allowing system:authenticated
@@ -791,7 +852,7 @@ class TestSubscriptionEnforcement:
             # Verify it returns valid model metadata (sanity check)
             try:
                 models_data = r_models.json()
-            except (json.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError):
                 # Non-JSON response is acceptable for some vLLM versions
                 log.info(f"✓ /v1/models endpoint accessible (200), non-JSON response: {r_models.text[:200]}")
             else:
@@ -799,6 +860,21 @@ class TestSubscriptionEnforcement:
                 assert "data" in models_data or "object" in models_data, \
                     f"Expected valid models response with 'data' or 'object' field, got: {models_data}"
                 log.info(f"✓ /v1/models endpoint accessible (200) despite exhausted quota. Response keys: {list(models_data.keys())}")
+
+            # 7. Verify the central MaaS API /v1/models endpoint is also exempt.
+            # This is a separate gateway route from the model-specific endpoint
+            # above and exercises central subscription filtering/aggregation.
+            log.info("Verifying central /v1/models endpoint is still accessible...")
+            central_models_data = _wait_for_central_models_in_subscription(
+                api_key,
+                subscription_name,
+            )
+            central_models = central_models_data.get("data")
+            assert isinstance(central_models, list), \
+                f"Expected central /v1/models 'data' to be a list, got: {central_models_data}"
+            log.info(
+                "✓ Central /v1/models endpoint returned subscription-scoped models despite exhausted quota"
+            )
 
         finally:
             # Clean up
@@ -1101,6 +1177,7 @@ class TestAllUnlimitedModel:
 class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
+    @pytest.mark.serial
     def test_two_auth_policies_or_logic(self):
         """Two auth policies for the premium model with OR logic: user matching either gets access."""
         ns = _ns()

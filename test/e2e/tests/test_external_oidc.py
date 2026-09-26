@@ -332,6 +332,7 @@ class TestOIDCTokenFlow:
             f"Expected 401 for tampered/expired OIDC token, got {response.status_code}: {response.text}"
         )
 
+
     @pytest.mark.slow
     def test_real_expired_oidc_token_gets_401(self, maas_api_base_url: str):
         """Genuine expired OIDC token (untampered, valid signature) is rejected.
@@ -352,7 +353,9 @@ class TestOIDCTokenFlow:
         wait_seconds = max(0, exp - int(time.time())) + 5
 
         if wait_seconds > 120:
-            pytest.skip(f"Token expiry too far out ({wait_seconds}s) — realm accessTokenLifespan may not be set to 60s")
+            pytest.skip(
+                f"Token expiry too far out ({wait_seconds}s) — realm accessTokenLifespan may not be set to 60s"
+            )
 
         log.info(f"Waiting {wait_seconds}s for OIDC token to expire naturally...")
         time.sleep(wait_seconds)
@@ -387,7 +390,6 @@ class TestOIDCTokenClaims:
         groups = payload["groups"]
         assert isinstance(groups, list), f"Expected groups to be a list, got: {type(groups)}"
 
-        # alice_lead is in Engineering and Project-Alpha
         assert "Engineering" in groups or "/Engineering" in groups, (
             f"Expected alice_lead to be in 'Engineering' group, got: {groups}"
         )
@@ -423,12 +425,14 @@ class TestOIDCTokenClaims:
 # ---------------------------------------------------------------------------
 
 class TestOIDCMultiUser:
-    """Verify that different OIDC users can mint API keys independently."""
+    """Verify OIDC user authentication boundaries and independent key minting."""
 
     def test_bob_sre_can_mint_api_key(self, maas_api_base_url: str):
         """bob_sre (Site-Reliability group) can also mint an API key."""
         token = _request_oidc_token(username="bob_sre", password="letmein")
-        data = _create_oidc_api_key(maas_api_base_url, token, name=f"e2e-bob-{uuid.uuid4().hex[:8]}")
+        data = _create_oidc_api_key(
+            maas_api_base_url, token, name=f"e2e-bob-{uuid.uuid4().hex[:8]}"
+        )
         log.info(f"bob_sre created API key id={data.get('id')}")
 
         assert data.get("key"), "bob_sre API key missing 'key' field"
@@ -443,10 +447,6 @@ class TestOIDCMultiUser:
         with pytest.raises(AssertionError, match="OIDC token request failed"):
             _request_oidc_token(username="nonexistent_user", password="letmein")
 
-
-# ---------------------------------------------------------------------------
-# Tests — End-to-End: OIDC → API Key → Model Access
-# ---------------------------------------------------------------------------
 
 class TestOIDCModelAccess:
     """Full flow: OIDC token → API key mint → list models → inference."""
@@ -655,37 +655,6 @@ class TestOIDCMultiTenant:
 
 class TestOIDCAPIKeyLifecycle:
     """API key management operations authenticated via OIDC tokens."""
-
-    def test_create_and_revoke_api_key(self, maas_api_base_url: str):
-        """Full create → revoke lifecycle with OIDC token."""
-        token = _request_oidc_token()
-
-        # Create
-        key_data = _create_oidc_api_key(maas_api_base_url, token, name=f"e2e-revoke-{uuid.uuid4().hex[:8]}")
-        key_id = key_data["id"]
-
-        # Revoke
-        response = _oidc_request_with_retry(
-            requests.delete,
-            f"{maas_api_base_url}/v1/api-keys/{key_id}",
-            token,
-            label="OIDC API key revoke",
-        )
-        assert response.status_code in (200, 204), (
-            f"API key revocation failed: {response.status_code} {response.text}"
-        )
-
-        # Verify key is gone (second revoke should 404)
-        response2 = _oidc_request_with_retry(
-            requests.delete,
-            f"{maas_api_base_url}/v1/api-keys/{key_id}",
-            token,
-            label="OIDC double revoke",
-        )
-        assert response2.status_code == 404, (
-            f"Expected 404 on double revoke, got {response2.status_code}: {response2.text}"
-        )
-        log.info(f"API key {key_id} create→revoke lifecycle completed")
 
     def test_api_key_owner_matches_oidc_username(self, maas_api_base_url: str):
         """API key's owner field reflects the preferred_username from the OIDC token.
@@ -976,7 +945,6 @@ class TestOIDCHeaderInjection:
         )
 
 
-
 @pytest.mark.skipif(
     os.environ.get("EXTERNAL_OIDC", "").lower() != "true",
     reason="EXTERNAL_OIDC not enabled",
@@ -1169,18 +1137,12 @@ class TestOIDCDirectModelAccess:
     reason="EXTERNAL_OIDC not enabled",
 )
 class TestOIDCAlertingInfra:
-    """Verify that the Authorino alerting infrastructure is present in the cluster.
-
-    The MaaSAuthorinoAuthenticationHighFailureRate PrometheusRule was introduced
-    as part of RHOAIENG-60847. If it is accidentally deleted or misconfigured,
-    the auth failure rate alerting silently stops working. This class provides
-    a lightweight smoke check that the rule exists.
-    """
+    """Verify that the Authorino authentication alerting infrastructure exists."""
 
     def test_authorino_prometheusrule_exists(self):
-        """PrometheusRule authorino-maas-authentication-alerts is present in kuadrant-system."""
-        # The rule is deployed to kuadrant-system (where Authorino runs) by
-        # scripts/observability/install-observability.sh, not kustomize base.
+        """PrometheusRule authorino-maas-authentication-alerts is present."""
+        # The rule is installed by scripts/observability/install-observability.sh,
+        # so retain this as a conditional deployment/observability regression guard.
         namespace = os.environ.get("AUTHORINO_NAMESPACE", "kuadrant-system")
         rule_name = "authorino-maas-authentication-alerts"
         result = subprocess.run(
@@ -1198,9 +1160,6 @@ class TestOIDCAlertingInfra:
             f"kubectl get prometheusrule failed (exit {result.returncode}): {result.stderr}"
         )
         assert result.stdout.strip() == rule_name, (
-            f"PrometheusRule '{rule_name}' not found in namespace '{namespace}'. "
-            "Ensure install-observability.sh has been run and the rule was applied to kuadrant-system."
+            f"PrometheusRule '{rule_name}' not found in namespace '{namespace}'."
         )
-        log.info(
-            f"PrometheusRule {rule_name} present in namespace '{namespace}'"
-        )
+        log.info(f"PrometheusRule {rule_name} present in namespace '{namespace}'")

@@ -285,10 +285,10 @@ class TestTenantNamespaceDiscovery:
             apply_tenant_cr(other_ns, DEFAULT_GATEWAY_NAME)
 
             assert auth_can_create_maassubscription(sa_user, case["tenant_ns"]), (
-                f"tenant-admin SA should manage subscriptions in its tenant namespace"
+                "tenant-admin SA should manage subscriptions in its tenant namespace"
             )
             assert not auth_can_create_maassubscription(sa_user, other_ns), (
-                f"tenant-admin SA should not manage subscriptions in another tenant namespace"
+                "tenant-admin SA should not manage subscriptions in another tenant namespace"
             )
         finally:
             delete_namespace_best_effort(other_ns)
@@ -350,6 +350,7 @@ class TestTenantWebhookValidation:
 class TestTenantDiscoveryDormantMode:
     """Verify dormant mode when discovery flag is disabled (regression guard)."""
 
+    @pytest.mark.serial
     def test_dormant_mode_ignores_labeled_namespace(self):
         if os.environ.get("ENABLE_TENANT_DISCOVERY_DORMANT_E2E", "").lower() != "true":
             pytest.skip("Dormant-mode test mutates controller flags; set ENABLE_TENANT_DISCOVERY_DORMANT_E2E=true")

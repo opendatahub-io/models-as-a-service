@@ -16,7 +16,6 @@ Prerequisites:
 
 import json
 import logging
-import subprocess
 import time
 
 import pytest
@@ -336,57 +335,45 @@ class TestTenantBodyRouting:
         }
         return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
-    def test_correct_model_in_body_succeeds(self, tenant_inference_cases):
-        """Correct model name in body passes through IPP and reaches backend."""
+    @pytest.mark.parametrize(
+        "body, should_succeed",
+        [
+            (
+                {"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "hello"}]},
+                True,
+            ),
+            (
+                {"model": "nonexistent-model", "messages": [{"role": "user", "content": "hello"}]},
+                False,
+            ),
+            (
+                {"messages": [{"role": "user", "content": "hello"}]},
+                False,
+            ),
+        ],
+        ids=["correct-model", "wrong-model", "missing-model"],
+    )
+    def test_model_in_body_routing(self, tenant_inference_cases, body, should_succeed):
+        """Body routing preserves the success and rejection cases for model identity."""
         case_a, _ = tenant_inference_cases
         gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
         api_key = _create_tenant_api_key(gateway_url, case_a)
         time.sleep(8)
 
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "model": "facebook/opt-125m",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code == 200, (
-            f"Expected 200 with correct model in body, got {r.status_code}. "
-            f"Response: {redact_sensitive(r.text[:500])}"
-        )
-        data = r.json()
-        assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
-        log.info("Body routing (correct model): HTTP %d", r.status_code)
-
-    def test_wrong_model_in_body_rejected(self, tenant_inference_cases):
-        """Wrong model name in body is rejected by IPP model-provider-resolver."""
-        case_a, _ = tenant_inference_cases
-        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
-        api_key = _create_tenant_api_key(gateway_url, case_a)
-        time.sleep(8)
-
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "model": "nonexistent-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected rejection for wrong model in body, got 200. "
-            f"Body routing may not be active — request succeeded via path routing alone."
-        )
-        log.info("Body routing (wrong model): HTTP %d", r.status_code)
-
-    def test_missing_model_in_body_rejected(self, tenant_inference_cases):
-        """Missing model field in body is rejected by IPP."""
-        case_a, _ = tenant_inference_cases
-        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
-        api_key = _create_tenant_api_key(gateway_url, case_a)
-        time.sleep(8)
-
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected rejection for missing model in body, got 200. "
-            f"Body routing may not be active — request succeeded without model field."
-        )
-        log.info("Body routing (missing model): HTTP %d", r.status_code)
+        r = self._post_chat(gateway_url, case_a["model_path"], api_key, body)
+        if should_succeed:
+            assert r.status_code == 200, (
+                f"Expected 200 with correct model in body, got {r.status_code}. "
+                f"Response: {redact_sensitive(r.text[:500])}"
+            )
+            data = r.json()
+            assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
+        else:
+            assert r.status_code != 200, (
+                f"Expected rejection for model body {body!r}, got 200. "
+                "Body routing may not be active — request succeeded via path routing alone."
+            )
+        log.info("Body routing (%s): HTTP %d", "success" if should_succeed else "rejection", r.status_code)
 
     def test_each_tenant_routes_to_own_model(self, tenant_inference_cases):
         """Both tenants route correctly with their own model in body."""

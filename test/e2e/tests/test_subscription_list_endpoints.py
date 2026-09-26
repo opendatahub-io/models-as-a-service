@@ -18,9 +18,7 @@ Environment variables:
   This file uses no additional file-specific environment variables.
 """
 
-import json
 import logging
-import os
 
 import pytest
 import requests
@@ -196,12 +194,20 @@ class TestListSubscriptions:
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
 
-    def test_unauthenticated_returns_401(self):
-        """Request without auth returns 401."""
-        url = f"{_maas_api_url()}/v1/subscriptions"
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/v1/subscriptions",
+            f"/v1/model/{MODEL_REF}/subscriptions",
+        ],
+        ids=["all-subscriptions", "subscriptions-for-model"],
+    )
+    def test_unauthenticated_returns_401(self, endpoint):
+        """Both subscription-list endpoints require authentication."""
+        url = f"{_maas_api_url()}{endpoint}"
         r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
-        log.info(f"GET /v1/subscriptions (no auth) -> {r.status_code}")
+        log.info("GET %s (no auth) -> %s", endpoint, r.status_code)
 
     def test_subscription_includes_model_refs(self):
         """Subscriptions include model_refs with name and rate limit info."""
@@ -459,14 +465,6 @@ class TestListSubscriptionsForModel:
 
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
-
-    def test_unauthenticated_returns_401(self):
-        """Request without auth returns 401."""
-        url = f"{_maas_api_url()}/v1/model/{MODEL_REF}/subscriptions"
-        r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
-        assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
-        log.info(f"GET /v1/model/{MODEL_REF}/subscriptions (no auth) -> {r.status_code}")
-
 
 class TestSubscriptionModelAccessFiltering:
     """E2E tests for model access filtering in GET /v1/subscriptions."""
