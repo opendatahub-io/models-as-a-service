@@ -46,6 +46,7 @@ Tests are organized into **xdist groups** for parallel execution. Each group run
 | `readonly` | `test_tenant.py` | Read-only MaasTenantConfig validation |
 | `readonly` | `test_tenant_discovery.py` | Read-only /v1/tenants endpoint checks |
 | `readonly` | `test_networkpolicy.py` | NetworkPolicy + connectivity checks |
+| `readonly` | `test_gateway_filter_chain.py` | Gateway filter order (ipp-pre -> auth -> ipp -> endpoint picker); its InferencePool traffic test is `serial` |
 | `api_keys` | `test_api_keys.py` | API key CRUD, admin authorization, validation |
 | `api_keys` | `test_subscription.py` | Subscription enforcement, rate limiting, auth flows |
 | `api_keys` | `test_subscription_list_endpoints.py` | Subscription listing endpoints |

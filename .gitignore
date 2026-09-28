@@ -55,8 +55,8 @@ apps/backend/.env
 
 # Git worktrees
 .worktrees/
+.openshift-e2e-overlay.*/
 
 # Docs build and site directories
 docs/build/
 docs/site/
-

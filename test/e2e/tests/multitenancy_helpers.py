@@ -15,6 +15,9 @@ import pytest
 import requests
 
 MULTITENANCY_PHASE_TIMEOUT = int(os.environ.get("E2E_MULTITENANCY_PHASE_TIMEOUT", "120"))
+# Parallel workers can create many simulators at once; 180s was flaking on
+# MinimumReplicasUnavailable under Konflux group-test load (see PR #1521 run).
+MODEL_BACKEND_READY_TIMEOUT = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "300"))
 
 from test_helper import (
     DEPLOYMENT_NAMESPACE,
@@ -206,6 +209,22 @@ def list_json(kind: str, namespace: Optional[str] = None, *, labels: Optional[st
     if _oc_output_not_found(result):
         return []
     raise RuntimeError(f"`oc {' '.join(args)}` failed: {result.stderr.strip() or result.stdout.strip()}")
+
+
+def wait_until(check, timeout: int, what: str, interval: int = 5):
+    """Poll check() until it returns a truthy value. Assertion failures and transient
+    cluster or HTTP errors count as "not yet"; the last one ends up in the timeout message."""
+    deadline = time.time() + timeout
+    while True:
+        try:
+            result = check()
+            if result:
+                return result
+            last = result
+        except (AssertionError, subprocess.TimeoutExpired, requests.RequestException) as exc:
+            last = exc
+        assert time.time() < deadline, f"{what} within {timeout}s; last: {last}"
+        time.sleep(interval)
 
 
 def wait_for_json(
@@ -700,16 +719,29 @@ def wait_for_llmisvc_backend_ready(
     gateway_name: str,
     gateway_namespace: str = GATEWAY_NAMESPACE,
     *,
-    timeout: int = 180,
+    timeout: Optional[int] = None,
 ) -> dict:
     """Wait until an LLMInferenceService, route, and serving workload are ready."""
-    llmisvc = wait_for_status_condition(
-        "llminferenceservice",
-        name,
-        namespace,
-        condition_type="Ready",
-        timeout=timeout,
-    )
+    if timeout is None:
+        timeout = MODEL_BACKEND_READY_TIMEOUT
+    deploy_name = f"{name}-kserve"
+    try:
+        llmisvc = wait_for_status_condition(
+            "llminferenceservice",
+            name,
+            namespace,
+            condition_type="Ready",
+            timeout=timeout,
+        )
+    except AssertionError as exc:
+        deploy = get_json_or_none("deployment", deploy_name, namespace)
+        deploy_status = (deploy or {}).get("status") if deploy is not None else None
+        raise AssertionError(
+            f"{exc}\n"
+            f"Hint: LLMIS Ready=False often means {deploy_name} is still unavailable "
+            f"(MinimumReplicasUnavailable / image pull / probe). "
+            f"deployment/{deploy_name} status: {deploy_status}"
+        ) from None
 
     wait_for_llmisvc_route_ready(
         name,
@@ -718,7 +750,7 @@ def wait_for_llmisvc_backend_ready(
         gateway_namespace,
         timeout=timeout,
     )
-    wait_for_deployment_available(f"{name}-kserve", namespace=namespace, timeout=timeout)
+    wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
     return llmisvc
 
 
@@ -1162,16 +1194,63 @@ def deployment_log_snapshot(
     namespace: str = GATEWAY_NAMESPACE,
     since: str = "30s",
 ) -> str:
-    result = _oc_run(
+    for args in (
         ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}"],
-        timeout=120,
+        ["logs", f"deployment/{deployment_name}", "-n", namespace, f"--since={since}", "--tail=300"],
+    ):
+        result = _oc_run(args, timeout=120)
+        if result.returncode == 0 and (result.stdout or "").strip():
+            return result.stdout
+    return ""
+
+
+def extproc_deployment_uses_praxis(
+    deployment_name: str,
+    namespace: str = GATEWAY_NAMESPACE,
+) -> bool:
+    """True when the deployment runs odh-praxis-extproc (not legacy Go IPP)."""
+    image_result = _oc_run(
+        [
+            "get",
+            "deployment",
+            deployment_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].image}",
+        ],
+        timeout=60,
     )
-    if result.returncode != 0:
-        return ""
-    return result.stdout or ""
+    args_result = _oc_run(
+        [
+            "get",
+            "deployment",
+            deployment_name,
+            "-n",
+            namespace,
+            "-o",
+            "jsonpath={.spec.template.spec.containers[0].args}",
+        ],
+        timeout=60,
+    )
+    if image_result.returncode != 0:
+        return False
+    image = (image_result.stdout or "").strip()
+    args = (args_result.stdout or "").strip() if args_result.returncode == 0 else ""
+    return (
+        "odh-praxis-extproc" in image
+        or "praxis-extproc" in image
+        or "/etc/praxis/extproc.yaml" in args
+    )
 
 
 def ipp_logs_show_recent_activity(log_text: str) -> bool:
+    """Detect legacy Go IPP per-request log lines (praxis-extproc is quiet at INFO).
+
+    praxis-extproc (Rust) does not emit per-request lines at default log levels;
+    :9090/metrics was also empty/unhelpful in e2e probes. Tests that opt the
+    default tenant into praxis skip this check and use body-model rejection.
+    """
     markers = ("x-request-id", "handlers/server.go", "processing request headers")
     return any(marker in log_text for marker in markers)
 

@@ -24,7 +24,9 @@ type PlatformParams struct {
 	GatewayName           string
 	ClusterAudience       string
 	SubscriptionNamespace string
-	ExternalOIDC          *maasv1alpha1.TenantExternalOIDCConfig
+	// ModelNamespace is the tenant namespace containing ExternalModels and their HTTPRoutes.
+	ModelNamespace string
+	ExternalOIDC   *maasv1alpha1.TenantExternalOIDCConfig
 
 	// TenantIdentifier is the tenant name used for per-tenant resource naming.
 	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
@@ -71,6 +73,14 @@ type PlatformParams struct {
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
+
+	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
+	// and the Kuadrant anchors were kept.
+	KuadrantDetectionWarning string
+
+	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
+	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
+	BundledPostgres bool
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -89,6 +99,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		ClusterAudience:         clusterAudience,
 		MonitoringNamespace:     monitoringNamespace,
 		SubscriptionNamespace:   tenant.GetNamespace(),
+		ModelNamespace:          tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
@@ -440,6 +451,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
+	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
+		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -482,6 +495,107 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
+// maas-db-config targets in-cluster Postgres. External databases are omitted so
+// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
+// and controller namespaces differ (upgrade path), postgres in the controller namespace
+// is also allowed.
+func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api egress NP missing egress rules")
+	}
+
+	egress = removePostgresEgressRules(egress)
+	if params.BundledPostgres {
+		egress = append(egress, bundledPostgresEgressRule(params))
+	}
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func removePostgresEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			filtered = append(filtered, ruleRaw)
+			continue
+		}
+		if networkPolicyRuleHasPort(rule, 5432) {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+func bundledPostgresEgressRule(params PlatformParams) map[string]any {
+	to := []any{
+		map[string]any{
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		},
+	}
+	if params.AppNamespace != "" && params.ControllerNamespace != "" &&
+		params.AppNamespace != params.ControllerNamespace {
+		to = append(to, map[string]any{
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"kubernetes.io/metadata.name": params.ControllerNamespace,
+				},
+			},
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		})
+	}
+	return map[string]any{
+		"to": to,
+		"ports": []any{
+			map[string]any{
+				"protocol": "TCP",
+				"port":     int64(5432),
+			},
+		},
+	}
+}
+
+func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
+	ports, ok := rule["ports"].([]any)
+	if !ok {
+		return false
+	}
+	for _, portRaw := range ports {
+		portObj, ok := portRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := portObj["port"].(type) {
+		case int64:
+			if v == port {
+				return true
+			}
+		case int:
+			if int64(v) == port {
+				return true
+			}
+		case float64:
+			if int64(v) == port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
@@ -1030,6 +1144,10 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
 		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
 		routeDisablePatchCount   = 5
+		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
+		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
+		// every gateway, so no mode rewrites them.
+		eppReorderPatchCount = 2
 	)
 	if !found {
 		return errors.New("EnvoyFilter configPatches not found")
@@ -1037,14 +1155,14 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 
 	routerStart := wasmFilterPatchCount
 	routerEnd := wasmFilterPatchCount + routerFallbackPatchCount
-	minPatchCount := routerEnd + routeDisablePatchCount
+	minPatchCount := routerEnd + routeDisablePatchCount + eppReorderPatchCount
 	if len(configPatches) < minPatchCount {
 		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
 			minPatchCount, len(configPatches))
 	}
 
 	if params.PayloadProcessingRouterExtProcFallback {
-		// Router-only anchoring when kuadrant CRs are absent or wasmplugin RBAC denies GET.
+		// Router-only anchoring when kuadrant CRs are absent.
 		// Drop wasm-anchored patches to avoid duplicate ext_proc on RHCL gateways that
 		// inject envoy.filters.http.wasm without kuadrant-{gateway} CRs.
 		configPatches = append(append([]any{}, configPatches[routerStart:routerEnd]...), configPatches[routerEnd:]...)
@@ -1052,9 +1170,9 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		configPatches = append(append([]any{}, configPatches[:routerStart]...), configPatches[routerEnd:]...)
 	}
 
-	filterPatchCount := len(configPatches) - routeDisablePatchCount
+	filterPatchCount := len(configPatches) - routeDisablePatchCount - eppReorderPatchCount
 	routeDisablePatchBase := filterPatchCount
-	totalConfigPatches := len(configPatches)
+	routeDisablePatchEnd := routeDisablePatchBase + routeDisablePatchCount
 
 	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster, beforeCluster, afterCluster}
 	wasmSubFilters := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
@@ -1107,10 +1225,11 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 			wasmFilterPatchCount, routerFallbackPatchCount, filterPatchCount)
 	}
 
-	// Final patches disable ext_proc on all non-inference maas-api routes.
+	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
+	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*, 4=/maas-api/health
+	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)

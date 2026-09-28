@@ -13,3 +13,8 @@ markers = [
     "external: external OIDC and ExternalModel integrations",
 ]
 addopts = "--strict-markers"
+
+[tool.ruff]
+# The e2e suite runs on the group-test runner's python3, which is 3.9. Without this, ruff
+# assumes 3.10 and suggests annotations that 3.9 cannot evaluate.
+target-version = "py39"

@@ -31,6 +31,7 @@ from multitenancy_helpers import (
     deployment_log_snapshot,
     envoyfilter_grpc_cluster_names,
     envoyfilter_target_gateway,
+    extproc_deployment_uses_praxis,
     get_ipp_deployment_env,
     get_json_or_none,
     ipp_logs_show_recent_activity,
@@ -67,7 +68,13 @@ GATEWAY_PROPAGATION_DELAY = 5
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Retry transient gateway/auth propagation errors (empty 403, Authorino AUTH_FAILURE)."""
+    """Retry transient gateway/auth propagation errors.
+
+    Matches ``test_helper._is_transient_gateway_response``, plus the
+    Authorino "Access denied" 403 body seen on some tenant gateways.
+    """
+    from test_helper import _is_transient_gateway_response
+
     for attempt in range(1, retries + 1):
         response = method(
             url,
@@ -75,10 +82,8 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
             verify=kwargs.pop("verify", TLS_VERIFY),
             **kwargs,
         )
-        retryable = (response.status_code == 403 and not response.text.strip()) or (
+        retryable = _is_transient_gateway_response(response) or (
             response.status_code == 403 and "Access denied" in response.text
-        ) or (
-            response.status_code == 500 and "AUTH_FAILURE" in response.text
         )
         if retryable and attempt < retries:
             log.info(
@@ -371,9 +376,29 @@ class TestPerTenantIPPRouting:
         tenant_logs = deployment_log_snapshot(
             tenant_names["processing_deployment"], since="1m"
         )
-        assert ipp_logs_show_recent_activity(default_logs), (
-            "Expected ext_proc activity in default payload-processing logs"
-        )
+        # praxis-extproc does not log per-request activity at INFO. Prove the default
+        # dataplane processed the request by rejecting an unresolvable body model
+        # (path-based auth alone would still return 200).
+        if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
+            wrong_body = _post_hybrid_chat(
+                _gateway_url(),
+                MODEL_PATH,
+                api_key,
+                model_name="nonexistent-ipp-route-model",
+            )
+            assert wrong_body.status_code != 200, (
+                "Expected default praxis IPP to reject unresolvable body model; "
+                f"got {wrong_body.status_code}. Request may have bypassed the processor."
+            )
+            log.info(
+                "Default dataplane uses praxis-extproc; routing verified via body-model "
+                "rejection (HTTP %d)",
+                wrong_body.status_code,
+            )
+        else:
+            assert ipp_logs_show_recent_activity(default_logs), (
+                "Expected ext_proc activity in default payload-processing logs"
+            )
         assert not ipp_logs_show_recent_activity(tenant_logs), (
             "Tenant IPP logs should stay quiet for default-gateway traffic"
         )

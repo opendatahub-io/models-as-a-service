@@ -130,12 +130,16 @@ metadata:
 ### MaaSSubscription Reconciler
 
 **What it does:**
+
 - Creates one Kuadrant **TokenRateLimitPolicy** per model (aggregating every **MaaSSubscription** that references that model)
-- For each subscription that applies to the model, adds a **limit** entry with rates from the CR and a **`when`** predicate that matches  
-  `auth.identity.selected_subscription_key` to the model-scoped key  
-  `{subNamespace}/{subName}@{modelNamespace}/{modelName}`  
-  AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see [Authentication Internals](./authentication-internals.md).
+- Adds one **limit** entry per distinct set of `tokenRateLimits` among those subscriptions, so subscriptions with identical rates share an entry:
+    - The limit is named after its rates: `tokens-{limit}-per-{window}`, with one `-{limit}-per-{window}` segment per rate, deduplicated and sorted as strings (for example `tokens-1000-per-1h-99999-per-1s`). Windows are compared as written, so `1m` and `60s` are different rate sets.
+    - Its **`when`** predicate matches `auth.identity.selected_subscription_key` against the model-scoped key `{subNamespace}/{subName}@{modelNamespace}/{modelName}` of every subscription in the group, keys sorted and OR-ed, for example `(auth.identity.selected_subscription_key == "ns/sub-a@llm/model" || auth.identity.selected_subscription_key == "ns/sub-b@llm/model") && !request.path.endsWith("/v1/models")`. A group of one gets the single equality without parentheses.
+    - Its **`counters`** are `auth.identity.selected_subscription_key` and `auth.identity.userid`, so each subscription and each user keep their own budget even when the limit is shared.
+- AuthPolicy is responsible for resolving subscription selection (via maas-api) before TRLP runs; see [Authentication Internals](./authentication-internals.md).
 - Exempts `/v1/models` from token consumption limits where configured so discovery still works when quotas are exhausted
+
+Kuadrant copies every limit into every route-match ActionSet of the gateway's wasm config (`kuadrant-{gateway-name}`, an `EnvoyFilter` on Kuadrant 1.5+ or a `WasmPlugin` on 1.4.x), so the number of limits drives that object's size (RHOAIENG-95277). Grouping by rate means a subscription at an existing rate adds one clause to a predicate instead of a whole limit. See [Subscription Cardinality](../advanced-administration/subscription-cardinality.md#gateway-config-size).
 
 **Watch triggers:**
 - MaaSSubscription changes

@@ -163,6 +163,12 @@ rules:
   - list
   - watch
 - apiGroups:
+  - extensions.istio.io
+  resources:
+  - wasmplugins
+  verbs:
+  - get
+- apiGroups:
   - extensions.kuadrant.io
   resources:
   - telemetrypolicies
@@ -249,6 +255,18 @@ rules:
   - get
   - list
   - patch
+  - watch
+- apiGroups:
+  - llm-d.ai
+  resources:
+  - inferenceobjectives
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
   - watch
 - apiGroups:
   - loki.grafana.com
@@ -375,6 +393,7 @@ rules:
   - get
   - list
   - patch
+  - update
   - watch
 - apiGroups:
   - opentelemetry.io

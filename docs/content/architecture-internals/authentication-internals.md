@@ -21,8 +21,8 @@ Today’s pipeline does **not** drive TokenRateLimitPolicy by splitting group me
      `{subscriptionNamespace}/{subscriptionName}@{modelNamespace}/{modelName}`  
      This is the value **rate limiting** keys off.
 
-4. **TokenRateLimitPolicy** (aggregated per model by the MaaSSubscription reconciler) defines **one limit entry per subscription** that applies to that model. Each limit’s **`when`** predicate matches requests where  
-   `auth.identity.selected_subscription_key` equals that subscription’s scoped key (and inference paths are distinguished from discovery; `/v1/models` is exempt from token consumption limits where configured).
+4. **TokenRateLimitPolicy** (aggregated per model by the MaaSSubscription reconciler) defines **one limit entry per distinct rate set** among the subscriptions that apply to that model. Each limit’s **`when`** predicate matches requests where
+   `auth.identity.selected_subscription_key` equals the scoped key of any subscription in that group (and inference paths are distinguished from discovery; `/v1/models` is exempt from token consumption limits where configured). Its counters are `selected_subscription_key` and `userid`, so subscriptions sharing a limit keep separate budgets; see [Reconciliation Flow](./reconciliation-flow.md#maassubscription-reconciler).
 
 So enforcement is: **subscription resolved in AuthPolicy → same key matched in TRLP**. Group-based **authorization** is resolved during subscription selection: **maas-api** evaluates **MaaSAuthPolicy** rules for the caller and returns `accessAllowed` in **`subscription-info`** metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. **Rate limit selection** follows the resolved subscription key, not a separate “group split” expression on TRLP.
 

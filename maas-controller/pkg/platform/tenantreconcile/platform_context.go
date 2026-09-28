@@ -18,7 +18,8 @@ const (
 	AnnotationAITenantNamespace = "maas.opendatahub.io/aitenant-namespace"
 
 	// AnnotationPayloadProcessingType selects the tenant payload-processing dataplane.
-	// Value "praxis" skips IPP reconciliation in maas-controller; absent or other values mean IPP.
+	// Value "praxis" skips legacy IPP reconciliation in maas-controller; absent or other values
+	// mean legacy IPP.
 	AnnotationPayloadProcessingType = "maas.opendatahub.io/payload-processing-type"
 
 	// PayloadProcessingTypePraxis is the annotation value that opts a tenant into the
@@ -106,19 +107,13 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 	return PlatformContext{
 		GatewayRef:   ref,
 		ExternalOIDC: aitenant.Spec.OIDC.DeepCopy(),
-		SkipIPP:      resolveSkipIPP(tenant, aitenant),
+		SkipIPP:      resolveSkipIPP(tenant),
 		Source:       "aitenant",
 	}, nil
 }
 
-func resolveSkipIPP(tenant client.Object, aitenant maasv1alpha1.AITenant) bool {
-	if v := annotationValue(tenant, AnnotationPayloadProcessingType); v != "" {
-		return v == PayloadProcessingTypePraxis
-	}
-	if v := annotationValue(&aitenant, AnnotationPayloadProcessingType); v != "" {
-		return v == PayloadProcessingTypePraxis
-	}
-	return false
+func resolveSkipIPP(tenant client.Object) bool {
+	return annotationValue(tenant, AnnotationPayloadProcessingType) == PayloadProcessingTypePraxis
 }
 
 func isAITenantManagedTenantConfig(tenant client.Object) bool {

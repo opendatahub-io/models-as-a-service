@@ -38,6 +38,18 @@ type MaaSSubscriptionSpec struct {
 	// +optional
 	// +kubebuilder:default=0
 	Priority int32 `json:"priority,omitempty"`
+
+	// InferencePriority is the scheduling priority applied to inference requests made under
+	// this subscription, published as InferenceObjective.spec.priority.
+	// Higher values are scheduled ahead of lower ones; negative values are scheduled below
+	// the scheduler default. Distinct from Priority, which selects among a user's
+	// subscriptions and has no effect on inference scheduling.
+	// When unset, no InferenceObjective is created and the scheduler applies priority 0.
+	// An explicit 0 creates an InferenceObjective with priority 0.
+	// +optional
+	// +kubebuilder:validation:Minimum=-2147483648
+	// +kubebuilder:validation:Maximum=2147483647
+	InferencePriority *int32 `json:"inferencePriority,omitempty"`
 }
 
 // OwnerSpec defines the owner of the subscription
@@ -52,6 +64,8 @@ type OwnerSpec struct {
 }
 
 // ModelSubscriptionRef defines a model reference with rate limits
+// +kubebuilder:validation:XValidation:rule="has(self.tokenRateLimits) || (has(self.unlimited) && self.unlimited)",message="tokenRateLimits is required unless unlimited is true"
+// +kubebuilder:validation:XValidation:rule="!(has(self.unlimited) && self.unlimited && has(self.tokenRateLimits))",message="tokenRateLimits must not be set when unlimited is true"
 type ModelSubscriptionRef struct {
 	// Name is the name of the MaaSModelRef
 	// +kubebuilder:validation:MinLength=1
@@ -63,9 +77,16 @@ type ModelSubscriptionRef struct {
 	// +kubebuilder:validation:MaxLength=63
 	Namespace string `json:"namespace"`
 
-	// TokenRateLimits defines token-based rate limits for this model
+	// TokenRateLimits defines token-based rate limits for this model.
+	// Required unless Unlimited is true.
+	// +optional
 	// +kubebuilder:validation:MinItems=1
-	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits"`
+	TokenRateLimits []TokenRateLimit `json:"tokenRateLimits,omitempty"`
+
+	// Unlimited grants access to this model without a token budget.
+	// Token usage is still metered. Mutually exclusive with TokenRateLimits.
+	// +optional
+	Unlimited bool `json:"unlimited,omitempty"`
 
 	// BillingRate defines the cost per token
 	// +optional
