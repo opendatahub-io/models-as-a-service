@@ -1,0 +1,57 @@
+name: E2E collection
+
+# The e2e suite runs only in the group test, against a cluster, on the runner's python3
+# (3.9). Collecting it here, without a cluster, catches modules that fail to import on that
+# Python before they abort a group test run, or sit unnoticed off the runner's list.
+
+on:
+  pull_request:
+    paths:
+      - 'test/e2e/**'
+      - '.github/workflows/e2e-collect.yml'
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    name: Collect e2e tests
+    timeout-minutes: 10
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.ref }}-collect
+      cancel-in-progress: true
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          # The group-test runner's python3.
+          python-version: '3.9'
+          cache: pip
+          cache-dependency-path: test/e2e/requirements.txt
+
+      - name: Install e2e requirements
+        run: pip install -r test/e2e/requirements.txt
+
+      - name: Install oc
+        env:
+          # Collection only needs oc to exist; without a cluster "oc get crd" fails and the
+          # modules that check for optional CRDs skip themselves.
+          OC_VERSION: 4.22.14
+        run: |
+          base="https://mirror.openshift.com/pub/openshift-v4/x86_64/clients/ocp/${OC_VERSION}"
+          curl -sSfLO "${base}/openshift-client-linux.tar.gz"
+          curl -sSfL "${base}/sha256sum.txt" | grep ' openshift-client-linux.tar.gz$' | sha256sum -c -
+          sudo tar -xzf openshift-client-linux.tar.gz -C /usr/local/bin oc
+
+      - name: Collect e2e tests
+        working-directory: test/e2e
+        run: python -m pytest --collect-only -q tests/

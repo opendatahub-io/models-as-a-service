@@ -41,7 +41,8 @@ const (
 )
 
 func TestMaaSSubscriptionReconciler_UnlimitedTRLPLimits(t *testing.T) {
-	limitedKey := unlimitedTestNamespace + "-limited-" + unlimitedTestModel + "-tokens"
+	// Limits are keyed by rate, and every limited subscription here uses 100/1m.
+	limitedKey := "tokens-100-per-1m"
 
 	tests := []struct {
 		name string
@@ -89,7 +90,7 @@ func TestMaaSSubscriptionReconciler_UnlimitedTRLPLimits(t *testing.T) {
 				Unlimited:       true,
 				TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}},
 			})},
-			wantKeys:       []string{unlimitedTestNamespace + "-both-" + unlimitedTestModel + "-tokens"},
+			wantKeys:       []string{"tokens-100-per-1m"},
 			wantAnnotation: "default/both",
 		},
 	}
@@ -149,7 +150,8 @@ func TestMaaSSubscriptionReconciler_UnlimitedTRLPLimits(t *testing.T) {
 // Adding an unlimited subscription must not touch the limits of limited ones,
 // or it would rewrite their share of the gateway's WasmPlugin.
 func TestMaaSSubscriptionReconciler_UnlimitedLeavesLimitedEntryUnchanged(t *testing.T) {
-	limitedKey := unlimitedTestNamespace + "-limited-" + unlimitedTestModel + "-tokens"
+	// Limits are keyed by rate, and every limited subscription here uses 100/1m.
+	limitedKey := "tokens-100-per-1m"
 
 	renderLimitedEntry := func(subs ...client.Object) string {
 		t.Helper()
@@ -224,7 +226,8 @@ func TestMaaSSubscriptionReconciler_UnlimitedSubscriptionDropsModel(t *testing.T
 }
 
 func TestMaaSSubscriptionReconciler_ToggleUnlimited(t *testing.T) {
-	limitedKey := unlimitedTestNamespace + "-sub-" + unlimitedTestModel + "-tokens"
+	// Limits are keyed by rate, and every limited subscription here uses 100/1m.
+	limitedKey := "tokens-100-per-1m"
 	c := newUnlimitedTestClient(limitedTestSub("sub"))
 
 	setRef := func(ref maasv1alpha1.ModelSubscriptionRef) {

@@ -115,6 +115,8 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 
 ### Key Fixes
 
+- **Gateway wasm config exceeding the etcd size limit (RHOAIENG-95277):** each model's `TokenRateLimitPolicy` now has one limit per distinct rate set instead of one per subscription. A subscription at an existing rate adds a predicate clause (about 3 KB per listener) to the gateway's `kuadrant-{gateway-name}` EnvoyFilter (WasmPlugin on Kuadrant 1.4.x) instead of a whole limit (about 27 KB). Budgets stay separate per subscription and per user. See [Subscription Cardinality](../advanced-administration/subscription-cardinality.md#gateway-config-size).
+    - **Upgrade note:** limit names change from `{namespace}-{subscription}-{model}-tokens` to `tokens-{limit}-per-{window}`, so Limitador starts fresh counters once on upgrade (and again on rollback). With long windows (for example `24h`), users can spend up to twice their budget in the window that spans the change.
 - **CVE-2026-33815 / CVE-2026-33816:** pgx memory-safety and SQL injection fixes.
 - Prevent crash-loop when Kuadrant or KServe CRDs are not installed.
 - Preserve MaaS traffic during RHOAI 3.5 upgrades.

@@ -335,6 +335,9 @@ spec:
                 cluster_name: dummy
               timeout: 10s
             failure_mode_allow: true
+            # Listener-level default only: Istio's ExtProcPerRoute override on every InferencePool
+            # route sends headers and bodies (FULL_DUPLEX_STREAMED) to that pool's EPP
+            # (pilot/pkg/networking/core/route/route.go).
             processing_mode:
               request_header_mode: "SKIP"
               response_header_mode: "SKIP"
