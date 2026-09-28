@@ -86,6 +86,17 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 
+	bundledPostgres, err := resolveBundledPostgres(ctx, c, appNs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundled postgres: %w", err)
+	}
+	params.BundledPostgres = bundledPostgres
+	if bundledPostgres {
+		log.V(1).Info("maas-api egress NP will allow bundled in-cluster postgres", "namespace", appNs)
+	} else {
+		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
+	}
+
 	if !params.SkipIPP {
 		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
 		if err != nil {
