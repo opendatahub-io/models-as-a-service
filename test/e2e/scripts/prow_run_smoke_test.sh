@@ -28,8 +28,8 @@
 #   SKIP_VALIDATION - Skip deployment validation (default: false)
 #   MAAS_API_IMAGE - Custom MaaS API image (optional)
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
-#   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional, requires DEPLOY_MODE=operator)
-#   DEPLOY_MODE           - kustomize (default) or operator
+#   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional)
+#   DEPLOY_MODE - MaaS ownership mode (default: kustomize for presubmits)
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
 #   RHCL_NAMESPACE - RHCL/Kuadrant workload namespace (default: kuadrant-system)
@@ -76,7 +76,7 @@ export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
-DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
+export DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
 export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export RHCL_NAMESPACE="${RHCL_NAMESPACE:-kuadrant-system}"
 export RHCL_STARTING_CSV="${RHCL_STARTING_CSV:-}"
@@ -175,7 +175,24 @@ setup_vars_for_tests() {
 
     export CLUSTER_DOMAIN="$(oc get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}')"
     [[ -z "$CLUSTER_DOMAIN" ]] && { echo "❌ ERROR: Failed to detect cluster domain"; exit 1; }
-    export HOST="maas.${CLUSTER_DOMAIN}"
+    # Route mode uses the MaaS GatewayClass and exposes an external load
+    # balancer address; clusterip mode uses the OpenShift ingress host.
+    gateway_class=$(oc get gateway maas-default-gateway -n openshift-ingress \
+        -o jsonpath='{.spec.gatewayClassName}' 2>/dev/null || echo "")
+    gateway_listener_host=$(oc get gateway maas-default-gateway -n openshift-ingress \
+        -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
+    HOST=""
+    if [[ -n "${MAAS_GATEWAY_HOST:-}" ]]; then
+        HOST="${MAAS_GATEWAY_HOST#*://}"
+    elif [[ -n "$gateway_listener_host" ]]; then
+        HOST="$gateway_listener_host"
+    elif [[ "$gateway_class" != "openshift-default" ]]; then
+        gateway_address=$(oc get gateway maas-default-gateway -n openshift-ingress \
+            -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
+        HOST="${gateway_address#*://}"
+    fi
+    [[ -z "$HOST" ]] && HOST="maas.${CLUSTER_DOMAIN}"
+    export HOST
     export EXTERNAL_OIDC
 
     if [[ "${EXTERNAL_OIDC}" == "true" ]]; then
