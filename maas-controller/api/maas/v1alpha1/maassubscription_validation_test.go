@@ -19,6 +19,7 @@ package v1alpha1_test
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -26,6 +27,8 @@ import (
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	structuralschema "k8s.io/apiextensions-apiserver/pkg/apiserver/schema"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/cel"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/schema/pruning"
+	"k8s.io/apiextensions-apiserver/pkg/apiserver/validation"
 	"k8s.io/apimachinery/pkg/runtime"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"sigs.k8s.io/yaml"
@@ -113,6 +116,184 @@ func TestMaaSSubscriptionUnlimitedRefSerializesWithinRules(t *testing.T) {
 	if len(errs) > 0 {
 		t.Fatalf("expected no validation errors, got %v", errs.ToAggregate())
 	}
+}
+
+// Covers the guardrails attachment example: subscription-wide guardrails plus a
+// per-model guardrails entry must be recognized by the generated CRD schema
+// (survive pruning) and satisfy its CEL rules.
+func TestMaaSSubscriptionGuardrailsAttachmentsAccepted(t *testing.T) {
+	schema, validator := maaSSubscriptionValidator(t)
+
+	obj := map[string]any{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaaSSubscription",
+		"metadata":   map[string]any{"name": "application-subscription", "namespace": "tenant-ns"},
+		"spec": map[string]any{
+			"owner": map[string]any{"groups": []any{map[string]any{"name": "team"}}},
+			"guardrails": []any{map[string]any{
+				"ref":    map[string]any{"name": "application-safety-v1"},
+				"checks": []any{"subscription-check"},
+			}},
+			"modelRefs": []any{map[string]any{
+				"name":      "granite-7b",
+				"namespace": "model-ns",
+				"unlimited": true, // required by the existing CEL rule; not part of guardrails
+				"guardrails": []any{map[string]any{
+					"ref":    map[string]any{"name": "application-safety-v1"},
+					"checks": []any{"application-check"},
+				}},
+			}},
+		},
+	}
+
+	pruned := runtime.DeepCopyJSON(obj)
+	pruning.Prune(pruned, schema, true)
+	spec, ok := pruned["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("pruned object is missing spec")
+	}
+	if _, ok := spec["guardrails"]; !ok {
+		t.Fatal("spec.guardrails was pruned — field missing from generated CRD schema")
+	}
+	modelRefs, ok := spec["modelRefs"].([]any)
+	if !ok || len(modelRefs) == 0 {
+		t.Fatal("pruned object is missing modelRefs")
+	}
+	model, ok := modelRefs[0].(map[string]any)
+	if !ok {
+		t.Fatal("pruned modelRefs[0] is not an object")
+	}
+	if _, ok := model["guardrails"]; !ok {
+		t.Fatal("spec.modelRefs[].guardrails was pruned — field missing from generated CRD schema")
+	}
+
+	errs, _ := validator.Validate(t.Context(), nil, schema, obj, nil, celconfig.RuntimeCELCostBudget)
+	if len(errs) > 0 {
+		t.Fatalf("expected no validation errors, got %v", errs.ToAggregate())
+	}
+}
+
+// A namespace is intentionally not part of a guardrail reference: the policy
+// resolves in the tenant target namespace only. A namespace supplied on the ref
+// must be dropped by the schema rather than honored.
+func TestMaaSSubscriptionGuardrailRefNamespaceIsPruned(t *testing.T) {
+	schema, _ := maaSSubscriptionValidator(t)
+
+	obj := map[string]any{
+		"apiVersion": "maas.opendatahub.io/v1alpha1",
+		"kind":       "MaaSSubscription",
+		"metadata":   map[string]any{"name": "sub", "namespace": "tenant-ns"},
+		"spec": map[string]any{
+			"owner": map[string]any{"groups": []any{map[string]any{"name": "team"}}},
+			"guardrails": []any{map[string]any{
+				"ref": map[string]any{"name": "policy-v1", "namespace": "attacker-ns"},
+			}},
+			"modelRefs": []any{map[string]any{"name": "granite-7b", "namespace": "model-ns", "unlimited": true}},
+		},
+	}
+
+	pruning.Prune(obj, schema, true)
+	spec, ok := obj["spec"].(map[string]any)
+	if !ok {
+		t.Fatal("pruned object is missing spec")
+	}
+	guardrails, ok := spec["guardrails"].([]any)
+	if !ok || len(guardrails) == 0 {
+		t.Fatal("pruned object is missing guardrails")
+	}
+	attachment, ok := guardrails[0].(map[string]any)
+	if !ok {
+		t.Fatal("pruned guardrails[0] is not an object")
+	}
+	ref, ok := attachment["ref"].(map[string]any)
+	if !ok {
+		t.Fatal("pruned guardrails[0].ref is not an object")
+	}
+	if _, ok := ref["namespace"]; ok {
+		t.Fatalf("guardrail ref.namespace should be pruned, got %v", ref)
+	}
+}
+
+// Value-shape violations on guardrail attachments must be rejected by the
+// generated CRD's structural schema (independent of the CEL rules).
+func TestMaaSSubscriptionGuardrailsInvalidAttachmentsRejected(t *testing.T) {
+	schemaValidator := maaSSubscriptionSchemaValidator(t)
+
+	manyChecks := make([]any, 0, 65)
+	for i := range 65 {
+		manyChecks = append(manyChecks, "check-"+strconv.Itoa(i))
+	}
+
+	tests := []struct {
+		name       string
+		guardrails []any
+		wantErr    string
+	}{
+		{
+			name:       "ref name violates DNS-1123 pattern",
+			guardrails: []any{map[string]any{"ref": map[string]any{"name": "Invalid_Name"}}},
+			wantErr:    "spec.guardrails[0].ref.name",
+		},
+		{
+			name:       "ref name empty",
+			guardrails: []any{map[string]any{"ref": map[string]any{"name": ""}}},
+			wantErr:    "spec.guardrails[0].ref.name",
+		},
+		{
+			name:       "missing ref",
+			guardrails: []any{map[string]any{"checks": []any{"a-check"}}},
+			wantErr:    "spec.guardrails[0].ref",
+		},
+		{
+			name: "check name violates pattern",
+			guardrails: []any{map[string]any{
+				"ref":    map[string]any{"name": "policy-v1"},
+				"checks": []any{"Bad Check"},
+			}},
+			wantErr: "spec.guardrails[0].checks[0]",
+		},
+		{
+			name: "too many checks",
+			guardrails: []any{map[string]any{
+				"ref":    map[string]any{"name": "policy-v1"},
+				"checks": manyChecks,
+			}},
+			wantErr: "spec.guardrails[0].checks",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			obj := map[string]any{
+				"apiVersion": "maas.opendatahub.io/v1alpha1",
+				"kind":       "MaaSSubscription",
+				"metadata":   map[string]any{"name": "sub", "namespace": "tenant-ns"},
+				"spec": map[string]any{
+					"owner":      map[string]any{"groups": []any{map[string]any{"name": "team"}}},
+					"guardrails": tt.guardrails,
+					"modelRefs":  []any{map[string]any{"name": "granite-7b", "namespace": "model-ns", "unlimited": true}},
+				},
+			}
+
+			errs := validation.ValidateCustomResource(nil, obj, schemaValidator)
+			if len(errs) == 0 {
+				t.Fatalf("expected a validation error containing %q, got none", tt.wantErr)
+			}
+			if !strings.Contains(errs.ToAggregate().Error(), tt.wantErr) {
+				t.Fatalf("expected error containing %q, got %v", tt.wantErr, errs.ToAggregate())
+			}
+		})
+	}
+}
+
+func maaSSubscriptionSchemaValidator(t *testing.T) validation.SchemaValidator {
+	t.Helper()
+	crd := loadMaaSSubscriptionCRD(t)
+	schemaValidator, _, err := validation.NewSchemaValidator(crd.Spec.Validation.OpenAPIV3Schema)
+	if err != nil {
+		t.Fatalf("build schema validator: %v", err)
+	}
+	return schemaValidator
 }
 
 func maaSSubscriptionObject(ref map[string]any) map[string]any {
