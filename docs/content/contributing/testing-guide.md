@@ -153,9 +153,11 @@ fi
     export GATEWAY_HOST="maas.apps.your-cluster.example.com"
     export E2E_SKIP_TLS_VERIFY=true
 
-    pytest tests/ -v                                    # all tests
-    pytest tests/test_subscription.py -v                # one module
-    pytest tests/test_api_keys.py::TestAPIKeyCreation -v  # one class
+    # Mixed-marker modules need separate passes (or use run_e2e_tests.sh for the full suite).
+    pytest tests/ -m "not serial" -v
+    pytest tests/ -m serial -v
+    pytest tests/test_subscription.py -m "not serial" -v
+    pytest tests/test_api_keys.py::TestAPIKeyCRUD -m "not serial" -v
     ```
 
 ### Key Environment Variables
@@ -177,7 +179,7 @@ See `test/e2e/tests/conftest.py` and individual test module docstrings for the f
 
 ### Parallel E2E (pytest-xdist)
 
-The E2E suite always runs in **two marker-filtered passes** (default `E2E_PARALLEL_WORKERS=7`):
+`run_e2e_tests.sh` and `run-tests-quick.sh` always run **two marker-filtered passes** (default `E2E_PARALLEL_WORKERS=7`). Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
 
 1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 7` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2 (serial)**: `-m serial` — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)

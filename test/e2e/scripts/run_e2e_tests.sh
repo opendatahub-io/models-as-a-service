@@ -51,6 +51,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Per-pass -m filters are owned by this script; forwarded markers can defeat the split.
+reject_forwarded_marker_args() {
+    local arg
+    for arg in "${extra_pytest_args[@]}"; do
+        case "$arg" in
+            -m|--markers|-m*|--markers=*)
+                echo "ERROR: forwarded pytest marker ($arg) is not allowed; run_e2e_tests.sh applies per-pass -m filters" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+reject_forwarded_marker_args
+
 # ── Defaults ─────────────────────────────────────────────────────────────
 export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
 E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
@@ -153,12 +167,42 @@ fi
 # ── Run ──────────────────────────────────────────────────────────────────
 parallel_rc=0
 serial_rc=0
+any_pass_collected_tests=false
+
+count_pytest_collected() {
+    local summary collected=0
+    set +e
+    summary=$( "$@" --collect-only -q 2>&1 | tail -1 )
+    set -e
+    if [[ "$summary" =~ ^([0-9]+)/[0-9]+\ tests\ collected ]]; then
+        collected="${BASH_REMATCH[1]}"
+    elif [[ "$summary" != *"no tests collected"* ]]; then
+        echo "WARNING: could not parse pytest collection summary: ${summary}" >&2
+    fi
+    echo "$collected"
+}
 
 # pytest exit 5 = no tests collected (e.g. -k matched only the other marker pass).
 run_pytest_pass() {
     local pass_label="$1"
     shift
+    local collected=0
     local rc=0
+
+    collected=$(count_pytest_collected "$@")
+    if [[ "$collected" -eq 0 ]]; then
+        echo "Note: ${pass_label} collected no tests (pytest exit 5 acceptable for this pass)"
+        set +e
+        "$@"
+        rc=$?
+        set -e
+        if [[ "$rc" -eq 0 || "$rc" -eq 5 ]]; then
+            return 0
+        fi
+        return 1
+    fi
+
+    any_pass_collected_tests=true
     set +e
     "$@"
     rc=$?
@@ -167,7 +211,7 @@ run_pytest_pass() {
         return 0
     fi
     if [[ "$rc" -eq 5 ]]; then
-        echo "Note: ${pass_label} collected no tests (pytest exit 5), treating as success"
+        echo "Note: ${pass_label} collected no tests at run time (pytest exit 5), treating as success"
         return 0
     fi
     return 1
@@ -178,10 +222,10 @@ run_serial_pass() {
     if ! run_pytest_pass "pass 2 (serial)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
-        -m serial \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
+        "${pytest_common_args[@]}" \
+        -m serial; then
         serial_rc=1
     fi
 }
@@ -196,10 +240,10 @@ elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
-        -m "not serial" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
+        "${pytest_common_args[@]}" \
+        -m "not serial"; then
         parallel_rc=1
     fi
     run_serial_pass
@@ -209,16 +253,20 @@ else
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
-        -m "not serial" \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
+        "${pytest_common_args[@]}" \
+        -m "not serial"; then
         parallel_rc=1
     fi
     run_serial_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────
+if [[ "$any_pass_collected_tests" != "true" ]]; then
+    echo "❌ ERROR: no tests collected in any pass"
+    exit 1
+fi
 if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 ]]; then
     echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc})"
     exit 1
