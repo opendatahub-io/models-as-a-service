@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -562,7 +563,11 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 	}
 	clauseA := `auth.identity.selected_subscription_id == "` + idA + `"`
 	clauseB := `auth.identity.selected_subscription_id == "` + idB + `"`
-	expectedPred := "(" + clauseA + " || " + clauseB + `) && !request.path.endsWith("/v1/models")`
+	// buildGroupLimit sorts short IDs lexicographically before OR-ing.
+	ids := []string{idA, idB}
+	sort.Strings(ids)
+	expectedPred := `(auth.identity.selected_subscription_id == "` + ids[0] + `" || ` +
+		`auth.identity.selected_subscription_id == "` + ids[1] + `") && !request.path.endsWith("/v1/models")`
 	if pred != expectedPred {
 		t.Errorf("grouped predicate = %q, want %q", pred, expectedPred)
 	}

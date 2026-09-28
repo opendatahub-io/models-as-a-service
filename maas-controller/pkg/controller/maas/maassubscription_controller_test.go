@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
