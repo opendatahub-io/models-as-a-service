@@ -118,6 +118,8 @@ type AITenantReconciler struct {
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch;update;patch;delete
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get
+// +kubebuilder:rbac:groups=kuadrant.io,resources=authpolicies,verbs=get;create;update;delete
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch;create;patch
 // +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=roles,verbs=get;list;watch;create;update;patch;delete
@@ -270,10 +272,27 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		}
 		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
 	}
+	if err := r.ensureOGXAPIAuthPolicy(ctx, &aitenant, tenantNamespace, gatewayRef); err != nil {
+		setAITenantPhase(&aitenant, "Pending", "OGXAPIAuthNotReady", err.Error())
+		if err2 := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err2 != nil {
+			return ctrl.Result{}, err2
+		}
+		return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+	}
 
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
 	if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 		return ctrl.Result{}, err
+	}
+	if aitenant.Spec.AgenticBackendRef == "" {
+		_, policyName := ogxAPINames(aitenant.Name)
+		policy := &unstructured.Unstructured{}
+		policy.SetGroupVersionKind(tenantreconcile.GVKAuthPolicy)
+		if err := r.Get(ctx, client.ObjectKey{Name: policyName, Namespace: tenantNamespace}, policy); err == nil {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		} else if !apierrors.IsNotFound(err) {
+			return ctrl.Result{}, err
+		}
 	}
 	return ctrl.Result{}, nil
 }
@@ -1035,6 +1054,9 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	}
 	if !tenantDeleted {
 		return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+	}
+	if err := r.ensureOGXAPIAuthPolicy(ctx, &maasv1alpha1.AITenant{ObjectMeta: aitenant.ObjectMeta}, tenantNamespace, aitenant.Status.GatewayRef); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := r.deleteAITenantScopedChildren(ctx, aitenant); err != nil {

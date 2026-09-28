@@ -864,6 +864,12 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					map[string]any{
 						"predicate": `!("x-maas-keyname" in request.headers)`,
 					},
+					map[string]any{
+						"predicate": `!("x-maas-owner-tenant" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-ogx-route-tenant" in request.headers)`,
+					},
 				},
 			},
 		},
@@ -1102,6 +1108,14 @@ allow {
 						},
 						"plain": map[string]any{
 							"expression": celSubscription,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-Owner-Tenant": map[string]any{
+						"when": []any{map[string]any{"predicate": celIsAPIKey}},
+						"plain": map[string]any{
+							"expression": `(auth.metadata.apiKeyValidation.tenant == "" ? "models-as-a-service" : auth.metadata.apiKeyValidation.tenant) + "/" + auth.metadata.apiKeyValidation.subscription`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
