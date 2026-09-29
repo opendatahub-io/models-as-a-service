@@ -46,17 +46,19 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | namespace | string | Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this namespace, alongside the LLMInferenceService. |
 | inferencePool | LocalObjectReference | InferencePool (`group`, `kind`, `name`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
 | objectiveName | string | InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when `inferencePriority` is unset. It does not change when `inferencePriority` changes. |
-| state | string | Reconciliation state (see below) |
-| message | string | Human-readable detail for the state |
+| ready | bool | `true` when nothing is left to reconcile for this model (see reasons below) |
+| reason | string | Machine-readable reason for `ready` (see below). New reasons may be added. |
+| message | string | Human-readable detail for the reason |
 
-| State | Meaning |
-|-------|---------|
-| `Pending` | The pool has not been observed yet, or the InferenceObjective is not reconciled yet |
-| `NotApplicable` | The model is not served through an inference scheduler (for example, an ExternalModel) |
-| `Unsupported` | Flow control cannot be applied, for example because traffic is split across a routing group |
-| `Failed` | Reconciling the InferenceObjective failed |
-| `Ready` | The InferenceObjective matches `inferencePriority` |
-| `NotRequired` | `inferencePriority` is unset: no InferenceObjective is created and the scheduler applies priority `0` |
+| Reason | ready | Meaning |
+|--------|-------|---------|
+| `ObjectiveReconciled` | `true` | The InferenceObjective matches `inferencePriority` |
+| `PriorityUnset` | `true` | `inferencePriority` is unset: no InferenceObjective is created and the scheduler applies priority `0` |
+| `NotApplicable` | `true` | The model is not served through an inference scheduler (for example, an ExternalModel) |
+| `PoolPending` | `false` | The model's InferencePool has not been observed yet |
+| `ObjectivePending` | `false` | `inferencePriority` is set but the InferenceObjective is not reconciled yet |
+| `Unsupported` | `false` | Request priority cannot be applied, for example because traffic is split across a routing group |
+| `ReconcileFailed` | `false` | Reconciling request priority for the model failed |
 
 ## Annotations
 

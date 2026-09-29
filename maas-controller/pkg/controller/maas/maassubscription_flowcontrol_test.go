@@ -138,6 +138,36 @@ func newFlowControlSubscription(name, ns string, priority *int32, modelNames ...
 	return sub
 }
 
+// TestFlowControlReady pins which reasons mean nothing is left to reconcile. Pending and failed
+// objectives must never report ready.
+func TestFlowControlReady(t *testing.T) {
+	for reason, want := range map[maasv1alpha1.FlowControlReason]bool{
+		maasv1alpha1.FlowControlReasonObjectiveReconciled: true,
+		maasv1alpha1.FlowControlReasonPriorityUnset:       true,
+		maasv1alpha1.FlowControlReasonNotApplicable:       true,
+		maasv1alpha1.FlowControlReasonPoolPending:         false,
+		maasv1alpha1.FlowControlReasonObjectivePending:    false,
+		maasv1alpha1.FlowControlReasonUnsupported:         false,
+		maasv1alpha1.FlowControlReasonReconcileFailed:     false,
+		"": false,
+	} {
+		if got := flowControlReady(reason); got != want {
+			t.Errorf("flowControlReady(%q) = %t, want %t", reason, got, want)
+		}
+	}
+}
+
+// assertFlowControl checks a model's reason and that ready matches it.
+func assertFlowControl(t *testing.T, model string, s maasv1alpha1.ModelFlowControlStatus, want maasv1alpha1.FlowControlReason) {
+	t.Helper()
+	if s.Reason != want {
+		t.Errorf("%s: reason = %s, want %s (message %q)", model, s.Reason, want, s.Message)
+	}
+	if wantReady := flowControlReady(want); s.Ready != wantReady {
+		t.Errorf("%s: ready = %t, want %t for reason %s", model, s.Ready, wantReady, want)
+	}
+}
+
 func flowControlStatusFor(t *testing.T, statuses []maasv1alpha1.ModelFlowControlStatus, model string) maasv1alpha1.ModelFlowControlStatus {
 	t.Helper()
 	for _, s := range statuses {
@@ -194,13 +224,13 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 	allModels := []string{"llama", "llama-alias", "explicit-ns", "remote-pool", "external", "starting", "no-scheduler", "missing-svc", "missing-ref", "grouped", "split"}
 
 	tests := []struct {
-		name          string
-		priority      *int32
-		wantPoolState maasv1alpha1.FlowControlState
+		name           string
+		priority       *int32
+		wantPoolReason maasv1alpha1.FlowControlReason
 	}{
-		{name: "unset priority publishes names without objectives", priority: nil, wantPoolState: maasv1alpha1.FlowControlStateNotRequired},
-		{name: "explicit zero requires an objective", priority: &zero, wantPoolState: maasv1alpha1.FlowControlStatePending},
-		{name: "positive priority requires an objective", priority: &ten, wantPoolState: maasv1alpha1.FlowControlStatePending},
+		{name: "unset priority publishes names without objectives", priority: nil, wantPoolReason: maasv1alpha1.FlowControlReasonPriorityUnset},
+		{name: "explicit zero requires an objective", priority: &zero, wantPoolReason: maasv1alpha1.FlowControlReasonObjectivePending},
+		{name: "positive priority requires an objective", priority: &ten, wantPoolReason: maasv1alpha1.FlowControlReasonObjectivePending},
 	}
 
 	for _, tc := range tests {
@@ -228,9 +258,7 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 				"grouped":     testPool("grouped-pool"),
 			} {
 				s := flowControlStatusFor(t, statuses, model)
-				if s.State != tc.wantPoolState {
-					t.Errorf("%s: state = %s, want %s (message %q)", model, s.State, tc.wantPoolState, s.Message)
-				}
+				assertFlowControl(t, model, s, tc.wantPoolReason)
 				if s.InferencePool == nil || *s.InferencePool != pool {
 					t.Errorf("%s: inferencePool = %+v, want %+v", model, s.InferencePool, pool)
 				}
@@ -245,24 +273,22 @@ func TestResolveFlowControlStatuses(t *testing.T) {
 			}
 
 			// Models without a single pool report why, and never carry an objective name.
-			for model, want := range map[string]maasv1alpha1.FlowControlState{
-				"external":     maasv1alpha1.FlowControlStateNotApplicable,
-				"no-scheduler": maasv1alpha1.FlowControlStateNotApplicable,
-				"starting":     maasv1alpha1.FlowControlStatePending,
-				"missing-svc":  maasv1alpha1.FlowControlStatePending,
-				"missing-ref":  maasv1alpha1.FlowControlStatePending,
-				"split":        maasv1alpha1.FlowControlStateUnsupported,
-				"remote-pool":  maasv1alpha1.FlowControlStateUnsupported,
+			for model, want := range map[string]maasv1alpha1.FlowControlReason{
+				"external":     maasv1alpha1.FlowControlReasonNotApplicable,
+				"no-scheduler": maasv1alpha1.FlowControlReasonNotApplicable,
+				"starting":     maasv1alpha1.FlowControlReasonPoolPending,
+				"missing-svc":  maasv1alpha1.FlowControlReasonPoolPending,
+				"missing-ref":  maasv1alpha1.FlowControlReasonPoolPending,
+				"split":        maasv1alpha1.FlowControlReasonUnsupported,
+				"remote-pool":  maasv1alpha1.FlowControlReasonUnsupported,
 			} {
 				s := flowControlStatusFor(t, statuses, model)
-				if s.State != want {
-					t.Errorf("%s: state = %s, want %s (message %q)", model, s.State, want, s.Message)
-				}
+				assertFlowControl(t, model, s, want)
 				if s.ObjectiveName != "" || s.InferencePool != nil {
 					t.Errorf("%s: unexpected pool %+v / objective %q", model, s.InferencePool, s.ObjectiveName)
 				}
 				if s.Message == "" {
-					t.Errorf("%s: state %s has no message", model, s.State)
+					t.Errorf("%s: reason %s has no message", model, s.Reason)
 				}
 			}
 		})
@@ -348,12 +374,12 @@ func TestResolveFlowControlStatuses_TenantErrorFailsOnlyPoolModels(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolveFlowControlStatuses: unexpected error: %v", err)
 	}
-	if s := flowControlStatusFor(t, statuses, "llama"); s.State != maasv1alpha1.FlowControlStateFailed || s.ObjectiveName != "" {
-		t.Errorf("llama: state = %s, objectiveName = %q; want Failed with no name", s.State, s.ObjectiveName)
+	llama := flowControlStatusFor(t, statuses, "llama")
+	assertFlowControl(t, "llama", llama, maasv1alpha1.FlowControlReasonReconcileFailed)
+	if llama.ObjectiveName != "" {
+		t.Errorf("llama: objectiveName = %q, want none", llama.ObjectiveName)
 	}
-	if s := flowControlStatusFor(t, statuses, "external"); s.State != maasv1alpha1.FlowControlStateNotApplicable {
-		t.Errorf("external: state = %s, want NotApplicable", s.State)
-	}
+	assertFlowControl(t, "external", flowControlStatusFor(t, statuses, "external"), maasv1alpha1.FlowControlReasonNotApplicable)
 }
 
 // failLLMISvcGets returns interceptor funcs that fail Get for the named LLMInferenceService.
@@ -387,11 +413,11 @@ func TestResolveFlowControlStatuses_TransientErrorIsReturned(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected transient lookup error to be returned for retry")
 	}
-	if s := flowControlStatusFor(t, statuses, "flaky"); s.State != maasv1alpha1.FlowControlStatePending {
-		t.Errorf("flaky: state = %s, want Pending", s.State)
-	}
-	if s := flowControlStatusFor(t, statuses, "llama"); s.State != maasv1alpha1.FlowControlStateNotRequired || s.ObjectiveName == "" {
-		t.Errorf("llama: state = %s, objectiveName = %q; want NotRequired with a name", s.State, s.ObjectiveName)
+	assertFlowControl(t, "flaky", flowControlStatusFor(t, statuses, "flaky"), maasv1alpha1.FlowControlReasonPoolPending)
+	llama := flowControlStatusFor(t, statuses, "llama")
+	assertFlowControl(t, "llama", llama, maasv1alpha1.FlowControlReasonPriorityUnset)
+	if llama.ObjectiveName == "" {
+		t.Error("llama: objectiveName is empty, want a name")
 	}
 }
 
@@ -422,8 +448,8 @@ func TestMaaSSubscriptionReconciler_TransientFlowControlErrorRequeues(t *testing
 	if err := c.Get(context.Background(), req.NamespacedName, got); err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if len(got.Status.FlowControlStatuses) != 1 || got.Status.FlowControlStatuses[0].State != maasv1alpha1.FlowControlStatePending {
-		t.Errorf("flowControlStatuses = %+v, want one Pending entry", got.Status.FlowControlStatuses)
+	if len(got.Status.FlowControlStatuses) != 1 || got.Status.FlowControlStatuses[0].Reason != maasv1alpha1.FlowControlReasonPoolPending {
+		t.Errorf("flowControlStatuses = %+v, want one PoolPending entry", got.Status.FlowControlStatuses)
 	}
 }
 
@@ -459,8 +485,8 @@ func TestMaaSSubscriptionReconciler_PublishesFlowControlStatuses(t *testing.T) {
 	if len(got.Status.FlowControlStatuses) != 1 {
 		t.Fatalf("flowControlStatuses = %+v, want one entry", got.Status.FlowControlStatuses)
 	}
-	if s := got.Status.FlowControlStatuses[0]; s.Name != modelName || s.State != maasv1alpha1.FlowControlStateNotApplicable {
-		t.Errorf("flowControlStatuses[0] = %+v, want %s NotApplicable", s, modelName)
+	if s := got.Status.FlowControlStatuses[0]; s.Name != modelName || s.Reason != maasv1alpha1.FlowControlReasonNotApplicable || !s.Ready {
+		t.Errorf("flowControlStatuses[0] = %+v, want %s ready with reason NotApplicable", s, modelName)
 	}
 }
 

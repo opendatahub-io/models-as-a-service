@@ -147,26 +147,30 @@ type TokenRateLimitStatus struct {
 	Model string `json:"model"`
 }
 
-// FlowControlState reports the request-priority reconciliation state of a model in a subscription.
-// +kubebuilder:validation:Enum=Pending;NotApplicable;Unsupported;Failed;Ready;NotRequired
-type FlowControlState string
+// FlowControlReason is a machine-readable reason for a model's request-priority status.
+// It is intentionally not an enum in the CRD so reasons can be added without a CRD update.
+// +kubebuilder:validation:MaxLength=64
+type FlowControlReason string
 
 const (
-	// FlowControlStatePending indicates the model's InferencePool or InferenceObjective is not reconciled yet.
-	FlowControlStatePending FlowControlState = "Pending"
-	// FlowControlStateNotApplicable indicates the model is not served through an inference scheduler
-	// (for example, an ExternalModel), so flow control does not apply.
-	FlowControlStateNotApplicable FlowControlState = "NotApplicable"
-	// FlowControlStateUnsupported indicates flow control cannot be applied to the model, for example
-	// because its traffic is split across multiple InferencePools.
-	FlowControlStateUnsupported FlowControlState = "Unsupported"
-	// FlowControlStateFailed indicates reconciliation of the model's InferenceObjective failed.
-	FlowControlStateFailed FlowControlState = "Failed"
-	// FlowControlStateReady indicates the model's InferenceObjective matches spec.inferencePriority.
-	FlowControlStateReady FlowControlState = "Ready"
-	// FlowControlStateNotRequired indicates spec.inferencePriority is unset, so no InferenceObjective
-	// is created and the scheduler applies priority 0 to the objective name.
-	FlowControlStateNotRequired FlowControlState = "NotRequired"
+	// FlowControlReasonObjectiveReconciled indicates the model's InferenceObjective matches
+	// spec.inferencePriority. Ready is true.
+	FlowControlReasonObjectiveReconciled FlowControlReason = "ObjectiveReconciled"
+	// FlowControlReasonPriorityUnset indicates spec.inferencePriority is unset, so no
+	// InferenceObjective is required and the scheduler applies priority 0. Ready is true.
+	FlowControlReasonPriorityUnset FlowControlReason = "PriorityUnset"
+	// FlowControlReasonNotApplicable indicates the model is not served through an inference
+	// scheduler (for example, an ExternalModel), so request priority does not apply. Ready is true.
+	FlowControlReasonNotApplicable FlowControlReason = "NotApplicable"
+	// FlowControlReasonPoolPending indicates the model's InferencePool has not been observed yet.
+	FlowControlReasonPoolPending FlowControlReason = "PoolPending"
+	// FlowControlReasonObjectivePending indicates the InferenceObjective is not reconciled yet.
+	FlowControlReasonObjectivePending FlowControlReason = "ObjectivePending"
+	// FlowControlReasonUnsupported indicates request priority cannot be applied to the model, for
+	// example because its traffic is split across multiple InferencePools.
+	FlowControlReasonUnsupported FlowControlReason = "Unsupported"
+	// FlowControlReasonReconcileFailed indicates reconciling the model's request priority failed.
+	FlowControlReasonReconcileFailed FlowControlReason = "ReconcileFailed"
 )
 
 // ModelFlowControlStatus maps a referenced model to its InferencePool and InferenceObjective.
@@ -187,9 +191,13 @@ type ModelFlowControlStatus struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ObjectiveName string `json:"objectiveName,omitempty"`
-	// State is the request-priority reconciliation state for this model
-	State FlowControlState `json:"state"`
-	// Message is a human-readable description of the state
+	// Ready is true when nothing is left to reconcile for this model: its InferenceObjective matches
+	// spec.inferencePriority, spec.inferencePriority is unset, or request priority does not apply
+	Ready bool `json:"ready"`
+	// Reason is a machine-readable reason for Ready
+	// +optional
+	Reason FlowControlReason `json:"reason,omitempty"`
+	// Message is a human-readable description of the reason
 	// +kubebuilder:validation:MaxLength=1024
 	// +optional
 	Message string `json:"message,omitempty"`

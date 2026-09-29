@@ -286,7 +286,7 @@ spec:
                       type: object
                     message:
                       description: Message is a human-readable description of the
-                        state
+                        reason
                       maxLength: 1024
                       type: string
                     name:
@@ -306,21 +306,19 @@ spec:
                         and no InferenceObjective is created.
                       maxLength: 63
                       type: string
-                    state:
-                      description: State is the request-priority reconciliation state
-                        for this model
-                      enum:
-                      - Pending
-                      - NotApplicable
-                      - Unsupported
-                      - Failed
-                      - Ready
-                      - NotRequired
+                    ready:
+                      description: |-
+                        Ready is true when nothing is left to reconcile for this model: its InferenceObjective matches
+                        spec.inferencePriority, spec.inferencePriority is unset, or request priority does not apply
+                      type: boolean
+                    reason:
+                      description: Reason is a machine-readable reason for Ready
+                      maxLength: 64
                       type: string
                   required:
                   - name
                   - namespace
-                  - state
+                  - ready
                   type: object
                 type: array
               modelRefStatuses:

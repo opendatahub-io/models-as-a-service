@@ -119,7 +119,7 @@ func flowControlTenantName(ctx context.Context, c client.Reader, namespace strin
 }
 
 // resolveFlowControlStatuses reports, for each referenced model, the observed InferencePool,
-// the generated InferenceObjective name, and the request-priority reconciliation state.
+// the generated InferenceObjective name, and whether request priority is fully reconciled.
 // A failure for one model is reported on that model and does not affect the others.
 // Transient lookup errors are also returned so the caller can retry.
 func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription) ([]maasv1alpha1.ModelFlowControlStatus, error) {
@@ -140,12 +140,12 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 		seen[key] = struct{}{}
 
 		status := maasv1alpha1.ModelFlowControlStatus{Name: ref.Name, Namespace: ref.Namespace}
-		pool, state, message, err := r.resolveModelInferencePool(ctx, ref.Namespace, ref.Name)
+		pool, reason, message, err := r.resolveModelInferencePool(ctx, ref.Namespace, ref.Name)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("model %s: %w", key, err))
 		}
 		status.InferencePool = pool
-		status.State = state
+		status.Reason = reason
 		status.Message = message
 
 		if pool != nil {
@@ -155,55 +155,70 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 			}
 			switch {
 			case tenantErr != nil:
-				status.State = maasv1alpha1.FlowControlStateFailed
+				status.Reason = maasv1alpha1.FlowControlReasonReconcileFailed
 				status.Message = fmt.Sprintf("failed to resolve tenant for namespace %s: %v", subscription.Namespace, tenantErr)
 			case subscription.Spec.InferencePriority == nil:
 				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
-				status.State = maasv1alpha1.FlowControlStateNotRequired
+				status.Reason = maasv1alpha1.FlowControlReasonPriorityUnset
 				status.Message = "spec.inferencePriority is unset; no InferenceObjective is required and the scheduler applies priority 0"
 			default:
 				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
-				status.State = maasv1alpha1.FlowControlStatePending
+				status.Reason = maasv1alpha1.FlowControlReasonObjectivePending
 				status.Message = "waiting for InferenceObjective reconciliation"
 			}
 		}
+		status.Ready = flowControlReady(status.Reason)
 		statuses = append(statuses, status)
 	}
 	return statuses, errors.Join(errs...)
 }
 
+// flowControlReady reports whether nothing is left to reconcile for a model with the given
+// reason: its objective is reconciled, no objective is required, or request priority does
+// not apply to the model.
+func flowControlReady(reason maasv1alpha1.FlowControlReason) bool {
+	switch reason {
+	case maasv1alpha1.FlowControlReasonObjectiveReconciled,
+		maasv1alpha1.FlowControlReasonPriorityUnset,
+		maasv1alpha1.FlowControlReasonNotApplicable:
+		return true
+	default:
+		return false
+	}
+}
+
 // resolveModelInferencePool returns the InferencePool observed for a MaaSModelRef. The pool
 // lives in the model's namespace, alongside its LLMInferenceService. When no pool is returned,
-// state and message explain why. A non-nil error is a transient lookup failure that should be
-// retried; missing resources are reported as Pending without an error because the MaaSModelRef
-// and LLMInferenceService watches re-trigger reconciliation.
-func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*gwapiv1.LocalObjectReference, maasv1alpha1.FlowControlState, string, error) {
+// reason and message explain why. A non-nil error is a transient lookup failure that should be
+// retried; missing resources are reported as PoolPending without an error because the
+// MaaSModelRef and LLMInferenceService watches re-trigger reconciliation.
+func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Context, modelNamespace, modelName string) (*gwapiv1.LocalObjectReference, maasv1alpha1.FlowControlReason, string, error) {
 	model := &maasv1alpha1.MaaSModelRef{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: modelNamespace, Name: modelName}, model); err != nil {
 		if apierrors.IsNotFound(err) {
-			return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("MaaSModelRef %s/%s not found", modelNamespace, modelName), nil
+			return nil, maasv1alpha1.FlowControlReasonPoolPending, fmt.Sprintf("MaaSModelRef %s/%s not found", modelNamespace, modelName), nil
 		}
-		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get MaaSModelRef: %v", err),
+		return nil, maasv1alpha1.FlowControlReasonPoolPending, fmt.Sprintf("failed to get MaaSModelRef: %v", err),
 			fmt.Errorf("failed to get MaaSModelRef %s/%s: %w", modelNamespace, modelName, err)
 	}
 	if model.Spec.ModelRef.Kind != "LLMInferenceService" {
-		return nil, maasv1alpha1.FlowControlStateNotApplicable,
+		return nil, maasv1alpha1.FlowControlReasonNotApplicable,
 			fmt.Sprintf("model kind %s is not served through an inference scheduler", model.Spec.ModelRef.Kind), nil
 	}
 
 	llmisvc := &kservev1alpha2.LLMInferenceService{}
 	if err := r.Get(ctx, types.NamespacedName{Namespace: model.Namespace, Name: model.Spec.ModelRef.Name}, llmisvc); err != nil {
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-			return nil, maasv1alpha1.FlowControlStatePending,
+			return nil, maasv1alpha1.FlowControlReasonPoolPending,
 				fmt.Sprintf("LLMInferenceService %s/%s not found", model.Namespace, model.Spec.ModelRef.Name), nil
 		}
-		return nil, maasv1alpha1.FlowControlStatePending, fmt.Sprintf("failed to get LLMInferenceService: %v", err),
+		return nil, maasv1alpha1.FlowControlReasonPoolPending, fmt.Sprintf("failed to get LLMInferenceService: %v", err),
 			fmt.Errorf("failed to get LLMInferenceService %s/%s: %w", model.Namespace, model.Spec.ModelRef.Name, err)
 	}
 
 	router := llmisvc.Status.Router
 	if router != nil && router.Group != nil && activeRoutingGroupMembers(router.Group) > 1 {
-		return nil, maasv1alpha1.FlowControlStateUnsupported,
+		return nil, maasv1alpha1.FlowControlReasonUnsupported,
 			fmt.Sprintf("LLMInferenceService %s/%s splits traffic across routing group %s; flow control requires a single InferencePool",
 				llmisvc.Namespace, llmisvc.Name, router.Group.Name), nil
 	}
@@ -212,7 +227,7 @@ func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Conte
 		// An InferenceObjective can only reference a pool in its own namespace, and KServe
 		// creates or references pools in the LLMInferenceService namespace.
 		if observed.Namespace != nil && *observed.Namespace != "" && string(*observed.Namespace) != llmisvc.Namespace {
-			return nil, maasv1alpha1.FlowControlStateUnsupported,
+			return nil, maasv1alpha1.FlowControlReasonUnsupported,
 				fmt.Sprintf("InferencePool %s/%s is not in the LLMInferenceService namespace %s",
 					*observed.Namespace, observed.Name, llmisvc.Namespace), nil
 		}
@@ -226,10 +241,10 @@ func (r *MaaSSubscriptionReconciler) resolveModelInferencePool(ctx context.Conte
 	// The scheduler can come from the service spec or from a referenced config, so rely on
 	// the observed status: a ready service without a pool is served without a scheduler.
 	if llmisvcReadyStatus(llmisvc) != string(corev1.ConditionTrue) {
-		return nil, maasv1alpha1.FlowControlStatePending,
+		return nil, maasv1alpha1.FlowControlReasonPoolPending,
 			fmt.Sprintf("waiting for LLMInferenceService %s/%s to report an InferencePool", llmisvc.Namespace, llmisvc.Name), nil
 	}
-	return nil, maasv1alpha1.FlowControlStateNotApplicable,
+	return nil, maasv1alpha1.FlowControlReasonNotApplicable,
 		fmt.Sprintf("LLMInferenceService %s/%s is not served through an inference scheduler", llmisvc.Namespace, llmisvc.Name), nil
 }
 
