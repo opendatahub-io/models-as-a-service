@@ -29,6 +29,13 @@ func TestIsInClusterPostgresHost(t *testing.T) {
 	assert.False(t, isInClusterPostgresHost("mydb.abc123.us-east-1.rds.amazonaws.com"))
 }
 
+func TestPostgresNamespaceFromHost(t *testing.T) {
+	assert.Equal(t, "redhat-ai-gateway-infra", postgresNamespaceFromHost("postgres", "redhat-ai-gateway-infra"))
+	assert.Equal(t, "postgres", postgresNamespaceFromHost("postgres.postgres.svc.cluster.local", "redhat-ai-gateway-infra"))
+	assert.Equal(t, "redhat-ods-applications", postgresNamespaceFromHost("postgres.redhat-ods-applications.svc", "infra"))
+	assert.Equal(t, "infra", postgresNamespaceFromHost("db.example.com", "infra"))
+}
+
 func TestResolveBundledPostgres(t *testing.T) {
 	t.Run("in-cluster short hostname", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithObjects(&corev1.Secret{
@@ -36,9 +43,22 @@ func TestResolveBundledPostgres(t *testing.T) {
 			Data:       map[string][]byte{MaaSDBSecretKey: []byte("postgresql://u:p@postgres:5432/maas")},
 		}).Build()
 
-		got, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
+		got, ns, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
 		require.NoError(t, err)
 		assert.True(t, got)
+		assert.Equal(t, "redhat-ai-gateway-infra", ns)
+	})
+
+	t.Run("in-cluster FQDN in dedicated namespace", func(t *testing.T) {
+		cl := fake.NewClientBuilder().WithObjects(&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: MaaSDBSecretName, Namespace: "redhat-ai-gateway-infra"},
+			Data:       map[string][]byte{MaaSDBSecretKey: []byte("postgresql://u:p@postgres.postgres.svc.cluster.local:5432/maas")},
+		}).Build()
+
+		got, ns, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
+		require.NoError(t, err)
+		assert.True(t, got)
+		assert.Equal(t, "postgres", ns)
 	})
 
 	t.Run("external hostname", func(t *testing.T) {
@@ -47,15 +67,17 @@ func TestResolveBundledPostgres(t *testing.T) {
 			Data:       map[string][]byte{MaaSDBSecretKey: []byte("postgresql://u:p@rds.example.com:5432/maas")},
 		}).Build()
 
-		got, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
+		got, ns, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
 		require.NoError(t, err)
 		assert.False(t, got)
+		assert.Empty(t, ns)
 	})
 
 	t.Run("missing secret", func(t *testing.T) {
 		cl := fake.NewClientBuilder().Build()
-		got, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
+		got, ns, err := resolveBundledPostgres(context.Background(), cl, "redhat-ai-gateway-infra")
 		require.NoError(t, err)
 		assert.False(t, got)
+		assert.Empty(t, ns)
 	})
 }

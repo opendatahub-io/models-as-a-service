@@ -745,6 +745,40 @@ func TestPatchMaaSAPIEgressRestrictPostgres_addsControllerNamespaceWhenSeparated
 	assert.Equal(t, "postgres", podLabels["app"])
 }
 
+func TestPatchMaaSAPIEgressRestrictPostgres_addsDSNNamespace(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		AppNamespace:             "redhat-ai-gateway-infra",
+		ControllerNamespace:      "redhat-ods-applications",
+		BundledPostgres:          true,
+		BundledPostgresNamespace: "postgres",
+	}
+
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	rule, ok := egress[2].(map[string]any)
+	require.True(t, ok)
+	to, ok := rule["to"].([]any)
+	require.True(t, ok)
+	// same-ns peer + DSN ns + controller ns
+	require.Len(t, to, 3)
+
+	namespaces := make([]string, 0, 2)
+	for _, peerRaw := range to[1:] {
+		peer, ok := peerRaw.(map[string]any)
+		require.True(t, ok)
+		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+		require.True(t, ok)
+		matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
+		require.True(t, ok)
+		namespaces = append(namespaces, matchLabels["kubernetes.io/metadata.name"].(string))
+	}
+	assert.Equal(t, []string{"postgres", "redhat-ods-applications"}, namespaces)
+}
+
 func TestPatchMaaSAPIEgressRestrictPostgres_omitsPostgresWhenExternal(t *testing.T) {
 	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	params := PlatformParams{

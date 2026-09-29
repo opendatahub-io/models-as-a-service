@@ -35,32 +35,53 @@ func isInClusterPostgresHost(hostname string) bool {
 	return strings.HasSuffix(hostname, ".svc.cluster.local") || strings.HasSuffix(hostname, ".svc")
 }
 
-// resolveBundledPostgres reads maas-db-config and returns true when the connection
-// URL targets in-cluster Postgres. External databases (RDS, etc.) return false so
-// maas-api-egress-restrict omits the app=postgres peer; administrators apply a
-// companion egress policy with ipBlock CIDRs for the external endpoint.
-func resolveBundledPostgres(ctx context.Context, c client.Reader, appNamespace string) (bool, error) {
+// postgresNamespaceFromHost returns the Kubernetes namespace for an in-cluster
+// Postgres hostname. Short name "postgres" (or any non-FQDN) maps to appNamespace.
+// Cluster DNS names like postgres.postgres.svc.cluster.local yield the embedded
+// namespace label ("postgres").
+func postgresNamespaceFromHost(hostname, appNamespace string) string {
+	if hostname == "" || hostname == "postgres" || !strings.Contains(hostname, ".") {
+		return appNamespace
+	}
+	if !strings.HasSuffix(hostname, ".svc.cluster.local") && !strings.HasSuffix(hostname, ".svc") {
+		return appNamespace
+	}
+	parts := strings.Split(hostname, ".")
+	if len(parts) < 2 || parts[1] == "" {
+		return appNamespace
+	}
+	return parts[1]
+}
+
+// resolveBundledPostgres reads maas-db-config and returns whether the connection
+// URL targets in-cluster Postgres plus that Postgres namespace. External databases
+// (RDS, etc.) return false so maas-api-egress-restrict omits the app=postgres peer;
+// administrators apply a companion egress policy with ipBlock CIDRs instead.
+func resolveBundledPostgres(ctx context.Context, c client.Reader, appNamespace string) (bool, string, error) {
 	if appNamespace == "" {
-		return false, nil
+		return false, "", nil
 	}
 
 	secret := &corev1.Secret{}
 	err := c.Get(ctx, types.NamespacedName{Namespace: appNamespace, Name: MaaSDBSecretName}, secret)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, nil
+			return false, "", nil
 		}
-		return false, fmt.Errorf("read %s secret: %w", MaaSDBSecretName, err)
+		return false, "", fmt.Errorf("read %s secret: %w", MaaSDBSecretName, err)
 	}
 
 	rawURL := string(secret.Data[MaaSDBSecretKey])
 	if rawURL == "" {
-		return false, nil
+		return false, "", nil
 	}
 
 	host, err := postgresHostFromConnectionURL(rawURL)
 	if err != nil {
-		return false, err
+		return false, "", err
 	}
-	return isInClusterPostgresHost(host), nil
+	if !isInClusterPostgresHost(host) {
+		return false, "", nil
+	}
+	return true, postgresNamespaceFromHost(host, appNamespace), nil
 }

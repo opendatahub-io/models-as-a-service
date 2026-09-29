@@ -81,6 +81,10 @@ type PlatformParams struct {
 	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
 	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
 	BundledPostgres bool
+	// BundledPostgresNamespace is the Kubernetes namespace of in-cluster Postgres, derived
+	// from maas-db-config (e.g. postgres.postgres.svc.cluster.local → "postgres"). Empty when
+	// BundledPostgres is false; defaults to AppNamespace for short hostnames like "postgres".
+	BundledPostgresNamespace string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -535,6 +539,7 @@ func removePostgresEgressRules(egress []any) []any {
 }
 
 func bundledPostgresEgressRule(params PlatformParams) map[string]any {
+	// Same-namespace peer covers short hostname "postgres" and co-located DBs.
 	to := []any{
 		map[string]any{
 			"podSelector": map[string]any{
@@ -544,12 +549,14 @@ func bundledPostgresEgressRule(params PlatformParams) map[string]any {
 			},
 		},
 	}
-	if params.AppNamespace != "" && params.ControllerNamespace != "" &&
-		params.AppNamespace != params.ControllerNamespace {
+	addNamespacedPeer := func(ns string) {
+		if ns == "" || ns == params.AppNamespace {
+			return
+		}
 		to = append(to, map[string]any{
 			"namespaceSelector": map[string]any{
 				"matchLabels": map[string]any{
-					"kubernetes.io/metadata.name": params.ControllerNamespace,
+					"kubernetes.io/metadata.name": ns,
 				},
 			},
 			"podSelector": map[string]any{
@@ -559,6 +566,10 @@ func bundledPostgresEgressRule(params PlatformParams) map[string]any {
 			},
 		})
 	}
+	// DSN-derived namespace (e.g. postgres.postgres.svc.cluster.local).
+	addNamespacedPeer(params.BundledPostgresNamespace)
+	// Upgrade path: also allow postgres in the controller namespace when separated.
+	addNamespacedPeer(params.ControllerNamespace)
 	return map[string]any{
 		"to": to,
 		"ports": []any{
