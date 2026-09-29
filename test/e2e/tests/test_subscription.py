@@ -76,6 +76,7 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
+    _delete_governance_and_wait,
     _delete_sa,
     _gateway_url,
     _get_auth_policies_for_model,
@@ -92,10 +93,11 @@ from test_helper import (
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
-    _wait_for_token_rate_limit_policy,
     _scale_kuadrant_controller_down,
     _scale_kuadrant_controller_up,
     _wait_for_subscription_trlp_status,
+    _wait_for_subscription_discovery_ready,
+    _wait_for_subscription_inference_ready,
     _wait_for_cr_absent,
 )
 
@@ -425,7 +427,7 @@ def high_priority_subscription_name_for_api_key_binding():
             groups=["system:authenticated"],
             priority=_E2E_API_KEY_BINDING_HIGH_PRIORITY,
         )
-        _wait_for_maas_subscription_phase(name, namespace=ns, timeout=90)
+        _wait_for_subscription_discovery_ready(name, namespace=ns, timeout=90)
         yield name
     finally:
         _delete_cr("maassubscription", name)
@@ -518,6 +520,7 @@ class TestSubscriptionEnforcement:
         r = _poll_status(api_key, 200, timeout=90)
         log.info(f"Subscribed API key -> {r.status_code}")
 
+    @pytest.mark.serial
     def test_auth_pass_no_subscription_gets_403(self):
         """API key with auth pass but no matching subscription should get 403.
 
@@ -607,11 +610,12 @@ class TestSubscriptionEnforcement:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_for_maas_subscription_phase(subscription_name)
-
-            # Wait for TRLP to be created AND enforced by Kuadrant/Limitador.
-            # Without this, requests bypass token rate limiting entirely.
-            _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                model_ref,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # 3. API key must be minted for this subscription
             oc_token = _get_cluster_token()
@@ -709,7 +713,6 @@ class TestSubscriptionEnforcement:
         # (even if each request uses exactly 1 token: 5 requests > 3 token limit)
         token_limit = 3
         window = "1m"
-        max_tokens = 1
 
         try:
             # 1. Create auth policy allowing system:authenticated
@@ -728,10 +731,12 @@ class TestSubscriptionEnforcement:
                 token_limit=token_limit,
                 window=window
             )
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
-
-            # Wait for TRLP to be created AND enforced by Kuadrant/Limitador
-            _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                model_ref,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # 3. Create API key for this subscription
             oc_token = _get_cluster_token()
@@ -791,7 +796,7 @@ class TestSubscriptionEnforcement:
             # Verify it returns valid model metadata (sanity check)
             try:
                 models_data = r_models.json()
-            except (json.JSONDecodeError, ValueError) as e:
+            except (json.JSONDecodeError, ValueError):
                 # Non-JSON response is acceptable for some vLLM versions
                 log.info(f"✓ /v1/models endpoint accessible (200), non-JSON response: {r_models.text[:200]}")
             else:
@@ -964,8 +969,18 @@ class TestUnlimitedSubscription:
             _wait_for_maas_auth_policy_phase(self.AUTH_POLICY, require_enforced=False)
             _create_test_subscription(self.LIMITED_SUB, [model_ref], groups=["system:authenticated"], token_limit=10)
             _create_test_subscription(self.UNLIMITED_SUB, [model_ref], groups=["system:authenticated"], unlimited=True)
-            _wait_for_maas_subscription_phase(self.LIMITED_SUB)
-            _wait_for_maas_subscription_phase(self.UNLIMITED_SUB)
+            _wait_for_subscription_inference_ready(
+                self.LIMITED_SUB,
+                model_ref,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
+            _wait_for_subscription_inference_ready(
+                self.UNLIMITED_SUB,
+                model_ref,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             unlimited_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
             _wait_for_trlp_limits(
@@ -980,11 +995,17 @@ class TestUnlimitedSubscription:
             }
             yield model_ref, keys
         finally:
-            for sub in (self.LIMITED_SUB, self.UNLIMITED_SUB, self.SECOND_UNLIMITED_SUB):
-                _delete_cr("maassubscription", sub)
-            _delete_cr("maasauthpolicy", self.AUTH_POLICY)
-            for sub in (self.LIMITED_SUB, self.UNLIMITED_SUB, self.SECOND_UNLIMITED_SUB):
-                _wait_for_cr_absent("maassubscription", sub)
+            _delete_governance_and_wait(
+                subscriptions=[
+                    (sub, _ns())
+                    for sub in (
+                        self.LIMITED_SUB,
+                        self.UNLIMITED_SUB,
+                        self.SECOND_UNLIMITED_SUB,
+                    )
+                ],
+                auth_policies=[(self.AUTH_POLICY, _ns())],
+            )
 
     @pytest.mark.serial
     def test_unlimited_and_token_rate_limits_are_mutually_exclusive(self):
@@ -1041,7 +1062,12 @@ class TestUnlimitedSubscription:
         before_bytes = len(json.dumps(plugin_config))
 
         _create_test_subscription(self.SECOND_UNLIMITED_SUB, [model_ref], groups=["system:authenticated"], unlimited=True)
-        _wait_for_maas_subscription_phase(self.SECOND_UNLIMITED_SUB)
+        _wait_for_subscription_inference_ready(
+            self.SECOND_UNLIMITED_SUB,
+            model_ref,
+            model_namespace=MODEL_NAMESPACE,
+            timeout=180,
+        )
         plugin_config = _wait_for_wasm_plugin_config_containing(second_key)
 
         after = _trlp_actions_per_action_set(plugin_config, model_ref)
@@ -1082,7 +1108,12 @@ class TestAllUnlimitedModel:
             _create_test_auth_policy(auth_policy, model_refs=[model_ref], groups=["system:authenticated"])
             _wait_for_maas_auth_policy_phase(auth_policy, require_enforced=False)
             _create_test_subscription(sub, [model_ref], groups=["system:authenticated"], unlimited=True)
-            _wait_for_maas_subscription_phase(sub)
+            _wait_for_subscription_inference_ready(
+                sub,
+                model_ref,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             limits = _wait_for_trlp_limits(model_ref, lambda limits: list(limits) == [UNLIMITED_LIMIT_NAME])
             assert "rates" not in limits[UNLIMITED_LIMIT_NAME], limits[UNLIMITED_LIMIT_NAME]
@@ -1101,6 +1132,7 @@ class TestAllUnlimitedModel:
 class TestMultipleAuthPoliciesPerModel:
     """Multiple auth policies for one model aggregate with OR logic."""
 
+    @pytest.mark.serial
     def test_two_auth_policies_or_logic(self):
         """Two auth policies for the premium model with OR logic: user matching either gets access."""
         ns = _ns()
@@ -1126,7 +1158,12 @@ class TestMultipleAuthPoliciesPerModel:
                 },
             })
             _wait_for_maas_auth_policy_phase("e2e-premium-sa-auth", require_enforced=False)
-            _wait_for_maas_subscription_phase("e2e-premium-sa-sub")
+            _wait_for_subscription_inference_ready(
+                "e2e-premium-sa-sub",
+                PREMIUM_MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # Key must be minted for the premium subscription
             api_key = _create_api_key(
@@ -1188,7 +1225,12 @@ class TestCascadeDeletion:
                     "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE, "tokenRateLimits": [{"limit": 50, "window": "1m"}]}],
                 },
             })
-            _wait_for_maas_subscription_phase("e2e-temp-sub")
+            _wait_for_subscription_inference_ready(
+                "e2e-temp-sub",
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             _delete_cr("maassubscription", "e2e-temp-sub")
 
@@ -1237,7 +1279,12 @@ class TestCascadeDeletion:
                     }],
                 },
             })
-            _wait_for_maas_subscription_phase("e2e-second-sub")
+            _wait_for_subscription_inference_ready(
+                "e2e-second-sub",
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # Step 2: Verify TRLP exists and contains both subscriptions
             log.info("Verifying TRLP contains both subscriptions...")
@@ -1317,7 +1364,12 @@ class TestCascadeDeletion:
             _delete_cr("maassubscription", "e2e-second-sub", ns)
             if original_sub:
                 _apply_cr(original_sub)
-                _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+                _wait_for_subscription_inference_ready(
+                    SIMULATOR_SUBSCRIPTION,
+                    MODEL_REF,
+                    model_namespace=MODEL_NAMESPACE,
+                    timeout=180,
+                )
 
     @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
@@ -1337,11 +1389,12 @@ class TestCascadeDeletion:
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
         finally:
             _apply_cr(original)
-            _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
-            # Wait for the TRLP to be re-enforced before returning — this confirms the
-            # controller has fully reconciled the restored subscription and the maas-api
-            # subscription cache has caught up, preventing flaky failures in subsequent tests.
-            _wait_for_token_rate_limit_policy(MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90)
+            _wait_for_subscription_inference_ready(
+                SIMULATOR_SUBSCRIPTION,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
     @pytest.mark.serial
     def test_unconfigured_model_denied_by_gateway_auth(self):
@@ -1404,7 +1457,9 @@ class TestOrderingEdgeCases:
                 groups=["system:authenticated"],
                 namespace=ns,
             )
-            _wait_for_maas_subscription_phase("e2e-ordering-sub", namespace=ns, timeout=180)
+            _wait_for_subscription_discovery_ready(
+                "e2e-ordering-sub", namespace=ns, timeout=180
+            )
 
             # Use SA token instead of user token to avoid environment-specific 401s on /v1/api-keys.
             sa_token = _create_sa_token(sa_name, namespace=ns)
@@ -1596,7 +1651,12 @@ class TestManagedAnnotation:
             )
 
             # 6. Wait for reconciliation
-            _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+            _wait_for_subscription_inference_ready(
+                SIMULATOR_SUBSCRIPTION,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # 7. Re-read the TRLP and compare spec
             trlp_after = _get_cr("tokenratelimitpolicy", TRLP_NAME, trlp_ns)
@@ -1639,7 +1699,12 @@ class TestManagedAnnotation:
                     "Restored parent MaaSSubscription %s from snapshot",
                     SIMULATOR_SUBSCRIPTION,
                 )
-                _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+                _wait_for_subscription_inference_ready(
+                    SIMULATOR_SUBSCRIPTION,
+                    MODEL_REF,
+                    model_namespace=MODEL_NAMESPACE,
+                    timeout=180,
+                )
 
 
 class TestE2ESubscriptionFlow:
@@ -1733,7 +1798,13 @@ class TestE2ESubscriptionFlow:
             _create_test_auth_policy(auth_policy_name, PREMIUM_MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, PREMIUM_MODEL_REF, users=[sa_user])
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=ns, timeout=120, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, namespace=ns, timeout=120)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                PREMIUM_MODEL_REF,
+                namespace=ns,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # API key bound to this subscription at mint (inference does not send x-maas-subscription)
             api_key = _create_api_key(
@@ -1796,7 +1867,12 @@ class TestE2ESubscriptionFlow:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             if original_sim:
-                _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+                _wait_for_subscription_inference_ready(
+                    SIMULATOR_SUBSCRIPTION,
+                    MODEL_REF,
+                    model_namespace=MODEL_NAMESPACE,
+                    timeout=180,
+                )
 
     def test_e2e_with_subscription_but_no_access_gets_403(self):
         """
@@ -1825,7 +1901,9 @@ class TestE2ESubscriptionFlow:
             _create_test_auth_policy(auth_policy_name, PREMIUM_MODEL_REF, users=[sa_with_auth_user])
             _create_test_subscription(subscription_name, PREMIUM_MODEL_REF, users=[sa_with_sub_user])
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=ns, timeout=120, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, namespace=ns, timeout=120)
+            _wait_for_subscription_discovery_ready(
+                subscription_name, namespace=ns, timeout=120
+            )
 
             api_key_with_sub = _create_api_key(
                 oc_token_with_sub,
@@ -1874,7 +1952,12 @@ class TestE2ESubscriptionFlow:
             _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
             _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
             _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
-            _wait_for_maas_subscription_phase(subscription_name)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             # Exactly one subscription for this user → mint can auto-bind it without explicit name
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
@@ -1914,8 +1997,18 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_2, MODEL_REF, users=[sa_user], token_limit=1000)
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
-            _wait_for_maas_subscription_phase(subscription_1)
-            _wait_for_maas_subscription_phase(subscription_2)
+            _wait_for_subscription_inference_ready(
+                subscription_1,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
+            _wait_for_subscription_inference_ready(
+                subscription_2,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             key1 = _create_api_key(
                 oc_token,
@@ -1937,11 +2030,11 @@ class TestE2ESubscriptionFlow:
             log.info("✅ Key for tier 2 → %s", r2.status_code)
 
         finally:
-            _delete_cr("maassubscription", subscription_1, namespace=ns)
-            _delete_cr("maassubscription", subscription_2, namespace=ns)
-            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_governance_and_wait(
+                subscriptions=[(subscription_1, ns), (subscription_2, ns)],
+                auth_policies=[(auth_policy_name, ns)],
+            )
             _delete_sa(sa_name, namespace=ns)
-            _wait_for_cr_absent("maassubscription", subscription_1)
 
     def test_e2e_mint_api_key_denied_for_inaccessible_subscription(self):
         """POST /v1/api-keys with another user's subscription returns generic invalid_subscription."""
@@ -1968,8 +2061,8 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(other_subscription, MODEL_REF, users=[other_principal])
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
-            _wait_for_maas_subscription_phase(user_subscription)
-            _wait_for_maas_subscription_phase(other_subscription)
+            _wait_for_subscription_discovery_ready(user_subscription)
+            _wait_for_subscription_discovery_ready(other_subscription)
 
             # Retry on empty 403 from gateway propagation delay (Envoy may not
             # have loaded the AuthPolicy yet).
@@ -1998,12 +2091,12 @@ class TestE2ESubscriptionFlow:
             log.info("✅ Mint with inaccessible subscription → %s", r.status_code)
 
         finally:
-            _delete_cr("maassubscription", user_subscription, namespace=ns)
-            _delete_cr("maassubscription", other_subscription, namespace=ns)
-            _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
+            _delete_governance_and_wait(
+                subscriptions=[(user_subscription, ns), (other_subscription, ns)],
+                auth_policies=[(auth_policy_name, ns)],
+            )
             _delete_sa(sa_user, namespace=ns)
             _delete_sa(sa_other, namespace=ns)
-            _wait_for_cr_absent("maassubscription", user_subscription)
 
     def test_e2e_group_based_access_gets_200(self):
         """
@@ -2031,7 +2124,12 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_name, MODEL_REF, groups=[test_group])
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
-            _wait_for_maas_subscription_phase(subscription_name)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
 
             api_key = _create_api_key(
                 oc_token,
@@ -2095,7 +2193,12 @@ class TestE2ESubscriptionFlow:
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
             if original_sim:
-                _wait_for_maas_subscription_phase(SIMULATOR_SUBSCRIPTION)
+                _wait_for_subscription_inference_ready(
+                    SIMULATOR_SUBSCRIPTION,
+                    MODEL_REF,
+                    model_namespace=MODEL_NAMESPACE,
+                    timeout=180,
+                )
 
     def test_e2e_group_based_subscription_but_no_auth_gets_403(self):
         """
@@ -2120,7 +2223,9 @@ class TestE2ESubscriptionFlow:
             _create_test_subscription(subscription_name, PREMIUM_MODEL_REF, groups=[test_group])
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=ns, timeout=120, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, namespace=ns, timeout=120)
+            _wait_for_subscription_discovery_ready(
+                subscription_name, namespace=ns, timeout=120
+            )
 
             api_key = _create_api_key(
                 oc_token,

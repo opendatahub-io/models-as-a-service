@@ -28,21 +28,20 @@ from test_helper import (
     EMBEDDING_MODEL_REF,
     EMBEDDING_MODEL_CANONICAL_ID,
     MODEL_NAMESPACE,
-    RECONCILE_WAIT,
     TIMEOUT,
     TLS_VERIFY,
     _create_api_key,
     _create_test_auth_policy,
     _create_test_subscription,
-    _delete_cr,
+    _delete_governance_and_wait,
     _embedding_inference,
     _gateway_url,
     _get_cluster_token,
     _get_cr,
+    _ns,
     _poll_status,
     _wait_for_maas_auth_policy_phase,
-    _wait_for_maas_subscription_phase,
-    _wait_for_token_rate_limit_policy,
+    _wait_for_subscription_inference_ready,
 )
 
 log = logging.getLogger(__name__)
@@ -114,45 +113,65 @@ def _worker_embedding_context(request):
         globals()["_create_test_subscription"] = original_subscription_helper
 
 
+@pytest.fixture(scope="module")
+def embedding_path_governance(_worker_embedding_context):
+    """Create one governance stack for both parallel embedding routing tests."""
+    model = _get_cr("maasmodelref", EMBEDDING_MODEL_REF, namespace=MODEL_NAMESPACE)
+    if not model:
+        pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
+
+    auth_policy_name = "e2e-embedding-routing-auth"
+    subscription_name = "e2e-embedding-routing-sub"
+    maas_ns = _ns()
+    try:
+        _create_test_auth_policy(
+            name=auth_policy_name,
+            model_refs=[EMBEDDING_MODEL_REF],
+            groups=["system:authenticated"],
+        )
+        _create_test_subscription(
+            name=subscription_name,
+            model_refs=[EMBEDDING_MODEL_REF],
+            groups=["system:authenticated"],
+            token_limit=1000,
+            window="1m",
+        )
+        _wait_for_maas_auth_policy_phase(
+            auth_policy_name,
+            namespace=maas_ns,
+            timeout=90,
+            require_auth_policies=False,
+        )
+        _wait_for_subscription_inference_ready(
+            subscription_name,
+            EMBEDDING_MODEL_REF,
+            namespace=maas_ns,
+            model_namespace=MODEL_NAMESPACE,
+            timeout=180,
+        )
+        api_key = _create_api_key(
+            _get_cluster_token(),
+            name=f"e2e-emb-routing-{uuid.uuid4().hex[:8]}",
+            subscription=subscription_name,
+        )
+        yield {"api_key": api_key, "subscription": subscription_name}
+    finally:
+        _delete_governance_and_wait(
+            subscriptions=[(subscription_name, maas_ns)],
+            auth_policies=[(auth_policy_name, maas_ns)],
+        )
+
+
 class TestEmbeddingPathRouting:
     """Path-based and BBR embedding inference (read-only, uses existing fixtures)."""
 
-    def test_embedding_path_based_200(self):
+    def test_embedding_path_based_200(self, embedding_path_governance):
         """POST /{ns}/{model}/v1/embeddings returns valid embedding response."""
-        auth_policy_name = "e2e-embedding-path-auth"
-        subscription_name = "e2e-embedding-path-sub"
-        try:
-            _create_test_auth_policy(
-                name=auth_policy_name,
-                model_refs=[EMBEDDING_MODEL_REF],
-                groups=["system:authenticated"],
-            )
-            _create_test_subscription(
-                name=subscription_name,
-                model_refs=[EMBEDDING_MODEL_REF],
-                groups=["system:authenticated"],
-                token_limit=1000,
-                window="1m",
-            )
-            _wait_for_maas_auth_policy_phase(
-                auth_policy_name, timeout=90, require_auth_policies=False
-            )
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
-
-            oc_token = _get_cluster_token()
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-emb-path-{uuid.uuid4().hex[:8]}",
-                subscription=subscription_name,
-            )
-            r = _embedding_inference(
-                api_key,
-                path=EMBEDDING_MODEL_PATH,
-                model_name=EMBEDDING_MODEL_NAME,
-            )
-        finally:
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
+        r = _embedding_inference(
+            embedding_path_governance["api_key"],
+            path=EMBEDDING_MODEL_PATH,
+            model_name=EMBEDDING_MODEL_NAME,
+        )
         log.info(f"[embedding] POST /v1/embeddings -> {r.status_code}")
         assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
         data = r.json()
@@ -165,55 +184,25 @@ class TestEmbeddingPathRouting:
         usage = data.get("usage", {})
         assert usage.get("prompt_tokens", 0) > 0, f"Expected prompt_tokens > 0, got {usage}"
 
-    def test_embedding_bbr_llmisvc_200(self):
+    def test_embedding_bbr_llmisvc_200(self, embedding_path_governance):
         """POST /v1/embeddings with canonical model ID routes via BBR."""
         model = _get_cr("maasmodelref", EMBEDDING_MODEL_REF, namespace=MODEL_NAMESPACE)
         if not model:
             pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
 
-        auth_policy_name = "e2e-embedding-bbr-auth"
-        subscription_name = "e2e-embedding-bbr-sub"
-
-        try:
-            _create_test_auth_policy(
-                name=auth_policy_name,
-                model_refs=[EMBEDDING_MODEL_REF],
-                groups=["system:authenticated"],
-            )
-            _create_test_subscription(
-                name=subscription_name,
-                model_refs=[EMBEDDING_MODEL_REF],
-                groups=["system:authenticated"],
-                token_limit=1000,
-                window="1m",
-            )
-            _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
-
-            oc_token = _get_cluster_token()
-            api_key = _create_api_key(
-                oc_token,
-                name=f"e2e-emb-bbr-{uuid.uuid4().hex[:8]}",
-                subscription=subscription_name,
-            )
-
-            url = f"{_gateway_url()}/v1/embeddings"
-            headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-            body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
-            r = _poll_status(
-                api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME,
-                timeout=90, inference_fn=_embedding_inference,
-            )
-            r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-            log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
-            data = r.json()
-            assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
-
-        finally:
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
-            time.sleep(RECONCILE_WAIT)
+        api_key = embedding_path_governance["api_key"]
+        url = f"{_gateway_url()}/v1/embeddings"
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
+        body = {"model": EMBEDDING_MODEL_CANONICAL_ID, "input": "The quick brown fox"}
+        _poll_status(
+            api_key, 200, path=EMBEDDING_MODEL_PATH, model_name=EMBEDDING_MODEL_NAME,
+            timeout=90, inference_fn=_embedding_inference,
+        )
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        log.info(f"[embedding-bbr] POST /v1/embeddings (model={EMBEDDING_MODEL_CANONICAL_ID}) -> {r.status_code}")
+        assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text[:500]}"
+        data = r.json()
+        assert "data" in data, f"Missing 'data' in response: {list(data.keys())}"
 
 
 
@@ -268,9 +257,11 @@ class TestEmbeddingGovernance:
                 window=window,
             )
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
-            _wait_for_token_rate_limit_policy(
-                EMBEDDING_MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                EMBEDDING_MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
             )
 
             oc_token = _get_cluster_token()
@@ -313,9 +304,10 @@ class TestEmbeddingGovernance:
             )
 
         finally:
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
-            time.sleep(RECONCILE_WAIT)
+            _delete_governance_and_wait(
+                subscriptions=[(subscription_name, _ns())],
+                auth_policies=[(auth_policy_name, _ns())],
+            )
 
     def test_embedding_with_governance_200(self):
         """Embedding model with auth + subscription returns valid 200 response."""
@@ -340,9 +332,11 @@ class TestEmbeddingGovernance:
                 window="1m",
             )
             _wait_for_maas_auth_policy_phase(auth_policy_name, timeout=90, require_auth_policies=False)
-            _wait_for_maas_subscription_phase(subscription_name, timeout=90)
-            _wait_for_token_rate_limit_policy(
-                EMBEDDING_MODEL_REF, model_namespace=MODEL_NAMESPACE, timeout=90
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                EMBEDDING_MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
             )
 
             oc_token = _get_cluster_token()
@@ -366,6 +360,7 @@ class TestEmbeddingGovernance:
             log.info(f"[embedding-gov] Full governance -> {r.status_code}, tokens={usage}")
 
         finally:
-            _delete_cr("maassubscription", subscription_name)
-            _delete_cr("maasauthpolicy", auth_policy_name)
-            time.sleep(RECONCILE_WAIT)
+            _delete_governance_and_wait(
+                subscriptions=[(subscription_name, _ns())],
+                auth_policies=[(auth_policy_name, _ns())],
+            )
