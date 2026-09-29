@@ -821,7 +821,14 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
 
 def payload_processing_type_from_env() -> Optional[str]:
     value = os.environ.get("E2E_PAYLOAD_PROCESSING_TYPE", "").strip()
-    return value or None
+    if not value:
+        return None
+    if value != PAYLOAD_PROCESSING_TYPE_PRAXIS:
+        raise RuntimeError(
+            f"Unsupported E2E_PAYLOAD_PROCESSING_TYPE={value!r}; "
+            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r}"
+        )
+    return value
 
 
 def ensure_payload_processing_type_on_tenant_config(tenant_namespace: str) -> None:

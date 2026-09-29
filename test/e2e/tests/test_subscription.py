@@ -884,19 +884,12 @@ def _crd_rejects_unlimited_without_token_limits(stderr: str) -> bool:
     )
 
 
-def _oc_cluster_not_configured(stderr: str, stdout: str = "") -> bool:
-    """True when oc cannot reach a cluster (e.g. collection-only CI without kubeconfig)."""
-    return "missing or incomplete configuration" in f"{stderr}\n{stdout}".lower()
-
-
 def _unlimited_subscription_crd_supported() -> bool:
     """Return True when the cluster CRD accepts unlimited modelRefs without tokenRateLimits."""
     probe = _server_dry_run_subscription("e2e-unlimited-crd-probe", {"unlimited": True})
     if probe.returncode == 0:
         return True
     if _crd_rejects_unlimited_without_token_limits(probe.stderr):
-        return False
-    if _oc_cluster_not_configured(probe.stderr, probe.stdout):
         return False
     combined = probe.stderr.strip() or probe.stdout.strip() or f"exit {probe.returncode}"
     raise RuntimeError(f"unlimited subscription CRD probe failed unexpectedly: {combined}")
