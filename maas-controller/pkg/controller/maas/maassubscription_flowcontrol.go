@@ -53,15 +53,16 @@ const (
 )
 
 // inferenceObjectiveName returns the deterministic InferenceObjective name for a
-// subscription and the InferencePool in poolNamespace. The readable tenant, subscription,
-// and pool parts are truncated as needed; the hash of their full identities keeps names
-// unique. The name does not depend on spec.inferencePriority, so it is stable across
-// priority changes.
-func inferenceObjectiveName(tenantName string, subscription types.NamespacedName, poolNamespace string, pool gwapiv1.LocalObjectReference) string {
+// subscription and InferencePool. The readable tenant, subscription, and pool parts are
+// truncated as needed; the hash of their full identities keeps names unique. The name
+// does not depend on spec.inferencePriority, so it is stable across priority changes.
+// It also excludes the pool's API group and kind: KServe keeps the pool name stable but
+// reports the group of whichever pool API version the gateway currently accepts.
+func inferenceObjectiveName(tenantName string, subscription, pool types.NamespacedName) string {
 	identity := strings.Join([]string{
 		tenantName,
 		subscription.Namespace, subscription.Name,
-		string(pool.Group), string(pool.Kind), poolNamespace, string(pool.Name),
+		pool.Namespace, pool.Name,
 	}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
@@ -69,7 +70,7 @@ func inferenceObjectiveName(tenantName string, subscription types.NamespacedName
 	parts := []string{
 		dnsLabelPart(tenantName),
 		dnsLabelPart(subscription.Name),
-		dnsLabelPart(string(pool.Name)),
+		dnsLabelPart(pool.Name),
 	}
 	// Budget for the readable parts and the separators between them.
 	budget := inferenceObjectiveNameMaxLength - len(inferenceObjectiveNamePrefix) - len(hash) - 2
@@ -153,18 +154,19 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControlStatuses(ctx context.Cont
 				tenantName, tenantErr = flowControlTenantName(ctx, r.Client, subscription.Namespace)
 				tenantResolved = true
 			}
-			switch {
-			case tenantErr != nil:
+			if tenantErr != nil {
 				status.Reason = maasv1alpha1.FlowControlReasonReconcileFailed
 				status.Message = fmt.Sprintf("failed to resolve tenant for namespace %s: %v", subscription.Namespace, tenantErr)
-			case subscription.Spec.InferencePriority == nil:
-				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
-				status.Reason = maasv1alpha1.FlowControlReasonPriorityUnset
-				status.Message = "spec.inferencePriority is unset; no InferenceObjective is required and the scheduler applies priority 0"
-			default:
-				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), ref.Namespace, *pool)
-				status.Reason = maasv1alpha1.FlowControlReasonObjectivePending
-				status.Message = "waiting for InferenceObjective reconciliation"
+			} else {
+				poolKey := types.NamespacedName{Namespace: ref.Namespace, Name: string(pool.Name)}
+				status.ObjectiveName = inferenceObjectiveName(tenantName, client.ObjectKeyFromObject(subscription), poolKey)
+				if subscription.Spec.InferencePriority == nil {
+					status.Reason = maasv1alpha1.FlowControlReasonPriorityUnset
+					status.Message = "spec.inferencePriority is unset; no InferenceObjective is required and the scheduler applies priority 0"
+				} else {
+					status.Reason = maasv1alpha1.FlowControlReasonObjectivePending
+					status.Message = "waiting for InferenceObjective reconciliation"
+				}
 			}
 		}
 		status.Ready = flowControlReady(status.Reason)
