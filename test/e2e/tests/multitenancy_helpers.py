@@ -1014,14 +1014,15 @@ def make_tenant_model_accessible(
     window: str = "1m",
     priority: Optional[int] = None,
     trlp_timeout: int = 120,
+    require_trlp_ready: bool = True,
     gateway_name: str | None = None,
     gateway_namespace: str = GATEWAY_NAMESPACE,
 ) -> None:
     """Make a deployed tenant model accessible per ADR MS-0003 (tenant admin role).
 
     Creates MaasAuthPolicy + MaasSubscription in the tenant namespace and waits
-    for controller reconciliation, including TokenRateLimitPolicy readiness on the
-    subscription status (required by maas-api subscription selection).
+    for controller reconciliation. Inference callers retain the default strict
+    mirrored TRLP wait; management-only callers may disable that wait.
     """
     from test_helper import _wait_for_subscription_trlp_status
 
@@ -1054,12 +1055,13 @@ def make_tenant_model_accessible(
         tenant_namespace,
         expected_phase=("Active", "Degraded"),
     )
-    _wait_for_subscription_trlp_status(
-        subscription_name,
-        expected_ready=True,
-        namespace=tenant_namespace,
-        timeout=trlp_timeout,
-    )
+    if require_trlp_ready:
+        _wait_for_subscription_trlp_status(
+            subscription_name,
+            expected_ready=True,
+            namespace=tenant_namespace,
+            timeout=trlp_timeout,
+        )
     wait_for_status_phase(
         "maasmodelref",
         model_name,

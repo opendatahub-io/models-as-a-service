@@ -34,6 +34,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 from datetime import datetime
 
 import pytest
@@ -53,6 +54,7 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
+    _delete_governance_and_wait,
     _delete_sa,
     _get_cr,
     _gateway_url,
@@ -64,6 +66,7 @@ from test_helper import (
     _scale_controller_up,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_subscription_phase,
+    _wait_for_subscription_discovery_ready,
     _wait_for_cr_absent,
 )
 
@@ -497,7 +500,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(3):
                 r = _request_with_gateway_retry(
@@ -606,7 +609,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(2):
                 r = _request_with_gateway_retry(
@@ -670,7 +673,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user, sa_user2])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user, sa_user2])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(2):
                 r = _request_with_gateway_retry(
@@ -765,119 +768,73 @@ class TestAPIKeyExpiration:
                 "skipping expiration policy tests"
             )
 
-    def test_create_key_within_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration within the limit should succeed."""
+    @pytest.mark.parametrize(
+        "label, expiration_case, should_succeed",
+        [
+            ("within-limit", "within", True),
+            ("at-limit", "at", True),
+            ("exceeds-limit", "exceeds", False),
+            ("without-expiration", None, True),
+            ("short-expiration", "short", True),
+        ],
+        ids=[
+            "within-limit",
+            "at-limit",
+            "exceeds-limit",
+            "without-expiration",
+            "short-expiration",
+        ],
+    )
+    def test_expiration_policy_boundaries(
+        self,
+        api_keys_base_url: str,
+        headers: dict,
+        max_expiration_days: int,
+        label: str,
+        expiration_case,
+        should_succeed: bool,
+    ):
+        """Validate successful, boundary, rejected, and non-expiring key requests."""
+        expiration_hours = {
+            "within": (max_expiration_days // 2) * 24 or 24,
+            "at": max_expiration_days * 24,
+            "exceeds": max_expiration_days * 2 * 24,
+            "short": 1,
+            None: None,
+        }
+        expires_in_hours = expiration_hours[expiration_case]
+        payload = {
+            "name": f"test-{label}-{uuid.uuid4().hex[:8]}",
+            "description": f"Expiration boundary case: {label}",
+        }
+        if expires_in_hours is not None:
+            payload["expiresIn"] = f"{expires_in_hours}h"
 
-        # Request expiration at half the limit (e.g., 15 days if limit is 30)
-        expires_in_hours = (max_expiration_days // 2) * 24
-        if expires_in_hours <= 0:
-            expires_in_hours = 24  # At least 1 day
-
-        r = requests.post(
+        response = requests.post(
             api_keys_base_url,
             headers=headers,
-            json={
-                "name": "test-within-limit",
-                "description": f"Test key with {expires_in_hours}h expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
+            json=payload,
             timeout=30,
             verify=TLS_VERIFY,
         )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key within limit: expires_in={expires_in_hours}h, expiresAt={data.get('expiresAt')}")
 
-    def test_create_key_at_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exactly at the limit should succeed."""
+        if not should_succeed:
+            assert response.status_code == 400, (
+                f"Expected 400 for {label}, got {response.status_code}: {response.text}"
+            )
+            error_text = response.text.lower()
+            assert "exceed" in error_text or "maximum" in error_text, (
+                f"Error for {label} should mention the maximum: {response.text}"
+            )
+            return
 
-        # Request expiration exactly at the limit
-        expires_in_hours = max_expiration_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-at-limit",
-                "description": f"Test key with exactly {max_expiration_days} days expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
+        assert response.status_code in (200, 201), (
+            f"Expected 200/201 for {label}, got {response.status_code}: {response.text}"
         )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key at limit: expires_in={expires_in_hours}h ({max_expiration_days} days)")
-
-    def test_create_key_exceeds_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exceeding the limit should fail."""
-
-        # Request expiration exceeding the limit (e.g., 2x the limit)
-        exceeds_days = max_expiration_days * 2
-        expires_in_hours = exceeds_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-exceeds-limit",
-                "description": f"Test key with {exceeds_days} days expiration (exceeds {max_expiration_days} day limit)",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code == 400, f"Expected 400 for exceeding limit, got {r.status_code}: {r.text}"
-        
-        # Verify error message mentions the limit
-        error_text = r.text.lower()
-        assert "exceed" in error_text or "maximum" in error_text, \
-            f"Error message should mention exceeding maximum: {r.text}"
-        print(f"[expiration] Correctly rejected key exceeding limit: {exceeds_days} days > {max_expiration_days} days")
-
-    def test_create_key_without_expiration(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key without expiration should succeed (expiration is optional by default)."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-no-expiration",
-                "description": "Test key without expiration"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        # expiresAt should be absent or null for non-expiring keys
-        expires_at = data.get("expiresAt")
-        if expires_at:
-            print(f"[expiration] Key created with default expiration: {expires_at}")
-        else:
-            print("[expiration] Key created without expiration (never expires)")
-
-    def test_create_key_with_short_expiration(self, api_keys_base_url: str, headers: dict):
-        """Test: Creating API key with very short expiration (1 hour) should succeed."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-short-expiration",
-                "description": "Test key with 1 hour expiration",
-                "expiresIn": "1h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key with 1h expiration: expiresAt={data.get('expiresAt')}")
+        data = response.json()
+        assert "key" in data, f"Response for {label} should contain key"
+        if expires_in_hours is not None:
+            assert "expiresAt" in data, f"Response for {label} should contain expiresAt"
 
 
 class TestAPIKeyModelInference:
@@ -1419,7 +1376,7 @@ class TestEphemeralKeyCleanup:
         assert key_id not in default_ids, \
             "Ephemeral key should be excluded from default search (includeEphemeral defaults to false)"
 
-        print(f"[cleanup] Ephemeral key visibility verified: visible with filter, hidden by default")
+        print("[cleanup] Ephemeral key visibility verified: visible with filter, hidden by default")
 
     def test_trigger_cleanup_preserves_active_keys(
         self,
@@ -1870,11 +1827,11 @@ class TestAPIKeySubscriptionFilter:
 
             _create_test_auth_policy(f"{sub_a}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_a, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_a, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_a, namespace=ns)
 
             _create_test_auth_policy(f"{sub_b}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_b, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_b, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_b, namespace=ns)
 
             # Create 2 keys bound to sub_a
             for i in range(2):
@@ -1934,10 +1891,10 @@ class TestAPIKeySubscriptionFilter:
         finally:
             for kid in key_ids_a + key_ids_b:
                 requests.delete(f"{api_keys_base_url}/{kid}", headers=sa_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
-            _delete_cr("maassubscription", sub_b, namespace=ns)
-            _delete_cr("maasauthpolicy", f"{sub_b}-auth", namespace=ns)
-            _delete_cr("maassubscription", sub_a, namespace=ns)
-            _delete_cr("maasauthpolicy", f"{sub_a}-auth", namespace=ns)
+            _delete_governance_and_wait(
+                subscriptions=[(sub_a, ns), (sub_b, ns)],
+                auth_policies=[(f"{sub_a}-auth", ns), (f"{sub_b}-auth", ns)],
+            )
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             # Deleting MaaSAuthPolicies rewrites maas-gateway-auth; wait until
             # Kuadrant reports Enforced again before the next test hits maas-api.

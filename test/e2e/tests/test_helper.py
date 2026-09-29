@@ -1388,12 +1388,77 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
     cr = _get_cr("maassubscription", name, namespace)
     status = cr.get("status", {}) if cr else {}
     raise TimeoutError(
-        f"MaaSSubscription {name} did not reach phase '{expected_phase}' within {timeout}s "
-        f"(current: phase={status.get('phase')}, modelRefStatuses={len(status.get('modelRefStatuses', []))})"
+        f"MaaSSubscription {namespace}/{name} did not reach {expected_phase!r} within {timeout}s: "
+        f"phase={status.get('phase')}, "
+        f"conditions={status.get('conditions', [])}, "
+        f"modelRefStatuses={status.get('modelRefStatuses', [])}, "
+        f"tokenRateLimitStatuses={status.get('tokenRateLimitStatuses', [])}"
     )
 
 
-def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None, timeout=60):
+def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
+    """Wait until a subscription can support discovery and management APIs.
+
+    A subscription may remain Degraded while its model-wide TRLP is being
+    rebuilt. Discovery and API-key management only require every referenced
+    model to exist and be ready; they do not require rate-limit enforcement.
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    last_status = {}
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            status = cr.get("status", {})
+            last_status = status
+            expected_refs = {
+                (model_ref.get("name"), model_ref.get("namespace"))
+                for model_ref in cr.get("spec", {}).get("modelRefs", [])
+                if isinstance(model_ref, dict)
+            }
+            model_statuses = status.get("modelRefStatuses", [])
+            statuses_by_ref = {}
+            for model_status in model_statuses:
+                model_ref = (
+                    model_status.get("name"),
+                    model_status.get("namespace"),
+                )
+                statuses_by_ref.setdefault(model_ref, []).append(model_status)
+            models_valid = all(
+                bool(statuses_by_ref.get(model_ref))
+                and all(
+                    model_status.get("ready") is True
+                    for model_status in statuses_by_ref[model_ref]
+                )
+                for model_ref in expected_refs
+            )
+            if status.get("phase") in ("Active", "Degraded") and models_valid:
+                log.info(
+                    "MaaSSubscription %s/%s is discovery-ready in phase %s",
+                    namespace,
+                    name,
+                    status.get("phase"),
+                )
+                return cr
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"MaaSSubscription {namespace}/{name} was not discovery-ready within {timeout}s: "
+        f"phase={last_status.get('phase')}, "
+        f"conditions={last_status.get('conditions', [])}, "
+        f"modelRefStatuses={last_status.get('modelRefStatuses', [])}, "
+        f"tokenRateLimitStatuses={last_status.get('tokenRateLimitStatuses', [])}"
+    )
+
+
+def _wait_for_subscription_trlp_status(
+    name,
+    expected_ready=True,
+    namespace=None,
+    timeout=60,
+    model=None,
+):
     """Wait for MaaSSubscription's TokenRateLimitPolicy status to reach expected ready state.
 
     Args:
@@ -1401,6 +1466,8 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
         expected_ready: Expected ready state for all TRLPs (True or False)
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
+        model: Optional model name. When set, only that model's mirrored TRLP
+            status is considered.
 
     Returns:
         The subscription CR dict when all TRLPs reach the expected ready state
@@ -1417,6 +1484,10 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
         if cr:
             status = cr.get("status", {})
             trlp_statuses = status.get("tokenRateLimitStatuses", [])
+            if model is not None:
+                trlp_statuses = [
+                    trlp for trlp in trlp_statuses if trlp.get("model") == model
+                ]
 
             # If we expect ready and there are no TRLPs yet, keep waiting
             if expected_ready and len(trlp_statuses) == 0:
@@ -1438,9 +1509,43 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
     cr = _get_cr("maassubscription", name, namespace)
     status = cr.get("status", {}) if cr else {}
     trlp_statuses = status.get("tokenRateLimitStatuses", [])
+    if model is not None:
+        trlp_statuses = [
+            trlp for trlp in trlp_statuses if trlp.get("model") == model
+        ]
     raise TimeoutError(
-        f"MaaSSubscription {name} TRLPs did not reach ready={expected_ready} within {timeout}s "
-        f"(current TRLPs: {trlp_statuses})"
+        f"MaaSSubscription {namespace}/{name} TRLPs"
+        f"{f' for model {model}' if model else ''} did not reach ready={expected_ready} "
+        f"within {timeout}s (current TRLPs: {trlp_statuses})"
+    )
+
+
+def _wait_for_subscription_inference_ready(
+    subscription_name,
+    model_name,
+    *,
+    namespace=None,
+    model_namespace=MODEL_NAMESPACE,
+    timeout=180,
+):
+    """Wait for model discovery plus direct and mirrored TRLP enforcement."""
+    namespace = namespace or _ns()
+    _wait_for_subscription_discovery_ready(
+        subscription_name,
+        namespace=namespace,
+        timeout=timeout,
+    )
+    _wait_for_token_rate_limit_policy(
+        model_name,
+        model_namespace=model_namespace,
+        timeout=timeout,
+    )
+    return _wait_for_subscription_trlp_status(
+        subscription_name,
+        model=model_name,
+        expected_ready=True,
+        namespace=namespace,
+        timeout=timeout,
     )
 
 
@@ -1618,6 +1723,28 @@ def _wait_for_cr_absent(kind, name, namespace=None, timeout=30, poll_interval=2)
     raise TimeoutError(
         f"{kind}/{name} in {namespace} still exists after {timeout}s"
     )
+
+
+def _delete_crs_and_wait(resources, timeout=60):
+    """Delete a set of CRs, then wait until every deletion is complete."""
+    resources = list(resources)
+    for kind, name, namespace in resources:
+        _delete_cr(kind, name, namespace=namespace)
+    for kind, name, namespace in resources:
+        _wait_for_cr_absent(kind, name, namespace=namespace, timeout=timeout)
+
+
+def _delete_governance_and_wait(*, subscriptions=(), auth_policies=(), timeout=60):
+    """Delete subscriptions before auth policies and wait for all finalizers."""
+    resources = [
+        ("maassubscription", name, namespace)
+        for name, namespace in subscriptions
+    ]
+    resources.extend(
+        ("maasauthpolicy", name, namespace)
+        for name, namespace in auth_policies
+    )
+    _delete_crs_and_wait(resources, timeout=timeout)
 
 
 # ---------------------------------------------------------------------------
