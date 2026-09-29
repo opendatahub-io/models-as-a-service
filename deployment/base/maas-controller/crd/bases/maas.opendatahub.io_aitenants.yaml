@@ -92,7 +92,7 @@ spec:
                     selects which of the policy's checks apply.
 
                     Attachments are additive across scopes (tenant, subscription): the effective
-                    set of checks is the union of every scope's selection, and one scope cannot1
+                    set of checks is the union of every scope's selection, and one scope cannot
                     remove checks contributed by another. Multiple entries referencing the same
                     policy contribute a union of their selected checks.
                   properties:
