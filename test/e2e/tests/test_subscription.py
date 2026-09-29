@@ -875,10 +875,24 @@ _UNLIMITED_SUBSCRIPTION_SKIP_REASON = (
 )
 
 
+def _crd_rejects_unlimited_without_token_limits(stderr: str) -> bool:
+    """True when admission rejects unlimited-only modelRefs for an older CRD schema."""
+    msg = stderr.lower()
+    return (
+        "tokenratelimits: required value" in msg
+        or "tokenratelimits is required unless unlimited is true" in msg
+    )
+
+
 def _unlimited_subscription_crd_supported() -> bool:
     """Return True when the cluster CRD accepts unlimited modelRefs without tokenRateLimits."""
     probe = _server_dry_run_subscription("e2e-unlimited-crd-probe", {"unlimited": True})
-    return probe.returncode == 0
+    if probe.returncode == 0:
+        return True
+    if _crd_rejects_unlimited_without_token_limits(probe.stderr):
+        return False
+    combined = probe.stderr.strip() or probe.stdout.strip() or f"exit {probe.returncode}"
+    raise RuntimeError(f"unlimited subscription CRD probe failed unexpectedly: {combined}")
 
 
 def _wait_for_trlp_limits(model_ref, predicate_fn, timeout=90):
