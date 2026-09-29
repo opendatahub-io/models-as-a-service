@@ -869,6 +869,18 @@ def _server_dry_run_subscription(name, model_ref_budget):
     )
 
 
+_UNLIMITED_SUBSCRIPTION_SKIP_REASON = (
+    "MaaSSubscription modelRefs[].unlimited not supported by installed CRD "
+    "(requires models-as-a-service #1536 or newer maas-controller bundle)"
+)
+
+
+def _unlimited_subscription_crd_supported() -> bool:
+    """Return True when the cluster CRD accepts unlimited modelRefs without tokenRateLimits."""
+    probe = _server_dry_run_subscription("e2e-unlimited-crd-probe", {"unlimited": True})
+    return probe.returncode == 0
+
+
 def _wait_for_trlp_limits(model_ref, predicate_fn, timeout=90):
     """Poll the model's TRLP until predicate_fn(spec.limits) holds and Kuadrant enforces it."""
     trlp_name = f"maas-trlp-{model_ref}"
@@ -947,6 +959,10 @@ def _limitador_authorized_hits(subscription_name):
     return sum(float(line.rsplit(" ", 1)[1]) for line in hits if f'subscription="{subscription_name}"' in line)
 
 
+@pytest.mark.skipif(
+    not _unlimited_subscription_crd_supported(),
+    reason=_UNLIMITED_SUBSCRIPTION_SKIP_REASON,
+)
 class TestUnlimitedSubscription:
     """modelRefs[].unlimited: access without a token budget that still meters usage.
 
@@ -1091,6 +1107,10 @@ class TestUnlimitedSubscription:
         assert after > before, f"authorized_hits for {self.UNLIMITED_SUB} did not grow: {before} -> {after}"
 
 
+@pytest.mark.skipif(
+    not _unlimited_subscription_crd_supported(),
+    reason=_UNLIMITED_SUBSCRIPTION_SKIP_REASON,
+)
 class TestAllUnlimitedModel:
     """A model whose only subscriptions are unlimited.
 
