@@ -237,6 +237,34 @@ var _ = Describe("Tenant watch predicates", func() {
 			})
 		})
 
+		When("a per-tenant NetworkPolicy is relabelled to another tenant", func() {
+			It("admits the update and maps it back to its owner, also once deleted", func(ctx SpecContext) {
+				red := predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("red")).Name)[0]
+				blue := predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("blue")).Name)[0]
+				for _, tenant := range []reconcile.Request{red, blue} {
+					Expect(envTest.Create(ctx, predTenantConfig(tenant.Namespace))).To(Succeed())
+				}
+				perTenant := tenantNetworkPolicy(namespace, tenantreconcile.PayloadProcessingNetworkPolicyName("red"), "red", red.Namespace)
+				Expect(applyNetworkPolicy(ctx, perTenant)).To(Succeed())
+
+				oldObj, newObj := predWrite(ctx, perTenant, func(ctx context.Context, current *netwv1.NetworkPolicy) {
+					current.Labels[tenantreconcile.LabelTenantName] = "blue"
+					current.Labels[tenantreconcile.LabelTenantNamespace] = blue.Namespace
+					Expect(envTest.Update(ctx, current)).To(Succeed())
+				})
+
+				Expect(newObj.Generation).To(Equal(oldObj.Generation))
+				Expect(predAdmits(networkPolicyChangedForTenant(), oldObj, newObj)).To(BeTrue())
+				r := &TenantReconciler{Client: envTest.Client, GatewayNamespace: namespace, TenantNamespaceDiscoveryEnabled: true}
+				Expect(append(r.mapNetworkPolicyToMaasTenantConfigs(ctx, oldObj), r.mapNetworkPolicyToMaasTenantConfigs(ctx, newObj)...)).
+					To(ContainElements(red, blue))
+
+				By("deleting it while blue's labels are on it")
+				Expect(envTest.Delete(ctx, newObj)).To(Succeed())
+				Expect(r.mapNetworkPolicyToMaasTenantConfigs(ctx, newObj)).To(ContainElement(red))
+			})
+		})
+
 		When("its spec changes", func() {
 			It("admits the update", func(ctx SpecContext) {
 				oldObj, newObj := predWrite(ctx, policy, func(ctx context.Context, current *netwv1.NetworkPolicy) {
@@ -380,23 +408,23 @@ func predRemoveConfig(ctx SpecContext) {
 func predApplyNetworkPolicy(ctx context.Context, namespace, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
 	GinkgoHelper()
 
-	policy := sharedNetworkPolicy(namespace, tenantName, tenantNamespace)
-	Expect(applySharedNetworkPolicy(ctx, policy)).To(Succeed())
+	policy := tenantNetworkPolicy(namespace, "maas-api", tenantName, tenantNamespace)
+	Expect(applyNetworkPolicy(ctx, policy)).To(Succeed())
 	return policy
 }
 
-func applySharedNetworkPolicy(ctx context.Context, policy *netwv1.NetworkPolicy) error {
+func applyNetworkPolicy(ctx context.Context, policy *netwv1.NetworkPolicy) error {
 	return envTest.Patch(ctx, policy, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)
 }
 
-// sharedNetworkPolicy is the maas-api NetworkPolicy every tenant applies to the app
-// namespace, stamped with one tenant's tracking labels.
-func sharedNetworkPolicy(namespace, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
+// tenantNetworkPolicy is a NetworkPolicy as a tenant's platform apply renders it, stamped
+// with that tenant's tracking labels.
+func tenantNetworkPolicy(namespace, name, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
 	tcp := corev1.ProtocolTCP
 	return &netwv1.NetworkPolicy{
 		TypeMeta: metav1.TypeMeta{APIVersion: netwv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy"},
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      "maas-api",
+			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
 				"app.kubernetes.io/part-of":          "models-as-a-service",

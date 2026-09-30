@@ -78,13 +78,14 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 		TenantNamespace:                 tenantNS,
 		TenantNamespaceDiscoveryEnabled: true,
 	}
-	networkPolicy := func(name, namespace, trackedTenantNS string) *netwv1.NetworkPolicy {
+	networkPolicy := func(name, namespace, trackedTenant string) *netwv1.NetworkPolicy {
 		return &netwv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
 			Namespace: namespace,
 			Labels: map[string]string{
 				tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
-				tenantreconcile.LabelTenantNamespace:                                    trackedTenantNS,
+				tenantreconcile.LabelTenantName:                                         trackedTenant,
+				tenantreconcile.LabelTenantNamespace:                                    "ai-tenant-" + trackedTenant,
 			},
 		}}
 	}
@@ -97,17 +98,23 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 		{
 			// The labels name the tenant that applied last, which may be gone.
 			name: "shared policy in the app namespace enqueues every tenant",
-			np:   networkPolicy("maas-api-allow-gateway", infraNS, "ai-tenant-deleted"),
+			np:   networkPolicy("maas-api-allow-gateway", infraNS, "deleted"),
 			want: []reconcile.Request{tenantRequest(tenantNS), tenantRequest(teamANS)},
 		},
 		{
 			name: "per-tenant policy in the gateway namespace enqueues its tenant",
-			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, teamANS),
+			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "team-a"),
 			want: []reconcile.Request{tenantRequest(teamANS)},
 		},
 		{
+			// Its owner is the only tenant that renders it, and the labels no longer say so.
+			name: "per-tenant policy under another tenant's labels enqueues every tenant",
+			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "deleted"),
+			want: []reconcile.Request{tenantRequest(tenantNS), tenantRequest(teamANS)},
+		},
+		{
 			name: "policy outside the platform namespaces is ignored",
-			np:   networkPolicy("maas-api-allow-gateway", "other", tenantNS),
+			np:   networkPolicy("maas-api-allow-gateway", "other", "team-a"),
 			want: nil,
 		},
 	}

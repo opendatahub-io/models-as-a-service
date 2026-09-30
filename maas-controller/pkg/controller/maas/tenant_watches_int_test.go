@@ -2,6 +2,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 
@@ -39,26 +40,33 @@ const (
 // write that re-enqueues its own tenant shows up as requests.
 var _ = Describe("TenantReconciler watches", func() {
 	var (
-		appNamespace string
-		tenantA      reconcile.Request
-		tenantB      reconcile.Request
-		recorder     *tenantRequestRecorder
+		appNamespace     string
+		gatewayNamespace string
+		tenantA          reconcile.Request
+		tenantB          reconcile.Request
+		recorder         *tenantRequestRecorder
 	)
 
 	BeforeEach(func(ctx SpecContext) {
 		appNamespace = pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("app")).Name
+		gatewayNamespace = pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("gateway")).Name
 		tenantA = predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("tenant-a")).Name)[0]
 		tenantB = predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("tenant-b")).Name)[0]
 		for _, tenant := range []reconcile.Request{tenantA, tenantB} {
 			Expect(envTest.Create(ctx, predTenantConfig(tenant.Namespace))).To(Succeed())
 		}
 
-		// Every platform pass applies the shared NetworkPolicies stamped with its own tenant.
+		// Every platform pass applies the shared NetworkPolicy and its own per-tenant one,
+		// stamped with its tracking labels. The tenant namespace doubles as the tenant name.
 		recorder = newTenantRequestRecorder(func(ctx context.Context, tenant reconcile.Request) error {
 			if tenant != tenantA && tenant != tenantB {
 				return nil
 			}
-			return applySharedNetworkPolicy(ctx, sharedNetworkPolicy(appNamespace, tenant.Namespace, tenant.Namespace))
+			perTenantName := tenantreconcile.PayloadProcessingNetworkPolicyName(tenant.Namespace)
+			return errors.Join(
+				applyNetworkPolicy(ctx, tenantNetworkPolicy(appNamespace, "maas-api", tenant.Namespace, tenant.Namespace)),
+				applyNetworkPolicy(ctx, tenantNetworkPolicy(gatewayNamespace, perTenantName, tenant.Namespace, tenant.Namespace)),
+			)
 		})
 	})
 
@@ -69,7 +77,7 @@ var _ = Describe("TenantReconciler watches", func() {
 			AppNamespace:                    appNamespace,
 			OperatorNamespace:               appNamespace,
 			TenantNamespace:                 tenantA.Namespace,
-			GatewayNamespace:                "openshift-ingress",
+			GatewayNamespace:                gatewayNamespace,
 			TenantNamespaceDiscoveryEnabled: true,
 		}
 		startTenantWatches(ctx, r, recorder)
@@ -103,6 +111,36 @@ var _ = Describe("TenantReconciler watches", func() {
 		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
 		Expect(envTest.Get(ctx, client.ObjectKeyFromObject(policy), policy)).To(Succeed())
 		Expect(policy.Spec.PodSelector.MatchLabels).To(HaveKeyWithValue("app", "maas-api"))
+	})
+
+	It("restores a per-tenant NetworkPolicy relabelled to another tenant, then deleted", func(ctx SpecContext) {
+		startWatches(ctx)
+		policy := &netwv1.NetworkPolicy{}
+		key := client.ObjectKey{Namespace: gatewayNamespace, Name: tenantreconcile.PayloadProcessingNetworkPolicyName(tenantA.Namespace)}
+		trackedTenant := func(g Gomega) string {
+			current := &netwv1.NetworkPolicy{}
+			g.Expect(envTest.Get(ctx, key, current)).To(Succeed())
+			return current.Labels[tenantreconcile.LabelTenantNamespace]
+		}
+
+		By("relabelling tenant A's policy to tenant B")
+		Expect(envTest.Get(ctx, key, policy)).To(Succeed())
+		policy.Labels[tenantreconcile.LabelTenantName] = tenantB.Namespace
+		policy.Labels[tenantreconcile.LabelTenantNamespace] = tenantB.Namespace
+		Expect(envTest.Update(ctx, policy)).To(Succeed())
+		Eventually(trackedTenant).Should(Equal(tenantA.Namespace))
+		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod),
+			"the owner's restamp bounces between the tenants")
+
+		By("relabelling it again and deleting it before its owner restores it")
+		mark := recorder.mark()
+		Expect(envTest.Get(ctx, key, policy)).To(Succeed())
+		policy.Labels[tenantreconcile.LabelTenantName] = tenantB.Namespace
+		policy.Labels[tenantreconcile.LabelTenantNamespace] = tenantB.Namespace
+		Expect(envTest.Update(ctx, policy)).To(Succeed())
+		Expect(client.IgnoreNotFound(envTest.Delete(ctx, policy))).To(Succeed())
+		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(tenantA))
+		Eventually(trackedTenant).Should(Equal(tenantA.Namespace))
 	})
 
 	It("enqueues every tenant when maas-db-config changes", func(ctx SpecContext) {

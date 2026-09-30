@@ -216,7 +216,7 @@ func TestNetworkPolicyChangedForTenant(t *testing.T) {
 
 	expectPredicate(t, networkPolicyChangedForTenant(), base, []predicateUpdateCase[*netwv1.NetworkPolicy]{
 		{
-			name: "another tenant restamping the tracking labels is dropped",
+			name: "another tenant restamping the tracking labels of a shared policy is dropped",
 			mutate: func(np *netwv1.NetworkPolicy) {
 				np.Labels[tenantreconcile.LabelTenantName] = "tenant-b"
 				np.Labels[tenantreconcile.LabelTenantNamespace] = "ai-tenant-tenant-b"
@@ -245,6 +245,27 @@ func TestNetworkPolicyChangedForTenant(t *testing.T) {
 			mutate: func(np *netwv1.NetworkPolicy) { np.SetDeletionTimestamp(&metav1.Time{Time: time.Now()}) },
 			want:   true,
 		},
+	})
+
+	relabel := func(tenantName string) func(*netwv1.NetworkPolicy) {
+		return func(np *netwv1.NetworkPolicy) {
+			np.Labels[tenantreconcile.LabelTenantName] = tenantName
+			np.Labels[tenantreconcile.LabelTenantNamespace] = "ai-tenant-" + tenantName
+		}
+	}
+	perTenant := base.DeepCopy()
+	perTenant.Name = tenantreconcile.PayloadProcessingNetworkPolicyName("tenant-a")
+	perTenant.Namespace = "openshift-ingress"
+	expectPredicate(t, networkPolicyChangedForTenant(), perTenant, []predicateUpdateCase[*netwv1.NetworkPolicy]{
+		{name: "relabelling a per-tenant policy to another tenant passes", mutate: relabel("tenant-b"), want: true},
+	})
+
+	// Under another tenant's labels the per-tenant name looks shared, so the owner
+	// restoring its labels does not bounce back.
+	relabelled := perTenant.DeepCopy()
+	relabel("tenant-b")(relabelled)
+	expectPredicate(t, networkPolicyChangedForTenant(), relabelled, []predicateUpdateCase[*netwv1.NetworkPolicy]{
+		{name: "the owner restoring its labels on a per-tenant policy is dropped", mutate: relabel("tenant-a"), want: false},
 	})
 }
 

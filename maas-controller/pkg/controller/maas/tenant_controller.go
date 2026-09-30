@@ -273,17 +273,23 @@ func managedTenantNetworkPolicy() predicate.Predicate {
 	})
 }
 
-// networkPolicyChangedForTenant drops NetworkPolicy updates that only move the tenant
-// tracking labels. Each tenant's apply stamps its own tracking labels on the NetworkPolicies
-// shared in the app namespace and every tenant restores those, so admitting those writes
-// makes tenants re-enqueue each other indefinitely.
+// networkPolicyChangedForTenant drops updates that only move the tenant tracking labels
+// of a shared NetworkPolicy (isSharedTenantOperand). Every tenant applies those and each
+// apply stamps that tenant's labels, so admitting the relabel makes tenants re-enqueue each
+// other indefinitely. A relabel of a per-tenant NetworkPolicy is drift and passes, so its
+// owner restores the labels; under the other tenant's labels the policy looks shared, so
+// that restamp does not bounce back.
 func networkPolicyChangedForTenant() predicate.Predicate {
 	return predicate.Or(
 		predicate.GenerationChangedPredicate{},
 		predicate.AnnotationChangedPredicate{},
 		predicate.Funcs{UpdateFunc: deletionTimestampSet},
 		predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
-			return !maps.Equal(withoutTenantTrackingLabels(e.ObjectOld.GetLabels()), withoutTenantTrackingLabels(e.ObjectNew.GetLabels()))
+			oldLabels, newLabels := e.ObjectOld.GetLabels(), e.ObjectNew.GetLabels()
+			if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), e.ObjectOld) {
+				oldLabels, newLabels = withoutTenantTrackingLabels(oldLabels), withoutTenantTrackingLabels(newLabels)
+			}
+			return !maps.Equal(oldLabels, newLabels)
 		}},
 	)
 }
@@ -313,10 +319,10 @@ func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
 	return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
 }
 
-// mapNetworkPolicyToMaasTenantConfigs enqueues the tenants that apply a NetworkPolicy. Only
-// the payload-processing NetworkPolicies in the gateway namespace belong to one tenant. The
-// others are shared and their tracking labels name whichever tenant applied last, which may
-// be gone, so every tenant is enqueued to restore them.
+// mapNetworkPolicyToMaasTenantConfigs enqueues the tenants that apply a NetworkPolicy. A
+// shared one (isSharedTenantOperand) carries the tracking labels of whichever tenant applied
+// it last, which may be gone, so every tenant is enqueued to restore it. So is a per-tenant
+// one under another tenant's labels, since its owner is the only tenant that renders it.
 func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
 	np, ok := obj.(*netwv1.NetworkPolicy)
 	if !ok {
@@ -325,7 +331,7 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
 		return nil
 	}
-	if np.GetNamespace() != r.GatewayNamespace || np.GetNamespace() == r.AppNamespace {
+	if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), np) {
 		return r.enqueueAllTenants(ctx, obj)
 	}
 	if r.TenantNamespaceDiscoveryEnabled {
