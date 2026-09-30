@@ -824,10 +824,13 @@ func TestTenantReconcile_ReadErrorsRetryInsteadOfWaiting(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
 			// Absent and could-not-check look alike to the caller unless the error surfaces;
-			// only the error path retries, with backoff.
+			// only the error path retries, with backoff. A read failure is transient, so it
+			// marks the tenant Degraded and leaves readiness alone.
 			_, tenant, err := reconcileTenantOnce(t, tt.w)
 			g.Expect(err).To(HaveOccurred())
-			g.Expect(readyReason(tenant)).To(Equal(tt.wantReason))
+			degraded := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+			g.Expect(degraded).NotTo(BeNil())
+			g.Expect(degraded.Reason).To(Equal(tt.wantReason))
 		})
 	}
 }
