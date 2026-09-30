@@ -65,15 +65,21 @@ var _ = Describe("TenantReconciler watches", func() {
 			Expect(envTest.Create(ctx, predTenantConfig(tenant.Namespace))).To(Succeed())
 		}
 
-		// Every platform pass applies the shared NetworkPolicy and its own per-tenant one,
-		// stamped with its tracking labels. The tenant namespace doubles as the tenant name.
+		// Every platform pass applies the shared NetworkPolicy, marked shared like a real
+		// render would, and its own per-tenant one stamped with its tracking labels. The
+		// tenant namespace doubles as the tenant name. The shared policy's content never
+		// varies by tenant, so every pass SSAs the same object: no relabel, no churn.
 		recorder = newTenantRequestRecorder(func(ctx context.Context, tenant reconcile.Request) error {
 			if tenant != tenantA && tenant != tenantB {
 				return nil
 			}
 			perTenantName := tenantreconcile.PayloadProcessingNetworkPolicyName(tenant.Namespace)
+			shared := tenantNetworkPolicy(appNamespace, "maas-api", tenant.Namespace, tenant.Namespace)
+			delete(shared.Labels, tenantreconcile.LabelTenantName)
+			delete(shared.Labels, tenantreconcile.LabelTenantNamespace)
+			shared.Labels[tenantreconcile.LabelSharedOperand] = "true"
 			return errors.Join(
-				applyNetworkPolicy(ctx, tenantNetworkPolicy(appNamespace, "maas-api", tenant.Namespace, tenant.Namespace)),
+				applyNetworkPolicy(ctx, shared),
 				applyNetworkPolicy(ctx, tenantNetworkPolicy(gatewayNamespace, perTenantName, tenant.Namespace, tenant.Namespace)),
 			)
 		})
@@ -102,17 +108,19 @@ var _ = Describe("TenantReconciler watches", func() {
 			"tenants keep re-enqueueing each other")
 	}
 
-	It("settles after the tenants restamp each other's labels on the shared NetworkPolicy", func(ctx SpecContext) {
+	It("settles because the shared NetworkPolicy carries the same marker for every tenant", func(ctx SpecContext) {
 		startWatches(ctx)
 
 		policy := &netwv1.NetworkPolicy{}
 		Expect(envTest.Get(ctx, client.ObjectKey{Namespace: appNamespace, Name: "maas-api"}, policy)).To(Succeed())
-		Expect(policy.Labels).To(HaveKey(tenantreconcile.LabelTenantNamespace))
+		Expect(policy.Labels).To(HaveKeyWithValue(tenantreconcile.LabelSharedOperand, "true"))
+		Expect(policy.Labels).NotTo(HaveKey(tenantreconcile.LabelTenantNamespace))
 	})
 
 	It("settles when the tenants apply the rendered cleanup NetworkPolicy", func(ctx SpecContext) {
 		// The rendered manifest goes to server-side apply unstructured, as the platform
-		// apply sends it, so an empty list in it reaches the API server.
+		// apply sends it, so an empty list in it reaches the API server. It is shared
+		// (never renamed), so every pass marks it instead of stamping tracking labels.
 		cleanupPolicy := renderedOperand(appNamespace, tenantreconcile.GVKNetworkPolicy, "maas-api-cleanup-restrict")
 		recorder = newTenantRequestRecorder(func(ctx context.Context, tenant reconcile.Request) error {
 			if tenant != tenantA && tenant != tenantB {
@@ -120,8 +128,7 @@ var _ = Describe("TenantReconciler watches", func() {
 			}
 			policy := cleanupPolicy.DeepCopy()
 			labels := policy.GetLabels()
-			labels[tenantreconcile.LabelTenantName] = tenant.Namespace
-			labels[tenantreconcile.LabelTenantNamespace] = tenant.Namespace
+			labels[tenantreconcile.LabelSharedOperand] = "true"
 			policy.SetLabels(labels)
 			return envTest.Patch(ctx, policy, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)
 		})
@@ -129,7 +136,7 @@ var _ = Describe("TenantReconciler watches", func() {
 		startWatches(ctx)
 	})
 
-	It("enqueues every tenant when the shared NetworkPolicy drifts", func(ctx SpecContext) {
+	It("enqueues one tenant to repair the shared NetworkPolicy when it drifts", func(ctx SpecContext) {
 		startWatches(ctx)
 		mark := recorder.mark()
 
@@ -138,8 +145,12 @@ var _ = Describe("TenantReconciler watches", func() {
 		policy.Spec.PodSelector.MatchLabels["app"] = "edited"
 		Expect(envTest.Update(ctx, policy)).To(Succeed())
 
-		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElements(tenantA, tenantB))
+		// tenantA is the default tenant (TenantNamespace) in startWatches, so it repairs
+		// the shared policy alone: every tenant rendering it identically means one repair
+		// is enough, and fanning the drift out to tenantB too would cost it for nothing.
+		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(tenantA))
 		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+		Expect(recorder.since(mark)).NotTo(ContainElement(tenantB))
 		Expect(envTest.Get(ctx, client.ObjectKeyFromObject(policy), policy)).To(Succeed())
 		Expect(policy.Spec.PodSelector.MatchLabels).To(HaveKeyWithValue("app", "maas-api"))
 	})

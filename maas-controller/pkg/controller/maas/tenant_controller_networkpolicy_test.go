@@ -78,16 +78,17 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 		TenantNamespace:                 tenantNS,
 		TenantNamespaceDiscoveryEnabled: true,
 	}
-	networkPolicy := func(name, namespace, trackedTenant string) *netwv1.NetworkPolicy {
-		return &netwv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
-			Name:      name,
-			Namespace: namespace,
-			Labels: map[string]string{
-				tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
-				tenantreconcile.LabelTenantName:                                         trackedTenant,
-				tenantreconcile.LabelTenantNamespace:                                    "ai-tenant-" + trackedTenant,
-			},
-		}}
+	networkPolicy := func(name, namespace, trackedTenant string, shared bool) *netwv1.NetworkPolicy {
+		l := map[string]string{
+			tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
+		}
+		if shared {
+			l[tenantreconcile.LabelSharedOperand] = "true"
+		} else {
+			l[tenantreconcile.LabelTenantName] = trackedTenant
+			l[tenantreconcile.LabelTenantNamespace] = "ai-tenant-" + trackedTenant
+		}
+		return &netwv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, Labels: l}}
 	}
 
 	tests := []struct {
@@ -96,25 +97,29 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 		want []reconcile.Request
 	}{
 		{
-			// The labels name the tenant that applied last, which may be gone.
-			name: "shared policy in the app namespace enqueues every tenant",
-			np:   networkPolicy("maas-api-allow-gateway", infraNS, "deleted"),
-			want: []reconcile.Request{tenantRequest(tenantNS), tenantRequest(teamANS)},
+			// The default tenant config (tenantNS) repairs it: every tenant renders a
+			// shared policy identically, so one live, reconcilable tenant is enough.
+			name: "shared policy in the app namespace enqueues the default tenant",
+			np:   networkPolicy("maas-api-allow-gateway", infraNS, "", true),
+			want: []reconcile.Request{tenantRequest(tenantNS)},
 		},
 		{
 			name: "per-tenant policy in the gateway namespace enqueues its tenant",
-			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "team-a"),
+			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "team-a", false),
 			want: []reconcile.Request{tenantRequest(teamANS)},
 		},
 		{
-			// Its owner is the only tenant that renders it, and the labels no longer say so.
-			name: "per-tenant policy under another tenant's labels enqueues every tenant",
-			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "deleted"),
-			want: []reconcile.Request{tenantRequest(tenantNS), tenantRequest(teamANS)},
+			// A relabel is recovered by the mapped handler invoking this mapper on both
+			// the old and the new object on Update (controller-runtime), not by inference
+			// in a single call here: this call alone maps by whatever labels the object
+			// carries now, even when they no longer name its real owner.
+			name: "per-tenant policy under another tenant's labels maps by those labels alone",
+			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, "deleted", false),
+			want: []reconcile.Request{tenantRequest("ai-tenant-deleted")},
 		},
 		{
 			name: "policy outside the platform namespaces is ignored",
-			np:   networkPolicy("maas-api-allow-gateway", "other", "team-a"),
+			np:   networkPolicy("maas-api-allow-gateway", "other", "team-a", false),
 			want: nil,
 		},
 	}

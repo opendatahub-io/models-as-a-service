@@ -40,7 +40,7 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 		gvk := resource.GroupVersionKind()
 		switch {
 		case gvk == GVKTokenRateLimitPolicy && resource.GetName() == baseGatewayTokenRateLimitDefaultDenyPolicyName:
-			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName, tenantID); err != nil {
+			if err := configureTokenRateLimitPolicy(log, resource, gatewayNamespace, gatewayName, params); err != nil {
 				return nil, err
 			}
 		case gvk == GVKDestinationRule && resource.GetName() == baseGatewayDestinationRuleName:
@@ -82,20 +82,40 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
 	}
+	markSharedOperands(filteredResources)
 	_ = ctx
 	return filteredResources, nil
 }
 
-func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName, tenantID string) error {
+// markSharedOperands marks every object left without tracking labels as shared. An
+// object is per-tenant if and only if a rename site derived its name from the tenant,
+// stamping tracking labels while doing so (renameForTenant). Anything left over,
+// including the default tenant's own base-named objects, has the same name for every
+// tenant, which is the definition of shared.
+func markSharedOperands(resources []unstructured.Unstructured) {
+	for i := range resources {
+		labels := resources[i].GetLabels()
+		if labels != nil && labels[LabelTenantNamespace] != "" {
+			continue
+		}
+		if labels == nil {
+			labels = make(map[string]string)
+		}
+		labels[LabelSharedOperand] = "true"
+		resources[i].SetLabels(labels)
+	}
+}
+
+func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, params PlatformParams) error {
 	// Generate unique per-tenant name to avoid conflicts when multiple tenants share the same gateway namespace
-	newName := GatewayTokenRateLimitDefaultDenyPolicyName(tenantID)
+	newName := GatewayTokenRateLimitDefaultDenyPolicyName(params.TenantIdentifier)
 	log.V(4).Info("Configuring TokenRateLimitPolicy",
 		"oldName", resource.GetName(),
 		"newName", newName,
 		"namespace", gatewayNamespace,
 		"targetGateway", gatewayName)
 
-	resource.SetName(newName)
+	renameForTenant(resource, newName, params)
 	resource.SetNamespace(gatewayNamespace)
 	if err := unstructured.SetNestedField(resource.Object, gatewayName, "spec", "targetRef", "name"); err != nil {
 		return fmt.Errorf("failed to set spec.targetRef.name on TokenRateLimitPolicy: %w", err)
@@ -278,8 +298,6 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenantTrackingName(tenant),
-					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -297,6 +315,7 @@ func configureTelemetryPolicyResources(log logr.Logger, tenant client.Object, re
 		},
 	}
 	telemetryPolicyName := TelemetryPolicyName(tenantID)
+	renameForTenant(tp, telemetryPolicyName, params)
 	log.V(2).Info("Appending TelemetryPolicy", "name", telemetryPolicyName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *tp)
 	return nil
@@ -318,8 +337,6 @@ func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, res
 				"namespace": gatewayNamespace,
 				"labels": map[string]any{
 					"app.kubernetes.io/part-of": "maas-observability",
-					LabelTenantName:             tenantTrackingName(tenant),
-					LabelTenantNamespace:        tenant.GetNamespace(),
 				},
 			},
 			"spec": map[string]any{
@@ -348,6 +365,7 @@ func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, res
 		},
 	}
 	istioTelemetryName := IstioTelemetryName(tenantID)
+	renameForTenant(istioTelemetry, istioTelemetryName, params)
 	log.V(2).Info("Appending Istio Telemetry", "name", istioTelemetryName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *istioTelemetry)
 	return nil
@@ -442,6 +460,7 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 		},
 	}
 
+	renameForTenant(hpa, hpaName, params)
 	log.V(2).Info("Appending payload-processing HPA",
 		"name", hpaName,
 		"namespace", gatewayNamespace,
@@ -497,12 +516,11 @@ func buildTelemetryLabels(log logr.Logger, config *maasv1alpha1.TenantTelemetryC
 func configureMaaSAPIHTTPRoute(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, params PlatformParams) error {
 	tenantID := params.TenantIdentifier
 
-	// Rename HTTPRoute for non-default tenants
-	if tenantID != "" {
-		newName := MaaSAPIRouteName(tenantID)
-		log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
-		resource.SetName(newName)
-	}
+	// Rename unconditionally: the default tenant keeps the base name, but still goes
+	// through renameForTenant so it is stamped as per-tenant like every other tenant.
+	newName := MaaSAPIRouteName(tenantID)
+	log.V(4).Info("Renaming maas-api HTTPRoute", "oldName", resource.GetName(), "newName", newName)
+	renameForTenant(resource, newName, params)
 
 	// Get parentRefs array first
 	parentRefs, found, err := unstructured.NestedSlice(resource.Object, "spec", "parentRefs")

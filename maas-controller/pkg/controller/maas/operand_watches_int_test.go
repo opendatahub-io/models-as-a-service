@@ -40,6 +40,18 @@ func operandWatchTenantNamespace(tenant string) string {
 	return tenantreconcile.TenantNamespaceForAITenant(tenant, operandWatchDefaultTenantNamespace)
 }
 
+// markShared sets the marker PostRender's final pass stamps on an object no rename site
+// claimed. Real shared operands never carry tracking labels.
+func markShared(obj client.Object) client.Object {
+	l := obj.GetLabels()
+	if l == nil {
+		l = map[string]string{}
+	}
+	l[tenantreconcile.LabelSharedOperand] = "true"
+	obj.SetLabels(l)
+	return obj
+}
+
 var _ = Describe("Tenant operand watches", func() {
 	var (
 		r                *TenantReconciler
@@ -60,7 +72,7 @@ var _ = Describe("Tenant operand watches", func() {
 		}
 	})
 
-	// stamp sets the tracking labels ApplyRendered writes when tenant applies obj.
+	// stamp sets the tracking labels a rename site writes when tenant applies obj.
 	stamp := func(obj client.Object, tenant string) {
 		tenantreconcile.SetTenantTrackingLabels(obj, &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
@@ -129,15 +141,33 @@ var _ = Describe("Tenant operand watches", func() {
 			)
 
 			BeforeEach(func(ctx SpecContext) {
-				// A shared operand maps to its labelled tenant only while that tenant config
-				// would re-apply it.
+				// A shared operand maps to a live, reconcilable tenant
+				// (enqueueSharedOperandRepairer); with only "red" configured, that is red.
 				ensureTenantConfig(ctx, "red")
 				operand, edit = build(appNamespace)
-				stamp(operand, "red")
+				if shared {
+					markShared(operand)
+				} else {
+					stamp(operand, "red")
+				}
 				op = watchOf(operand)
 				Expect(envTest.Create(ctx, operand)).To(Succeed())
 				original = observe(ctx, op, operand)
 			})
+
+			// wantMapped is what operandMapper should return for a marker-carrying obj: not
+			// a hardcoded tenant (other specs' tenant configs accumulate cluster-wide across
+			// this suite, since envtest never finishes deleting a namespace, so the winner
+			// enqueueSharedOperandRepairer picks among them is not fixed), but exactly what
+			// that repair-selection helper itself picks. The helper's own selection logic
+			// (default preferred, deterministic fallback, none qualifying) is unit-tested
+			// against a clean fake client in TestOperandMapperForSharedOperands.
+			wantMapped := func(ctx SpecContext, obj client.Object) []reconcile.Request {
+				if shared {
+					return r.enqueueSharedOperandRepairer(ctx, obj)
+				}
+				return tenantConfigOf(operandWatchTenantNamespace("red"))
+			}
 
 			When("its spec or data is edited", func() {
 				It("re-enqueues the tenant config named in its tracking labels", func(ctx SpecContext) {
@@ -146,7 +176,7 @@ var _ = Describe("Tenant operand watches", func() {
 					edited := observe(ctx, op, operand)
 
 					Expect(admitsUpdate(op, original, edited)).To(BeTrue())
-					Expect(r.operandMapper(op)(ctx, edited)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+					Expect(r.operandMapper(op)(ctx, edited)).To(Equal(wantMapped(ctx, edited)))
 				})
 			})
 
@@ -156,21 +186,23 @@ var _ = Describe("Tenant operand watches", func() {
 					Expect(apierrors.IsNotFound(envTest.Get(ctx, client.ObjectKeyFromObject(operand), op.newObject()))).To(BeTrue())
 
 					Expect(r.operandPredicate(op).Delete(event.DeleteEvent{Object: original})).To(BeTrue())
-					Expect(r.operandMapper(op)(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+					Expect(r.operandMapper(op)(ctx, original)).To(Equal(wantMapped(ctx, original)))
 				})
 			})
 
 			if shared {
-				When("another tenant's apply stamps its own tracking labels", func() {
-					It("is not admitted", func(ctx SpecContext) {
-						// Every tenant applies this name; re-enqueueing on the relabel would
-						// bounce the reconcile between tenants.
+				When("it also gains a tenant's tracking labels", func() {
+					It("is admitted: relabel suppression no longer exists", func(ctx SpecContext) {
+						// A real shared operand never carries tracking labels post-render
+						// (it gets the marker instead), so this cannot happen through the
+						// pipeline. It probes that the predicate no longer special-cases a
+						// label change on a marked object either way.
 						stamp(operand, "blue")
 						Expect(envTest.Update(ctx, operand)).To(Succeed())
 						relabelled := observe(ctx, op, operand)
 
 						Expect(relabelled.GetResourceVersion()).NotTo(Equal(original.GetResourceVersion()))
-						Expect(admitsUpdate(op, original, relabelled)).To(BeFalse())
+						Expect(admitsUpdate(op, original, relabelled)).To(BeTrue())
 					})
 				})
 			} else {
@@ -523,10 +555,11 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 		return func() []reconcile.Request { return recorder.since(mark) }
 	}
 
-	It("wakes the remaining tenants when a shared operand last applied by a departed tenant is deleted", func(ctx SpecContext) {
-		// Shared operands keep whichever tenant applied them last; once that tenant is gone,
-		// only a remaining tenant can recreate what every tenant's maas-api needs.
-		sa := stampedFor(fixture.OperandServiceAccount(appNamespace, "maas-api"), operandWatchTenantNamespace("departed"))
+	It("repairs a deleted shared operand through the surviving tenant", func(ctx SpecContext) {
+		// A shared operand carries only the marker, never a "last applier" to lose:
+		// enqueueSharedOperandRepairer picks survivor because it is the only (and the
+		// default) live, reconcilable tenant config.
+		sa := markShared(fixture.OperandServiceAccount(appNamespace, "maas-api"))
 		Expect(envTest.Create(ctx, sa)).To(Succeed())
 		startWatches(ctx)
 		mark := recorder.mark()
@@ -615,17 +648,26 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 			Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(BeEmpty())
 		})
 
-		It("when another live tenant restamps a shared operand", func(ctx SpecContext) {
-			other := pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name
-			Expect(envTest.Create(ctx, predTenantConfig(other))).To(Succeed())
-			role := stampedFor(fixture.OperandClusterRole(appNamespace), survivor.Namespace)
-			Expect(envTest.Create(ctx, role)).To(Succeed())
-			startWatches(ctx)
-			mark := recorder.mark()
+	})
 
-			Expect(envTest.Update(ctx, stampedFor(role, other))).To(Succeed())
+	// A shared operand renders byte-identical for every tenant (see the design doc), so
+	// its watch event only needs to repair it once, not once per tenant: fanning out to
+	// every live tenant would multiply a single external write by N for no gain, which
+	// matters because ai-gateway-controller writes the shared payload-processing-reader
+	// ClusterRole on every praxis tenant's own resync.
+	It("enqueues exactly one tenant when a shared operand is written by another field manager", func(ctx SpecContext) {
+		other := pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name
+		Expect(envTest.Create(ctx, predTenantConfig(other))).To(Succeed())
+		role := fixture.OperandClusterRole(appNamespace)
+		markShared(role)
+		Expect(envTest.Create(ctx, role)).To(Succeed())
+		startWatches(ctx)
+		mark := recorder.mark()
 
-			Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(BeEmpty())
-		})
+		role.Rules[0].Verbs = []string{"get", "list"}
+		Expect(envTest.Update(ctx, role)).To(Succeed())
+
+		Eventually(since(mark)).Should(ContainElement(survivor))
+		Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(ConsistOf(survivor))
 	})
 })

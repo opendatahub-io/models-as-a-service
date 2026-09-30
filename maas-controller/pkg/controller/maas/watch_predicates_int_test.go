@@ -224,16 +224,18 @@ var _ = Describe("Tenant watch predicates", func() {
 		})
 
 		When("another tenant re-applies it with its own tracking labels", func() {
-			It("does not admit the update that would bounce between the tenants", func(ctx SpecContext) {
+			It("admits the update: relabel suppression is gone", func(ctx SpecContext) {
 				oldObj, newObj := predWrite(ctx, policy, func(ctx context.Context, _ *netwv1.NetworkPolicy) {
 					predApplyNetworkPolicy(ctx, namespace, "tenant-b", "ai-tenant-tenant-b")
 				})
 
 				Expect(newObj.ResourceVersion).NotTo(Equal(oldObj.ResourceVersion))
 				Expect(newObj.Generation).To(Equal(oldObj.Generation))
-				// Without the filter this update enqueues every tenant, and each one's
-				// apply restamps the labels for the others.
-				Expect(predAdmits(networkPolicyChangedForTenant(), oldObj, newObj)).To(BeFalse())
+				// A real shared NetworkPolicy never carries tracking labels post-render
+				// (it gets the shared marker instead), so this relabel cannot happen
+				// through the pipeline. The predicate no longer special-cases it: any
+				// label change is drift.
+				Expect(predAdmits(networkPolicyChangedForTenant(), oldObj, newObj)).To(BeTrue())
 			})
 		})
 
@@ -395,8 +397,10 @@ func predRemoveConfig(ctx SpecContext) {
 	}).WithContext(ctx).Should(Succeed())
 }
 
-// predApplyNetworkPolicy server-side applies the shared maas-api NetworkPolicy the way
-// a tenant's platform apply does, stamped with that tenant's tracking labels.
+// predApplyNetworkPolicy server-side applies a NetworkPolicy named like the shared
+// maas-api one but stamped with a tenant's tracking labels, a state the render pipeline
+// no longer produces (a real shared object carries the shared marker instead) but that
+// still probes the predicate's label-change handling directly.
 func predApplyNetworkPolicy(ctx context.Context, namespace, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
 	GinkgoHelper()
 

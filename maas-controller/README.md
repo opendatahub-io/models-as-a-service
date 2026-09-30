@@ -40,6 +40,8 @@ labels:
 
 The `maas-controller` Deployment in the application namespace is never given a controller owner reference to itself; it only receives the tracking labels above when present in the rendered manifests.
 
+**Shared operands.** Some rendered objects (the `maas-api` ServiceAccount, its ClusterRoles, the shared NetworkPolicies, and a few others) render byte-identical for every tenant and carry no tenant-specific content. Render time decides which: every rename site stamps the tracking labels above on the object it renames, and anything left unrenamed at the end of `PostRender` is marked instead with `maas.opendatahub.io/shared-operand: "true"`. An object carries exactly one of the two, never both and never neither. Watches read the marker to fan an event on a shared operand out to a single live tenant that can repair it, rather than to every tenant or to whichever tenant happened to apply it last.
+
 ### Subscription model
 
 The controller implements a **dual-gate** model where both gates must pass for a request to succeed:

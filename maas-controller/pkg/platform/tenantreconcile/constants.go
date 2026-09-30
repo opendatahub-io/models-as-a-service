@@ -70,6 +70,12 @@ const (
 	LabelTenantName      = "maas.opendatahub.io/tenant-name"
 	LabelTenantNamespace = "maas.opendatahub.io/tenant-namespace"
 
+	// LabelSharedOperand marks a rendered object that no PostRender rename site claimed:
+	// it has the same name for every tenant. Set once, at the end of PostRender, on
+	// anything left without tracking labels. Watches read this instead of inferring
+	// sharedness from the object's name and kind.
+	LabelSharedOperand = "maas.opendatahub.io/shared-operand"
+
 	// LabelAIGatewayTenant is the ADR-defined tenant marker on tenant admin namespaces.
 	LabelAIGatewayTenant = "ai-gateway.opendatahub.io/tenant"
 

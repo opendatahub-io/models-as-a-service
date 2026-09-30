@@ -73,6 +73,8 @@ func RenderDefaultTenant(ctx context.Context, opts ...RenderOption) []unstructur
 			GatewayName:             "maas-default-gateway",
 			MonitoringNamespace:     "opendatahub",
 			SubscriptionNamespace:   "models-as-a-service",
+			TenantTrackingName:      maasv1alpha1.MaasTenantConfigInstanceName,
+			TenantTrackingNamespace: "models-as-a-service",
 			MaaSAPIImage:            "quay.io/example/maas-api:test",
 			PayloadProcessingImage:  "quay.io/example/payload:test",
 			MaaSAPIKeyCleanupImage:  "quay.io/example/cleanup:test",

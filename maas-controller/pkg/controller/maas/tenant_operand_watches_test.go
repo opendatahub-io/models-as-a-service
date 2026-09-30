@@ -68,6 +68,18 @@ func trackedBy(tenantName, tenantNamespace string) map[string]string {
 	}
 }
 
+// sharedLabels is what PostRender's final pass stamps on an object no rename site
+// claimed: the marker alone, never tracking labels.
+func sharedLabels() map[string]string {
+	return map[string]string{tenantreconcile.LabelSharedOperand: "true"}
+}
+
+// componentLabel is the ODH label postBuildTransform stamps on every kustomize-rendered
+// object, shared or per-tenant.
+func componentLabelSet() labels.Set {
+	return labels.Set{tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true"}
+}
+
 func operandMeta(gvk schema.GroupVersionKind, namespace, name string, l map[string]string) *metav1.PartialObjectMetadata {
 	obj := &metav1.PartialObjectMetadata{}
 	obj.SetGroupVersionKind(gvk)
@@ -173,7 +185,11 @@ func TestTenantOperandCacheByObject(t *testing.T) {
 
 	g.Expect(scoped).To(HaveKey(gvkClusterRole))
 	g.Expect(scoped[gvkClusterRole].Namespaces).To(BeNil())
-	g.Expect(scoped[gvkClusterRole].Label.Matches(labels.Set(trackedBy("red", operandRedNS)))).To(BeTrue())
+	// The scope selects on the ODH component label, not the tenant tracking labels: a
+	// shared ClusterRole carries the marker instead of tracking labels post-upgrade, and
+	// must stay visible in the cache either way.
+	g.Expect(scoped[gvkClusterRole].Label.Matches(componentLabelSet())).To(BeTrue())
+	g.Expect(scoped[gvkClusterRole].Label.Matches(labels.Set(trackedBy("red", operandRedNS)))).To(BeFalse())
 	g.Expect(scoped[gvkClusterRole].Label.Matches(labels.Set{"app": "other"})).To(BeFalse())
 
 	g.Expect(scoped).NotTo(HaveKey(tenantreconcile.GVKEnvoyFilter), "CRD not established yet")
@@ -245,20 +261,28 @@ func TestMapTenantOperandToMaasTenantConfig(t *testing.T) {
 	}
 }
 
+// TestOperandMapperForSharedOperands covers the operandMapper side of
+// enqueueSharedOperandRepairer: a shared operand (the marker) maps to one
+// representative tenant, never every tenant, because all of them render it identically.
 func TestOperandMapperForSharedOperands(t *testing.T) {
 	now := metav1.Now()
-	redConfig := func(mutate func(*maasv1alpha1.MaasTenantConfig)) *maasv1alpha1.MaasTenantConfig {
+	tenantConfig := func(namespace string, mutate func(*maasv1alpha1.MaasTenantConfig)) *maasv1alpha1.MaasTenantConfig {
 		tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
-			Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: operandRedNS,
+			Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace,
 		}}
 		if mutate != nil {
 			mutate(tenant)
 		}
 		return tenant
 	}
-	survivor := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
-		Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: operandDefaultNS,
-	}}
+	deleting := func(tc *maasv1alpha1.MaasTenantConfig) {
+		tc.DeletionTimestamp = &now
+		tc.Finalizers = []string{tenantFinalizer}
+	}
+	unmanaged := func(tc *maasv1alpha1.MaasTenantConfig) {
+		tc.Annotations = map[string]string{managementStateAnnotation: managementStateUnmanaged}
+	}
+
 	var serviceAccounts, services tenantOperand
 	for _, op := range tenantOperands() {
 		switch op.gvk {
@@ -268,43 +292,59 @@ func TestOperandMapperForSharedOperands(t *testing.T) {
 			services = op
 		}
 	}
-	sharedSA := operandMeta(tenantreconcile.GVKServiceAccount, operandInfraNS, "maas-api", trackedBy("red", operandRedNS))
+	sharedSA := operandMeta(tenantreconcile.GVKServiceAccount, operandInfraNS, "maas-api", sharedLabels())
 	perTenantService := operandMeta(tenantreconcile.GVKService, operandInfraNS, tenantreconcile.MaaSAPIServiceName("red"), trackedBy("red", operandRedNS))
-	everyTenant := []reconcile.Request{tenantRequest(operandDefaultNS), tenantRequest(operandRedNS)}
 
 	tests := []struct {
-		name  string
-		red   *maasv1alpha1.MaasTenantConfig
-		op    tenantOperand
-		obj   client.Object
-		want  []reconcile.Request
-		exact bool
+		name string
+		objs []client.Object
+		op   tenantOperand
+		obj  client.Object
+		want []reconcile.Request
 	}{
-		{name: "owner Managed", red: redConfig(nil), op: serviceAccounts, obj: sharedSA, want: []reconcile.Request{tenantRequest(operandRedNS)}, exact: true},
-		{name: "owner gone", op: serviceAccounts, obj: sharedSA, want: []reconcile.Request{tenantRequest(operandDefaultNS)}},
-		{name: "owner deleting", op: serviceAccounts, obj: sharedSA, want: everyTenant, red: redConfig(func(tc *maasv1alpha1.MaasTenantConfig) {
-			tc.DeletionTimestamp = &now
-			tc.Finalizers = []string{tenantFinalizer}
-		})},
-		{name: "owner Unmanaged", op: serviceAccounts, obj: sharedSA, want: everyTenant, red: redConfig(func(tc *maasv1alpha1.MaasTenantConfig) {
-			tc.Annotations = map[string]string{managementStateAnnotation: managementStateUnmanaged}
-		})},
-		{name: "per-tenant operand of a gone owner", op: services, obj: perTenantService, want: []reconcile.Request{tenantRequest(operandRedNS)}, exact: true},
+		{
+			name: "the default tenant repairs it when live",
+			objs: []client.Object{tenantConfig(operandDefaultNS, nil), tenantConfig(operandRedNS, nil)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandDefaultNS)},
+		},
+		{
+			name: "falls back to the only other tenant when the default is absent",
+			objs: []client.Object{tenantConfig(operandRedNS, nil)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandRedNS)},
+		},
+		{
+			name: "falls back to another tenant when the default is deleting",
+			objs: []client.Object{tenantConfig(operandDefaultNS, deleting), tenantConfig(operandRedNS, nil)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandRedNS)},
+		},
+		{
+			name: "falls back to another tenant when the default is Unmanaged",
+			objs: []client.Object{tenantConfig(operandDefaultNS, unmanaged), tenantConfig(operandRedNS, nil)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandRedNS)},
+		},
+		{
+			name: "nothing qualifies to repair it",
+			objs: []client.Object{tenantConfig(operandDefaultNS, deleting), tenantConfig(operandRedNS, unmanaged)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: nil,
+		},
+		{
+			name: "a per-tenant operand maps by its tracking labels alone, regardless of tenant state",
+			objs: []client.Object{tenantConfig(operandDefaultNS, nil)},
+			op:   services, obj: perTenantService,
+			want: []reconcile.Request{tenantRequest(operandRedNS)},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			g := NewWithT(t)
-			objs := []client.Object{survivor.DeepCopy()}
-			if tt.red != nil {
-				objs = append(objs, tt.red)
-			}
-			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tt.objs...).Build()
 			got := operandTestReconciler(c, true).operandMapper(tt.op)(t.Context(), tt.obj)
-			if tt.exact {
-				g.Expect(got).To(Equal(tt.want))
-				return
-			}
-			g.Expect(got).To(ContainElements(tt.want))
+			g.Expect(got).To(Equal(tt.want))
 		})
 	}
 }
@@ -356,7 +396,11 @@ func TestTenantOperandChanged(t *testing.T) {
 			want:     false,
 		},
 		{
-			name:     "another tenant relabelling a shared operand is ignored",
+			// Real shared operands never carry tracking labels (they get the shared
+			// marker instead), so this relabel cannot happen through the render pipeline.
+			// The predicate no longer special-cases it either way: relabel suppression is
+			// gone, so any label change is drift.
+			name:     "relabelling a tenant's operand to another tenant is drift now that relabel suppression is gone",
 			anyWrite: true,
 			old:      base(),
 			new: with(func(o *metav1.PartialObjectMetadata) {
@@ -364,7 +408,7 @@ func TestTenantOperandChanged(t *testing.T) {
 				o.SetGeneration(2)
 				o.SetResourceVersion("2")
 			}),
-			want: false,
+			want: true,
 		},
 		{
 			name:     "stripping the tracking labels is drift",

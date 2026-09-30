@@ -60,8 +60,11 @@ var (
 	gvkClusterRole    = rbacv1.SchemeGroupVersion.WithKind("ClusterRole")
 	gvkServiceMonitor = schema.GroupVersionKind{Group: "monitoring.coreos.com", Version: "v1", Kind: "ServiceMonitor"}
 
-	// trackedSelector matches objects carrying the tenant-namespace tracking label.
-	trackedSelector = labels.NewSelector().Add(mustRequirement(tenantreconcile.LabelTenantNamespace, selection.Exists))
+	// operandSelector matches the ODH component label postBuildTransform stamps on every
+	// kustomize-rendered object, shared or per-tenant. Unlike the tenant tracking labels,
+	// it never leaves an object (no synthetic DELETE when a shared object drops tracking
+	// labels for the shared marker at upgrade), and a per-tenant object needs no new label.
+	operandSelector = labels.NewSelector().Add(mustRequirement(tenantreconcile.LabelODHAppPrefix+"/"+tenantreconcile.ComponentName, selection.Equals, "true"))
 )
 
 func mustRequirement(key string, op selection.Operator, values ...string) labels.Requirement {
@@ -104,7 +107,9 @@ const (
 	scopeCluster operandCacheScope = iota
 	// scopePlatformNamespaces limits the informer to the app and gateway namespaces.
 	scopePlatformNamespaces
-	// scopeTracked limits a cluster-scoped informer to objects with tenant tracking labels.
+	// scopeTracked limits a cluster-scoped informer to objects carrying the ODH component
+	// label (operandSelector), so shared and per-tenant objects of the kind both stay
+	// visible across the tenant-labels-to-marker upgrade.
 	scopeTracked
 )
 
@@ -175,7 +180,7 @@ func TenantOperandCacheByObject(ctx context.Context, c client.Client, appNamespa
 				}
 			}
 		case scopeTracked:
-			byObject.Label = trackedSelector
+			byObject.Label = operandSelector
 		}
 		if op.crd != "" && !crdServesVersion(lookupCRD(ctx, c, op.crd), op.gvk.Version) {
 			continue
@@ -278,17 +283,25 @@ func watchWhenServed(ctx context.Context, c controller.Controller, mgr ctrl.Mana
 	return registerWatchWhenCRDServes(c, mgr, crd, version, makeSource)
 }
 
-// isTenantOperand matches objects ApplyRendered stamped with tenant tracking labels,
-// either cluster-scoped or in a namespace the pipeline writes to.
+// isTenantOperand matches objects the tenant platform pipeline rendered: either
+// cluster-scoped or in a namespace the pipeline writes to, and carrying either the
+// per-tenant tracking labels or the shared-operand marker.
 func (r *TenantReconciler) isTenantOperand(obj client.Object) bool {
 	if ns := obj.GetNamespace(); ns != "" && !r.isTenantPlatformNamespace(ns) {
 		return false
 	}
-	return hasTenantTrackingLabels(obj.GetLabels())
+	l := obj.GetLabels()
+	return hasTenantTrackingLabels(l) || isSharedOperand(l)
 }
 
 func hasTenantTrackingLabels(l map[string]string) bool {
 	return l[tenantreconcile.LabelTenantName] != "" || l[tenantreconcile.LabelTenantNamespace] != ""
+}
+
+// isSharedOperand reports whether obj's labels carry the shared-operand marker
+// PostRender's final pass stamps on anything no rename site claimed.
+func isSharedOperand(l map[string]string) bool {
+	return l[tenantreconcile.LabelSharedOperand] == "true"
 }
 
 func (r *TenantReconciler) mapTenantOperandToMaasTenantConfig(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -316,33 +329,16 @@ func (r *TenantReconciler) mapTenantOperandToMaasTenantConfig(ctx context.Contex
 }
 
 // operandMapper maps an event on an operand of op's kind to the tenant configs that
-// repair it: the tenant named in its tracking labels. A shared operand carries whichever
-// tenant applied it last, and cleanup never deletes it with that tenant, so when that
-// tenant config is gone, deleting or not Managed, every tenant is enqueued instead;
-// the first to apply it takes over the labels.
+// repair it. A shared operand (the marker) renders byte-identical for every tenant, so
+// one live, reconcilable tenant is enough (enqueueSharedOperandRepairer); a per-tenant
+// operand maps by the tenant named in its tracking labels.
 func (r *TenantReconciler) operandMapper(op tenantOperand) handler.MapFunc {
-	gk := op.gvk.GroupKind()
 	return func(ctx context.Context, obj client.Object) []reconcile.Request {
-		owner := r.mapTenantOperandToMaasTenantConfig(ctx, obj)
-		if len(owner) == 1 && isSharedTenantOperand(gk, obj) && !r.reconcilesOperands(ctx, owner[0].NamespacedName) {
-			return r.enqueueAllTenants(ctx, obj)
+		if isSharedOperand(obj.GetLabels()) {
+			return r.enqueueSharedOperandRepairer(ctx, obj)
 		}
-		return owner
+		return r.mapTenantOperandToMaasTenantConfig(ctx, obj)
 	}
-}
-
-// reconcilesOperands reports whether the tenant config at key exists and would re-apply
-// its operands: not deleting and Managed.
-func (r *TenantReconciler) reconcilesOperands(ctx context.Context, key types.NamespacedName) bool {
-	var tenant maasv1alpha1.MaasTenantConfig
-	if err := r.Get(ctx, key, &tenant); err != nil {
-		if !apierrors.IsNotFound(err) {
-			oteljson.FromContext(ctx).Error(err, "failed to get MaasTenantConfig for operand mapping", "tenantConfig", key)
-		}
-		return false
-	}
-	ms := managementState(tenant.Annotations)
-	return tenant.DeletionTimestamp.IsZero() && (ms == "" || ms == managementStateManaged)
 }
 
 // operandPredicate is the predicate the watch on op uses: drift, plus the rollout
@@ -374,20 +370,16 @@ func (r *TenantReconciler) tenantOperandChanged(op tenantOperand) predicate.Func
 	}
 }
 
-// tenantOperandDrifted ignores updates that move the tracking labels of a shared operand
-// (isSharedTenantOperand) from one tenant to another: every tenant applies it and each
-// apply stamps that tenant's labels, so re-enqueueing on the relabel would bounce between
-// tenants indefinitely, whether or not the rest of the rendered object differs. A relabel
-// of a tenant-specific operand still fires, so its owner, the only tenant that renders
-// it, restores the labels before a later delete maps to the wrong tenant.
+// tenantOperandDrifted admits any label change along with the usual generation, spec and
+// annotation checks. Whether an object is shared is now decided once, at render time
+// (the shared-operand marker), so a label change can no longer mean "every tenant
+// restamped this the same way" the way it did when ApplyRendered stamped the applying
+// tenant's tracking labels on every apply; there is nothing left to suppress.
 //
 // Kinds that are not anyWrite never fire on resourceVersion alone, because their status
 // is written by other controllers. A no-op server-side apply leaves resourceVersion
 // unchanged, so the controller's own steady-state applies never fire either way.
 func tenantOperandDrifted(oldObj, newObj client.Object, op tenantOperand) bool {
-	if tenantRelabelled(oldObj.GetLabels(), newObj.GetLabels()) && isSharedTenantOperand(op.gvk.GroupKind(), oldObj) {
-		return false
-	}
 	if !isManaged(oldObj) && !isManaged(newObj) {
 		// Apply skips opendatahub.io/managed=false objects, so this cannot loop, but
 		// readiness checks such as PayloadProcessingEnvoyFilterReady still read their spec.
@@ -406,15 +398,6 @@ func tenantOperandDrifted(oldObj, newObj client.Object, op tenantOperand) bool {
 		return true
 	}
 	return op.anyWrite && oldObj.GetResourceVersion() != newObj.GetResourceVersion()
-}
-
-func tenantRelabelled(oldLabels, newLabels map[string]string) bool {
-	for _, key := range []string{tenantreconcile.LabelTenantName, tenantreconcile.LabelTenantNamespace} {
-		if oldLabels[key] != "" && newLabels[key] != "" && oldLabels[key] != newLabels[key] {
-			return true
-		}
-	}
-	return false
 }
 
 func hpaSpecChanged(oldObj, newObj client.Object) bool {

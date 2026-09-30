@@ -199,12 +199,8 @@ func RunPlatform(
 		}
 	}
 
-	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
+	if err := ApplyRendered(ctx, c, scheme, appNs, mcfg, resources); err != nil {
 		return nil, fmt.Errorf("apply: %w", err)
-	}
-
-	if err := syncMaaSParametersConfigMap(ctx, c, appNs, params, log); err != nil {
-		return nil, fmt.Errorf("sync maas-parameters ConfigMap: %w", err)
 	}
 
 	tenantID, err := TenantIdentifierFor(tenant)
@@ -271,42 +267,6 @@ func Run(
 	}
 
 	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
-}
-
-const maasParametersConfigMapName = "maas-parameters"
-
-// syncMaaSParametersConfigMap patches the maas-parameters ConfigMap with
-// tenant-specific values. The RHOAI operator creates this ConfigMap with
-// defaults from params.env; the maas-controller updates keys that the
-// Tenant CR overrides (e.g., api-key-max-expiration-days).
-func syncMaaSParametersConfigMap(ctx context.Context, c client.Client, namespace string, params PlatformParams, log logr.Logger) error {
-	key := types.NamespacedName{Namespace: namespace, Name: maasParametersConfigMapName}
-
-	// Quick check: skip if already correct (avoids unnecessary writes).
-	cm := &corev1.ConfigMap{}
-	if err := c.Get(ctx, key, cm); err != nil {
-		if apierrors.IsNotFound(err) {
-			log.V(4).Info("maas-parameters ConfigMap not found, skipping sync")
-			return nil
-		}
-		return fmt.Errorf("get maas-parameters ConfigMap: %w", err)
-	}
-	if cm.Data["api-key-max-expiration-days"] == params.APIKeyMaxExpirationDays {
-		return nil
-	}
-
-	log.Info("Updating maas-parameters ConfigMap", "api-key-max-expiration-days", params.APIKeyMaxExpirationDays)
-	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
-		latest := &corev1.ConfigMap{}
-		if err := c.Get(ctx, key, latest); err != nil {
-			return err
-		}
-		if latest.Data == nil {
-			latest.Data = make(map[string]string)
-		}
-		latest.Data["api-key-max-expiration-days"] = params.APIKeyMaxExpirationDays
-		return c.Update(ctx, latest)
-	})
 }
 
 // MaasAPIDeploymentReady mirrors ODH deployments action for maas-api.
