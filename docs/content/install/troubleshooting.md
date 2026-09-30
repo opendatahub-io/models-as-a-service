@@ -151,7 +151,7 @@ This guide helps you diagnose and resolve common issues with MaaS Platform deplo
 
       - [ ] Upgrade RHCL to v1.4.1 or later
 
-17. **Gateway pod OOMKilled or CPU-throttled under load**: The Sail Operator sets default istio-proxy resource limits (2 CPU, 1Gi memory) that are too low for high-concurrency workloads or when RHCL Wasm filters are active.
+17. **Gateway pod OOMKilled or CPU-throttled under load**: The default istio-proxy resource limits (2 CPU, 1Gi memory) can be too low for high-concurrency workloads.
       - [ ] Check for OOMKill events: `kubectl get events -n openshift-ingress --field-selector reason=OOMKilling`
       - [ ] Check pod restarts: `kubectl get pods -n openshift-ingress -l gateway.networking.k8s.io/gateway-name=maas-default-gateway`
       - [ ] Check for CPU throttling (high `nr_throttled` indicates the container is hitting its CPU limit):

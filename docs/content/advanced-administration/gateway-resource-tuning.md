@@ -1,11 +1,8 @@
 # Gateway Resource Tuning
 
-The MaaS gateway pod (`maas-default-gateway-openshift-default`) runs an `istio-proxy` container whose CPU and memory limits are set by the OpenShift Gateway API / Sail Operator. The defaults (2 CPU cores, 1Gi memory) can cause problems under load.
+The MaaS gateway pod (`maas-default-gateway-openshift-default`) runs an `istio-proxy` container whose CPU and memory limits are set by the OpenShift Gateway API / Sail Operator. The defaults (2 CPU cores, 1Gi memory) can be too low for high-concurrency workloads.
 
-Performance testing found that:
-
-- **CPU**: 2 cores throttle at ~500 RPS. 4+ cores recommended for high-concurrency workloads.
-- **Memory**: 1Gi leaves little headroom once RHCL Wasm filters (Kuadrant AuthPolicy, RateLimitPolicy) compile at startup. 2Gi minimum recommended with RHCL enabled.
+This page covers how to raise those limits vertically and how to scale the gateway horizontally.
 
 ## Symptoms
 
@@ -18,7 +15,7 @@ Performance testing found that:
 !!! note
     Customizing gateway pod resources through `spec.infrastructure.parametersRef` is not directly supported in OpenShift yet. This is a field workaround that relies on Istio's ConfigMap merge behavior for Gateway deployments.
 
-The Gateway API `spec.infrastructure.parametersRef` field allows referencing a ConfigMap that Istio merges into the generated Deployment. Unlike direct `oc patch deployment` commands (which the Sail Operator reverts on reconciliation), this approach persists across operator restarts.
+The Gateway API `spec.infrastructure.parametersRef` field allows referencing a ConfigMap that Istio merges into the generated Deployment. Use this rather than patching the Deployment directly, as direct patches do not persist across operator reconciliation.
 
 ### 1. Create and apply the ConfigMap
 
@@ -50,7 +47,7 @@ data:
 kubectl apply -f gateway-resource-config.yaml
 ```
 
-Adjust CPU and memory values based on your workload. See [Sizing guidance](#sizing-guidance) below for recommendations.
+Adjust CPU and memory values based on your workload.
 
 ### 2. Wire parametersRef on the Gateway
 
@@ -131,7 +128,7 @@ kubectl apply -f gateway-hpa.yaml
 
 Adjust `maxReplicas` and utilization thresholds based on your traffic patterns. `minReplicas: 2` is recommended for availability during rolling updates and node disruptions. For the HPA `averageUtilization` metric to work, the gateway pod must have CPU and memory `requests` set (see the ConfigMap approach above).
 
-For production deployments, consider adding a PodDisruptionBudget to prevent all gateway replicas from being evicted simultaneously during cluster maintenance:
+For production deployments, consider adding a PodDisruptionBudget to prevent all gateway replicas from being evicted simultaneously during cluster maintenance. Keep `minAvailable` below the HPA `minReplicas` value, otherwise voluntary evictions such as node drains are blocked entirely:
 
 ```yaml
 apiVersion: policy/v1
@@ -158,14 +155,6 @@ kubectl describe hpa maas-default-gateway-hpa -n openshift-ingress
 
 !!! note
     Gateway HPA support requires OCP 4.22 or later. On earlier versions, scale the gateway manually by combining the ConfigMap approach above with a `replicas` field in the deployment patch.
-
-## Sizing guidance
-
-| Workload | CPU (limit) | Memory (limit) | Notes |
-|----------|-------------|----------------|-------|
-| Low volume (< 100 RPS) | `2` (default) | `1Gi` (default) | Default limits are sufficient |
-| Medium (100-500 RPS) | `2`-`4` | `1.5Gi`-`2Gi` | Raise memory if RHCL Wasm filters are enabled |
-| High concurrency (500+ RPS) | `4`+ | `2Gi`+ | Consider combining vertical scaling with HPA |
 
 ## References
 
