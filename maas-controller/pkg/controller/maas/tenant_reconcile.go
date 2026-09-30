@@ -27,7 +27,6 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apiextensions-apiserver/pkg/apihelpers"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
@@ -72,10 +71,10 @@ const (
 	// tenant ran before watches replaced it: no slower to notice, no more expensive.
 	kuadrantWasmPluginRecheckInterval = 5 * time.Minute
 
-	// dependencyDiscoveryRetry covers the gap between a dependency CRD turning Established,
-	// which fires the CRD watch, and discovery serving its kind to the REST mapper. No
-	// further CRD event arrives once that gap closes.
-	dependencyDiscoveryRetry = 10 * time.Second
+	// discoveryLagRetry covers the gap between a CRD turning Established, which fires the
+	// CRD watch, and discovery serving its kind to the REST mapper. No further event
+	// arrives once that gap closes.
+	discoveryLagRetry = 10 * time.Second
 )
 
 // kuadrantRecheck requeues while the Kuadrant wasm detection depends on a WasmPlugin,
@@ -360,12 +359,9 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", err.Error()); err2 != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err2
 		}
-		// The dependency CRD watch re-enqueues every tenant when the CRD appears.
-		res := ctrl.Result{}
-		if r.dependencyCRDsEstablished(ctx) {
-			res.RequeueAfter = dependencyDiscoveryRetry
-		}
-		return tenantreconcile.PrerequisiteReport{}, &res, nil
+		// The CRD watch re-enqueues every tenant when the CRD appears; retryAfterDiscoveryLag
+		// covers a CRD that is already Established.
+		return tenantreconcile.PrerequisiteReport{}, &ctrl.Result{}, nil
 	}
 	setDependenciesCondition(tenant, true, "")
 
@@ -543,17 +539,30 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 	return kuadrantRecheck(runRes), nil
 }
 
-// dependencyCRDsEstablished reports whether every dependency CRD is already Established,
-// so a failed dependency check is discovery lag rather than a missing CRD.
-func (r *TenantReconciler) dependencyCRDsEstablished(ctx context.Context) bool {
-	for _, d := range tenantreconcile.Dependencies {
-		var crd extv1.CustomResourceDefinition
-		if err := r.Get(ctx, client.ObjectKey{Name: d.CRD}, &crd); err != nil ||
-			!apihelpers.IsCRDConditionTrue(&crd, extv1.Established) {
-			return false
+// retryAfterDiscoveryLag brings the reconcile back soon when it skipped a kind the REST
+// mapper did not know although a CRD serving that kind is Established: discovery lags the
+// Established condition and nothing reports it catching up. A kind with no such CRD waits
+// for the CRD watch. CRDs are read from the cache the CRD watches keep, which the event
+// that started this reconcile has already updated.
+func (r *TenantReconciler) retryAfterDiscoveryLag(ctx context.Context, kinds []schema.GroupVersionKind, result ctrl.Result) ctrl.Result {
+	if len(kinds) == 0 || (result.RequeueAfter > 0 && result.RequeueAfter <= discoveryLagRetry) {
+		return result
+	}
+	var crds extv1.CustomResourceDefinitionList
+	if err := r.List(ctx, &crds, client.UnsafeDisableDeepCopy); err != nil {
+		oteljson.FromContext(ctx).Error(err, "failed to list CRDs for kinds skipped as not served", "kinds", kinds)
+		return result
+	}
+	for i := range crds.Items {
+		crd := &crds.Items[i]
+		for _, gvk := range kinds {
+			if crd.Spec.Group == gvk.Group && crd.Spec.Names.Kind == gvk.Kind && crdServesVersion(crd, gvk.Version) {
+				result.RequeueAfter = discoveryLagRetry
+				return result
+			}
 		}
 	}
-	return true
+	return result
 }
 
 // readyConfigOrWait returns the singleton Config when it exists, is not deleting,

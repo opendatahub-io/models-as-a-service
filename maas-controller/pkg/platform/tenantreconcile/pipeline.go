@@ -56,7 +56,7 @@ var Dependencies = []Dependency{
 // CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
 func CheckDependencies(ctx context.Context, c client.Client) error {
 	for _, d := range Dependencies {
-		if ok, err := IsGVKAvailable(c, d.GVK); err != nil {
+		if ok, err := IsGVKAvailable(ctx, c, d.GVK); err != nil {
 			return fmt.Errorf("dependencies: %w", err)
 		} else if !ok {
 			return fmt.Errorf("dependency missing: %s CRD (%s) not available on cluster", d.GVK.Kind, d.GVK.GroupVersion())

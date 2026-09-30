@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -67,7 +66,7 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 	switch {
 	case err == nil:
 		return kuadrantWasmPlugin, "", nil
-	case apierrors.IsNotFound(err), meta.IsNoMatchError(err):
+	case apierrors.IsNotFound(err), KindNotServed(ctx, gvkWasmPlugin, err):
 		// No kuadrant-{gateway} WasmPlugin CR (or no WasmPlugin API at all): use the
 		// router-anchored ext_proc fallback.
 		return kuadrantWasmNone, "", nil
@@ -75,7 +74,7 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 		// Without permission to check, fall back to router anchors only when Kuadrant is
 		// not installed at all; otherwise keep the Kuadrant anchors rather than assume it
 		// is absent. Expected only until the parent operator grants get.
-		kuadrantInstalled, gvkErr := IsGVKAvailable(c, GVKAuthPolicy)
+		kuadrantInstalled, gvkErr := IsGVKAvailable(ctx, c, GVKAuthPolicy)
 		if gvkErr != nil {
 			return kuadrantWasmNone, "", fmt.Errorf("check Kuadrant AuthPolicy API: %w", gvkErr)
 		}

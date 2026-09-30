@@ -151,6 +151,7 @@ type TenantReconciler struct {
 // owns the full deploy pipeline via the MaasTenantConfig CR (no standalone ModelsAsService instance CR exists).
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = oteljson.IntoContext(ctx)
+	ctx, unserved := tenantreconcile.WithUnservedKinds(ctx)
 	result, err := r.reconcile(ctx, req)
 	if apierrors.IsConflict(err) && isMaasTenantConfigConflict(err, req) {
 		// Stale-cache conflict on the MaasTenantConfig itself: the in-memory object's
@@ -160,6 +161,9 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// will re-read a fresh copy. Conflicts on child resources are propagated unchanged.
 		oteljson.FromContext(ctx).V(1).Info("requeuing after stale-cache conflict on MaasTenantConfig", "error", err)
 		return ctrl.Result{Requeue: true}, nil
+	}
+	if err == nil {
+		result = r.retryAfterDiscoveryLag(ctx, unserved.Kinds(), result)
 	}
 	return result, err
 }

@@ -7,7 +7,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -16,13 +15,14 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 )
 
-// IsGVKAvailable uses the REST mapper (same spirit as ODH dependency checks).
-func IsGVKAvailable(c client.Client, gvk schema.GroupVersionKind) (bool, error) {
+// IsGVKAvailable uses the REST mapper (same spirit as ODH dependency checks). A kind the
+// mapper does not know is recorded through KindNotServed.
+func IsGVKAvailable(ctx context.Context, c client.Client, gvk schema.GroupVersionKind) (bool, error) {
 	_, err := c.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+	if KindNotServed(ctx, gvk, err) {
+		return false, nil
+	}
 	if err != nil {
-		if meta.IsNoMatchError(err) {
-			return false, nil
-		}
 		return false, err
 	}
 	return true, nil
@@ -73,7 +73,7 @@ func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace st
 }
 
 func checkAuthorinoTLS(ctx context.Context, c client.Client) string {
-	has, err := IsGVKAvailable(c, GVKAuthorino)
+	has, err := IsGVKAvailable(ctx, c, GVKAuthorino)
 	if err != nil {
 		oteljson.FromContext(ctx).Error(err, "failed to check Authorino API availability")
 		return "failed to check Authorino CRD availability due to a cluster API error"
@@ -149,15 +149,12 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 	log := oteljson.FromContext(ctx)
 
 	// Look for DSCInitialization resources
+	dsciGVK := schema.GroupVersionKind{Group: "dscinitialization.opendatahub.io", Version: "v1", Kind: "DSCInitialization"}
 	dsciList := &unstructured.UnstructuredList{}
-	dsciList.SetGroupVersionKind(schema.GroupVersionKind{
-		Group:   "dscinitialization.opendatahub.io",
-		Version: "v1",
-		Kind:    "DSCInitializationList",
-	})
+	dsciList.SetGroupVersionKind(gvkListKind(dsciGVK))
 
 	if err := c.List(ctx, dsciList); err != nil {
-		if meta.IsNoMatchError(err) {
+		if KindNotServed(ctx, dsciGVK, err) {
 			return "DSCI monitoring not configured: DSCInitialization CRD not found. " +
 				"Showback/FinOps usage views will not work without monitoring stack enabled"
 		}

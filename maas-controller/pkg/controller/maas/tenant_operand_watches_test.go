@@ -718,12 +718,19 @@ func TestTenantReconcile_WaitsOnWatchesInsteadOfPolling(t *testing.T) {
 			name: "dependency CRD established before discovery serves it",
 			w: waitingTenant{objs: []client.Object{gateway, &extv1.CustomResourceDefinition{
 				ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.Dependencies[0].CRD},
+				Spec: extv1.CustomResourceDefinitionSpec{
+					Group: tenantreconcile.GVKAuthConfig.Group,
+					Names: extv1.CustomResourceDefinitionNames{Kind: tenantreconcile.GVKAuthConfig.Kind},
+					Versions: []extv1.CustomResourceDefinitionVersion{
+						{Name: tenantreconcile.GVKAuthConfig.Version, Served: true, Storage: true},
+					},
+				},
 				Status: extv1.CustomResourceDefinitionStatus{Conditions: []extv1.CustomResourceDefinitionCondition{
 					{Type: extv1.Established, Status: extv1.ConditionTrue},
 				}},
 			}}},
 			wantReason:  "DependenciesNotAvailable",
-			wantRequeue: dependencyDiscoveryRetry,
+			wantRequeue: discoveryLagRetry,
 		},
 		{
 			name:       "missing database Secret",
@@ -936,4 +943,140 @@ func TestTenantPlatformCRDEventsWakeTenants(t *testing.T) {
 
 	g := NewWithT(t)
 	g.Expect(p.Create(event.CreateEvent{Object: crd("widgets.example.com")})).To(BeFalse())
+}
+
+// A settled Praxis tenant renders no IPP operands and runs no Kuadrant detection, so its
+// usage-logs EnvoyFilter is the only EnvoyFilter it applies.
+func TestTenantReconcile_OptionalKindAwaitingDiscovery(t *testing.T) {
+	envoyFilterCRD := &extv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{Name: "envoyfilters.networking.istio.io"},
+		Spec: extv1.CustomResourceDefinitionSpec{
+			Group:    tenantreconcile.GVKEnvoyFilter.Group,
+			Names:    extv1.CustomResourceDefinitionNames{Kind: tenantreconcile.GVKEnvoyFilter.Kind, Plural: "envoyfilters"},
+			Scope:    extv1.NamespaceScoped,
+			Versions: []extv1.CustomResourceDefinitionVersion{{Name: tenantreconcile.GVKEnvoyFilter.Version, Served: true, Storage: true}},
+		},
+		Status: extv1.CustomResourceDefinitionStatus{Conditions: []extv1.CustomResourceDefinitionCondition{
+			{Type: extv1.Established, Status: extv1.ConditionTrue},
+		}},
+	}
+
+	tests := []struct {
+		name        string
+		objs        []client.Object
+		wantRequeue time.Duration
+	}{
+		{
+			// The CRD is Established but discovery does not list EnvoyFilter yet; nothing
+			// reports discovery catching up, so the reconcile has to come back.
+			name:        "CRD established before discovery serves the kind",
+			objs:        []client.Object{envoyFilterCRD},
+			wantRequeue: discoveryLagRetry,
+		},
+		{
+			// The CRD watch wakes the tenant when the CRD is installed.
+			name: "CRD not installed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			s := operandReconcileScheme(t)
+			praxis := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+				Namespace: operandDefaultNS,
+				Labels: map[string]string{
+					tenantreconcile.LabelManagedByAITenant: "true",
+					tenantreconcile.LabelTenantName:        "red",
+					tenantreconcile.LabelTenantNamespace:   operandDefaultNS,
+				},
+				Annotations: map[string]string{
+					tenantreconcile.AnnotationAITenantName:            "red",
+					tenantreconcile.AnnotationAITenantNamespace:       tenantreconcile.DefaultAITenantNamespace,
+					tenantreconcile.AnnotationPayloadProcessingType:   tenantreconcile.PayloadProcessingTypePraxis,
+					tenantreconcile.AnnotationPayloadProcessingStatus: tenantreconcile.PayloadProcessingStatusCleanupComplete,
+				},
+			}}
+			objs := append([]client.Object{
+				praxis,
+				&maasv1alpha1.Config{
+					ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("config-uid")},
+					Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
+				},
+				&maasv1alpha1.AITenant{
+					ObjectMeta: metav1.ObjectMeta{Name: "red", Namespace: tenantreconcile.DefaultAITenantNamespace},
+					Status: maasv1alpha1.AITenantStatus{
+						GatewayRef: maasv1alpha1.TenantGatewayRef{Name: operandGateway, Namespace: operandGatewayNS},
+					},
+				},
+				&gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: operandGateway, Namespace: operandGatewayNS}},
+				&corev1.Secret{
+					ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.MaaSDBSecretName, Namespace: operandInfraNS},
+					Data:       map[string][]byte{tenantreconcile.MaaSDBSecretKey: []byte("postgresql://maas@db.example.com:5432/maas")},
+				},
+			}, tt.objs...)
+
+			// The fake client stores any kind; a real client fails requests for kinds its REST
+			// mapper does not know. No deployment controller runs either, so the rendered
+			// maas-api Deployment reads back rolled out.
+			unmapped := func(c client.WithWatch, obj client.Object) error {
+				u, ok := obj.(*unstructured.Unstructured)
+				if !ok {
+					return nil
+				}
+				gvk := u.GroupVersionKind()
+				_, err := c.RESTMapper().RESTMapping(gvk.GroupKind(), gvk.Version)
+				if apimeta.IsNoMatchError(err) {
+					return err
+				}
+				return nil
+			}
+			clusterLikeClient := interceptor.Funcs{
+				Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+					if err := unmapped(c, obj); err != nil {
+						return err
+					}
+					if err := c.Get(ctx, key, obj, opts...); err != nil {
+						return err
+					}
+					if dep, ok := obj.(*appsv1.Deployment); ok {
+						replicas := ptr.Deref(dep.Spec.Replicas, 1)
+						dep.Status = appsv1.DeploymentStatus{
+							ObservedGeneration: dep.Generation, Replicas: replicas, UpdatedReplicas: replicas, AvailableReplicas: replicas,
+						}
+					}
+					return nil
+				},
+				Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+					if err := unmapped(c, obj); err != nil {
+						return err
+					}
+					return c.Patch(ctx, obj, patch, opts...)
+				},
+			}
+
+			c := fake.NewClientBuilder().
+				WithScheme(s).
+				WithRESTMapper(restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKDestinationRule, gvkServiceMonitor)).
+				WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+				WithObjects(objs...).
+				WithInterceptorFuncs(clusterLikeClient).
+				Build()
+			r := operandTestReconciler(c, false)
+			r.Scheme = s
+			r.ManifestPath = filepath.Join(testUsageLogsManifestPath(t), "..", "..", "..", "..", "maas-api", "deploy", "overlays", "odh")
+			r.MonitoringNamespace = usageLogsTestMonitoringNS
+			r.UsageLogsManifestPath = testUsageLogsManifestPath(t)
+
+			res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(praxis)})
+			g.Expect(err).NotTo(HaveOccurred())
+
+			var updated maasv1alpha1.MaasTenantConfig
+			g.Expect(c.Get(t.Context(), client.ObjectKeyFromObject(praxis), &updated)).To(Succeed())
+			degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+			g.Expect(degraded).NotTo(BeNil())
+			g.Expect(degraded.Message).To(ContainSubstring("Usage-logs EnvoyFilter not deployed"))
+			g.Expect(res).To(Equal(ctrl.Result{RequeueAfter: tt.wantRequeue}))
+		})
+	}
 }

@@ -24,7 +24,6 @@ import (
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/serializer/yaml"
 	"k8s.io/utils/ptr"
@@ -106,7 +105,7 @@ func (r *TenantReconciler) deleteUsageLogsEnvoyFilterIfExists(ctx context.Contex
 	ef.SetNamespace(r.GatewayNamespace)
 
 	if err := r.Delete(ctx, ef); err != nil {
-		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+		if apierrors.IsNotFound(err) || tenantreconcile.KindNotServed(ctx, tenantreconcile.GVKEnvoyFilter, err) {
 			return nil
 		}
 		return fmt.Errorf("failed to delete usage-logs EnvoyFilter %s: %w", efName, err)
@@ -169,7 +168,7 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
 
 	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
-		if apimeta.IsNoMatchError(err) {
+		if tenantreconcile.KindNotServed(ctx, tenantreconcile.GVKEnvoyFilter, err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
 			return false, nil
 		}
