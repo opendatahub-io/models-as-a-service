@@ -671,6 +671,10 @@ func TestTenantReconcile_WaitsOnWatchesInsteadOfPolling(t *testing.T) {
 	kuadrantFilter.SetNamespace(operandGatewayNS)
 	kuadrantFilter.SetName("kuadrant-" + operandGateway)
 	gvkWasmPlugin := schema.GroupVersionKind{Group: "extensions.istio.io", Version: "v1alpha1", Kind: "WasmPlugin"}
+	kuadrantPlugin := &unstructured.Unstructured{}
+	kuadrantPlugin.SetGroupVersionKind(gvkWasmPlugin)
+	kuadrantPlugin.SetNamespace(operandGatewayNS)
+	kuadrantPlugin.SetName("kuadrant-" + operandGateway)
 
 	_, file, _, ok := goruntime.Caller(0)
 	if !ok {
@@ -737,6 +741,18 @@ func TestTenantReconcile_WaitsOnWatchesInsteadOfPolling(t *testing.T) {
 			wantReason: "DeploymentsNotReady",
 		},
 		{
+			// A WasmPlugin cannot be watched, so its removal is only seen by rechecking.
+			name: "deployment pending with Kuadrant wasm from a WasmPlugin keeps rechecking",
+			w: waitingTenant{
+				tenant:       awaitingPeer,
+				manifestPath: odhOverlay,
+				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, gvkWasmPlugin),
+				objs:         []client.Object{gateway, dbSecret, kuadrantPlugin},
+			},
+			wantReason:  "DeploymentsNotReady",
+			wantRequeue: kuadrantWasmPluginRecheckInterval,
+		},
+		{
 			name: "deployment pending on the router fallback rechecks Kuadrant",
 			w: waitingTenant{
 				tenant:       awaitingPeer,
@@ -765,9 +781,10 @@ func TestTenantReconcile_SuccessRequeuesOnlyForKuadrantDetection(t *testing.T) {
 		runRes *tenantreconcile.RunResult
 		want   ctrl.Result
 	}{
-		{name: "Kuadrant wasm detected", runRes: &tenantreconcile.RunResult{}, want: ctrl.Result{}},
+		{name: "Kuadrant wasm carried by the watched EnvoyFilter", runRes: &tenantreconcile.RunResult{}, want: ctrl.Result{}},
 		{name: "router fallback", runRes: &tenantreconcile.RunResult{KuadrantRouterFallback: true}, want: ctrl.Result{RequeueAfter: kuadrantRecheckInterval}},
 		{name: "detection unverified", runRes: &tenantreconcile.RunResult{KuadrantDetectionWarning: "cannot get WasmPlugin"}, want: ctrl.Result{RequeueAfter: kuadrantRecheckInterval}},
+		{name: "Kuadrant wasm carried by a WasmPlugin", runRes: &tenantreconcile.RunResult{KuadrantWasmPlugin: true}, want: ctrl.Result{RequeueAfter: kuadrantWasmPluginRecheckInterval}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -890,4 +907,33 @@ func TestCRDServesVersion(t *testing.T) {
 	g.Expect(crdServesVersion(operandTestCRD("a.example.com", "v1", true, true), "v1")).To(BeTrue())
 	g.Expect(crdServesVersion(operandTestCRD("a.example.com", "v1alpha1", true, true), "v1")).To(BeFalse(), "other version")
 	g.Expect(crdServesVersion(operandTestCRD("a.example.com", "v1", false, true), "v1")).To(BeFalse(), "version not served")
+}
+
+func TestTenantPlatformCRDEventsWakeTenants(t *testing.T) {
+	crd := func(name string) *extv1.CustomResourceDefinition {
+		return &extv1.CustomResourceDefinition{ObjectMeta: metav1.ObjectMeta{Name: name}}
+	}
+	p := crdNamed(tenantPlatformCRDs()...)
+
+	for _, name := range []string{
+		tenantreconcile.Dependencies[0].CRD,
+		// Optional operand kinds: a tenant that rendered without them only warned.
+		"envoyfilters.networking.istio.io",
+		"telemetrypolicies.extensions.kuadrant.io",
+		"certificates.cert-manager.io",
+		"servicemonitors.monitoring.coreos.com",
+		"authpolicies.kuadrant.io",
+		"authorinos.operator.authorino.kuadrant.io",
+	} {
+		t.Run(name, func(t *testing.T) {
+			g := NewWithT(t)
+			g.Expect(p.Create(event.CreateEvent{Object: crd(name)})).To(BeTrue())
+			established := crd(name)
+			established.Status.Conditions = []extv1.CustomResourceDefinitionCondition{{Type: extv1.Established, Status: extv1.ConditionTrue}}
+			g.Expect(p.Update(event.UpdateEvent{ObjectOld: crd(name), ObjectNew: established})).To(BeTrue())
+		})
+	}
+
+	g := NewWithT(t)
+	g.Expect(p.Create(event.CreateEvent{Object: crd("widgets.example.com")})).To(BeFalse())
 }

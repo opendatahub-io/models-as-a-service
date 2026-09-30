@@ -32,10 +32,22 @@ func KuadrantGatewayForResource(name string) (string, bool) {
 	return gateway, ok && gateway != ""
 }
 
-// gatewayHasKuadrantWasmAuth reports whether Kuadrant auth is wired on the gateway via
-// RHCL EnvoyFilter (envoy.filters.http.wasm) or ODH/community WasmPlugin. A non-empty
-// warning means this could not be verified and Kuadrant was assumed present.
-func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNamespace, gatewayName string) (bool, string, error) {
+// kuadrantWasm is where gatewayHasKuadrantWasmAuth found Kuadrant's wasm filter.
+type kuadrantWasm int
+
+const (
+	kuadrantWasmNone kuadrantWasm = iota
+	// kuadrantWasmEnvoyFilter is the RHCL EnvoyFilter (envoy.filters.http.wasm).
+	kuadrantWasmEnvoyFilter
+	// kuadrantWasmPlugin is the ODH/community WasmPlugin.
+	kuadrantWasmPlugin
+	// kuadrantWasmAssumed means the WasmPlugin could not be read while Kuadrant is installed.
+	kuadrantWasmAssumed
+)
+
+// gatewayHasKuadrantWasmAuth reports where Kuadrant auth is wired on the gateway. A
+// non-empty warning means this could not be verified and Kuadrant was assumed present.
+func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNamespace, gatewayName string) (kuadrantWasm, string, error) {
 	name := kuadrantGatewayResourceName(gatewayName)
 	key := types.NamespacedName{Namespace: gatewayNamespace, Name: name}
 
@@ -43,10 +55,10 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 	ef.SetGroupVersionKind(GVKEnvoyFilter)
 	if err := c.Get(ctx, key, ef); err != nil {
 		if !apierrors.IsNotFound(err) {
-			return false, "", fmt.Errorf("get EnvoyFilter %s: %w", key, err)
+			return kuadrantWasmNone, "", fmt.Errorf("get EnvoyFilter %s: %w", key, err)
 		}
 	} else {
-		return true, "", nil
+		return kuadrantWasmEnvoyFilter, "", nil
 	}
 
 	wp := &unstructured.Unstructured{}
@@ -54,25 +66,25 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 	err := c.Get(ctx, key, wp)
 	switch {
 	case err == nil:
-		return true, "", nil
+		return kuadrantWasmPlugin, "", nil
 	case apierrors.IsNotFound(err), meta.IsNoMatchError(err):
 		// No kuadrant-{gateway} WasmPlugin CR (or no WasmPlugin API at all): use the
 		// router-anchored ext_proc fallback.
-		return false, "", nil
+		return kuadrantWasmNone, "", nil
 	case apierrors.IsForbidden(err):
 		// Without permission to check, fall back to router anchors only when Kuadrant is
 		// not installed at all; otherwise keep the Kuadrant anchors rather than assume it
 		// is absent. Expected only until the parent operator grants get.
 		kuadrantInstalled, gvkErr := IsGVKAvailable(c, GVKAuthPolicy)
 		if gvkErr != nil {
-			return false, "", fmt.Errorf("check Kuadrant AuthPolicy API: %w", gvkErr)
+			return kuadrantWasmNone, "", fmt.Errorf("check Kuadrant AuthPolicy API: %w", gvkErr)
 		}
 		if !kuadrantInstalled {
-			return false, "", nil
+			return kuadrantWasmNone, "", nil
 		}
-		return true, fmt.Sprintf("cannot get WasmPlugin %s; keeping Kuadrant-anchored payload processing "+
+		return kuadrantWasmAssumed, fmt.Sprintf("cannot get WasmPlugin %s; keeping Kuadrant-anchored payload processing "+
 			"until maas-controller may get wasmplugins.extensions.istio.io", key), nil
 	default:
-		return false, "", fmt.Errorf("get WasmPlugin %s: %w", key, err)
+		return kuadrantWasmNone, "", fmt.Errorf("get WasmPlugin %s: %w", key, err)
 	}
 }

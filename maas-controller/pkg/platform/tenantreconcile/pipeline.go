@@ -37,6 +37,9 @@ type RunResult struct {
 	// KuadrantRouterFallback reports that no Kuadrant wasm filter was found on the gateway
 	// and payload processing was anchored on the router instead.
 	KuadrantRouterFallback bool
+	// KuadrantWasmPlugin reports that a WasmPlugin carries Kuadrant's wasm filter.
+	// maas-controller may get WasmPlugins but not watch them, so their removal goes unseen.
+	KuadrantWasmPlugin bool
 }
 
 // Dependency is a CRD the platform pipeline cannot run without.
@@ -116,8 +119,10 @@ func RunPlatform(
 		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
 	}
 
+	wasm := kuadrantWasmNone
 	if !params.SkipIPP {
-		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+		var warning string
+		wasm, warning, err = gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
 		if err != nil {
 			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
 		}
@@ -125,7 +130,7 @@ func RunPlatform(
 			log.Info(warning, "gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
 			params.KuadrantDetectionWarning = warning
 		}
-		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+		params.PayloadProcessingRouterExtProcFallback = wasm == kuadrantWasmNone
 		if params.PayloadProcessingRouterExtProcFallback {
 			log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
 				"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
@@ -136,6 +141,7 @@ func RunPlatform(
 		Warnings:                 params.Warnings,
 		KuadrantDetectionWarning: params.KuadrantDetectionWarning,
 		KuadrantRouterFallback:   params.PayloadProcessingRouterExtProcFallback,
+		KuadrantWasmPlugin:       wasm == kuadrantWasmPlugin,
 	}
 	pending := func(detail string) *RunResult {
 		out := result

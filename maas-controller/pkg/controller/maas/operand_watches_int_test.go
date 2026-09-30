@@ -27,7 +27,7 @@ const operandWatchDefaultTenantNamespace = "models-as-a-service"
 // operandWatchTenantNamespace is the namespace of the tenant config an operand's
 // tracking labels name.
 func operandWatchTenantNamespace(tenant string) string {
-	return "ai-tenant-" + tenant
+	return tenantreconcile.TenantNamespaceForAITenant(tenant, operandWatchDefaultTenantNamespace)
 }
 
 var _ = Describe("Tenant operand watches", func() {
@@ -57,6 +57,15 @@ var _ = Describe("Tenant operand watches", func() {
 			Namespace: operandWatchTenantNamespace(tenant),
 			Labels:    map[string]string{tenantreconcile.LabelTenantName: tenant},
 		}})
+	}
+
+	// ownerTenantID is the identifier rendered names carry for tenant; the default tenant
+	// keeps the base names.
+	ownerTenantID := func(tenant string) string {
+		if tenant == tenantreconcile.DefaultAITenantName {
+			return ""
+		}
+		return tenant
 	}
 
 	watchOf := func(obj client.Object) tenantOperand {
@@ -91,7 +100,7 @@ var _ = Describe("Tenant operand watches", func() {
 
 	DescribeTableSubtree("on a built-in operand",
 		// build returns the operand and an edit of its spec or data.
-		func(build func(namespace string) (client.Object, func())) {
+		func(build func(namespace string) (client.Object, func()), shared bool) {
 			var (
 				op       tenantOperand
 				operand  client.Object
@@ -128,51 +137,95 @@ var _ = Describe("Tenant operand watches", func() {
 				})
 			})
 
-			When("another tenant's apply stamps its own tracking labels", func() {
-				It("is not admitted", func(ctx SpecContext) {
-					// Shared operands are applied by every tenant; re-enqueueing on the relabel
-					// would bounce the reconcile between tenants.
-					stamp(operand, "blue")
-					Expect(envTest.Update(ctx, operand)).To(Succeed())
-					relabelled := observe(ctx, op, operand)
+			if shared {
+				When("another tenant's apply stamps its own tracking labels", func() {
+					It("is not admitted", func(ctx SpecContext) {
+						// Every tenant applies this name; re-enqueueing on the relabel would
+						// bounce the reconcile between tenants.
+						stamp(operand, "blue")
+						Expect(envTest.Update(ctx, operand)).To(Succeed())
+						relabelled := observe(ctx, op, operand)
 
-					Expect(relabelled.GetResourceVersion()).NotTo(Equal(original.GetResourceVersion()))
-					Expect(admitsUpdate(op, original, relabelled)).To(BeFalse())
+						Expect(relabelled.GetResourceVersion()).NotTo(Equal(original.GetResourceVersion()))
+						Expect(admitsUpdate(op, original, relabelled)).To(BeFalse())
+					})
 				})
-			})
+			} else {
+				When("its tracking labels are rewritten to another tenant", func() {
+					It("re-enqueues both tenants, so the owner restores its labels", func(ctx SpecContext) {
+						stamp(operand, "blue")
+						Expect(envTest.Update(ctx, operand)).To(Succeed())
+						relabelled := observe(ctx, op, operand)
+
+						Expect(admitsUpdate(op, original, relabelled)).To(BeTrue())
+						Expect(r.mapTenantOperandToMaasTenantConfig(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+						Expect(r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("blue"))))
+					})
+				})
+			}
 		},
 		Entry("Deployment (typed, generation)", func(ns string) (client.Object, func()) {
-			dep := fixture.OperandDeployment(ns, "payload-processing")
+			dep := fixture.OperandDeployment(ns, tenantreconcile.PayloadProcessingDeploymentName("red"))
 			return dep, func() { dep.Spec.Template.Spec.Containers[0].Image = "registry.example.com/operand:2" }
-		}),
+		}, false),
 		Entry("Service (metadata, any write)", func(ns string) (client.Object, func()) {
-			svc := fixture.OperandService(ns, "maas-api")
+			svc := fixture.OperandService(ns, "maas-api-metrics")
 			return svc, func() { svc.Spec.Ports[0].Port = 9443 }
-		}),
+		}, true),
 		Entry("ServiceAccount (metadata, any write)", func(ns string) (client.Object, func()) {
 			sa := fixture.OperandServiceAccount(ns, "maas-api")
 			return sa, func() { sa.AutomountServiceAccountToken = ptr.To(false) }
-		}),
+		}, true),
 		Entry("ConfigMap (typed, any write)", func(ns string) (client.Object, func()) {
 			cm := fixture.OperandConfigMap(ns, "maas-parameters")
 			return cm, func() { cm.Data["namespace"] = "edited" }
-		}),
+		}, true),
 		Entry("ClusterRole (metadata, any write)", func(ns string) (client.Object, func()) {
 			role := fixture.OperandClusterRole(ns)
 			return role, func() { role.Rules[0].Verbs = []string{"get", "list"} }
-		}),
+		}, true),
 		Entry("ClusterRoleBinding (typed, any write)", func(ns string) (client.Object, func()) {
 			binding := fixture.OperandClusterRoleBinding(ns, ns)
 			return binding, func() { binding.Subjects[0].Name = "edited" }
-		}),
+		}, true),
 		Entry("CronJob (metadata, generation)", func(ns string) (client.Object, func()) {
-			cronJob := fixture.OperandCronJob(ns, "maas-api-key-cleanup")
+			cronJob := fixture.OperandCronJob(ns, tenantreconcile.MaaSAPIKeyCleanupCronJobName("red"))
 			return cronJob, func() { cronJob.Spec.Schedule = "30 * * * *" }
-		}),
+		}, false),
 		Entry("HorizontalPodAutoscaler (typed, spec compare)", func(ns string) (client.Object, func()) {
-			hpa := fixture.OperandHPA(ns, "payload-processing", "payload-processing")
+			hpa := fixture.OperandHPA(ns, tenantreconcile.PayloadProcessingHPAName("red"), tenantreconcile.PayloadProcessingDeploymentName("red"))
 			return hpa, func() { hpa.Spec.MaxReplicas = 5 }
-		}),
+		}, false),
+	)
+
+	DescribeTable("a tenant-specific operand relabelled to another tenant and then deleted",
+		func(ctx SpecContext, owner string) {
+			// Only the owner renders this name, so only the owner can recreate it. The delete
+			// maps to whichever tenant the labels name last; the relabel has to reach the owner.
+			svc := fixture.OperandService(appNamespace, tenantreconcile.MaaSAPIServiceName(ownerTenantID(owner)))
+			stamp(svc, owner)
+			op := watchOf(svc)
+			Expect(envTest.Create(ctx, svc)).To(Succeed())
+			original := observe(ctx, op, svc)
+
+			stamp(svc, "blue")
+			Expect(envTest.Update(ctx, svc)).To(Succeed())
+			relabelled := observe(ctx, op, svc)
+			Expect(envTest.Delete(ctx, svc)).To(Succeed())
+
+			var enqueued []reconcile.Request
+			if admitsUpdate(op, original, relabelled) {
+				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, original)...)
+				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)...)
+			}
+			if r.operandPredicate(op).Delete(event.DeleteEvent{Object: relabelled}) {
+				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)...)
+			}
+
+			Expect(enqueued).To(ContainElement(tenantConfigOf(operandWatchTenantNamespace(owner))[0]))
+		},
+		Entry("per-tenant name", "red"),
+		Entry("default tenant base name", tenantreconcile.DefaultAITenantName),
 	)
 
 	Describe("an operand opted out with opendatahub.io/managed=false", func() {

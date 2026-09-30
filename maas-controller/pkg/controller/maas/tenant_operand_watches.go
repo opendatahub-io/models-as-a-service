@@ -50,7 +50,11 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
-const envoyFilterCRD = "envoyfilters.networking.istio.io"
+const (
+	envoyFilterCRD = "envoyfilters.networking.istio.io"
+	authorinoCRD   = "authorinos.operator.authorino.kuadrant.io"
+	authPolicyCRD  = "authpolicies.kuadrant.io"
+)
 
 var (
 	gvkClusterRole    = rbacv1.SchemeGroupVersion.WithKind("ClusterRole")
@@ -213,10 +217,6 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 		}
 	}
 
-	dependencyCRDs := make([]string, 0, len(tenantreconcile.Dependencies))
-	for _, d := range tenantreconcile.Dependencies {
-		dependencyCRDs = append(dependencyCRDs, d.CRD)
-	}
 	allTenants := handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants)
 	watches := []struct {
 		crd, version string
@@ -232,15 +232,15 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 			source: kind(metadataOnly(tenantreconcile.GVKEnvoyFilter)(), handler.EnqueueRequestsFromMapFunc(r.mapKuadrantGatewayFilterToMaasTenantConfigs),
 				createOrDeleteOnly(), predicate.NewPredicateFuncs(r.isKuadrantGatewayFilter)),
 		},
-		{source: kind(&extv1.CustomResourceDefinition{}, allTenants, crdNamed(dependencyCRDs...))},
+		{source: kind(&extv1.CustomResourceDefinition{}, allTenants, crdNamed(tenantPlatformCRDs()...))},
 		{
-			crd: "authorinos.operator.authorino.kuadrant.io", version: tenantreconcile.GVKAuthorino.Version,
+			crd: authorinoCRD, version: tenantreconcile.GVKAuthorino.Version,
 			source: kind(metadataOnly(tenantreconcile.GVKAuthorino)(), allTenants, predicate.GenerationChangedPredicate{}),
 		},
 		{source: kind(&maasv1alpha1.MaaSSubscription{}, handler.EnqueueRequestsFromMapFunc(r.mapDeletedTenantChildToMaasTenantConfig), deleteOnly())},
 		{source: kind(&maasv1alpha1.MaaSAuthPolicy{}, handler.EnqueueRequestsFromMapFunc(r.mapDeletedTenantChildToMaasTenantConfig), deleteOnly())},
 		{
-			crd: "authpolicies.kuadrant.io", version: tenantreconcile.GVKAuthPolicy.Version,
+			crd: authPolicyCRD, version: tenantreconcile.GVKAuthPolicy.Version,
 			source: kind(unstructuredOf(tenantreconcile.GVKAuthPolicy)(), handler.EnqueueRequestsFromMapFunc(r.mapGatewayAuthPolicyToMaasTenantConfigs),
 				deleteOnly(), predicate.NewPredicateFuncs(r.isGatewayAuthPolicy)),
 		},
@@ -329,17 +329,18 @@ func (r *TenantReconciler) tenantOperandChanged(op tenantOperand) predicate.Func
 	}
 }
 
-// tenantOperandDrifted ignores updates that move the tracking labels from one tenant to
-// another. Operands with a fixed name in the shared app namespace, and the cluster-scoped
-// RBAC, are applied by every tenant and each apply stamps that tenant's labels.
-// Re-enqueueing on the relabel would bounce between tenants indefinitely, whether or not
-// the rest of the rendered object differs.
+// tenantOperandDrifted ignores updates that move the tracking labels of a shared operand
+// (isSharedTenantOperand) from one tenant to another: every tenant applies it and each
+// apply stamps that tenant's labels, so re-enqueueing on the relabel would bounce between
+// tenants indefinitely, whether or not the rest of the rendered object differs. A relabel
+// of a tenant-specific operand still fires, so its owner, the only tenant that renders
+// it, restores the labels before a later delete maps to the wrong tenant.
 //
 // Kinds that are not anyWrite never fire on resourceVersion alone, because their status
 // is written by other controllers. A no-op server-side apply leaves resourceVersion
 // unchanged, so the controller's own steady-state applies never fire either way.
 func tenantOperandDrifted(oldObj, newObj client.Object, op tenantOperand) bool {
-	if tenantRelabelled(oldObj.GetLabels(), newObj.GetLabels()) {
+	if tenantRelabelled(oldObj.GetLabels(), newObj.GetLabels()) && isSharedTenantOperand(op.gvk.GroupKind(), oldObj) {
 		return false
 	}
 	if !isManaged(oldObj) && !isManaged(newObj) {
@@ -521,6 +522,22 @@ func (r *TenantReconciler) mapDeletedTenantChildToMaasTenantConfig(ctx context.C
 		return nil
 	}
 	return []reconcile.Request{{NamespacedName: key}}
+}
+
+// tenantPlatformCRDs names the CRDs whose arrival changes what a tenant reconcile can
+// do. A CRD with no objects yet produces no operand event, so its own events have to
+// re-enqueue the tenants.
+func tenantPlatformCRDs() []string {
+	crds := []string{authorinoCRD, authPolicyCRD}
+	for _, d := range tenantreconcile.Dependencies {
+		crds = append(crds, d.CRD)
+	}
+	for _, op := range tenantOperands() {
+		if op.crd != "" && !slices.Contains(crds, op.crd) {
+			crds = append(crds, op.crd)
+		}
+	}
+	return crds
 }
 
 func crdNamed(names ...string) predicate.Funcs {

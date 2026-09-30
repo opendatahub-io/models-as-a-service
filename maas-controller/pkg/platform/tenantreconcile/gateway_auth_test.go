@@ -36,7 +36,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got)
+		assert.Equal(t, kuadrantWasmEnvoyFilter, got)
 		assert.Empty(t, warning)
 	})
 
@@ -56,7 +56,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got)
+		assert.Equal(t, kuadrantWasmPlugin, got)
 		assert.Empty(t, warning)
 	})
 
@@ -65,7 +65,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 
@@ -86,7 +86,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got, "a forbidden read must not count as Kuadrant being absent")
+		assert.Equal(t, kuadrantWasmAssumed, got, "a forbidden read must not count as Kuadrant being absent")
 		assert.Contains(t, warning, "wasmplugins.extensions.istio.io")
 	})
 
@@ -95,7 +95,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 
@@ -111,7 +111,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 }

@@ -65,17 +65,31 @@ const (
 	// one render and apply per affected tenant, only while detection is degraded.
 	kuadrantRecheckInterval = 2 * time.Minute
 
+	// kuadrantWasmPluginRecheckInterval is how often a gateway whose wasm filter a
+	// WasmPlugin carries is re-detected. Losing the plugin leaves ext_proc anchored to a
+	// filter that no longer exists, a silent no-op that breaks body-routed inference. On
+	// ODH/community Kuadrant this is the steady state, so it matches the 5m resync every
+	// tenant ran before watches replaced it: no slower to notice, no more expensive.
+	kuadrantWasmPluginRecheckInterval = 5 * time.Minute
+
 	// dependencyDiscoveryRetry covers the gap between a dependency CRD turning Established,
 	// which fires the CRD watch, and discovery serving its kind to the REST mapper. No
 	// further CRD event arrives once that gap closes.
 	dependencyDiscoveryRetry = 10 * time.Second
 )
 
-// kuadrantRecheck requeues while payload processing runs on the router fallback or the
-// Kuadrant wasm filter could not be verified; both hinge on a WasmPlugin no watch covers.
+// kuadrantRecheck requeues while the Kuadrant wasm detection depends on a WasmPlugin,
+// which no watch covers: while payload processing runs on the router fallback or could
+// not be verified (a plugin may appear), and while a plugin carries the filter (it may
+// go away). The kuadrant-<gateway> EnvoyFilter carrier is watched.
 func kuadrantRecheck(runRes *tenantreconcile.RunResult) ctrl.Result {
-	if runRes != nil && (runRes.KuadrantRouterFallback || runRes.KuadrantDetectionWarning != "") {
+	switch {
+	case runRes == nil:
+		return ctrl.Result{}
+	case runRes.KuadrantRouterFallback || runRes.KuadrantDetectionWarning != "":
 		return ctrl.Result{RequeueAfter: kuadrantRecheckInterval}
+	case runRes.KuadrantWasmPlugin:
+		return ctrl.Result{RequeueAfter: kuadrantWasmPluginRecheckInterval}
 	}
 	return ctrl.Result{}
 }
