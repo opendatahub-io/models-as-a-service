@@ -219,6 +219,20 @@ run_pytest_pass() {
     return 1
 }
 
+# Serial tests scale the Kuadrant operator and maas-controller to 0, which
+# replaces the pods that ran during the parallel pass along with their restart
+# history and previous-container logs. Snapshot them first. Best-effort.
+snapshot_parallel_pass_pods() (
+    # shellcheck source=auth_utils.sh
+    source "$SCRIPT_DIR/auth_utils.sh"
+    local ns
+    for ns in "${RHCL_NAMESPACE:-kuadrant-system}" "$DEPLOYMENT_NAMESPACE"; do
+        if kubectl get namespace "$ns" &>/dev/null; then
+            collect_namespace_pod_logs "$ns" "$ARTIFACTS_DIR/pod-logs-after-parallel/$ns"
+        fi
+    done
+)
+
 run_serial_pass() {
     echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
     if ! run_pytest_pass "pass 2 (serial)" \
@@ -248,6 +262,7 @@ elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
         -m "not serial"; then
         parallel_rc=1
     fi
+    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     run_serial_pass
 else
     echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
@@ -261,6 +276,7 @@ else
         -m "not serial"; then
         parallel_rc=1
     fi
+    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     run_serial_pass
 fi
 

@@ -4,6 +4,9 @@ on:
   pull_request:
     paths:
       - 'maas-controller/**'
+      # Trees the controller image embeds manifests from and its tests render (maas-controller/Dockerfile).
+      - 'maas-api/deploy/**'
+      - 'deployment/**'
       - '.github/workflows/maas-controller-ci.yml'
 
 permissions:
