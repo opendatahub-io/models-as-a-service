@@ -12,11 +12,12 @@ Contract under test:
     tokens-<limit>-per-<window>[-<limit>-per-<window>...]. Rates are rendered
     "<limit>/<window>", deduplicated and sorted as strings, then "/" becomes
     "-per-" and "," becomes "-".
-  - The limit's predicate matches auth.identity.selected_subscription_key
-    against every subscription in the group, keys sorted:
+  - The limit's predicate matches auth.identity.selected_subscription_id
+    (first 16 hex chars of SHA-256 over ns/sub@modelNs/model) against every
+    subscription in the group, IDs sorted:
       one member:  <clause> && !request.path.endsWith("/v1/models")
       N members:   (<clause> || <clause>) && !request.path.endsWith("/v1/models")
-  - Counters are [selected_subscription_key, userid], so subscriptions sharing
+  - Counters are [selected_subscription_id, userid], so subscriptions sharing
     a limit keep independent budgets, as do users on one subscription.
   - A subscription at an existing rate adds a predicate clause, not a limit.
 
@@ -38,6 +39,7 @@ Environment variables:
     existing rate may add to the gateway wasm config (default: 8192)
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -83,10 +85,10 @@ TRLP_NAME = f"maas-trlp-{MODEL_REF}"
 SUBSCRIPTIONS_ANNOTATION = "maas.opendatahub.io/subscriptions"
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 
-SUBSCRIPTION_KEY = "auth.identity.selected_subscription_key"
+SUBSCRIPTION_ID = "auth.identity.selected_subscription_id"
 USERID = "auth.identity.userid"
 MODELS_EXEMPTION = '!request.path.endsWith("/v1/models")'
-_CLAUSE_RE = re.compile(r'auth\.identity\.selected_subscription_key == "([^"]+)"')
+_CLAUSE_RE = re.compile(r'auth\.identity\.selected_subscription_id == "([^"]+)"')
 
 TRLP_SYNC_TIMEOUT = 180
 WASM_SYNC_TIMEOUT = 180
@@ -120,14 +122,24 @@ def _limit_name(*rates):
     return "tokens-" + _rate_key(*rates).replace("/", "-per-").replace(",", "-")
 
 
-def _sub_key(sub, namespace=None):
-    """selected_subscription_key of sub on the model under test."""
+def _model_scoped_key(sub, namespace=None):
+    """Human-readable ns/sub@modelNs/model (auth.identity.selected_subscription_key)."""
     return f"{namespace or _ns()}/{sub}@{MODEL_NAMESPACE}/{MODEL_REF}"
 
 
-def _expected_predicate(keys):
-    """buildGroupLimit's predicate for a group with these subscription keys."""
-    clauses = [f'{SUBSCRIPTION_KEY} == "{key}"' for key in sorted(keys)]
+def _rate_limit_id(model_scoped_key):
+    """SubscriptionRateLimitID: first 16 hex chars of SHA-256(model-scoped key)."""
+    return hashlib.sha256(model_scoped_key.encode()).hexdigest()[:16]
+
+
+def _sub_id(sub, namespace=None):
+    """selected_subscription_id of sub on the model under test."""
+    return _rate_limit_id(_model_scoped_key(sub, namespace=namespace))
+
+
+def _expected_predicate(ids):
+    """buildGroupLimit's predicate for a group with these short subscription IDs."""
+    clauses = [f'{SUBSCRIPTION_ID} == "{sid}"' for sid in sorted(ids)]
     match = clauses[0] if len(clauses) == 1 else "(" + " || ".join(clauses) + ")"
     return f"{match} && {MODELS_EXEMPTION}"
 
@@ -157,13 +169,13 @@ def _limit_rates(limit):
 
 
 def _limit_members(limit):
-    """Subscription keys a limit's predicate matches."""
-    return {key for predicate in _limit_predicates(limit) for key in _CLAUSE_RE.findall(predicate)}
+    """Short subscription IDs a limit's predicate matches."""
+    return {sid for predicate in _limit_predicates(limit) for sid in _CLAUSE_RE.findall(predicate)}
 
 
-def _limits_matching(limits, key):
-    """Sorted names of the limits whose predicate matches key."""
-    return sorted(name for name, limit in limits.items() if key in _limit_members(limit))
+def _limits_matching(limits, sid):
+    """Sorted names of the limits whose predicate matches sid."""
+    return sorted(name for name, limit in limits.items() if sid in _limit_members(limit))
 
 
 def _describe_limits(limits):
@@ -211,14 +223,14 @@ def _wait_for_trlp(ready, what, timeout=TRLP_SYNC_TIMEOUT):
 
 def _wait_for_placement(placement, timeout=TRLP_SYNC_TIMEOUT):
     """Wait until the TRLP lists every subscription in placement ({subscription:
-    limit name}) and each one's key is matched by exactly that limit."""
+    limit name}) and each one's short ID is matched by exactly that limit."""
     listed = {f"{_ns()}/{sub}" for sub in placement}
-    by_key = {_sub_key(sub): name for sub, name in placement.items()}
+    by_id = {_sub_id(sub): name for sub, name in placement.items()}
 
     def ready(trlp):
         limits = _trlp_limits(trlp)
         return listed <= _trlp_subscriptions(trlp) and all(
-            _limits_matching(limits, key) == [name] for key, name in by_key.items()
+            _limits_matching(limits, sid) == [name] for sid, name in by_id.items()
         )
 
     return _wait_for_trlp(ready, f"place {placement}", timeout)
@@ -226,15 +238,15 @@ def _wait_for_placement(placement, timeout=TRLP_SYNC_TIMEOUT):
 
 def _assert_limit_shape(name, limit, rates):
     """A grouped limit carries the given rates, the controller's predicate for
-    its members and the [selected_subscription_key, userid] counters."""
+    its members and the [selected_subscription_id, userid] counters."""
     members = _limit_members(limit)
-    assert members, f"{name}: predicate matches no subscription key: {_limit_predicates(limit)}"
+    assert members, f"{name}: predicate matches no subscription id: {_limit_predicates(limit)}"
     assert _limit_predicates(limit) == [_expected_predicate(members)], (
         f"{name}: predicate {_limit_predicates(limit)} is not the grouped form "
         f"{_expected_predicate(members)!r}"
     )
-    assert _limit_counters(limit) == [SUBSCRIPTION_KEY, USERID], (
-        f"{name}: counters must be [{SUBSCRIPTION_KEY}, {USERID}] so subscriptions sharing the "
+    assert _limit_counters(limit) == [SUBSCRIPTION_ID, USERID], (
+        f"{name}: counters must be [{SUBSCRIPTION_ID}, {USERID}] so subscriptions sharing the "
         f"limit keep their own budgets; got {limit.get('counters')}"
     )
     assert _limit_rates(limit) == set(rates), (
@@ -280,22 +292,22 @@ def _wasm_config_kind(name, namespace):
     return None
 
 
-def _wait_for_wasm_config(kind, name, namespace, keys, after_rv=None, timeout=WASM_SYNC_TIMEOUT):
+def _wait_for_wasm_config(kind, name, namespace, ids, after_rv=None, timeout=WASM_SYNC_TIMEOUT):
     """Wait for a write of the wasm config newer than after_rv that renders every
-    subscription key in keys. Returns (resourceVersion, compact JSON size).
+    subscription id in ids. Returns (resourceVersion, compact JSON size).
 
-    Kuadrant renders TRLP predicates verbatim into each action, so the keys
+    Kuadrant renders TRLP predicates verbatim into each action, so the ids
     showing up means the object reflects the TRLP that added them, not an
     intermediate write.
     """
     deadline = time.time() + timeout
-    rv, missing = None, sorted(keys)
+    rv, missing = None, sorted(ids)
     while time.time() < deadline:
         obj = _get_cr(kind, name, namespace)
         assert obj is not None, f"{kind} {namespace}/{name} disappeared while measuring its size"
         text = json.dumps(obj, separators=(",", ":"), sort_keys=True)
         rv = obj["metadata"]["resourceVersion"]
-        missing = sorted(k for k in keys if k not in text)
+        missing = sorted(i for i in ids if i not in text)
         if not missing and rv != after_rv:
             return rv, len(text.encode())
         time.sleep(5)
@@ -466,19 +478,24 @@ class TestExpectedShapeHelpers:
         assert _limit_name(*rates) == name
 
     def test_single_member_predicate_is_unchanged(self):
-        """A group of one renders exactly the per-subscription predicate main had."""
-        assert _expected_predicate(["ns/a@llm/m"]) == (
-            'auth.identity.selected_subscription_key == "ns/a@llm/m" && !request.path.endsWith("/v1/models")'
+        """A group of one renders exactly the short-id predicate the controller emits."""
+        sid = _rate_limit_id("ns/a@llm/m")
+        assert _expected_predicate([sid]) == (
+            f'auth.identity.selected_subscription_id == "{sid}" && !request.path.endsWith("/v1/models")'
         )
 
     def test_multi_member_predicate_is_sorted_or(self):
-        predicate = _expected_predicate(["ns/b@llm/m", "ns/a@llm/m"])
+        id_a = _rate_limit_id("ns/a@llm/m")
+        id_b = _rate_limit_id("ns/b@llm/m")
+        predicate = _expected_predicate([id_b, id_a])
+        # Sorted by short ID string, not by human-readable key.
+        first, second = sorted([id_a, id_b])
         assert predicate == (
-            '(auth.identity.selected_subscription_key == "ns/a@llm/m"'
-            ' || auth.identity.selected_subscription_key == "ns/b@llm/m")'
+            f'(auth.identity.selected_subscription_id == "{first}"'
+            f' || auth.identity.selected_subscription_id == "{second}")'
             ' && !request.path.endsWith("/v1/models")'
         )
-        assert _limit_members({"when": [{"predicate": predicate}]}) == {"ns/a@llm/m", "ns/b@llm/m"}
+        assert _limit_members({"when": [{"predicate": predicate}]}) == {id_a, id_b}
 
 
 class TestRateGrouping:
@@ -505,7 +522,7 @@ class TestRateGrouping:
 
         limits = _trlp_limits(trlp)
         _assert_limit_shape(name, limits[name], [rate])
-        assert {_sub_key(sub_a), _sub_key(sub_b)} <= _limit_members(limits[name])
+        assert {_sub_id(sub_a), _sub_id(sub_b)} <= _limit_members(limits[name])
         for sub in (sub_a, sub_b):
             legacy = f"{ns}-{sub}-{MODEL_REF}-tokens"
             assert legacy not in limits, f"per-subscription limit {legacy} should no longer be emitted"
@@ -586,7 +603,7 @@ class TestRateGrouping:
         """Editing a live subscription's rate moves its clause out of the shared
         limit into the limit for the new rate, and its key stays rate limited.
 
-        The key's selected_subscription_key does not change with the rate, and
+        The key's selected_subscription_id does not change with the rate, and
         the TRLP update moves the clause in one write, so each request is
         counted by the old limit or the new one, never by neither.
         """
@@ -609,7 +626,7 @@ class TestRateGrouping:
         trlp = _wait_for_placement({sub_a: new_name, sub_b: old_name})
 
         limits = _trlp_limits(trlp)
-        assert _sub_key(sub_a) not in _limit_members(limits[old_name]), (
+        assert _sub_id(sub_a) not in _limit_members(limits[old_name]), (
             f"{sub_a}'s clause must leave {old_name} after its rate edit: {_limit_predicates(limits[old_name])}"
         )
         _assert_limit_shape(old_name, limits[old_name], [old_rate])
@@ -658,7 +675,7 @@ class TestRateGrouping:
                 f"neither EnvoyFilter nor WasmPlugin {gw_ns}/{obj_name} exists; "
                 f"cannot measure Kuadrant's wasm config for gateway {gw_name}"
             )
-        base_rv, base_size = _wait_for_wasm_config(kind, obj_name, gw_ns, [_sub_key(base_sub)])
+        base_rv, base_size = _wait_for_wasm_config(kind, obj_name, gw_ns, [_sub_id(base_sub)])
         log.info("Baseline: limits %s, %s %s/%s %d bytes", sorted(base_limits), kind, gw_ns, obj_name, base_size)
 
         extra = [f"e2e-rg-size-{i}-{s}" for i in range(SIZE_EXTRA_SUBSCRIPTIONS)]
@@ -676,7 +693,7 @@ class TestRateGrouping:
         _assert_limit_shape(existing_name, limits[existing_name], [existing_rate])
 
         rv, size = _wait_for_wasm_config(
-            kind, obj_name, gw_ns, [_sub_key(name) for name in extra], after_rv=base_rv
+            kind, obj_name, gw_ns, [_sub_id(name) for name in extra], after_rv=base_rv
         )
         per_sub = (size - base_size) / len(extra)
         log.info("After %d same-rate subscriptions: %s %d bytes (%.0f B/subscription)", len(extra), kind, size, per_sub)
@@ -698,7 +715,7 @@ class TestRateGrouping:
             f"expected {len(base_limits) + 1} limits, got {sorted(limits)}"
         )
 
-        _, new_size = _wait_for_wasm_config(kind, obj_name, gw_ns, [_sub_key(new_sub)], after_rv=rv)
+        _, new_size = _wait_for_wasm_config(kind, obj_name, gw_ns, [_sub_id(new_sub)], after_rv=rv)
         limit_cost = new_size - size
         log.info("After a new rate: %s %d bytes (one limit costs %d B)", kind, new_size, limit_cost)
         # Listener count scales both sides equally, so this holds on any gateway.

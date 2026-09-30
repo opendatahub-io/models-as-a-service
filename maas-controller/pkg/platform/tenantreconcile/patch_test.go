@@ -774,7 +774,9 @@ func TestPatchMaaSAPIEgressRestrictPostgres_addsDSNNamespace(t *testing.T) {
 		require.True(t, ok)
 		matchLabels, ok := nsSelector["matchLabels"].(map[string]any)
 		require.True(t, ok)
-		namespaces = append(namespaces, matchLabels["kubernetes.io/metadata.name"].(string))
+		name, ok := matchLabels["kubernetes.io/metadata.name"].(string)
+		require.True(t, ok)
+		namespaces = append(namespaces, name)
 	}
 	assert.Equal(t, []string{"postgres", "redhat-ods-applications"}, namespaces)
 }
