@@ -27,16 +27,17 @@ func sharedMarkingOverlayDir(t *testing.T, overlay string) string {
 }
 
 // sharedMarkingTenant renders tenantID (the default tenant when empty) through
-// BuildPlatformParams and PostRender, as its reconcile does.
-func sharedMarkingTenant(t *testing.T, overlayDir, appNamespace, gatewayName, tenantID string, skipIPP bool) []unstructured.Unstructured {
+// BuildPlatformParams and PostRender, as its reconcile does, for a tenant whose gateway
+// is gatewayNamespace/gatewayName.
+func sharedMarkingTenant(t *testing.T, overlayDir, appNamespace, gatewayNamespace, gatewayName, tenantID string, skipIPP bool) []unstructured.Unstructured {
 	t.Helper()
 
-	resources, err := sharedMarkingRender(t, overlayDir, appNamespace, gatewayName, tenantID, skipIPP)
+	resources, err := sharedMarkingRender(t, overlayDir, appNamespace, gatewayNamespace, gatewayName, tenantID, skipIPP)
 	require.NoError(t, err)
 	return resources
 }
 
-func sharedMarkingRender(t *testing.T, overlayDir, appNamespace, gatewayName, tenantID string, skipIPP bool) ([]unstructured.Unstructured, error) {
+func sharedMarkingRender(t *testing.T, overlayDir, appNamespace, gatewayNamespace, gatewayName, tenantID string, skipIPP bool) ([]unstructured.Unstructured, error) {
 	t.Helper()
 
 	tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
@@ -51,7 +52,7 @@ func sharedMarkingRender(t *testing.T, overlayDir, appNamespace, gatewayName, te
 	}
 
 	params, err := BuildPlatformParams(tenant, PlatformContext{
-		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: "openshift-ingress", Name: gatewayName},
+		GatewayRef: maasv1alpha1.TenantGatewayRef{Namespace: gatewayNamespace, Name: gatewayName},
 		SkipIPP:    skipIPP,
 	}, appNamespace, appNamespace, "https://kubernetes.default.svc", appNamespace, logr.Discard())
 	require.NoError(t, err)
@@ -82,9 +83,12 @@ func TestSharedOperandMarkingInvariant(t *testing.T) {
 		t.Run(overlay, func(t *testing.T) {
 			overlayDir := sharedMarkingOverlayDir(t, overlay)
 
-			def := sharedMarkingTenant(t, overlayDir, "opendatahub", "maas-default-gateway", "", false)
-			red := sharedMarkingTenant(t, overlayDir, "opendatahub", "red", "red", false)
-			praxisRed := sharedMarkingTenant(t, overlayDir, "opendatahub", "red", "red", true)
+			// red's gateway lives in its own namespace: an object moved into the gateway
+			// namespace without a rename would then land at a different identity per tenant
+			// and fail the intersection check below, instead of passing as shared.
+			def := sharedMarkingTenant(t, overlayDir, "opendatahub", "openshift-ingress", "maas-default-gateway", "", false)
+			red := sharedMarkingTenant(t, overlayDir, "opendatahub", "red-gateway", "red", "red", false)
+			praxisRed := sharedMarkingTenant(t, overlayDir, "opendatahub", "red-gateway", "red", "red", true)
 
 			byKey := map[string]map[sharedMarkingKey]unstructured.Unstructured{}
 			for name, set := range map[string][]unstructured.Unstructured{"default": def, "red": red, "praxis-red": praxisRed} {
@@ -131,6 +135,16 @@ func TestSharedOperandMarkingInvariant(t *testing.T) {
 				defObj, redObj := byKey["default"][k], byKey["red"][k]
 				require.Equal(t, defObj.Object, redObj.Object, "%v must render identically for every tenant", k)
 			}
+
+			// Praxis renders a subset (no IPP), but whatever it marks shared is shared with
+			// the others and identical to theirs.
+			for k, obj := range byKey["praxis-red"] {
+				if obj.GetLabels()[LabelSharedOperand] != "true" {
+					continue
+				}
+				require.Truef(t, intersection[k], "praxis-red marks %v shared, but default and red do not share it", k)
+				require.Equal(t, byKey["default"][k].Object, obj.Object, "%v must render identically for praxis", k)
+			}
 		})
 	}
 }
@@ -143,14 +157,14 @@ func TestPostRenderRejectsDuplicateObjects(t *testing.T) {
 	overlayDir := sharedMarkingOverlayDir(t, "odh")
 
 	t.Run("a tenant whose per-tenant name collides with a shared object", func(t *testing.T) {
-		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "metrics", "metrics", false)
+		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "openshift-ingress", "metrics", "metrics", false)
 		require.Error(t, err)
 		require.ErrorIs(t, err, reconcile.TerminalError(nil))
 		require.ErrorContains(t, err, "Service opendatahub/maas-api-metrics")
 	})
 
 	t.Run("an ordinary tenant", func(t *testing.T) {
-		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "red", "red", false)
+		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "openshift-ingress", "red", "red", false)
 		require.NoError(t, err)
 	})
 }

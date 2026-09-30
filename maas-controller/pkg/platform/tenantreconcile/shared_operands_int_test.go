@@ -61,14 +61,23 @@ var _ = Describe("Shared tenant operands", func() {
 		})
 	})
 
-	When("the previous controller applied them with a tenant's tracking labels", func() {
+	When("the previous controller applied the tenant's operands with its tracking labels", func() {
 		BeforeEach(func(ctx SpecContext) {
 			fixture.ApplyTrackingLabelled(ctx, envTest.Client, envTest.Environment.Scheme,
-				fixture.TenantConfig("red"), appNamespace, redOperands)
+				fixture.DefaultTenantConfig(), appNamespace, defaultOperands)
 		})
 
-		It("relabels each of them once, after which a second tenant changes nothing", func(ctx SpecContext) {
+		It("relabels each shared object once and leaves the per-tenant ones alone, after which a second tenant changes nothing", func(ctx SpecContext) {
+			perTenant := slices.DeleteFunc(slices.Clone(defaultOperands), func(obj unstructured.Unstructured) bool {
+				return obj.GetLabels()[tenantreconcile.LabelSharedOperand] == "true"
+			})
+			Expect(perTenant).NotTo(BeEmpty())
 			labelled := fixture.ResourceVersions(ctx, envTest.Client, shared)
+			perTenantBefore := fixture.ResourceVersions(ctx, envTest.Client, perTenant)
+			perTenantLabels := make([]map[string]string, len(perTenant))
+			for i, obj := range perTenant {
+				perTenantLabels[i] = liveLabels(ctx, obj)
+			}
 
 			// Server-side apply drops the tracking labels: the same field manager owns them
 			// and no longer sends them.
@@ -80,6 +89,13 @@ var _ = Describe("Shared tenant operands", func() {
 					Not(HaveKey(tenantreconcile.LabelTenantName)),
 					Not(HaveKey(tenantreconcile.LabelTenantNamespace)),
 				), "%s %s", obj.GetKind(), obj.GetName())
+			}
+			// The per-tenant objects, the workloads among them, carry the same tracking
+			// labels either way, so the upgrade writes none of them and rolls no pods.
+			Expect(changedSince(perTenantBefore, fixture.ResourceVersions(ctx, envTest.Client, perTenant))).To(BeEmpty(),
+				"the upgrade rewrote these per-tenant objects")
+			for i, obj := range perTenant {
+				Expect(liveLabels(ctx, obj)).To(Equal(perTenantLabels[i]), "%s %s", obj.GetKind(), obj.GetName())
 			}
 
 			relabelled := fixture.ResourceVersions(ctx, envTest.Client, shared)
