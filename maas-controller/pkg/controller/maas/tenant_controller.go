@@ -29,6 +29,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,6 +38,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -221,55 +223,84 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 }
 
 // enqueueSharedOperandRepairer maps a shared-operand event (the LabelSharedOperand
-// marker) to a single tenant that will re-apply it, instead of every tenant.
+// marker) to the tenants that re-apply it: normally one, not every tenant.
 //
 // Every shared operand renders byte-identical content for every tenant (verified by
-// tenantreconcile.TestSharedOperandMarkingInvariant): any one live, reconcilable tenant's
-// pass repairs it, and fanning the event out to N tenants buys nothing. That matters
-// because shared-operand writes are not rare: ai-gateway-controller force-applies the
-// narrower payload-processing-reader ClusterRole rules on every praxis tenant reconcile
-// (5m resync), and each of those would otherwise cost every maas tenant a reconcile.
+// tenantreconcile.TestSharedOperandMarkingInvariant), so one tenant's pass repairs it
+// and fanning the event out to N tenants buys nothing. Shared-operand writes are not
+// rare: ai-gateway-controller force-applies narrower payload-processing-reader
+// ClusterRole rules on every praxis tenant reconcile (5m resync), and each of those
+// would otherwise cost every maas tenant a reconcile.
 //
-// Preference: the default tenant when it exists, is not deleting and is Managed;
-// otherwise the first other such tenant in namespace/name order, for a deterministic
-// choice across repeated events. Nothing qualifying means no reconcile can repair the
-// object yet, so nothing is enqueued.
-func (r *TenantReconciler) enqueueSharedOperandRepairer(ctx context.Context, _ client.Object) []reconcile.Request {
+// The one tenant must actually reach apply. A Managed tenant can stop before it (gateway
+// not ready, render failure, the legacy IPP handshake, an earlier object failing to
+// apply), and with polling gone nothing else would repair the object. Ready=True says
+// the tenant's last pass applied everything, so the pick is the default tenant if Ready,
+// else the first Ready tenant in namespace/name order. When none is Ready every
+// reconcilable tenant is enqueued: rare, bounded, and correct.
+func (r *TenantReconciler) enqueueSharedOperandRepairer(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := oteljson.FromContext(ctx).WithValues(
+		"kind", r.objectKind(obj), "namespace", obj.GetNamespace(), "name", obj.GetName())
 	if !r.TenantNamespaceDiscoveryEnabled {
-		return r.enqueueDefaultTenant(ctx, nil)
+		requests := r.enqueueDefaultTenant(ctx, obj)
+		log.V(1).Info("shared operand changed; enqueueing the tenant that repairs it", "tenants", requests)
+		return requests
 	}
 
 	var list maasv1alpha1.MaasTenantConfigList
 	if err := r.List(ctx, &list); err != nil {
-		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for shared-operand repair mapping")
+		log.Error(err, "failed to list MaasTenantConfigs for shared-operand repair mapping")
 		return nil
 	}
 	sort.Slice(list.Items, func(i, j int) bool {
 		return client.ObjectKeyFromObject(&list.Items[i]).String() < client.ObjectKeyFromObject(&list.Items[j]).String()
 	})
 
-	reconcilable := func(t *maasv1alpha1.MaasTenantConfig) bool {
-		ms := managementState(t.Annotations)
-		return t.DeletionTimestamp.IsZero() && (ms == "" || ms == managementStateManaged)
-	}
-
-	var fallback *maasv1alpha1.MaasTenantConfig
+	var reconcilable []reconcile.Request
+	var chosen *reconcile.Request
 	for i := range list.Items {
 		t := &list.Items[i]
-		if !reconcilable(t) {
+		ms := managementState(t.Annotations)
+		if r.tenantConfigSkipReason(t) != "" || !t.DeletionTimestamp.IsZero() || (ms != "" && ms != managementStateManaged) {
+			continue
+		}
+		request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(t)}
+		reconcilable = append(reconcilable, request)
+		if !apimeta.IsStatusConditionTrue(t.Status.Conditions, tenantreconcile.ReadyConditionType) {
 			continue
 		}
 		if t.Namespace == r.TenantNamespace && t.Name == maasv1alpha1.MaasTenantConfigInstanceName {
-			return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(t)}}
+			chosen = &request
+			break
 		}
-		if fallback == nil {
-			fallback = t
+		if chosen == nil {
+			chosen = &request
 		}
 	}
-	if fallback == nil {
+
+	switch {
+	case len(reconcilable) == 0:
+		log.Info("shared operand changed, but no tenant config can repair it: none is reconciled, live and Managed")
 		return nil
+	case chosen == nil:
+		log.V(1).Info("shared operand changed and no tenant is Ready; enqueueing every reconcilable tenant", "tenants", reconcilable)
+		return reconcilable
 	}
-	return []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(fallback)}}
+	log.V(1).Info("shared operand changed; enqueueing the tenant that repairs it", "tenants", []reconcile.Request{*chosen})
+	return []reconcile.Request{*chosen}
+}
+
+// objectKind names obj's kind for logs; typed objects from the cache carry no TypeMeta.
+func (r *TenantReconciler) objectKind(obj client.Object) string {
+	if kind := obj.GetObjectKind().GroupVersionKind().Kind; kind != "" {
+		return kind
+	}
+	if r.Scheme != nil {
+		if gvk, err := apiutil.GVKForObject(obj, r.Scheme); err == nil {
+			return gvk.Kind
+		}
+	}
+	return fmt.Sprintf("%T", obj)
 }
 
 // enqueueAllTenants maps a change that applies to every tenant to all the

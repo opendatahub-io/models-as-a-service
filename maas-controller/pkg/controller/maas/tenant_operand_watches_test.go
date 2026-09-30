@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	goruntime "runtime"
 	"testing"
 	"time"
@@ -262,18 +263,35 @@ func TestMapTenantOperandToMaasTenantConfig(t *testing.T) {
 }
 
 // TestOperandMapperForSharedOperands covers the operandMapper side of
-// enqueueSharedOperandRepairer: a shared operand (the marker) maps to one
-// representative tenant, never every tenant, because all of them render it identically.
+// enqueueSharedOperandRepairer: a shared operand (the marker) maps to one tenant whose
+// last pass applied everything (Ready), never to every tenant, because all of them
+// render it identically. Only when no tenant is Ready does every reconcilable one go.
 func TestOperandMapperForSharedOperands(t *testing.T) {
 	now := metav1.Now()
-	tenantConfig := func(namespace string, mutate func(*maasv1alpha1.MaasTenantConfig)) *maasv1alpha1.MaasTenantConfig {
+	const operandBlueNS = "ai-tenant-blue"
+	// tenantConfig builds the default tenant config in operandDefaultNS and an
+	// AITenant-managed one anywhere else, as reconcile accepts both.
+	tenantConfig := func(namespace string, mutate ...func(*maasv1alpha1.MaasTenantConfig)) *maasv1alpha1.MaasTenantConfig {
 		tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
 			Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace,
 		}}
-		if mutate != nil {
-			mutate(tenant)
+		if namespace != operandDefaultNS {
+			tenant.Labels = map[string]string{
+				tenantreconcile.LabelManagedByAITenant: "true",
+				tenantreconcile.LabelTenantName:        strings.TrimPrefix(namespace, "ai-tenant-"),
+			}
+		}
+		for _, m := range mutate {
+			m(tenant)
 		}
 		return tenant
+	}
+	ready := func(status metav1.ConditionStatus) func(*maasv1alpha1.MaasTenantConfig) {
+		return func(tc *maasv1alpha1.MaasTenantConfig) {
+			apimeta.SetStatusCondition(&tc.Status.Conditions, metav1.Condition{
+				Type: tenantreconcile.ReadyConditionType, Status: status, Reason: "Test",
+			})
+		}
 	}
 	deleting := func(tc *maasv1alpha1.MaasTenantConfig) {
 		tc.DeletionTimestamp = &now
@@ -282,6 +300,7 @@ func TestOperandMapperForSharedOperands(t *testing.T) {
 	unmanaged := func(tc *maasv1alpha1.MaasTenantConfig) {
 		tc.Annotations = map[string]string{managementStateAnnotation: managementStateUnmanaged}
 	}
+	unlabelled := func(tc *maasv1alpha1.MaasTenantConfig) { tc.Labels = nil }
 
 	var serviceAccounts, services tenantOperand
 	for _, op := range tenantOperands() {
@@ -303,28 +322,50 @@ func TestOperandMapperForSharedOperands(t *testing.T) {
 		want []reconcile.Request
 	}{
 		{
-			name: "the default tenant repairs it when live",
-			objs: []client.Object{tenantConfig(operandDefaultNS, nil), tenantConfig(operandRedNS, nil)},
+			name: "the default tenant repairs it when Ready",
+			objs: []client.Object{tenantConfig(operandDefaultNS, ready(metav1.ConditionTrue)), tenantConfig(operandRedNS, ready(metav1.ConditionTrue))},
 			op:   serviceAccounts, obj: sharedSA,
 			want: []reconcile.Request{tenantRequest(operandDefaultNS)},
 		},
 		{
-			name: "falls back to the only other tenant when the default is absent",
-			objs: []client.Object{tenantConfig(operandRedNS, nil)},
+			// A Managed default that stops before apply (gateway not ready, render or
+			// apply failure) must not be the only tenant asked to repair it.
+			name: "a Ready tenant repairs it when the default is live but not Ready",
+			objs: []client.Object{tenantConfig(operandDefaultNS, ready(metav1.ConditionFalse)), tenantConfig(operandRedNS, ready(metav1.ConditionTrue))},
 			op:   serviceAccounts, obj: sharedSA,
 			want: []reconcile.Request{tenantRequest(operandRedNS)},
 		},
 		{
-			name: "falls back to another tenant when the default is deleting",
-			objs: []client.Object{tenantConfig(operandDefaultNS, deleting), tenantConfig(operandRedNS, nil)},
+			name: "the first Ready tenant in namespace order repairs it when the default is absent",
+			objs: []client.Object{tenantConfig(operandRedNS, ready(metav1.ConditionTrue)), tenantConfig(operandBlueNS, ready(metav1.ConditionTrue))},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandBlueNS)},
+		},
+		{
+			name: "a Ready tenant repairs it when the default is deleting",
+			objs: []client.Object{tenantConfig(operandDefaultNS, deleting, ready(metav1.ConditionTrue)), tenantConfig(operandRedNS, ready(metav1.ConditionTrue))},
 			op:   serviceAccounts, obj: sharedSA,
 			want: []reconcile.Request{tenantRequest(operandRedNS)},
 		},
 		{
-			name: "falls back to another tenant when the default is Unmanaged",
-			objs: []client.Object{tenantConfig(operandDefaultNS, unmanaged), tenantConfig(operandRedNS, nil)},
+			name: "a Ready tenant repairs it when the default is Unmanaged",
+			objs: []client.Object{tenantConfig(operandDefaultNS, unmanaged, ready(metav1.ConditionTrue)), tenantConfig(operandRedNS, ready(metav1.ConditionTrue))},
 			op:   serviceAccounts, obj: sharedSA,
 			want: []reconcile.Request{tenantRequest(operandRedNS)},
+		},
+		{
+			name: "every reconcilable tenant repairs it when none is Ready",
+			objs: []client.Object{tenantConfig(operandDefaultNS, ready(metav1.ConditionFalse)), tenantConfig(operandRedNS), tenantConfig(operandBlueNS, unmanaged)},
+			op:   serviceAccounts, obj: sharedSA,
+			want: []reconcile.Request{tenantRequest(operandRedNS), tenantRequest(operandDefaultNS)},
+		},
+		{
+			// reconcile ignores an unlabelled tenant config outside the default tenant
+			// namespace, so it cannot repair anything.
+			name: "an unlabelled tenant config in a foreign namespace is never picked",
+			objs: []client.Object{tenantConfig(operandDefaultNS, unmanaged), tenantConfig(operandRedNS, unlabelled, ready(metav1.ConditionTrue))},
+			op:   serviceAccounts, obj: sharedSA,
+			want: nil,
 		},
 		{
 			name: "nothing qualifies to repair it",
@@ -334,7 +375,7 @@ func TestOperandMapperForSharedOperands(t *testing.T) {
 		},
 		{
 			name: "a per-tenant operand maps by its tracking labels alone, regardless of tenant state",
-			objs: []client.Object{tenantConfig(operandDefaultNS, nil)},
+			objs: []client.Object{tenantConfig(operandDefaultNS)},
 			op:   services, obj: perTenantService,
 			want: []reconcile.Request{tenantRequest(operandRedNS)},
 		},

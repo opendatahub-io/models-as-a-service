@@ -157,7 +157,7 @@ func tenantOperands() []tenantOperand {
 
 // TenantOperandCacheByObject narrows the informers that exist only for tenant operand
 // watches; every other reader of these kinds bypasses the cache (unstructured reads).
-// A future cached reader would see a ClusterRole without tracking labels as NotFound,
+// A future cached reader would see a ClusterRole without the component label as NotFound,
 // and a namespaced object outside the app and gateway namespaces as an "unknown
 // namespace for the cache" error, which IgnoreNotFound does not swallow.
 //
@@ -507,13 +507,9 @@ func (r *TenantReconciler) tenantsUsingGateway(ctx context.Context, namespace, n
 	return requests
 }
 
-// reconcilesTenantConfig mirrors the namespace and name gate at the top of reconcile.
+// reconcilesTenantConfig applies the gate at the top of reconcile (tenantConfigSkipReason).
 func (r *TenantReconciler) reconcilesTenantConfig(tenant *maasv1alpha1.MaasTenantConfig) bool {
-	if r.TenantNamespaceDiscoveryEnabled {
-		return true
-	}
-	return tenant.Name == maasv1alpha1.MaasTenantConfigInstanceName &&
-		(r.TenantNamespace == "" || tenant.Namespace == r.TenantNamespace)
+	return r.tenantConfigSkipReason(tenant) == ""
 }
 
 // isGatewayAuthPolicy matches the per-gateway AuthPolicy that ensureGatewayManagementAuth

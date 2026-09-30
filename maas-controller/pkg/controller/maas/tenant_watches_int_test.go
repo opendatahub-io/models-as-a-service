@@ -137,6 +137,19 @@ var _ = Describe("TenantReconciler watches", func() {
 	})
 
 	It("enqueues one tenant to repair the shared NetworkPolicy when it drifts", func(ctx SpecContext) {
+		// Both tenants would repair it: tenantB is AITenant-managed and both are Ready.
+		Eventually(func(g Gomega) {
+			tenantConfig := &maasv1alpha1.MaasTenantConfig{}
+			g.Expect(envTest.Get(ctx, tenantB.NamespacedName, tenantConfig)).To(Succeed())
+			tenantConfig.Labels = aiTenantConfig(tenantB.Namespace, "tenant-b").Labels
+			g.Expect(envTest.Update(ctx, tenantConfig)).To(Succeed())
+		}).Should(Succeed())
+		DeferCleanup(func(ctx SpecContext) {
+			Expect(client.IgnoreNotFound(envTest.Delete(ctx, predTenantConfig(tenantB.Namespace)))).To(Succeed())
+		})
+		for _, tenant := range []reconcile.Request{tenantA, tenantB} {
+			setTenantReady(ctx, tenant.NamespacedName, metav1.ConditionTrue)
+		}
 		startWatches(ctx)
 		mark := recorder.mark()
 
@@ -145,9 +158,9 @@ var _ = Describe("TenantReconciler watches", func() {
 		policy.Spec.PodSelector.MatchLabels["app"] = "edited"
 		Expect(envTest.Update(ctx, policy)).To(Succeed())
 
-		// tenantA is the default tenant (TenantNamespace) in startWatches, so it repairs
-		// the shared policy alone: every tenant rendering it identically means one repair
-		// is enough, and fanning the drift out to tenantB too would cost it for nothing.
+		// tenantA is the Ready default tenant (TenantNamespace) in startWatches, so it
+		// repairs the shared policy alone: every tenant renders it identically, and fanning
+		// the drift out to tenantB too would cost it a pass for nothing.
 		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(tenantA))
 		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
 		Expect(recorder.since(mark)).NotTo(ContainElement(tenantB))

@@ -122,6 +122,32 @@ func tenantUsesCleanupFinalizer(tenant *maasv1alpha1.MaasTenantConfig) (bool, er
 	return tenantreconcile.TenantUsesAITenantPlatformContext(tenant) || tenantID != "", nil
 }
 
+// tenantConfigSkipReason reports why reconcile ignores tenant, or "" when it reconciles
+// it. Watches that choose which tenant configs to enqueue use the same gate, so they
+// never pick one reconcile drops.
+func (r *TenantReconciler) tenantConfigSkipReason(tenant *maasv1alpha1.MaasTenantConfig) string {
+	// Without discovery only the default tenant config in TenantNamespace is reconciled.
+	if !r.TenantNamespaceDiscoveryEnabled {
+		if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
+			return "outside the configured platform tenant namespace"
+		}
+		if tenant.Name != maasv1alpha1.MaasTenantConfigInstanceName {
+			return "not the platform tenant config"
+		}
+		return ""
+	}
+	// Without LabelManagedByAITenant, TenantIdentifierFor returns "" (default tenant), so a
+	// tenant config in a foreign namespace would render the base name "maas-api" and
+	// SSA-overwrite the default tenant's Deployment with wrong env vars (e.g.
+	// MAAS_SUBSCRIPTION_NAMESPACE pointing at the foreign namespace).
+	if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace &&
+		tenant.GetLabels()[tenantreconcile.LabelManagedByAITenant] != "true" {
+		return "unlabeled MaasTenantConfig in a foreign namespace would collide with the default tenant's resources; " +
+			"set maas.opendatahub.io/managed-by-aitenant=true and maas.opendatahub.io/tenant-name labels"
+	}
+	return ""
+}
+
 func managementState(ann map[string]string) string {
 	if ann == nil {
 		return ""
@@ -140,35 +166,10 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// When tenant namespace discovery is disabled, only reconcile the default tenant config
-	// in the configured TenantNamespace. When enabled, reconcile all MaasTenantConfig CRs cluster-wide.
-	if !r.TenantNamespaceDiscoveryEnabled {
-		if r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
-			log.V(1).Info("ignoring MaasTenantConfig outside configured platform tenant namespace",
-				"tenantNamespace", tenant.Namespace,
-				"configuredTenantNamespace", r.TenantNamespace)
-			return ctrl.Result{}, nil
-		}
-
-		if tenant.Name != maasv1alpha1.MaasTenantConfigInstanceName {
-			return ctrl.Result{}, nil
-		}
-	}
-
-	// Guard against unlabeled tenant configs in foreign namespaces when discovery is enabled.
-	// Without LabelManagedByAITenant, TenantIdentifierFor returns "" (default tenant),
-	// which would cause the rendered maas-api Deployment to use the base name "maas-api"
-	// and SSA-overwrite the actual default tenant's Deployment with wrong env vars
-	// (e.g., MAAS_SUBSCRIPTION_NAMESPACE pointing at the foreign namespace).
-	if r.TenantNamespaceDiscoveryEnabled && r.TenantNamespace != "" && tenant.Namespace != r.TenantNamespace {
-		labels := tenant.GetLabels()
-		if labels == nil || labels[tenantreconcile.LabelManagedByAITenant] != "true" {
-			log.V(1).Info("ignoring unlabeled MaasTenantConfig in foreign namespace to prevent default-tenant resource collision",
-				"tenantNamespace", tenant.Namespace,
-				"defaultTenantNamespace", r.TenantNamespace,
-				"hint", "set maas.opendatahub.io/managed-by-aitenant=true and maas.opendatahub.io/tenant-name labels")
-			return ctrl.Result{}, nil
-		}
+	if reason := r.tenantConfigSkipReason(&tenant); reason != "" {
+		log.V(1).Info("ignoring MaasTenantConfig", "reason", reason,
+			"tenantNamespace", tenant.Namespace, "defaultTenantNamespace", r.TenantNamespace)
+		return ctrl.Result{}, nil
 	}
 
 	// Handle deletion before tenant identifier validation and the teardown guard:

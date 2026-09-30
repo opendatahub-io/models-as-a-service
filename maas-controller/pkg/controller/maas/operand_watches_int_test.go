@@ -9,6 +9,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -38,6 +39,32 @@ const operandWatchDefaultTenantNamespace = "models-as-a-service"
 // tracking labels name.
 func operandWatchTenantNamespace(tenant string) string {
 	return tenantreconcile.TenantNamespaceForAITenant(tenant, operandWatchDefaultTenantNamespace)
+}
+
+// aiTenantConfig returns the tenant config an AITenant named tenantName manages in
+// namespace. Unlike predTenantConfig's, reconcile accepts it outside the default tenant
+// namespace.
+func aiTenantConfig(namespace, tenantName string) *maasv1alpha1.MaasTenantConfig {
+	tenantConfig := predTenantConfig(namespace)
+	tenantConfig.Labels = map[string]string{
+		tenantreconcile.LabelManagedByAITenant: "true",
+		tenantreconcile.LabelTenantName:        tenantName,
+	}
+	return tenantConfig
+}
+
+// setTenantReady writes the Ready condition a tenant's last platform pass left: True once
+// it applied everything, False when it stopped short.
+func setTenantReady(ctx context.Context, key client.ObjectKey, status metav1.ConditionStatus) {
+	GinkgoHelper()
+	Eventually(func(g Gomega) {
+		tenantConfig := &maasv1alpha1.MaasTenantConfig{}
+		g.Expect(envTest.Get(ctx, key, tenantConfig)).To(Succeed())
+		apimeta.SetStatusCondition(&tenantConfig.Status.Conditions, metav1.Condition{
+			Type: tenantreconcile.ReadyConditionType, Status: status, Reason: "SetBySpec",
+		})
+		g.Expect(envTest.Status().Update(ctx, tenantConfig)).To(Succeed())
+	}).Should(Succeed())
 }
 
 // markShared sets the marker PostRender's final pass stamps on an object no rename site
@@ -141,8 +168,10 @@ var _ = Describe("Tenant operand watches", func() {
 			)
 
 			BeforeEach(func(ctx SpecContext) {
-				// A shared operand maps to a live, reconcilable tenant
-				// (enqueueSharedOperandRepairer); with only "red" configured, that is red.
+				// A shared operand maps to the Ready default tenant (enqueueSharedOperandRepairer).
+				// Other specs' tenant configs outlive them, but none is the default and Ready.
+				ensureTenantConfig(ctx, tenantreconcile.DefaultAITenantName)
+				setTenantReady(ctx, tenantConfigOf(operandWatchDefaultTenantNamespace)[0].NamespacedName, metav1.ConditionTrue)
 				ensureTenantConfig(ctx, "red")
 				operand, edit = build(appNamespace)
 				if shared {
@@ -155,38 +184,31 @@ var _ = Describe("Tenant operand watches", func() {
 				original = observe(ctx, op, operand)
 			})
 
-			// wantMapped is what operandMapper should return for a marker-carrying obj: not
-			// a hardcoded tenant (other specs' tenant configs accumulate cluster-wide across
-			// this suite, since envtest never finishes deleting a namespace, so the winner
-			// enqueueSharedOperandRepairer picks among them is not fixed), but exactly what
-			// that repair-selection helper itself picks. The helper's own selection logic
-			// (default preferred, deterministic fallback, none qualifying) is unit-tested
-			// against a clean fake client in TestOperandMapperForSharedOperands.
-			wantMapped := func(ctx SpecContext, obj client.Object) []reconcile.Request {
-				if shared {
-					return r.enqueueSharedOperandRepairer(ctx, obj)
-				}
-				return tenantConfigOf(operandWatchTenantNamespace("red"))
+			// A shared operand is repaired by the Ready default tenant, a per-tenant one by the
+			// tenant its tracking labels name.
+			wantMapped := tenantConfigOf(operandWatchTenantNamespace("red"))
+			if shared {
+				wantMapped = tenantConfigOf(operandWatchDefaultTenantNamespace)
 			}
 
 			When("its spec or data is edited", func() {
-				It("re-enqueues the tenant config named in its tracking labels", func(ctx SpecContext) {
+				It("re-enqueues the tenant config that repairs it", func(ctx SpecContext) {
 					edit()
 					Expect(envTest.Update(ctx, operand)).To(Succeed())
 					edited := observe(ctx, op, operand)
 
 					Expect(admitsUpdate(op, original, edited)).To(BeTrue())
-					Expect(r.operandMapper(op)(ctx, edited)).To(Equal(wantMapped(ctx, edited)))
+					Expect(r.operandMapper(op)(ctx, edited)).To(Equal(wantMapped))
 				})
 			})
 
 			When("it is deleted", func() {
-				It("re-enqueues the tenant config named in its tracking labels", func(ctx SpecContext) {
+				It("re-enqueues the tenant config that repairs it", func(ctx SpecContext) {
 					Expect(envTest.Delete(ctx, operand)).To(Succeed())
 					Expect(apierrors.IsNotFound(envTest.Get(ctx, client.ObjectKeyFromObject(operand), op.newObject()))).To(BeTrue())
 
 					Expect(r.operandPredicate(op).Delete(event.DeleteEvent{Object: original})).To(BeTrue())
-					Expect(r.operandMapper(op)(ctx, original)).To(Equal(wantMapped(ctx, original)))
+					Expect(r.operandMapper(op)(ctx, original)).To(Equal(wantMapped))
 				})
 			})
 
@@ -555,19 +577,66 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 		return func() []reconcile.Request { return recorder.since(mark) }
 	}
 
-	It("repairs a deleted shared operand through the surviving tenant", func(ctx SpecContext) {
-		// A shared operand carries only the marker, never a "last applier" to lose:
-		// enqueueSharedOperandRepairer picks survivor because it is the only (and the
-		// default) live, reconcilable tenant config.
-		sa := markShared(fixture.OperandServiceAccount(appNamespace, "maas-api"))
-		Expect(envTest.Create(ctx, sa)).To(Succeed())
-		startWatches(ctx)
-		mark := recorder.mark()
+	// The default tenant (survivor) stops before it applies anything, as on a missing
+	// gateway or a render failure; only the other tenant's pass applies the shared
+	// ServiceAccount. With polling gone, a delete the default alone is asked to repair
+	// stays deleted.
+	DescribeTable("repairs a deleted shared operand through the tenant that still applies",
+		func(ctx SpecContext, disableDefault func(SpecContext), wakesDefault bool) {
+			other := aiTenantConfig(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name, "other")
+			Expect(envTest.Create(ctx, other)).To(Succeed())
+			DeferCleanup(func(ctx SpecContext) { Expect(client.IgnoreNotFound(envTest.Delete(ctx, other))).To(Succeed()) })
+			otherRequest := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(other)}
+			setTenantReady(ctx, otherRequest.NamespacedName, metav1.ConditionTrue)
 
-		Expect(envTest.Delete(ctx, sa)).To(Succeed())
+			key := client.ObjectKey{Namespace: appNamespace, Name: "maas-api"}
+			recorder = newTenantRequestRecorder(func(ctx context.Context, req reconcile.Request) error {
+				if req != otherRequest {
+					return nil
+				}
+				sa := &unstructured.Unstructured{}
+				sa.SetGroupVersionKind(tenantreconcile.GVKServiceAccount)
+				sa.SetNamespace(key.Namespace)
+				sa.SetName(key.Name)
+				markShared(sa)
+				return envTest.Patch(ctx, sa, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)
+			})
+			startWatches(ctx)
+			mark := recorder.mark()
+			disableDefault(ctx)
+			if wakesDefault {
+				// The cache has seen the change once its event has arrived.
+				Eventually(since(mark)).Should(ContainElement(survivor))
+				Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+			}
+			mark = recorder.mark()
 
-		Eventually(since(mark)).Should(ContainElement(survivor))
-	})
+			Expect(envTest.Delete(ctx, markShared(fixture.OperandServiceAccount(key.Namespace, key.Name)))).To(Succeed())
+
+			Eventually(func(g Gomega) {
+				sa := &metav1.PartialObjectMetadata{}
+				sa.SetGroupVersionKind(tenantreconcile.GVKServiceAccount)
+				g.Expect(envTest.Get(ctx, key, sa)).To(Succeed())
+				g.Expect(sa.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelSharedOperand, "true"))
+			}).WithTimeout(watchSettleTimeout).Should(Succeed())
+			Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(And(ContainElement(otherRequest), HaveEach(otherRequest)))
+		},
+		// A status-only write wakes nothing; the default was never Ready anyway.
+		Entry("the default tenant is Managed but not Ready", func(ctx SpecContext) {
+			setTenantReady(ctx, survivor.NamespacedName, metav1.ConditionFalse)
+		}, false),
+		Entry("the default tenant is Unmanaged", func(ctx SpecContext) {
+			Eventually(func(g Gomega) {
+				tc := &maasv1alpha1.MaasTenantConfig{}
+				g.Expect(envTest.Get(ctx, survivor.NamespacedName, tc)).To(Succeed())
+				tc.Annotations = map[string]string{managementStateAnnotation: managementStateUnmanaged}
+				g.Expect(envTest.Update(ctx, tc)).To(Succeed())
+			}).Should(Succeed())
+		}, true),
+		Entry("the default tenant config is gone", func(ctx SpecContext) {
+			Expect(envTest.Delete(ctx, predTenantConfig(survivor.Namespace))).To(Succeed())
+		}, true),
+	)
 
 	It("delivers operand events through the namespace-scoped metadata cache", func(ctx SpecContext) {
 		cached := startWatches(ctx)
@@ -584,7 +653,7 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 		Expect(err).To(MatchError(ContainSubstring("unknown namespace")))
 	})
 
-	It("sees a ClusterRole that loses its tracking labels as a delete carrying the old labels", func(ctx SpecContext) {
+	It("sees a ClusterRole that loses the component label as a delete carrying the old labels", func(ctx SpecContext) {
 		role := stampedFor(fixture.OperandClusterRole(appNamespace), survivor.Namespace)
 		Expect(envTest.Create(ctx, role)).To(Succeed())
 		cached := startWatches(ctx)
@@ -598,6 +667,30 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 		gone := &metav1.PartialObjectMetadata{}
 		gone.SetGroupVersionKind(gvkClusterRole)
 		Expect(apierrors.IsNotFound(cached.Get(ctx, client.ObjectKeyFromObject(role), gone))).To(BeTrue())
+	})
+
+	It("keeps a ClusterRole cached when the upgrade swaps its tracking labels for the marker", func(ctx SpecContext) {
+		// The cache selects on the component label, which both shapes carry, so the first
+		// post-upgrade apply is an update the watch sees, not a synthetic delete.
+		role := stampedFor(fixture.OperandClusterRole(appNamespace), survivor.Namespace)
+		Expect(envTest.Create(ctx, role)).To(Succeed())
+		cached := startWatches(ctx)
+
+		labels := role.GetLabels()
+		delete(labels, tenantreconcile.LabelTenantName)
+		delete(labels, tenantreconcile.LabelTenantNamespace)
+		markShared(role)
+		Expect(envTest.Update(ctx, role)).To(Succeed())
+
+		Eventually(func(g Gomega) {
+			live := &metav1.PartialObjectMetadata{}
+			live.SetGroupVersionKind(gvkClusterRole)
+			g.Expect(cached.Get(ctx, client.ObjectKeyFromObject(role), live)).To(Succeed())
+			g.Expect(live.GetLabels()).To(And(
+				HaveKeyWithValue(tenantreconcile.LabelSharedOperand, "true"),
+				Not(HaveKey(tenantreconcile.LabelTenantNamespace)),
+			))
+		}).Should(Succeed())
 	})
 
 	It("registers a CRD-backed operand watch once the CRD is served, and wakes the tenants", func(ctx SpecContext) {
@@ -656,8 +749,12 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 	// matters because ai-gateway-controller writes the shared payload-processing-reader
 	// ClusterRole on every praxis tenant's own resync.
 	It("enqueues exactly one tenant when a shared operand is written by another field manager", func(ctx SpecContext) {
-		other := pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name
-		Expect(envTest.Create(ctx, predTenantConfig(other))).To(Succeed())
+		// Both tenants would repair it: the default wins.
+		other := aiTenantConfig(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name, "other")
+		Expect(envTest.Create(ctx, other)).To(Succeed())
+		DeferCleanup(func(ctx SpecContext) { Expect(client.IgnoreNotFound(envTest.Delete(ctx, other))).To(Succeed()) })
+		setTenantReady(ctx, client.ObjectKeyFromObject(other), metav1.ConditionTrue)
+		setTenantReady(ctx, survivor.NamespacedName, metav1.ConditionTrue)
 		role := fixture.OperandClusterRole(appNamespace)
 		markShared(role)
 		Expect(envTest.Create(ctx, role)).To(Succeed())
