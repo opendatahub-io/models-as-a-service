@@ -3,6 +3,8 @@ package maas
 import (
 	"context"
 	"errors"
+	"fmt"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -11,7 +13,9 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -103,6 +107,25 @@ var _ = Describe("TenantReconciler watches", func() {
 		policy := &netwv1.NetworkPolicy{}
 		Expect(envTest.Get(ctx, client.ObjectKey{Namespace: appNamespace, Name: "maas-api"}, policy)).To(Succeed())
 		Expect(policy.Labels).To(HaveKey(tenantreconcile.LabelTenantNamespace))
+	})
+
+	It("settles when the tenants apply the rendered cleanup NetworkPolicy", func(ctx SpecContext) {
+		// The rendered manifest goes to server-side apply unstructured, as the platform
+		// apply sends it, so an empty list in it reaches the API server.
+		cleanupPolicy := renderedOperand(appNamespace, tenantreconcile.GVKNetworkPolicy, "maas-api-cleanup-restrict")
+		recorder = newTenantRequestRecorder(func(ctx context.Context, tenant reconcile.Request) error {
+			if tenant != tenantA && tenant != tenantB {
+				return nil
+			}
+			policy := cleanupPolicy.DeepCopy()
+			labels := policy.GetLabels()
+			labels[tenantreconcile.LabelTenantName] = tenant.Namespace
+			labels[tenantreconcile.LabelTenantNamespace] = tenant.Namespace
+			policy.SetLabels(labels)
+			return envTest.Patch(ctx, policy, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)
+		})
+
+		startWatches(ctx)
 	})
 
 	It("enqueues every tenant when the shared NetworkPolicy drifts", func(ctx SpecContext) {
@@ -208,6 +231,23 @@ var _ = Describe("AITenantReconciler watches", func() {
 		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(aitenant))
 	})
 })
+
+// renderedOperand renders the odh overlay into appNamespace the way the platform pipeline
+// does and returns the named object.
+func renderedOperand(appNamespace string, gvk schema.GroupVersionKind, name string) *unstructured.Unstructured {
+	GinkgoHelper()
+
+	overlay := filepath.Join(pkgtest.ProjectRoot(), "maas-api", "deploy", "overlays", "odh")
+	rendered, err := tenantreconcile.RenderKustomize(overlay, appNamespace)
+	Expect(err).NotTo(HaveOccurred())
+	for i := range rendered {
+		if rendered[i].GroupVersionKind() == gvk && rendered[i].GetName() == name {
+			return &rendered[i]
+		}
+	}
+	Fail(fmt.Sprintf("the odh overlay renders no %s %q", gvk.Kind, name))
+	return nil
+}
 
 // installGatewayCRD serves a schemaless Gateway API Gateway, which the AITenant controller
 // watches. The environment installs only the MaaS CRDs.
