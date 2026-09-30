@@ -869,39 +869,6 @@ def _server_dry_run_subscription(name, model_ref_budget):
     )
 
 
-_UNLIMITED_SUBSCRIPTION_SKIP_REASON = (
-    "MaaSSubscription modelRefs[].unlimited not supported by installed CRD "
-    "(requires models-as-a-service #1536 or newer maas-controller bundle)"
-)
-
-
-def _crd_rejects_unlimited_without_token_limits(stderr: str) -> bool:
-    """True when admission rejects unlimited-only modelRefs for an older CRD schema."""
-    msg = stderr.lower()
-    return (
-        "tokenratelimits: required value" in msg
-        or "tokenratelimits is required unless unlimited is true" in msg
-    )
-
-
-def _unlimited_subscription_crd_supported() -> bool:
-    """Return True when the cluster CRD accepts unlimited modelRefs without tokenRateLimits."""
-    probe = _server_dry_run_subscription("e2e-unlimited-crd-probe", {"unlimited": True})
-    if probe.returncode == 0:
-        return True
-    if _crd_rejects_unlimited_without_token_limits(probe.stderr):
-        return False
-    combined = probe.stderr.strip() or probe.stdout.strip() or f"exit {probe.returncode}"
-    raise RuntimeError(f"unlimited subscription CRD probe failed unexpectedly: {combined}")
-
-
-@pytest.fixture(scope="class")
-def _require_unlimited_subscription_crd():
-    """Skip unlimited-subscription tests when the installed CRD predates #1536."""
-    if not _unlimited_subscription_crd_supported():
-        pytest.skip(_UNLIMITED_SUBSCRIPTION_SKIP_REASON)
-
-
 def _wait_for_trlp_limits(model_ref, predicate_fn, timeout=90):
     """Poll the model's TRLP until predicate_fn(spec.limits) holds and Kuadrant enforces it."""
     trlp_name = f"maas-trlp-{model_ref}"
@@ -980,7 +947,6 @@ def _limitador_authorized_hits(subscription_name):
     return sum(float(line.rsplit(" ", 1)[1]) for line in hits if f'subscription="{subscription_name}"' in line)
 
 
-@pytest.mark.usefixtures("_require_unlimited_subscription_crd")
 class TestUnlimitedSubscription:
     """modelRefs[].unlimited: access without a token budget that still meters usage.
 
@@ -1125,7 +1091,6 @@ class TestUnlimitedSubscription:
         assert after > before, f"authorized_hits for {self.UNLIMITED_SUB} did not grow: {before} -> {after}"
 
 
-@pytest.mark.usefixtures("_require_unlimited_subscription_crd")
 class TestAllUnlimitedModel:
     """A model whose only subscriptions are unlimited.
 
