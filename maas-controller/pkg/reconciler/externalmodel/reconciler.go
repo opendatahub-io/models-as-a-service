@@ -50,10 +50,20 @@ var inferenceExternalModelGVK = schema.GroupVersionKind{
 // handles cleanup when the ExternalModel is deleted — no finalizer needed.
 type Reconciler struct {
 	client.Client
+	// APIReader reads Services. A typed Service read through the cached client starts a
+	// cluster-wide Service informer that nothing else in the manager needs.
+	APIReader        client.Reader
 	Scheme           *runtime.Scheme
 	Log              logr.Logger
 	GatewayName      string
 	GatewayNamespace string
+}
+
+func (r *Reconciler) serviceReader() client.Reader {
+	if r.APIReader != nil {
+		return r.APIReader
+	}
+	return r.Client
 }
 
 func (r *Reconciler) gatewayName() string {
@@ -269,7 +279,7 @@ func isManaged(obj metav1.Object) bool {
 // applyService creates or updates a Service.
 func (r *Reconciler) applyService(ctx context.Context, log logr.Logger, desired *corev1.Service) error {
 	existing := &corev1.Service{}
-	err := r.Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
+	err := r.serviceReader().Get(ctx, types.NamespacedName{Name: desired.Name, Namespace: desired.Namespace}, existing)
 	if apierrors.IsNotFound(err) {
 		log.Info("Creating Service", "name", desired.Name)
 		return r.Create(ctx, desired)
@@ -391,7 +401,7 @@ func (r *Reconciler) teardownLegacyChildren(ctx context.Context, extModel *maasv
 
 	svc := &corev1.Service{}
 	svcKey := types.NamespacedName{Name: resourceName, Namespace: ns}
-	if err := r.Get(ctx, svcKey, svc); err == nil {
+	if err := r.serviceReader().Get(ctx, svcKey, svc); err == nil {
 		if isManaged(svc) {
 			logger.Info("Deleting legacy Service", "name", resourceName)
 			if err := r.Delete(ctx, svc); err != nil && !apierrors.IsNotFound(err) {

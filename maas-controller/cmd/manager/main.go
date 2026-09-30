@@ -1156,6 +1156,9 @@ func main() {
 	// cache options are fixed before the manager exists. Operand kinds must stay
 	// disjoint from the kinds above: the cache keys ByObject by GVK while ranging
 	// over the map, so two entries for one kind resolve in random order.
+	// The only managedFields reader checks unstructured objects, which the client reads
+	// from the API server, so cached objects do not need them.
+	cacheOpts.DefaultTransform = cache.TransformStripManagedFields()
 	preManagerClient := mustPreManagerClient(cfg)
 	maps.Copy(cacheOpts.ByObject, maas.TenantOperandCacheByObject(context.Background(), preManagerClient, infraNamespace, gatewayNamespace))
 
@@ -1252,6 +1255,7 @@ func main() {
 
 	if err := (&externalmodel.Reconciler{
 		Client:           mgr.GetClient(),
+		APIReader:        mgr.GetAPIReader(),
 		Scheme:           mgr.GetScheme(),
 		Log:              ctrl.Log.WithName("controllers").WithName("ExternalModel"),
 		GatewayName:      gatewayName,

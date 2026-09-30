@@ -126,9 +126,9 @@ func tenantOperands() []tenantOperand {
 		// Unstructured informer shared with MaaSSubscriptionReconciler, which needs TRLPs
 		// in model namespaces, so it stays cluster-wide.
 		{gvk: tenantreconcile.GVKTokenRateLimitPolicy, crd: "tokenratelimitpolicies.kuadrant.io", newObject: unstructuredOf(tenantreconcile.GVKTokenRateLimitPolicy)},
-		// The ExternalModel reconciler reads typed Services in model namespaces, so the
-		// Service GVK cannot be scoped; metadata keeps the cluster-wide informer small.
-		{gvk: tenantreconcile.GVKService, newObject: metadataOnly(tenantreconcile.GVKService), anyWrite: true},
+		// The ExternalModel reconciler reads Services through the API reader, so no other
+		// Service informer exists and this one can be scoped.
+		{gvk: tenantreconcile.GVKService, newObject: metadataOnly(tenantreconcile.GVKService), anyWrite: true, scope: scopePlatformNamespaces},
 
 		{gvk: tenantreconcile.GVKServiceAccount, newObject: metadataOnly(tenantreconcile.GVKServiceAccount), anyWrite: true, scope: scopePlatformNamespaces},
 		{gvk: gvkClusterRole, newObject: metadataOnly(gvkClusterRole), anyWrite: true, scope: scopeTracked},

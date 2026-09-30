@@ -151,8 +151,9 @@ func TestTenantOperandCacheByObject(t *testing.T) {
 		scoped[gvk] = cfg
 	}
 
-	g.Expect(scoped).To(HaveLen(5), "SA, CronJob, HPA, ClusterRole and the one served CRD kind")
+	g.Expect(scoped).To(HaveLen(6), "Service, SA, CronJob, HPA, ClusterRole and the one served CRD kind")
 	for _, gvk := range []schema.GroupVersionKind{
+		tenantreconcile.GVKService,
 		tenantreconcile.GVKServiceAccount,
 		tenantreconcile.GVKCronJob,
 		tenantreconcile.GVKHPA,
@@ -176,7 +177,6 @@ func TestTenantOperandCacheByObject(t *testing.T) {
 	// Informers shared with other controllers must keep their cluster-wide scope.
 	for _, gvk := range []schema.GroupVersionKind{
 		tenantreconcile.GVKDeployment,
-		tenantreconcile.GVKService,
 		tenantreconcile.GVKConfigMap,
 		tenantreconcile.GVKHTTPRoute,
 		tenantreconcile.GVKTokenRateLimitPolicy,
