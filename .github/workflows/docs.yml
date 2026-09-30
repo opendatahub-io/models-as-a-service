@@ -124,9 +124,11 @@ jobs:
 
       - name: Summary
         run: |
-          echo "✅ Documentation built successfully!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "The documentation has been validated and builds without errors." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "✅ Documentation built successfully!"
+            echo ""
+            echo "The documentation has been validated and builds without errors."
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # Deploy job for main/master branch - deploys as 'dev' version
   deploy:
@@ -179,10 +181,12 @@ jobs:
 
       - name: Summary
         run: |
-          echo "✅ Development documentation deployed!" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "- Version: \`dev\` (hidden from version selector)" >> $GITHUB_STEP_SUMMARY
-          echo "- Branch: \`gh-pages\`" >> $GITHUB_STEP_SUMMARY
-          echo "- URL: https://opendatahub-io.github.io/models-as-a-service/dev/" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "ℹ️ The dev version is accessible directly but won't appear in the version dropdown." >> $GITHUB_STEP_SUMMARY
+          {
+            echo "✅ Development documentation deployed!"
+            echo ""
+            echo "- Version: \`dev\` (hidden from version selector)"
+            echo "- Branch: \`gh-pages\`"
+            echo "- URL: https://opendatahub-io.github.io/models-as-a-service/dev/"
+            echo ""
+            echo "ℹ️ The dev version is accessible directly but won't appear in the version dropdown."
+          } >> "$GITHUB_STEP_SUMMARY"

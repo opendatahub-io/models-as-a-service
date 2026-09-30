@@ -67,15 +67,17 @@ jobs:
 
           if ! git merge --no-commit --no-ff origin/stable; then
             echo "::error::Merge conflicts detected between stable and rhoai."
-            echo "## Promote Stable to RHOAI — FAILED" >> "$GITHUB_STEP_SUMMARY"
-            echo "### Merge conflicts detected" >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "The following files have conflicts:" >> "$GITHUB_STEP_SUMMARY"
-            echo '````' >> "$GITHUB_STEP_SUMMARY"
-            git diff --name-only --diff-filter=U >> "$GITHUB_STEP_SUMMARY"
-            echo '````' >> "$GITHUB_STEP_SUMMARY"
-            echo "" >> "$GITHUB_STEP_SUMMARY"
-            echo "Please resolve conflicts manually before re-running this workflow." >> "$GITHUB_STEP_SUMMARY"
+            {
+              echo "## Promote Stable to RHOAI — FAILED"
+              echo "### Merge conflicts detected"
+              echo ""
+              echo "The following files have conflicts:"
+              echo '````'
+              git diff --name-only --diff-filter=U
+              echo '````'
+              echo ""
+              echo "Please resolve conflicts manually before re-running this workflow."
+            } >> "$GITHUB_STEP_SUMMARY"
             git merge --abort
             exit 1
           fi
@@ -120,17 +122,19 @@ jobs:
             echo "Created new promotion PR #${PR_NUMBER}"
           fi
 
-          echo "## Promote Stable to RHOAI — PR Created" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "**PR:** [#${PR_NUMBER}](${PR_URL})" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Detail | Value |" >> "$GITHUB_STEP_SUMMARY"
-          echo "|--------|-------|" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Promotion | \`stable\` → \`rhoai\` |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Commits to merge | **${DIFF_COUNT}** |" >> "$GITHUB_STEP_SUMMARY"
-          echo "| Conflict check | ✅ Passed |" >> "$GITHUB_STEP_SUMMARY"
-          echo "" >> "$GITHUB_STEP_SUMMARY"
-          echo "### Commits included" >> "$GITHUB_STEP_SUMMARY"
-          echo '````' >> "$GITHUB_STEP_SUMMARY"
-          echo "$COMMIT_LOG" >> "$GITHUB_STEP_SUMMARY"
-          echo '````' >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "## Promote Stable to RHOAI — PR Created"
+            echo ""
+            echo "**PR:** [#${PR_NUMBER}](${PR_URL})"
+            echo ""
+            echo "| Detail | Value |"
+            echo "|--------|-------|"
+            echo "| Promotion | \`stable\` → \`rhoai\` |"
+            echo "| Commits to merge | **${DIFF_COUNT}** |"
+            echo "| Conflict check | ✅ Passed |"
+            echo ""
+            echo "### Commits included"
+            echo '````'
+            echo "$COMMIT_LOG"
+            echo '````'
+          } >> "$GITHUB_STEP_SUMMARY"
