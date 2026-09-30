@@ -183,6 +183,8 @@ func TestTenantOperandCacheByObject(t *testing.T) {
 	}
 }
 
+// mapTenantOperandToMaasTenantConfig is the labelled-owner lookup; shared operands add a
+// fallback on top of it (TestOperandMapperForSharedOperands).
 func TestMapTenantOperandToMaasTenantConfig(t *testing.T) {
 	tests := []struct {
 		name      string
@@ -193,19 +195,19 @@ func TestMapTenantOperandToMaasTenantConfig(t *testing.T) {
 		{
 			name:      "tracking namespace selects the tenant config",
 			discovery: true,
-			obj:       operandMeta(tenantreconcile.GVKServiceAccount, operandInfraNS, "maas-api", trackedBy("red", operandRedNS)),
+			obj:       operandMeta(tenantreconcile.GVKServiceAccount, operandGatewayNS, tenantreconcile.PayloadProcessingServiceAccountName("red"), trackedBy("red", operandRedNS)),
 			want:      []reconcile.Request{tenantRequest(operandRedNS)},
 		},
 		{
 			name:      "cluster-scoped operand maps the same way",
 			discovery: true,
-			obj:       operandMeta(gvkClusterRole, "", "maas-api", trackedBy("red", operandRedNS)),
+			obj:       operandMeta(tenantreconcile.GVKClusterRoleBinding, "", tenantreconcile.PayloadProcessingReaderClusterRoleBindingNameForTenant("red"), trackedBy("red", operandRedNS)),
 			want:      []reconcile.Request{tenantRequest(operandRedNS)},
 		},
 		{
 			name:      "without discovery every operand belongs to the default tenant",
 			discovery: false,
-			obj:       operandMeta(tenantreconcile.GVKServiceAccount, operandInfraNS, "maas-api", trackedBy("red", operandRedNS)),
+			obj:       operandMeta(tenantreconcile.GVKServiceAccount, operandGatewayNS, tenantreconcile.PayloadProcessingServiceAccountName("red"), trackedBy("red", operandRedNS)),
 			want:      []reconcile.Request{tenantRequest(operandDefaultNS)},
 		},
 		{
@@ -230,6 +232,70 @@ func TestMapTenantOperandToMaasTenantConfig(t *testing.T) {
 			g := NewWithT(t)
 			r := operandTestReconciler(nil, tt.discovery)
 			g.Expect(r.mapTenantOperandToMaasTenantConfig(t.Context(), tt.obj)).To(Equal(tt.want))
+		})
+	}
+}
+
+func TestOperandMapperForSharedOperands(t *testing.T) {
+	now := metav1.Now()
+	redConfig := func(mutate func(*maasv1alpha1.MaasTenantConfig)) *maasv1alpha1.MaasTenantConfig {
+		tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: operandRedNS,
+		}}
+		if mutate != nil {
+			mutate(tenant)
+		}
+		return tenant
+	}
+	survivor := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+		Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: operandDefaultNS,
+	}}
+	var serviceAccounts, services tenantOperand
+	for _, op := range tenantOperands() {
+		switch op.gvk {
+		case tenantreconcile.GVKServiceAccount:
+			serviceAccounts = op
+		case tenantreconcile.GVKService:
+			services = op
+		}
+	}
+	sharedSA := operandMeta(tenantreconcile.GVKServiceAccount, operandInfraNS, "maas-api", trackedBy("red", operandRedNS))
+	perTenantService := operandMeta(tenantreconcile.GVKService, operandInfraNS, tenantreconcile.MaaSAPIServiceName("red"), trackedBy("red", operandRedNS))
+	everyTenant := []reconcile.Request{tenantRequest(operandDefaultNS), tenantRequest(operandRedNS)}
+
+	tests := []struct {
+		name  string
+		red   *maasv1alpha1.MaasTenantConfig
+		op    tenantOperand
+		obj   client.Object
+		want  []reconcile.Request
+		exact bool
+	}{
+		{name: "owner Managed", red: redConfig(nil), op: serviceAccounts, obj: sharedSA, want: []reconcile.Request{tenantRequest(operandRedNS)}, exact: true},
+		{name: "owner gone", op: serviceAccounts, obj: sharedSA, want: []reconcile.Request{tenantRequest(operandDefaultNS)}},
+		{name: "owner deleting", op: serviceAccounts, obj: sharedSA, want: everyTenant, red: redConfig(func(tc *maasv1alpha1.MaasTenantConfig) {
+			tc.DeletionTimestamp = &now
+			tc.Finalizers = []string{tenantFinalizer}
+		})},
+		{name: "owner Unmanaged", op: serviceAccounts, obj: sharedSA, want: everyTenant, red: redConfig(func(tc *maasv1alpha1.MaasTenantConfig) {
+			tc.Annotations = map[string]string{managementStateAnnotation: managementStateUnmanaged}
+		})},
+		{name: "per-tenant operand of a gone owner", op: services, obj: perTenantService, want: []reconcile.Request{tenantRequest(operandRedNS)}, exact: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			objs := []client.Object{survivor.DeepCopy()}
+			if tt.red != nil {
+				objs = append(objs, tt.red)
+			}
+			c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).Build()
+			got := operandTestReconciler(c, true).operandMapper(tt.op)(t.Context(), tt.obj)
+			if tt.exact {
+				g.Expect(got).To(Equal(tt.want))
+				return
+			}
+			g.Expect(got).To(ContainElements(tt.want))
 		})
 	}
 }

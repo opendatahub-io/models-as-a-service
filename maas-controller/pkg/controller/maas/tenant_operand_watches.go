@@ -210,8 +210,8 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 		}
 	}
 
-	operandHandler := handler.EnqueueRequestsFromMapFunc(r.mapTenantOperandToMaasTenantConfig)
 	for _, op := range tenantOperands() {
+		operandHandler := handler.EnqueueRequestsFromMapFunc(r.operandMapper(op))
 		if err := watchWhenServed(ctx, c, mgr, op.crd, op.gvk.Version, kind(op.newObject(), operandHandler, r.operandPredicate(op))); err != nil {
 			return err
 		}
@@ -301,6 +301,36 @@ func (r *TenantReconciler) mapTenantOperandToMaasTenantConfig(ctx context.Contex
 		}
 	}
 	return r.enqueueDefaultTenant(ctx, obj)
+}
+
+// operandMapper maps an event on an operand of op's kind to the tenant configs that
+// repair it: the tenant named in its tracking labels. A shared operand carries whichever
+// tenant applied it last, and cleanup never deletes it with that tenant, so when that
+// tenant config is gone, deleting or not Managed, every tenant is enqueued instead;
+// the first to apply it takes over the labels.
+func (r *TenantReconciler) operandMapper(op tenantOperand) handler.MapFunc {
+	gk := op.gvk.GroupKind()
+	return func(ctx context.Context, obj client.Object) []reconcile.Request {
+		owner := r.mapTenantOperandToMaasTenantConfig(ctx, obj)
+		if len(owner) == 1 && isSharedTenantOperand(gk, obj) && !r.reconcilesOperands(ctx, owner[0].NamespacedName) {
+			return r.enqueueAllTenants(ctx, obj)
+		}
+		return owner
+	}
+}
+
+// reconcilesOperands reports whether the tenant config at key exists and would re-apply
+// its operands: not deleting and Managed.
+func (r *TenantReconciler) reconcilesOperands(ctx context.Context, key types.NamespacedName) bool {
+	var tenant maasv1alpha1.MaasTenantConfig
+	if err := r.Get(ctx, key, &tenant); err != nil {
+		if !apierrors.IsNotFound(err) {
+			oteljson.FromContext(ctx).Error(err, "failed to get MaasTenantConfig for operand mapping", "tenantConfig", key)
+		}
+		return false
+	}
+	ms := managementState(tenant.Annotations)
+	return tenant.DeletionTimestamp.IsZero() && (ms == "" || ms == managementStateManaged)
 }
 
 // operandPredicate is the predicate the watch on op uses: drift, plus the rollout

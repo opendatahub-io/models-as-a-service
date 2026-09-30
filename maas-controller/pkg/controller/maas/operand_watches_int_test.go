@@ -1,13 +1,17 @@
 package maas
 
 import (
+	"context"
+
 	appsv1 "k8s.io/api/apps/v1"
 	autov1 "k8s.io/api/autoscaling/v1"
 	autov2 "k8s.io/api/autoscaling/v2"
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/event"
@@ -68,6 +72,16 @@ var _ = Describe("Tenant operand watches", func() {
 		return tenant
 	}
 
+	// ensureTenantConfig creates tenant's config once; its namespace name is fixed, and
+	// envtest never finishes deleting namespaces.
+	ensureTenantConfig := func(ctx SpecContext, tenant string) {
+		namespace := operandWatchTenantNamespace(tenant)
+		Expect(client.IgnoreAlreadyExists(envTest.Create(ctx, &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: namespace}}))).To(Succeed())
+		Expect(client.IgnoreAlreadyExists(envTest.Create(ctx, &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+			Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace,
+		}}))).To(Succeed())
+	}
+
 	watchOf := func(obj client.Object) tenantOperand {
 		gvk, err := apiutil.GVKForObject(obj, envTest.Environment.Scheme)
 		Expect(err).NotTo(HaveOccurred())
@@ -109,6 +123,9 @@ var _ = Describe("Tenant operand watches", func() {
 			)
 
 			BeforeEach(func(ctx SpecContext) {
+				// A shared operand maps to its labelled tenant only while that tenant config
+				// would re-apply it.
+				ensureTenantConfig(ctx, "red")
 				operand, edit = build(appNamespace)
 				stamp(operand, "red")
 				op = watchOf(operand)
@@ -123,7 +140,7 @@ var _ = Describe("Tenant operand watches", func() {
 					edited := observe(ctx, op, operand)
 
 					Expect(admitsUpdate(op, original, edited)).To(BeTrue())
-					Expect(r.mapTenantOperandToMaasTenantConfig(ctx, edited)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+					Expect(r.operandMapper(op)(ctx, edited)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
 				})
 			})
 
@@ -133,7 +150,7 @@ var _ = Describe("Tenant operand watches", func() {
 					Expect(apierrors.IsNotFound(envTest.Get(ctx, client.ObjectKeyFromObject(operand), op.newObject()))).To(BeTrue())
 
 					Expect(r.operandPredicate(op).Delete(event.DeleteEvent{Object: original})).To(BeTrue())
-					Expect(r.mapTenantOperandToMaasTenantConfig(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+					Expect(r.operandMapper(op)(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
 				})
 			})
 
@@ -153,13 +170,14 @@ var _ = Describe("Tenant operand watches", func() {
 			} else {
 				When("its tracking labels are rewritten to another tenant", func() {
 					It("re-enqueues both tenants, so the owner restores its labels", func(ctx SpecContext) {
+						ensureTenantConfig(ctx, "blue")
 						stamp(operand, "blue")
 						Expect(envTest.Update(ctx, operand)).To(Succeed())
 						relabelled := observe(ctx, op, operand)
 
 						Expect(admitsUpdate(op, original, relabelled)).To(BeTrue())
-						Expect(r.mapTenantOperandToMaasTenantConfig(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
-						Expect(r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("blue"))))
+						Expect(r.operandMapper(op)(ctx, original)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+						Expect(r.operandMapper(op)(ctx, relabelled)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("blue"))))
 					})
 				})
 			}
@@ -215,11 +233,11 @@ var _ = Describe("Tenant operand watches", func() {
 
 			var enqueued []reconcile.Request
 			if admitsUpdate(op, original, relabelled) {
-				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, original)...)
-				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)...)
+				enqueued = append(enqueued, r.operandMapper(op)(ctx, original)...)
+				enqueued = append(enqueued, r.operandMapper(op)(ctx, relabelled)...)
 			}
 			if r.operandPredicate(op).Delete(event.DeleteEvent{Object: relabelled}) {
-				enqueued = append(enqueued, r.mapTenantOperandToMaasTenantConfig(ctx, relabelled)...)
+				enqueued = append(enqueued, r.operandMapper(op)(ctx, relabelled)...)
 			}
 
 			Expect(enqueued).To(ContainElement(tenantConfigOf(operandWatchTenantNamespace(owner))[0]))
@@ -397,7 +415,7 @@ var _ = Describe("Tenant operand watches", func() {
 			available := rolloutStatus(ctx, 1)
 
 			Expect(admitsUpdate(op, original, available)).To(BeTrue())
-			Expect(r.mapTenantOperandToMaasTenantConfig(ctx, available)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
+			Expect(r.operandMapper(op)(ctx, available)).To(Equal(tenantConfigOf(operandWatchTenantNamespace("red"))))
 		})
 
 		It("ignores status churn that stays below the readiness gate", func(ctx SpecContext) {
@@ -417,13 +435,69 @@ var _ = Describe("Tenant operand watches", func() {
 			op, dep := createUnlabelled(ctx, tenantreconcile.DefaultMaaSAPIDeploymentName)
 
 			Expect(r.operandPredicate(op).Create(event.CreateEvent{Object: dep})).To(BeTrue())
-			Expect(r.mapTenantOperandToMaasTenantConfig(ctx, dep)).To(Equal(tenantConfigOf(operandWatchDefaultTenantNamespace)))
+			Expect(r.operandMapper(op)(ctx, dep)).To(Equal(tenantConfigOf(operandWatchDefaultTenantNamespace)))
 		})
 
 		It("does not guess the tenant of a per-tenant name", func(ctx SpecContext) {
-			_, dep := createUnlabelled(ctx, tenantreconcile.DefaultMaaSAPIDeploymentName+"-red")
+			op, dep := createUnlabelled(ctx, tenantreconcile.DefaultMaaSAPIDeploymentName+"-red")
 
-			Expect(r.mapTenantOperandToMaasTenantConfig(ctx, dep)).To(BeEmpty())
+			Expect(r.operandMapper(op)(ctx, dep)).To(BeEmpty())
 		})
+	})
+})
+
+// These specs run the operand watches in a manager against a real API server, with PR1's
+// recorder in place of the platform reconcile.
+var _ = Describe("Tenant operand watches through a manager", func() {
+	var (
+		appNamespace     string
+		gatewayNamespace string
+		survivor         reconcile.Request
+		recorder         *tenantRequestRecorder
+	)
+
+	BeforeEach(func(ctx SpecContext) {
+		appNamespace = pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("app")).Name
+		gatewayNamespace = pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("gateway")).Name
+		survivor = predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("survivor")).Name)[0]
+		Expect(envTest.Create(ctx, predTenantConfig(survivor.Namespace))).To(Succeed())
+		recorder = newTenantRequestRecorder(func(context.Context, reconcile.Request) error { return nil })
+	})
+
+	// stampedFor sets the tracking labels the tenant config in tenantNamespace applies with.
+	stampedFor := func(obj client.Object, tenantNamespace string) client.Object {
+		tenantreconcile.SetTenantTrackingLabels(obj, predTenantConfig(tenantNamespace))
+		return obj
+	}
+
+	startWatches := func(ctx SpecContext) {
+		GinkgoHelper()
+
+		r := &TenantReconciler{
+			AppNamespace:                    appNamespace,
+			OperatorNamespace:               appNamespace,
+			TenantNamespace:                 survivor.Namespace,
+			GatewayNamespace:                gatewayNamespace,
+			TenantNamespaceDiscoveryEnabled: true,
+		}
+		startWatchManager(ctx, func(mgr ctrl.Manager) error {
+			r.Client, r.Scheme = mgr.GetClient(), mgr.GetScheme()
+			return r.setupWithManager(mgr, recorder)
+		})
+		Eventually(recorder.all).WithTimeout(watchSettleTimeout).Should(ContainElement(survivor))
+		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+	}
+
+	It("wakes the remaining tenants when a shared operand last applied by a departed tenant is deleted", func(ctx SpecContext) {
+		// Shared operands keep whichever tenant applied them last; once that tenant is gone,
+		// only a remaining tenant can recreate what every tenant's maas-api needs.
+		sa := stampedFor(fixture.OperandServiceAccount(appNamespace, "maas-api"), operandWatchTenantNamespace("departed"))
+		Expect(envTest.Create(ctx, sa)).To(Succeed())
+		startWatches(ctx)
+		mark := recorder.mark()
+
+		Expect(envTest.Delete(ctx, sa)).To(Succeed())
+
+		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(survivor))
 	})
 })
