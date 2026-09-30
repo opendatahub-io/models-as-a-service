@@ -1645,6 +1645,10 @@ class TestManagedAnnotation:
                     assert limits, f"modelRef {MODEL_REF} has no tokenRateLimits"
                     limits[0]["limit"] = limits[0]["limit"] + 99999
                     break
+            else:
+                pytest.fail(
+                    f"modelRef {MODEL_REF} not found in MaaSSubscription {SIMULATOR_SUBSCRIPTION}"
+                )
             _apply_cr(modified_parent)
             log.info(
                 "Modified parent MaaSSubscription %s (changed token rate limit)",
@@ -1656,10 +1660,22 @@ class TestManagedAnnotation:
             assert modified, (
                 f"MaaSSubscription {SIMULATOR_SUBSCRIPTION} disappeared after update"
             )
-            _wait_for_subscription_generation_observed(
+            reconciled = _wait_for_subscription_generation_observed(
                 SIMULATOR_SUBSCRIPTION,
                 modified["metadata"]["generation"],
                 namespace=ns,
+            )
+            # An unchanged TRLP only proves managed=false if the reconcile got
+            # to the TRLP step: the model was valid and the step did not fail.
+            # Degraded is expected while Kuadrant has not enforced the policy.
+            status = reconciled.get("status", {})
+            model_ready = any(
+                s.get("name") == MODEL_REF and s.get("ready") is True
+                for s in status.get("modelRefStatuses", [])
+            )
+            assert model_ready and status.get("phase") in ("Active", "Degraded"), (
+                f"MaaSSubscription {SIMULATOR_SUBSCRIPTION} reconciled without "
+                f"reaching the TRLP step: {status}"
             )
 
             # 7. Re-read the TRLP and compare spec

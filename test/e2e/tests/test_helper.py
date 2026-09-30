@@ -1455,13 +1455,17 @@ def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
 def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
     """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
 
-    The controller reconciles the TokenRateLimitPolicies before it writes status,
-    so the Ready condition's observedGeneration reaching ``generation`` means the
-    TRLPs were reconciled against that spec. Unlike phase or TRLP readiness, this
-    does not depend on Kuadrant.
+    The controller writes the Ready condition's observedGeneration at the end of
+    every reconcile, after the TRLP step, on success and failure paths alike. A
+    matching value means the controller processed that spec, not that the TRLP
+    step succeeded: callers that need that must check phase and modelRefStatuses
+    on the returned CR. Unlike phase or TRLP readiness, this does not depend on
+    Kuadrant.
     """
     namespace = namespace or _ns()
     deadline = time.time() + timeout
+    cr = None
+    ready = {}
     observed = None
 
     while time.time() < deadline:
@@ -1487,7 +1491,11 @@ def _wait_for_subscription_generation_observed(name, generation, namespace=None,
 
     raise TimeoutError(
         f"MaaSSubscription {namespace}/{name} was not reconciled at generation "
-        f"{generation} within {timeout}s (Ready observedGeneration={observed})"
+        f"{generation} within {timeout}s: "
+        f"current generation={(cr or {}).get('metadata', {}).get('generation')}, "
+        f"Ready observedGeneration={observed}, "
+        f"status={ready.get('status')}, reason={ready.get('reason')}, "
+        f"message={ready.get('message')}"
     )
 
 
