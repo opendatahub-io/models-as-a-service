@@ -3027,6 +3027,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#test-ownership-across-the-ai-gateway-stack-aigo-aigc-maas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Ownership Across the AI Gateway Stack (AIGO / AIGC / MaaS)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#checklist-adding-a-new-test" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3730,6 +3741,17 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#test-ownership-across-the-ai-gateway-stack-aigo-aigc-maas" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Test Ownership Across the AI Gateway Stack (AIGO / AIGC / MaaS)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#checklist-adding-a-new-test" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -4345,6 +4367,39 @@
 </tr>
 </tbody>
 </table>
+<h2 id="test-ownership-across-the-ai-gateway-stack-aigo-aigc-maas">Test Ownership Across the AI Gateway Stack (AIGO / AIGC / MaaS)</h2>
+<p>AI Gateway now spans three repos: <a href="https://github.com/opendatahub-io/ai-gateway-operator">ai-gateway-operator</a> (AIGO), <a href="https://github.com/opendatahub-io/ai-gateway-controller">ai-gateway-controller</a> (AIGC), and this repo (MaaS). Where a test belongs depends on what it needs to observe, not which repo you happen to be changing:</p>
+<table>
+<thead>
+<tr>
+<th>Repo</th>
+<th>Owns</th>
+<th>What it tests</th>
+<th>Test suite</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>AIGO</strong></td>
+<td>Component setup &amp; dependency management</td>
+<td><code>AIGateway</code> CR reconciles to <code>Ready</code>; sibling controller Deployments (<code>maas-controller</code>, <code>ai-gateway-controller</code>, <code>batch-gateway-operator</code>) become <code>Available</code>; aggregate status (<code>ModelsAsAServiceReady</code>, etc.) rolls up correctly. Never the request path.</td>
+<td><code>test/e2e/*_test.go</code> (Go — deploy prereqs, create CR, assert status)</td>
+</tr>
+<tr>
+<td><strong>AIGC</strong></td>
+<td>Deploying the Praxis-backed stack + AIGC's own control-plane logic</td>
+<td>Its own reconciliation logic (<code>pkg/tenant</code>, <code>pkg/render</code>, <code>pkg/controller</code> for ExternalModel/ExternalProvider) via real fixtures. For MaaS-level/request-path behavior, AIGC does <strong>not</strong> write new test content — it fetches and re-runs <strong>this repo's own pytest suite</strong> against its Praxis-backed deployment, pinned via <code>test/maas-e2e.lock</code>, proving the same behavior holds under Praxis as under IPP.</td>
+<td><code>test/kind-env</code>, <code>test/openshift-env</code> (real fixtures) + a vendored copy of <code>test/e2e/tests/</code> from this repo, fetched at a pinned commit</td>
+</tr>
+<tr>
+<td><strong>MaaS</strong> (this repo)</td>
+<td>The single source of truth for MaaS-level resource/request behavior</td>
+<td>Subscription enforcement, auth policy, rate limiting, API-key lifecycle, and anything visible at the MaaS API/Gateway boundary — including OpenAI resource-API routing and identity-header propagation. Written once here, run twice: in-repo against IPP, and via AIGC's vendored fetch against Praxis.</td>
+<td><code>test/e2e/tests/*.py</code> (pytest)</td>
+</tr>
+</tbody>
+</table>
+<p><strong>The upstream-first rule:</strong> if MaaS-level behavior has a coverage gap that's exposed while working in AIGC or AIGO, add the test to <strong>this repo's</strong> <code>test/e2e/tests/</code> first (skip-gated with <code>pytest.mark.skipif</code> if the behavior is genuinely Praxis-only, mirroring the existing <code>EXTERNAL_OIDC</code> skip pattern — see <a href="#group-assignment-rules">Group Assignment Rules</a>), then have the downstream repo bump its pin to pick it up. Don't accept a parallel Go/mock test in AIGO, and don't let a bespoke copy accumulate in AIGC. <a href="https://github.com/opendatahub-io/ai-gateway-controller/pull/37"><code>ai-gateway-controller#37</code></a> is a worked example of this lifecycle: a gap was fixed upstream in MaaS (<a href="https://github.com/opendatahub-io/models-as-a-service/pull/1508">#1508</a>); once it landed, AIGC removed its own side-workarounds and re-pinned <code>test/maas-e2e.lock</code>.</p>
 <h2 id="checklist-adding-a-new-test">Checklist: Adding a New Test</h2>
 <ul class="task-list">
 <li class="task-list-item"><input type="checkbox"/> <strong>Unit test</strong>: Add <code>*_test.go</code> alongside your source in <code>maas-api/</code> or <code>maas-controller/</code>; run <code>make test</code></li>
@@ -4379,7 +4434,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 29, 2026 15:42:40 UTC">September 29, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 30, 2026 11:02:41 UTC">September 30, 2026</span>
   </span>
 
     
