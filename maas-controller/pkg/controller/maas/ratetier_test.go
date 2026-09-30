@@ -19,6 +19,7 @@ package maas
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -428,8 +429,10 @@ func TestBuildGroupedLimits_UnlimitedNextToGroups(t *testing.T) {
 	}
 	idA := SubscriptionRateLimitID("ns/a-rated@models/llm")
 	idB := SubscriptionRateLimitID("ns/b-rated@models/llm")
-	wantGrouped := `(auth.identity.selected_subscription_id == "` + idA + `" || ` +
-		`auth.identity.selected_subscription_id == "` + idB + `") && !request.path.endsWith("/v1/models")`
+	ratedIDs := []string{idA, idB}
+	sort.Strings(ratedIDs)
+	wantGrouped := `(auth.identity.selected_subscription_id == "` + ratedIDs[0] + `" || ` +
+		`auth.identity.selected_subscription_id == "` + ratedIDs[1] + `") && !request.path.endsWith("/v1/models")`
 	groupedWhen, _, _ := unstructured.NestedSlice(grouped, "when")
 	if got := predicateOf(t, groupedWhen); got != wantGrouped {
 		t.Errorf("rate group predicate = %q, want %q", got, wantGrouped)
@@ -441,8 +444,10 @@ func TestBuildGroupedLimits_UnlimitedNextToGroups(t *testing.T) {
 	}
 	idY := SubscriptionRateLimitID("ns/y-free@models/llm")
 	idZ := SubscriptionRateLimitID("ns/z-free@models/llm")
-	wantFree := `(auth.identity.selected_subscription_id == "` + idY + `" || ` +
-		`auth.identity.selected_subscription_id == "` + idZ + `") && !request.path.endsWith("/v1/models")`
+	freeIDs := []string{idY, idZ}
+	sort.Strings(freeIDs)
+	wantFree := `(auth.identity.selected_subscription_id == "` + freeIDs[0] + `" || ` +
+		`auth.identity.selected_subscription_id == "` + freeIDs[1] + `") && !request.path.endsWith("/v1/models")`
 	freeWhen, _, _ := unstructured.NestedSlice(free, "when")
 	if got := predicateOf(t, freeWhen); got != wantFree {
 		t.Errorf("unlimited predicate = %q, want %q", got, wantFree)
