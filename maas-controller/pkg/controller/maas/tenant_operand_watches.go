@@ -156,10 +156,11 @@ func tenantOperands() []tenantOperand {
 // and a namespaced object outside the app and gateway namespaces as an "unknown
 // namespace for the cache" error, which IgnoreNotFound does not swallow.
 //
-// CRD-backed kinds are included only when the CRD serves the watched version now:
-// cache options for an unknown GVK fail manager creation. A CRD installed later gets a
+// A kind is included only when its CRD serves the watched version now and the REST
+// mapper already resolves it: cache options for a GVK the mapper does not know fail
+// manager creation, and discovery can lag an Established CRD. A kind left out gets a
 // cluster-wide informer until the next restart.
-func TenantOperandCacheByObject(ctx context.Context, reader client.Reader, appNamespace, gatewayNamespace string) map[client.Object]cache.ByObject {
+func TenantOperandCacheByObject(ctx context.Context, c client.Client, appNamespace, gatewayNamespace string) map[client.Object]cache.ByObject {
 	out := map[client.Object]cache.ByObject{}
 	for _, op := range tenantOperands() {
 		var byObject cache.ByObject
@@ -176,7 +177,10 @@ func TenantOperandCacheByObject(ctx context.Context, reader client.Reader, appNa
 		case scopeTracked:
 			byObject.Label = trackedSelector
 		}
-		if op.crd != "" && !crdServesVersion(lookupCRD(ctx, reader, op.crd), op.gvk.Version) {
+		if op.crd != "" && !crdServesVersion(lookupCRD(ctx, c, op.crd), op.gvk.Version) {
+			continue
+		}
+		if _, err := c.RESTMapper().RESTMapping(op.gvk.GroupKind(), op.gvk.Version); err != nil {
 			continue
 		}
 		out[op.newObject()] = byObject

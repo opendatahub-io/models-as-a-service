@@ -134,12 +134,18 @@ func operandTestCRD(name, version string, served, established bool) *extv1.Custo
 func TestTenantOperandCacheByObject(t *testing.T) {
 	g := NewWithT(t)
 
-	s := k8sruntime.NewScheme()
-	g.Expect(extv1.AddToScheme(s)).To(Succeed())
-	reader := fake.NewClientBuilder().WithScheme(s).WithObjects(
+	s := operandReconcileScheme(t)
+	// The ServiceMonitor CRD is Established, but discovery has not published the kind yet.
+	mapper := apimeta.MultiRESTMapper{testrestmapper.TestOnlyStaticRESTMapper(s), func() apimeta.RESTMapper {
+		m := apimeta.NewDefaultRESTMapper(nil)
+		m.Add(tenantreconcile.GVKDestinationRule, apimeta.RESTScopeNamespace)
+		return m
+	}()}
+	reader := fake.NewClientBuilder().WithScheme(s).WithRESTMapper(mapper).WithObjects(
 		operandTestCRD("destinationrules.networking.istio.io", "v1", true, true),
 		operandTestCRD("envoyfilters.networking.istio.io", "v1alpha3", true, false),
 		operandTestCRD("telemetries.telemetry.istio.io", "v1alpha1", true, true),
+		operandTestCRD("servicemonitors.monitoring.coreos.com", "v1", true, true),
 	).Build()
 
 	byObject := TenantOperandCacheByObject(t.Context(), reader, operandInfraNS, operandGatewayNS)
@@ -173,6 +179,7 @@ func TestTenantOperandCacheByObject(t *testing.T) {
 	g.Expect(scoped).NotTo(HaveKey(tenantreconcile.GVKEnvoyFilter), "CRD not established yet")
 	g.Expect(scoped).NotTo(HaveKey(tenantreconcile.GVKIstioTelemetry), "watched version not served")
 	g.Expect(scoped).NotTo(HaveKey(tenantreconcile.GVKCertificate), "CRD absent")
+	g.Expect(scoped).NotTo(HaveKey(gvkServiceMonitor), "cache options for a kind the REST mapper cannot resolve fail manager creation")
 
 	// Informers shared with other controllers must keep their cluster-wide scope.
 	for _, gvk := range []schema.GroupVersionKind{

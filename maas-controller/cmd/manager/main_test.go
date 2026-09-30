@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,6 +21,7 @@ import (
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
@@ -1050,4 +1052,26 @@ func TestRegisterWatcher_FailsClosedWhenSetupFails(t *testing.T) {
 
 	cfg.registerWatcher(mgr, func() { cancelled = true })
 	t.Fatal("registerWatcher should have exited")
+}
+
+func TestMergeCacheByObjectRefusesAKindConfiguredTwice(t *testing.T) {
+	dst := map[client.Object]cache.ByObject{&corev1.Secret{}: {}}
+
+	if err := mergeCacheByObject(dst, map[client.Object]cache.ByObject{&corev1.ServiceAccount{}: {}}, scheme); err != nil {
+		t.Fatalf("merging a new kind: %v", err)
+	}
+	if len(dst) != 2 {
+		t.Fatalf("merged options = %d entries, want 2", len(dst))
+	}
+
+	// Metadata-only keys share the typed kind's GVK.
+	sa := &metav1.PartialObjectMetadata{}
+	sa.SetGroupVersionKind(corev1.SchemeGroupVersion.WithKind("ServiceAccount"))
+	err := mergeCacheByObject(dst, map[client.Object]cache.ByObject{sa: {}}, scheme)
+	if err == nil || !strings.Contains(err.Error(), "ServiceAccount") {
+		t.Fatalf("merging ServiceAccount twice: err = %v, want a collision error", err)
+	}
+	if len(dst) != 2 {
+		t.Fatalf("a refused merge changed the options: %d entries", len(dst))
+	}
 }

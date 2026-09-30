@@ -22,7 +22,6 @@ import (
 	stderrors "errors"
 	"flag"
 	"fmt"
-	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -51,6 +50,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -762,12 +762,7 @@ type managerTLSConfig struct {
 	serverTLSOpt func(*tls.Config)
 }
 
-func loadManagerTLSConfig(ctx context.Context, cfg *rest.Config) (managerTLSConfig, error) {
-	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
-	if err != nil {
-		return managerTLSConfig{}, fmt.Errorf("creating pre-manager Kubernetes client: %w", err)
-	}
-
+func loadManagerTLSConfig(ctx context.Context, k8sClient client.Client) (managerTLSConfig, error) {
 	profile, adherence, available, err := fetchTLSProfileWithRetry(ctx, k8sClient)
 	if err != nil {
 		return managerTLSConfig{}, err
@@ -797,8 +792,8 @@ func loadManagerTLSConfig(ctx context.Context, cfg *rest.Config) (managerTLSConf
 	}, nil
 }
 
-func mustLoadManagerTLSConfig(ctx context.Context, cfg *rest.Config) managerTLSConfig {
-	tlsConfig, err := loadManagerTLSConfig(ctx, cfg)
+func mustLoadManagerTLSConfig(ctx context.Context, k8sClient client.Client) managerTLSConfig {
+	tlsConfig, err := loadManagerTLSConfig(ctx, k8sClient)
 	if err != nil {
 		setupLog.Error(err, "unable to fetch cluster TLS security profile")
 		os.Exit(1)
@@ -971,6 +966,38 @@ func mustPreManagerClient(cfg *rest.Config) client.Client { //nolint:ireturn // 
 		os.Exit(1)
 	}
 	return c
+}
+
+// mergeCacheByObject adds src to dst and refuses a GVK both configure: the cache keys
+// its options by GVK, so one would silently replace the other.
+func mergeCacheByObject(dst, src map[client.Object]cache.ByObject, s *runtime.Scheme) error {
+	configured := map[schema.GroupVersionKind]bool{}
+	for obj := range dst {
+		gvk, err := apiutil.GVKForObject(obj, s)
+		if err != nil {
+			return fmt.Errorf("cache options for %T: %w", obj, err)
+		}
+		configured[gvk] = true
+	}
+	for obj, opts := range src {
+		gvk, err := apiutil.GVKForObject(obj, s)
+		if err != nil {
+			return fmt.Errorf("cache options for %T: %w", obj, err)
+		}
+		if configured[gvk] {
+			return fmt.Errorf("cache options for %s are configured twice", gvk)
+		}
+		configured[gvk] = true
+		dst[obj] = opts
+	}
+	return nil
+}
+
+func mustMergeCacheByObject(dst, src map[client.Object]cache.ByObject) {
+	if err := mergeCacheByObject(dst, src, scheme); err != nil {
+		setupLog.Error(err, "unable to configure the cache")
+		os.Exit(1)
+	}
 }
 
 func main() {
@@ -1160,11 +1187,11 @@ func main() {
 	// from the API server, so cached objects do not need them.
 	cacheOpts.DefaultTransform = cache.TransformStripManagedFields()
 	preManagerClient := mustPreManagerClient(cfg)
-	maps.Copy(cacheOpts.ByObject, maas.TenantOperandCacheByObject(context.Background(), preManagerClient, infraNamespace, gatewayNamespace))
+	mustMergeCacheByObject(cacheOpts.ByObject, maas.TenantOperandCacheByObject(context.Background(), preManagerClient, infraNamespace, gatewayNamespace))
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
-	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
+	tlsConfig := mustLoadManagerTLSConfig(ctx, preManagerClient)
 	nextProtosOpt := func(c *tls.Config) {
 		c.NextProtos = []string{"h2", "http/1.1"}
 	}
