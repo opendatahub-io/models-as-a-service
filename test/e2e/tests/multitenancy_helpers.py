@@ -26,6 +26,7 @@ from test_helper import (
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
+    OC_TIMEOUT,
     SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
@@ -33,6 +34,7 @@ from test_helper import (
     _delete_cr,
     _ns,
     _request_with_gateway_retry,
+    _run_oc,
     kubectl_curl,
 )
 
@@ -63,7 +65,6 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
-OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
 SENSITIVE_FIELD_PATTERN = (
@@ -89,14 +90,7 @@ def _oc_bin() -> str:
 
 
 def _oc_run(args, *, input_text: Optional[str] = None, timeout: Optional[int] = None):
-    return subprocess.run(
-        [_oc_bin(), *args],
-        input=input_text,
-        capture_output=True,
-        text=True,
-        timeout=OC_TIMEOUT if timeout is None else timeout,
-        check=False,
-    )
+    return _run_oc([_oc_bin(), *args], input_text=input_text, timeout=timeout)
 
 
 def _oc_output_not_found(result) -> bool:
