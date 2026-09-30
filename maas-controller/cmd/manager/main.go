@@ -762,7 +762,12 @@ type managerTLSConfig struct {
 	serverTLSOpt func(*tls.Config)
 }
 
-func loadManagerTLSConfig(ctx context.Context, k8sClient client.Client) (managerTLSConfig, error) {
+func loadManagerTLSConfig(ctx context.Context, cfg *rest.Config) (managerTLSConfig, error) {
+	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		return managerTLSConfig{}, fmt.Errorf("creating pre-manager Kubernetes client: %w", err)
+	}
+
 	profile, adherence, available, err := fetchTLSProfileWithRetry(ctx, k8sClient)
 	if err != nil {
 		return managerTLSConfig{}, err
@@ -792,8 +797,8 @@ func loadManagerTLSConfig(ctx context.Context, k8sClient client.Client) (manager
 	}, nil
 }
 
-func mustLoadManagerTLSConfig(ctx context.Context, k8sClient client.Client) managerTLSConfig {
-	tlsConfig, err := loadManagerTLSConfig(ctx, k8sClient)
+func mustLoadManagerTLSConfig(ctx context.Context, cfg *rest.Config) managerTLSConfig {
+	tlsConfig, err := loadManagerTLSConfig(ctx, cfg)
 	if err != nil {
 		setupLog.Error(err, "unable to fetch cluster TLS security profile")
 		os.Exit(1)
@@ -1191,7 +1196,7 @@ func main() {
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
-	tlsConfig := mustLoadManagerTLSConfig(ctx, preManagerClient)
+	tlsConfig := mustLoadManagerTLSConfig(ctx, cfg)
 	nextProtosOpt := func(c *tls.Config) {
 		c.NextProtos = []string{"h2", "http/1.1"}
 	}
