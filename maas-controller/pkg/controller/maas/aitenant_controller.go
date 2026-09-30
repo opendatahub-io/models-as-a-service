@@ -293,6 +293,7 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Watches(
 			&maasv1alpha1.MaasTenantConfig{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForTenantConfig),
+			builder.WithPredicates(tenantConfigChangedForAITenant()),
 		).
 		Watches(
 			&gatewayapiv1.Gateway{},
@@ -784,10 +785,34 @@ func (r *AITenantReconciler) ensureTenantConfig(ctx context.Context, aitenant *m
 	if err := r.get(ctx, client.ObjectKeyFromObject(config), config); err != nil {
 		return false, false, fmt.Errorf("get MaasTenantConfig %s/%s readiness: %w", config.Namespace, config.Name, err)
 	}
+	return maasTenantConfigReady(config), false, nil
+}
+
+// maasTenantConfigReady is the only MaasTenantConfig status the AITenantReconciler
+// reads; tenantConfigChangedForAITenant compares it to drop other status writes.
+// Unlike tenantConfigModuleStatus it requires Ready at the current generation, so a
+// spec edit keeps the AITenant pending until the TenantReconciler has caught up.
+func maasTenantConfigReady(config *maasv1alpha1.MaasTenantConfig) bool {
 	ready := apimeta.FindStatusCondition(config.Status.Conditions, tenantreconcile.ReadyConditionType)
 	return ready != nil &&
 		ready.Status == metav1.ConditionTrue &&
-		ready.ObservedGeneration == config.Generation, false, nil
+		ready.ObservedGeneration == config.Generation
+}
+
+// tenantConfigChangedForAITenant admits MaasTenantConfig updates the AITenantReconciler
+// acts on: spec, the labels and annotations it converges (annotations also route the
+// event), deletion, and readiness. Finalizer changes need no event because the
+// deletion path requeues while it waits.
+func tenantConfigChangedForAITenant() predicate.Predicate { //nolint:ireturn // builder.WithPredicates takes predicate.Predicate.
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+		predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		updateOf(func(oldConfig, newConfig *maasv1alpha1.MaasTenantConfig) bool {
+			return maasTenantConfigReady(oldConfig) != maasTenantConfigReady(newConfig)
+		}),
+	)
 }
 
 // seedPayloadProcessingStatusOnCreate is the mutateCreate hook for

@@ -1985,7 +1985,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSAuthPolicy is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSAuthPolicies,
-		)).
+		), builder.WithPredicates(httpRouteChangedForAuthPolicy())).
 		// Watch MaaSModelRefs so we re-reconcile when a model is created or deleted.
 		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSModelRefToMaaSAuthPolicies,
@@ -2001,7 +2001,8 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			r.mapAITenantToMaaSAuthPolicies,
 		))
 
-	// Watch generated AuthPolicies — Kuadrant CRD must be present for this watch to succeed.
+	// Watch AuthPolicies: generated ones re-reconcile their parent, foreign ones targeting an
+	// HTTPRoute re-run conflict detection. Kuadrant CRD must be present for this watch to succeed.
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
 	const authPolicyCRD = "authpolicies.kuadrant.io"
 	authPolicyExists := crdExists(context.Background(), mgr.GetAPIReader(), authPolicyCRD)
@@ -2009,7 +2010,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		generatedAuthPolicy := &unstructured.Unstructured{}
 		generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 		b = b.Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
-			r.mapGeneratedAuthPolicyToParent,
+			r.mapAuthPolicyToMaaSAuthPolicies,
 		), builder.WithPredicates(predicate.Or(
 			predicate.GenerationChangedPredicate{},
 			unstructuredConditionsChangedPredicate{},
@@ -2073,7 +2074,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			return source.Kind(mgr.GetCache(), authPolicy,
 				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
 					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.Object) {
 							q.Add(req)
 						}
 					},
@@ -2085,12 +2086,17 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 							unstructuredConditionSignature(e.ObjectOld) == unstructuredConditionSignature(e.ObjectNew) {
 							return
 						}
-						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.ObjectNew) {
+						// Map both sides, like EnqueueRequestsFromMapFunc, so a policy
+						// retargeted away from a route still clears its conflict.
+						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.ObjectOld) {
+							q.Add(req)
+						}
+						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.ObjectNew) {
 							q.Add(req)
 						}
 					},
 					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.Object) {
 							q.Add(req)
 						}
 					},
@@ -2281,6 +2287,33 @@ func (r *MaaSAuthPolicyReconciler) findAnyAuthPolicyForModel(ctx context.Context
 	return &policies[0]
 }
 
+// mapAuthPolicyToMaaSAuthPolicies routes a Kuadrant AuthPolicy event to the parent of a
+// generated policy or, for a foreign policy, to the MaaSAuthPolicies whose conflict check it
+// can change.
+func (r *MaaSAuthPolicyReconciler) mapAuthPolicyToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	if obj.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller" {
+		return r.mapGeneratedAuthPolicyToParent(ctx, obj)
+	}
+	return r.mapForeignAuthPolicyToMaaSAuthPolicies(ctx, obj)
+}
+
+// mapForeignAuthPolicyToMaaSAuthPolicies enqueues the MaaSAuthPolicies referencing models in
+// the namespace of a non-MaaS AuthPolicy that targets an HTTPRoute, mirroring the targets
+// detectConflictingAuthPolicies inspects. This is the only prompt conflict trigger: the
+// HTTPRoute watch drops the route status Kuadrant writes when the policy attaches.
+func (r *MaaSAuthPolicyReconciler) mapForeignAuthPolicyToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
+	ap, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return nil
+	}
+	kind, _, _ := unstructured.NestedString(ap.Object, "spec", "targetRef", "kind")
+	group, _, _ := unstructured.NestedString(ap.Object, "spec", "targetRef", "group")
+	if kind != "HTTPRoute" || group != gatewayapiv1.GroupName {
+		return nil
+	}
+	return r.mapModelNamespaceToMaaSAuthPolicies(ctx, ap.GetNamespace())
+}
+
 // mapGeneratedAuthPolicyToParent maps a generated AuthPolicy back to any
 // MaaSAuthPolicy that references the same model. The AuthPolicy is per-model
 // (aggregated), so we use the model label to find a policy to trigger reconciliation.
@@ -2332,6 +2365,17 @@ func (r *MaaSAuthPolicyReconciler) mapMaaSModelRefToMaaSAuthPolicies(ctx context
 	return requests
 }
 
+// httpRouteChangedForAuthPolicy drops HTTPRoute status writes, which gateway and
+// Kuadrant controllers make as policies attach. MaaSAuthPolicy reconcile resolves a
+// model's route by existence, name and labels and never reads route status; a foreign
+// AuthPolicy attaching to a route is picked up by the AuthPolicy watch instead.
+func httpRouteChangedForAuthPolicy() predicate.Predicate { //nolint:ireturn // builder.WithPredicates takes predicate.Predicate.
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+	)
+}
+
 // mapHTTPRouteToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
 // that reference models in the HTTPRoute's namespace.
 func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
@@ -2339,9 +2383,15 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 	if !ok {
 		return nil
 	}
+	return r.mapModelNamespaceToMaaSAuthPolicies(ctx, route.Namespace)
+}
+
+// mapModelNamespaceToMaaSAuthPolicies returns reconcile requests for all MaaSAuthPolicies
+// that reference models in namespace.
+func (r *MaaSAuthPolicyReconciler) mapModelNamespaceToMaaSAuthPolicies(ctx context.Context, namespace string) []reconcile.Request {
 	// Find MaaSModelRefs in this namespace
 	var models maasv1alpha1.MaaSModelRefList
-	if err := r.List(ctx, &models, client.InNamespace(route.Namespace)); err != nil {
+	if err := r.List(ctx, &models, client.InNamespace(namespace)); err != nil {
 		return nil
 	}
 	// Use namespace-qualified keys to prevent cross-namespace matches

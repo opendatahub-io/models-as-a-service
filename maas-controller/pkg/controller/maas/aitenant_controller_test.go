@@ -3957,3 +3957,81 @@ func TestEnsureInfraNamespaceGatewayLabelsRejectsUnownedConflict(t *testing.T) {
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: "redhat-ai-gateway-infra"}, &ns)).To(Succeed())
 	g.Expect(ns.Labels).To(HaveKeyWithValue("env", "prod"))
 }
+
+func TestTenantConfigChangedForAITenant(t *testing.T) {
+	readyAt := func(generation int64) []metav1.Condition {
+		return []metav1.Condition{{
+			Type:               tenantreconcile.ReadyConditionType,
+			Status:             metav1.ConditionTrue,
+			Reason:             "Reconciled",
+			ObservedGeneration: generation,
+		}}
+	}
+	base := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:        maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:   "ai-tenant-team-a",
+			Generation:  2,
+			Labels:      map[string]string{aitenantManagedLabel: "true"},
+			Annotations: map[string]string{aitenantNameAnnotation: "team-a", aitenantNamespaceAnnotation: "ai-tenants"},
+		},
+		Status: maasv1alpha1.MaasTenantConfigStatus{Phase: "Active", Conditions: readyAt(2)},
+	}
+
+	expectPredicate(t, tenantConfigChangedForAITenant(), base, []predicateUpdateCase[*maasv1alpha1.MaasTenantConfig]{
+		{
+			name: "status write that keeps readiness is dropped",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Phase = "Degraded"
+				mtc.Status.InfraNamespace = "opendatahub"
+				apimeta.SetStatusCondition(&mtc.Status.Conditions, metav1.Condition{
+					Type: tenantreconcile.ConditionTypeDegraded, Status: metav1.ConditionTrue, Reason: "PrerequisitesWarning",
+				})
+			},
+			want: false,
+		},
+		{
+			name:   "finalizer-only change is dropped",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) { mtc.SetFinalizers([]string{tenantFinalizer}) },
+			want:   false,
+		},
+		{
+			name: "Ready turning false passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Conditions[0].Status = metav1.ConditionFalse
+			},
+			want: true,
+		},
+		{
+			name: "Ready observedGeneration falling behind passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Conditions = readyAt(1)
+			},
+			want: true,
+		},
+		{
+			name:   "spec change passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) { mtc.SetGeneration(3) },
+			want:   true,
+		},
+		{
+			name: "label drift passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.SetLabels(map[string]string{})
+			},
+			want: true,
+		},
+		{
+			name: "annotation change passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.SetAnnotations(map[string]string{aitenantNameAnnotation: "team-a"})
+			},
+			want: true,
+		},
+		{
+			name:   "deletion passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) { mtc.SetDeletionTimestamp(&metav1.Time{Time: time.Now()}) },
+			want:   true,
+		},
+	})
+}

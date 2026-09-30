@@ -3,6 +3,8 @@ package maas
 
 import (
 	"context"
+	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -20,6 +22,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -159,14 +163,14 @@ func TestTenantReconcile_DefaultTenantDoesNotAddCleanupFinalizer(t *testing.T) {
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Finalizers).To(BeEmpty(), "default-tenant teardown is Config-driven; no tenant-cleanup finalizer")
 }
 
@@ -201,14 +205,14 @@ func TestTenantReconcile_AITenantManagedDefaultAddsCleanupFinalizer(t *testing.T
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Finalizers).To(ContainElement(tenantFinalizer))
 }
 
@@ -482,17 +486,17 @@ func TestTenantReconcile_ManagementStateRemovedWaitsForConfigTeardown(t *testing
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var ctAfter maasv1alpha1.Config
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ctAfter)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.ConfigInstanceName}, &ctAfter)).To(Succeed())
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(readyCond).NotTo(BeNil())
@@ -538,14 +542,14 @@ func TestTenantReconcile_ManagementStateRemoved_ConfigTerminatingPatchesStatus(t
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(readyCond).NotTo(BeNil())
 	g.Expect(readyCond.Reason).To(Equal("ConfigTerminating"))
@@ -622,14 +626,14 @@ func TestTenantReconcile_UnexpectedManagementStateSetsFailedPhase(t *testing.T) 
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS}, &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal("Failed"))
 	g.Expect(updated.Status.InfraNamespace).To(Equal(testNS), "infraNamespace should be set even on error paths")
 	readyCond := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
@@ -663,14 +667,14 @@ func TestTenantReconcile_ConfigMissingSkipsPlatform(t *testing.T) {
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("ConfigMissing"))
@@ -794,17 +798,126 @@ func TestTenantReconcile_ConfigTerminatingSkipsPlatform(t *testing.T) {
 		GatewayNamespace: testTenantGatewayNamespace,
 	}
 
-	res, err := r.Reconcile(context.Background(), ctrl.Request{
+	res, err := r.Reconcile(t.Context(), ctrl.Request{
 		NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: testNS},
 	})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
+	g.Expect(cl.Get(t.Context(), client.ObjectKey{Name: tenant.Name, Namespace: testNS}, &updated)).To(Succeed())
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("ConfigTerminating"))
+}
+
+const platformFixtureNS = "models-as-a-service"
+
+// newPlatformTenantFixture returns a TenantReconciler over a fake client holding the
+// default MaasTenantConfig, Config/default with a UID, the fallback Gateway and extra,
+// so a reconcile gets past the Config and Gateway gates. customize may add client
+// options such as interceptors or a REST mapper.
+func newPlatformTenantFixture(
+	t *testing.T,
+	customize func(*fake.ClientBuilder) *fake.ClientBuilder,
+	extra ...client.Object,
+) (*TenantReconciler, *maasv1alpha1.MaasTenantConfig) {
+	t.Helper()
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: platformFixtureNS,
+		},
+	}
+	objs := append([]client.Object{
+		tenant,
+		&maasv1alpha1.Config{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("ct-uid")}},
+		&gatewayapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: testTenantGatewayName, Namespace: testTenantGatewayNamespace}},
+		tenantTestNamespace(platformFixtureNS),
+	}, extra...)
+
+	builder := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithStatusSubresource(&maasv1alpha1.MaasTenantConfig{}).
+		WithObjects(objs...)
+	if customize != nil {
+		builder = customize(builder)
+	}
+
+	return &TenantReconciler{
+		Client:           builder.Build(),
+		Scheme:           scheme,
+		AppNamespace:     platformFixtureNS,
+		GatewayName:      testTenantGatewayName,
+		GatewayNamespace: testTenantGatewayNamespace,
+	}, tenant
+}
+
+func TestTenantReconcile_UsageLogsEnvoyFilterDeleteErrorIsReturned(t *testing.T) {
+	g := NewWithT(t)
+	deleteErr := errors.New("envoyfilter delete refused")
+	r, tenant := newPlatformTenantFixture(t, func(b *fake.ClientBuilder) *fake.ClientBuilder {
+		return b.WithInterceptorFuncs(interceptor.Funcs{
+			Delete: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
+				if obj.GetObjectKind().GroupVersionKind() == tenantreconcile.GVKEnvoyFilter {
+					return deleteErr
+				}
+				return c.Delete(ctx, obj, opts...)
+			},
+		})
+	})
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
+	g.Expect(err).To(MatchError(deleteErr))
+	g.Expect(res).To(Equal(ctrl.Result{}))
+}
+
+func TestTenantReconcile_ManifestPathUnsetDoesNotRequeue(t *testing.T) {
+	g := NewWithT(t)
+	r, tenant := newPlatformTenantFixture(t, nil)
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("ManifestPathUnset"))
+}
+
+func TestTenantReconcile_PlatformReconcileErrorIsReturnedWithStatus(t *testing.T) {
+	g := NewWithT(t)
+	dbSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.MaaSDBSecretName, Namespace: platformFixtureNS},
+		Data: map[string][]byte{
+			tenantreconcile.MaaSDBSecretKey: []byte("postgresql://maas@db.example.com:5432/maas"),
+		},
+	}
+	// CheckDependencies needs the AuthConfig API to resolve.
+	mapper := apimeta.NewDefaultRESTMapper(nil)
+	mapper.Add(tenantreconcile.GVKAuthConfig, apimeta.RESTScopeNamespace)
+	r, tenant := newPlatformTenantFixture(t, func(b *fake.ClientBuilder) *fake.ClientBuilder {
+		return b.WithRESTMapper(mapper)
+	}, dbSecret)
+	r.ManifestPath = filepath.Join(t.TempDir(), "missing-overlay")
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
+	g.Expect(err).To(MatchError(ContainSubstring("tenant platform reconcile")))
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	g.Expect(updated.Status.Phase).To(Equal("Failed"))
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("PlatformReconcileFailed"))
+	deployments := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionDeploymentsAvailable)
+	g.Expect(deployments).NotTo(BeNil())
+	g.Expect(deployments.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(deployments.Reason).To(Equal("PlatformReconcileFailed"))
 }
 
 func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespace(t *testing.T) {

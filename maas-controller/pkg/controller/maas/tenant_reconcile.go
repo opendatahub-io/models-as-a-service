@@ -159,8 +159,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
 
 	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
-		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{}, fmt.Errorf("delete usage-logs EnvoyFilter after usageLogging disabled: %w", err)
 	}
 
 	// Handle management states
@@ -249,8 +248,8 @@ func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.L
 			fmt.Sprintf("unsupported %s=%q", managementStateAnnotation, ms)); err != nil {
 			return nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return &res, nil
+		// Correcting the annotation passes the MaasTenantConfig watch predicate.
+		return &ctrl.Result{}, nil
 	}
 
 	return nil, nil
@@ -271,8 +270,8 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// Config deletion and a management-state change both pass the watch predicates.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
@@ -299,8 +298,8 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 			"MAAS_PLATFORM_MANIFESTS is not set and no default kustomize path resolved; cannot apply platform manifests"); err != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 2 * time.Minute}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// ManifestPath is fixed at process start; only a restart can change it.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	return mcfg, platformContext, nil, nil
@@ -354,19 +353,15 @@ func (r *TenantReconciler) reconcilePlatform(
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
-		log.Error(err, "Tenant platform reconcile failed")
 		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "PlatformReconcileFailed", err.Error()); err2 != nil {
 			return nil, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return nil, &res, nil
+		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", err)
 	}
 
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
-		log.Error(err, "failed to ensure gateway management auth, will retry")
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return nil, &res, nil
+		return nil, nil, fmt.Errorf("ensure gateway management auth: %w", err)
 	}
 
 	if runRes.DeploymentPending {
@@ -501,8 +496,8 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 				fmt.Sprintf("Config %q is required before platform apply", maasv1alpha1.ConfigInstanceName)); err2 != nil {
 				return nil, nil, err2
 			}
-			res := ctrl.Result{RequeueAfter: 10 * time.Second}
-			return nil, &res, nil
+			// The Config watch admits its create event.
+			return nil, &ctrl.Result{}, nil
 		}
 		return nil, nil, err
 	}
@@ -512,8 +507,8 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 			fmt.Sprintf("Config %q is deleting; platform reconcile is suspended until the anchor is gone or recreated", ct.Name)); err != nil {
 			return nil, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return nil, &res, nil
+		// The Config watch admits the delete event and any recreate.
+		return nil, &ctrl.Result{}, nil
 	}
 	if ct.UID == "" {
 		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForConfigUID",
