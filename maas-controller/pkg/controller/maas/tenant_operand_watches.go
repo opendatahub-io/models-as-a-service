@@ -122,7 +122,7 @@ func tenantOperands() []tenantOperand {
 		},
 		{gvk: tenantreconcile.GVKConfigMap, newObject: func() client.Object { return &corev1.ConfigMap{} }, anyWrite: true},
 		{gvk: tenantreconcile.GVKClusterRoleBinding, newObject: func() client.Object { return &rbacv1.ClusterRoleBinding{} }, anyWrite: true},
-		{gvk: tenantreconcile.GVKHTTPRoute, newObject: func() client.Object { return &gwapiv1.HTTPRoute{} }},
+		{gvk: tenantreconcile.GVKHTTPRoute, crd: "httproutes.gateway.networking.k8s.io", newObject: func() client.Object { return &gwapiv1.HTTPRoute{} }},
 		// Unstructured informer shared with MaaSSubscriptionReconciler, which needs TRLPs
 		// in model namespaces, so it stays cluster-wide.
 		{gvk: tenantreconcile.GVKTokenRateLimitPolicy, crd: "tokenratelimitpolicies.kuadrant.io", newObject: unstructuredOf(tenantreconcile.GVKTokenRateLimitPolicy)},
@@ -222,8 +222,11 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 		crd, version string
 		source       func() source.Source
 	}{
-		{source: kind(&gwapiv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.mapGatewayToMaasTenantConfigs),
-			createOrDeleteOnly(), predicate.NewPredicateFuncs(r.inGatewayNamespace))},
+		{
+			crd: "gateways.gateway.networking.k8s.io", version: gwapiv1.GroupVersion.Version,
+			source: kind(&gwapiv1.Gateway{}, handler.EnqueueRequestsFromMapFunc(r.mapGatewayToMaasTenantConfigs),
+				createOrDeleteOnly(), predicate.NewPredicateFuncs(r.inGatewayNamespace)),
+		},
 		// Kuadrant's per-gateway filter switches payload processing between Kuadrant- and
 		// router-anchored ext_proc. Kuadrant rewrites its spec on every policy change on the
 		// gateway, while RunPlatform only checks that it exists, so updates are not admitted.
