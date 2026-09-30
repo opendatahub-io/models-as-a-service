@@ -8,6 +8,7 @@ import (
 	"github.com/go-logr/logr"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -83,14 +84,17 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 		return nil, err
 	}
 	markSharedOperands(filteredResources)
+	if err := rejectDuplicateObjects(filteredResources); err != nil {
+		return nil, reconcile.TerminalError(err)
+	}
 	_ = ctx
 	return filteredResources, nil
 }
 
 // markSharedOperands marks every object left without tracking labels as shared. An
 // object is per-tenant if and only if a rename site derived its name from the tenant,
-// stamping tracking labels while doing so (renameForTenant). Anything left over,
-// including the default tenant's own base-named objects, has the same name for every
+// stamping tracking labels while doing so (renameForTenant); the default tenant's
+// base-named objects go through it too. Anything left over has the same name for every
 // tenant, which is the definition of shared.
 func markSharedOperands(resources []unstructured.Unstructured) {
 	for i := range resources {
@@ -104,6 +108,29 @@ func markSharedOperands(resources []unstructured.Unstructured) {
 		labels[LabelSharedOperand] = "true"
 		resources[i].SetLabels(labels)
 	}
+}
+
+// rejectDuplicateObjects fails a render holding two objects with one kind, namespace and
+// name. A tenant's name can make a rename site produce a name the render already uses:
+// AITenant "metrics" renames its maas-api Service onto the shared maas-api-metrics
+// Service. Applying both flips that object on every pass, and every flip wakes the tenants
+// that repair it. Only renaming the tenant helps, so PostRender returns this as terminal.
+func rejectDuplicateObjects(resources []unstructured.Unstructured) error {
+	seen := make(map[string]bool, len(resources))
+	for i := range resources {
+		obj := &resources[i]
+		kind := obj.GroupVersionKind().GroupKind().String()
+		id := kind + " " + obj.GetName()
+		if ns := obj.GetNamespace(); ns != "" {
+			id = kind + " " + ns + "/" + obj.GetName()
+		}
+		if seen[id] {
+			return fmt.Errorf("the render holds two objects named %s: a per-tenant name collides with another object, "+
+				"so this tenant needs a different name", id)
+		}
+		seen[id] = true
+	}
+	return nil
 }
 
 func configureTokenRateLimitPolicy(log logr.Logger, resource *unstructured.Unstructured, gatewayNamespace, gatewayName string, params PlatformParams) error {

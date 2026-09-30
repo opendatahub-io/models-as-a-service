@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -25,9 +26,17 @@ func sharedMarkingOverlayDir(t *testing.T, overlay string) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(currentFile), "..", "..", "..", "..", "maas-api", "deploy", "overlays", overlay))
 }
 
-// sharedMarkingTenant builds the tenant config and PlatformParams renderTenantOperands
-// renders with, matching how BuildPlatformParams derives TenantTrackingName/Namespace.
+// sharedMarkingTenant renders tenantID (the default tenant when empty) through
+// BuildPlatformParams and PostRender, as its reconcile does.
 func sharedMarkingTenant(t *testing.T, overlayDir, appNamespace, gatewayName, tenantID string, skipIPP bool) []unstructured.Unstructured {
+	t.Helper()
+
+	resources, err := sharedMarkingRender(t, overlayDir, appNamespace, gatewayName, tenantID, skipIPP)
+	require.NoError(t, err)
+	return resources
+}
+
+func sharedMarkingRender(t *testing.T, overlayDir, appNamespace, gatewayName, tenantID string, skipIPP bool) ([]unstructured.Unstructured, error) {
 	t.Helper()
 
 	tenant := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
@@ -50,9 +59,7 @@ func sharedMarkingTenant(t *testing.T, overlayDir, appNamespace, gatewayName, te
 	rendered, err := RenderKustomize(overlayDir, appNamespace)
 	require.NoError(t, err)
 
-	resources, err := PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
-	require.NoError(t, err)
-	return resources
+	return PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
 }
 
 type sharedMarkingKey struct {
@@ -128,36 +135,22 @@ func TestSharedOperandMarkingInvariant(t *testing.T) {
 	}
 }
 
-// TestSharedNameCollisionGap documents, without fixing, the gap section 1 of the design
-// flags: an AITenant whose name matches the suffix a per-tenant name helper would
-// produce for the same kind and namespace as a shared object makes that render collide.
-// The fix (reserving the name via a CEL rule) is deliberately out of scope here; this
-// pins today's one known collision so a new one introduced by a future rename does not
-// slip in silently.
-func TestSharedNameCollisionGap(t *testing.T) {
+// TestPostRenderRejectsDuplicateObjects covers a tenant whose name makes a rename site
+// produce a name the render already uses: AITenant "metrics" renames its maas-api Service
+// onto the shared maas-api-metrics Service. Applying both would flip that Service on every
+// pass and wake the tenants that repair it, a hot loop. Only renaming the tenant helps.
+func TestPostRenderRejectsDuplicateObjects(t *testing.T) {
 	overlayDir := sharedMarkingOverlayDir(t, "odh")
-	shared := sharedMarkingTenant(t, overlayDir, "opendatahub", "maas-default-gateway", "", false)
 
-	// Per-tenant name helpers, keyed by the GVK they render, mirroring what
-	// tenantRenderedNames used to enumerate before the shared marker replaced it.
-	perTenantNameHelpers := map[schema.GroupVersionKind][]func(tenantID string) string{
-		GVKService: {MaaSAPIServiceName, PayloadProcessingServiceName, PayloadPreProcessingServiceName},
-	}
+	t.Run("a tenant whose per-tenant name collides with a shared object", func(t *testing.T) {
+		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "metrics", "metrics", false)
+		require.Error(t, err)
+		require.ErrorIs(t, err, reconcile.TerminalError(nil))
+		require.ErrorContains(t, err, "Service opendatahub/maas-api-metrics")
+	})
 
-	var collisions []string
-	for i := range shared {
-		obj := shared[i]
-		if obj.GetLabels()[LabelSharedOperand] != "true" {
-			continue
-		}
-		for _, helper := range perTenantNameHelpers[obj.GroupVersionKind()] {
-			if got := helper("metrics"); got == obj.GetName() {
-				collisions = append(collisions, obj.GetKind()+"/"+obj.GetNamespace()+"/"+obj.GetName())
-			}
-		}
-	}
-
-	require.Equal(t, []string{"Service/opendatahub/maas-api-metrics"}, collisions,
-		"an AITenant named \"metrics\" collides with the shared maas-api-metrics Service; "+
-			"reserving the name is tracked as a follow-up, not fixed here")
+	t.Run("an ordinary tenant", func(t *testing.T) {
+		_, err := sharedMarkingRender(t, overlayDir, "opendatahub", "red", "red", false)
+		require.NoError(t, err)
+	})
 }
