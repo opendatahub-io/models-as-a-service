@@ -1,15 +1,18 @@
 package maas
 
 import (
-	"context"
 	"testing"
 
 	netwv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
+
+	. "github.com/onsi/gomega"
 )
 
 func TestIsManagedTenantNetworkPolicyLabels(t *testing.T) {
@@ -59,38 +62,58 @@ func TestMapNetworkPolicyToMaasTenantConfigs(t *testing.T) {
 		infraNS   = "redhat-ai-gateway-infra"
 		gatewayNS = "openshift-ingress"
 		tenantNS  = "models-as-a-service"
+		teamANS   = "ai-tenant-team-a"
 	)
 
+	tenantRequest := func(namespace string) reconcile.Request {
+		return reconcile.Request{NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace}}
+	}
+	tenantConfig := func(namespace string) *maasv1alpha1.MaasTenantConfig {
+		return &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: namespace}}
+	}
 	r := &TenantReconciler{
+		Client:                          fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenantConfig(tenantNS), tenantConfig(teamANS)).Build(),
 		AppNamespace:                    infraNS,
 		GatewayNamespace:                gatewayNS,
 		TenantNamespace:                 tenantNS,
 		TenantNamespaceDiscoveryEnabled: true,
 	}
-
-	np := &netwv1.NetworkPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "maas-api-allow-gateway",
-			Namespace: infraNS,
+	networkPolicy := func(name, namespace, trackedTenantNS string) *netwv1.NetworkPolicy {
+		return &netwv1.NetworkPolicy{ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
 			Labels: map[string]string{
 				tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true",
-				tenantreconcile.LabelTenantNamespace:                                    tenantNS,
+				tenantreconcile.LabelTenantNamespace:                                    trackedTenantNS,
 			},
+		}}
+	}
+
+	tests := []struct {
+		name string
+		np   *netwv1.NetworkPolicy
+		want []reconcile.Request
+	}{
+		{
+			// The labels name the tenant that applied last, which may be gone.
+			name: "shared policy in the app namespace enqueues every tenant",
+			np:   networkPolicy("maas-api-allow-gateway", infraNS, "ai-tenant-deleted"),
+			want: []reconcile.Request{tenantRequest(tenantNS), tenantRequest(teamANS)},
+		},
+		{
+			name: "per-tenant policy in the gateway namespace enqueues its tenant",
+			np:   networkPolicy(tenantreconcile.PayloadProcessingNetworkPolicyName("team-a"), gatewayNS, teamANS),
+			want: []reconcile.Request{tenantRequest(teamANS)},
+		},
+		{
+			name: "policy outside the platform namespaces is ignored",
+			np:   networkPolicy("maas-api-allow-gateway", "other", tenantNS),
+			want: nil,
 		},
 	}
-
-	reqs := r.mapNetworkPolicyToMaasTenantConfigs(context.Background(), np)
-	if len(reqs) != 1 {
-		t.Fatalf("expected 1 reconcile request, got %d", len(reqs))
-	}
-	want := types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: tenantNS}
-	if reqs[0].NamespacedName != want {
-		t.Fatalf("unexpected request: got %v want %v", reqs[0].NamespacedName, want)
-	}
-
-	foreign := np.DeepCopy()
-	foreign.Namespace = "other"
-	if len(r.mapNetworkPolicyToMaasTenantConfigs(context.Background(), foreign)) != 0 {
-		t.Fatal("expected foreign namespace NetworkPolicy to be ignored")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			NewWithT(t).Expect(r.mapNetworkPolicyToMaasTenantConfigs(t.Context(), tt.np)).To(ConsistOf(tt.want))
+		})
 	}
 }

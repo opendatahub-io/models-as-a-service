@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -177,13 +178,17 @@ func isMaasTenantConfigConflict(err error, req ctrl.Request) bool {
 
 var dsciGVK = schema.GroupVersionKind{Group: "dscinitialization.opendatahub.io", Version: "v1", Kind: "DSCInitialization"}
 
-// tenantReconcileMaxBackoff caps error retries. Several reconcile failures clear on
+// Error retry bounds. A failed pass is a full render and apply, so retries start at a
+// second instead of the controller-runtime default of 5ms. Several failures clear on
 // changes no watch reports (a webhook coming back, an RBAC grant, a CRD installed later),
-// so the controller-runtime default cap of 1000s would stall recovery.
-const tenantReconcileMaxBackoff = 2 * time.Minute
+// so the default cap of 1000s would stall recovery.
+const (
+	tenantReconcileBaseBackoff = time.Second
+	tenantReconcileMaxBackoff  = 2 * time.Minute
+)
 
 func tenantReconcileRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](5*time.Millisecond, tenantReconcileMaxBackoff)
+	return workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](tenantReconcileBaseBackoff, tenantReconcileMaxBackoff)
 }
 
 func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Object) []reconcile.Request {
@@ -270,8 +275,8 @@ func managedTenantNetworkPolicy() predicate.Predicate {
 
 // networkPolicyChangedForTenant drops NetworkPolicy updates that only move the tenant
 // tracking labels. Each tenant's apply stamps its own tracking labels on the NetworkPolicies
-// shared in the app namespace and the mapper enqueues both the old and the new owner, so
-// admitting those writes makes tenants re-enqueue each other indefinitely.
+// shared in the app namespace and every tenant restores those, so admitting those writes
+// makes tenants re-enqueue each other indefinitely.
 func networkPolicyChangedForTenant() predicate.Predicate {
 	return predicate.Or(
 		predicate.GenerationChangedPredicate{},
@@ -308,6 +313,10 @@ func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
 	return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
 }
 
+// mapNetworkPolicyToMaasTenantConfigs enqueues the tenants that apply a NetworkPolicy. Only
+// the payload-processing NetworkPolicies in the gateway namespace belong to one tenant. The
+// others are shared and their tracking labels name whichever tenant applied last, which may
+// be gone, so every tenant is enqueued to restore them.
 func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
 	np, ok := obj.(*netwv1.NetworkPolicy)
 	if !ok {
@@ -315,6 +324,9 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	}
 	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
 		return nil
+	}
+	if np.GetNamespace() != r.GatewayNamespace || np.GetNamespace() == r.AppNamespace {
+		return r.enqueueAllTenants(ctx, obj)
 	}
 	if r.TenantNamespaceDiscoveryEnabled {
 		tenantNs := np.GetLabels()[tenantreconcile.LabelTenantNamespace]
@@ -349,12 +361,14 @@ func tenantConfigChangedForTenant() predicate.Predicate {
 }
 
 // aitenantPlatformContextChanged admits AITenant updates that can change the tenant
-// platform context, which reads only spec.oidc and status.gatewayRef.
+// platform context.
 func aitenantPlatformContextChanged() predicate.Predicate {
 	return predicate.Or(
-		predicate.GenerationChangedPredicate{},
 		updateOf(func(oldAITenant, newAITenant *maasv1alpha1.AITenant) bool {
-			return oldAITenant.Status.GatewayRef != newAITenant.Status.GatewayRef
+			return !equality.Semantic.DeepEqual(
+				tenantreconcile.AITenantPlatformInputsOf(oldAITenant),
+				tenantreconcile.AITenantPlatformInputsOf(newAITenant),
+			)
 		}),
 		predicate.Funcs{UpdateFunc: deletionTimestampSet},
 	)
@@ -385,6 +399,12 @@ func dsciMonitoringChanged() predicate.TypedFuncs[*unstructured.Unstructured] {
 
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the platform reconcile.
+func (r *TenantReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	ctx := context.Background()
 
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -402,12 +422,12 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		).
 		Watches(
 			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
 			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
@@ -437,7 +457,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		ctrl.Log.Info("DSCInitialization CRD not registered; skipping static watch")
 	}
 
-	c, err := b.Build(r)
+	c, err := b.Build(target)
 	if err != nil {
 		return err
 	}

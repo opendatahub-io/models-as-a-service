@@ -39,6 +39,18 @@ type PlatformContext struct {
 	Source       string
 }
 
+// AITenantPlatformInputs is the part of an AITenant that ResolvePlatformContext reads.
+// Watches compare it to decide whether an AITenant change can alter a tenant's platform.
+type AITenantPlatformInputs struct {
+	GatewayRef maasv1alpha1.TenantGatewayRef
+	OIDC       *maasv1alpha1.TenantExternalOIDCConfig
+}
+
+// AITenantPlatformInputsOf returns the AITenant fields ResolvePlatformContext reads.
+func AITenantPlatformInputsOf(aitenant *maasv1alpha1.AITenant) AITenantPlatformInputs {
+	return AITenantPlatformInputs{GatewayRef: aitenant.Status.GatewayRef, OIDC: aitenant.Spec.OIDC}
+}
+
 // ResolvePlatformContext resolves gateway and OIDC values for a tenant config object.
 //
 // AITenant-managed configs use their owning AITenant as the source of platform
@@ -99,14 +111,15 @@ func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant
 		return PlatformContext{}, fmt.Errorf("get owning AITenant %s/%s for tenant config %s/%s: %w", key.Namespace, key.Name, tenant.GetNamespace(), tenant.GetName(), err)
 	}
 
-	ref := aitenant.Status.GatewayRef
+	inputs := AITenantPlatformInputsOf(&aitenant)
+	ref := inputs.GatewayRef
 	if ref.Name == "" || ref.Namespace == "" {
 		return PlatformContext{}, fmt.Errorf("AITenant %s/%s status.gatewayRef is not ready", aitenant.Namespace, aitenant.Name)
 	}
 
 	return PlatformContext{
 		GatewayRef:   ref,
-		ExternalOIDC: aitenant.Spec.OIDC.DeepCopy(),
+		ExternalOIDC: inputs.OIDC.DeepCopy(),
 		SkipIPP:      resolveSkipIPP(tenant),
 		Source:       "aitenant",
 	}, nil

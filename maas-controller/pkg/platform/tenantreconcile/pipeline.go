@@ -19,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -66,8 +67,10 @@ func RunPlatform(
 		return nil, fmt.Errorf("manifest path: %w", err)
 	}
 
+	// Errors marked terminal come from process flags, the embedded manifests or the tenant
+	// config itself. Retrying cannot fix them, and a tenant config fix passes the watch.
 	if errs := validation.IsDNS1123Subdomain(appNs); len(errs) > 0 {
-		return nil, fmt.Errorf("invalid application namespace %q: %v", appNs, errs)
+		return nil, reconcile.TerminalError(fmt.Errorf("invalid application namespace %q: %v", appNs, errs))
 	}
 
 	if platformContext.GatewayRef.Namespace == "" || platformContext.GatewayRef.Name == "" {
@@ -83,7 +86,7 @@ func RunPlatform(
 
 	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, monitoringNamespace, log)
 	if err != nil {
-		return nil, fmt.Errorf("build params: %w", err)
+		return nil, reconcile.TerminalError(fmt.Errorf("build params: %w", err))
 	}
 
 	bundledPostgres, err := resolveBundledPostgres(ctx, c, appNs)
@@ -115,12 +118,12 @@ func RunPlatform(
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
 	if err != nil {
-		return nil, fmt.Errorf("kustomize: %w", err)
+		return nil, reconcile.TerminalError(fmt.Errorf("kustomize: %w", err))
 	}
 
 	resources, err := PostRender(ctx, log, tenant, rendered, params)
 	if err != nil {
-		return nil, fmt.Errorf("post-render: %w", err)
+		return nil, reconcile.TerminalError(fmt.Errorf("post-render: %w", err))
 	}
 
 	// SSA only creates/updates resources in the rendered set; it does NOT delete

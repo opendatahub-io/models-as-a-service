@@ -231,13 +231,8 @@ var _ = Describe("Tenant watch predicates", func() {
 
 				Expect(newObj.ResourceVersion).NotTo(Equal(oldObj.ResourceVersion))
 				Expect(newObj.Generation).To(Equal(oldObj.Generation))
-
-				// Without the filter this update enqueues both tenants, and each one's
-				// apply restamps the labels for the other.
-				r := &TenantReconciler{AppNamespace: namespace, TenantNamespaceDiscoveryEnabled: true}
-				Expect(r.mapNetworkPolicyToMaasTenantConfigs(ctx, oldObj)).To(Equal(predTenantRequest("ai-tenant-tenant-a")))
-				Expect(r.mapNetworkPolicyToMaasTenantConfigs(ctx, newObj)).To(Equal(predTenantRequest("ai-tenant-tenant-b")))
-
+				// Without the filter this update enqueues every tenant, and each one's
+				// apply restamps the labels for the others.
 				Expect(predAdmits(networkPolicyChangedForTenant(), oldObj, newObj)).To(BeFalse())
 			})
 		})
@@ -385,8 +380,20 @@ func predRemoveConfig(ctx SpecContext) {
 func predApplyNetworkPolicy(ctx context.Context, namespace, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
 	GinkgoHelper()
 
+	policy := sharedNetworkPolicy(namespace, tenantName, tenantNamespace)
+	Expect(applySharedNetworkPolicy(ctx, policy)).To(Succeed())
+	return policy
+}
+
+func applySharedNetworkPolicy(ctx context.Context, policy *netwv1.NetworkPolicy) error {
+	return envTest.Patch(ctx, policy, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)
+}
+
+// sharedNetworkPolicy is the maas-api NetworkPolicy every tenant applies to the app
+// namespace, stamped with one tenant's tracking labels.
+func sharedNetworkPolicy(namespace, tenantName, tenantNamespace string) *netwv1.NetworkPolicy {
 	tcp := corev1.ProtocolTCP
-	policy := &netwv1.NetworkPolicy{
+	return &netwv1.NetworkPolicy{
 		TypeMeta: metav1.TypeMeta{APIVersion: netwv1.SchemeGroupVersion.String(), Kind: "NetworkPolicy"},
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "maas-api",
@@ -405,8 +412,6 @@ func predApplyNetworkPolicy(ctx context.Context, namespace, tenantName, tenantNa
 			}},
 		},
 	}
-	Expect(envTest.Patch(ctx, policy, client.Apply, client.FieldOwner("maas-controller"), client.ForceOwnership)).To(Succeed())
-	return policy
 }
 
 func predTenantRequest(tenantNamespace string) []reconcile.Request {

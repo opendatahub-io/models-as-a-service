@@ -144,9 +144,20 @@ func TestAITenantPlatformContextChanged(t *testing.T) {
 			want: true,
 		},
 		{
-			name:   "spec change passes",
-			mutate: func(at *maasv1alpha1.AITenant) { at.SetGeneration(2) },
-			want:   true,
+			name: "spec.oidc change passes",
+			mutate: func(at *maasv1alpha1.AITenant) {
+				at.SetGeneration(2)
+				at.Spec.OIDC = &maasv1alpha1.TenantExternalOIDCConfig{IssuerURL: "https://keycloak.example.com/realms/maas", ClientID: "maas"}
+			},
+			want: true,
+		},
+		{
+			name: "spec.gateway change is dropped until it reaches status.gatewayRef",
+			mutate: func(at *maasv1alpha1.AITenant) {
+				at.SetGeneration(2)
+				at.Spec.Gateway = &maasv1alpha1.AITenantGatewayRef{Name: "team-a-v2"}
+			},
+			want: false,
 		},
 		{
 			name:   "deletion passes",
@@ -364,7 +375,7 @@ func TestTenantReconcileRateLimiterCapsBackoff(t *testing.T) {
 		Namespace: "models-as-a-service",
 	}}
 
-	g.Expect(rl.When(item)).To(Equal(5 * time.Millisecond))
+	g.Expect(rl.When(item)).To(Equal(tenantReconcileBaseBackoff))
 	var last time.Duration
 	for range 30 {
 		last = rl.When(item)
@@ -372,5 +383,5 @@ func TestTenantReconcileRateLimiterCapsBackoff(t *testing.T) {
 	g.Expect(last).To(Equal(tenantReconcileMaxBackoff))
 
 	rl.Forget(item)
-	g.Expect(rl.When(item)).To(Equal(5 * time.Millisecond))
+	g.Expect(rl.When(item)).To(Equal(tenantReconcileBaseBackoff))
 }

@@ -3423,3 +3423,70 @@ func TestMapAuthPolicyToMaaSAuthPolicies(t *testing.T) {
 		})
 	}
 }
+
+func TestAuthPolicyChangedForMaaSAuthPolicy(t *testing.T) {
+	authPolicy := func(labels map[string]string, enforced string) *unstructured.Unstructured {
+		ap := &unstructured.Unstructured{}
+		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		ap.SetName("llm-auth")
+		ap.SetNamespace("llm-ns")
+		ap.SetGeneration(1)
+		ap.SetLabels(labels)
+		conditions := []any{map[string]any{"type": "Enforced", "status": enforced}}
+		if err := unstructured.SetNestedSlice(ap.Object, conditions, "status", "conditions"); err != nil {
+			t.Fatalf("set conditions: %v", err)
+		}
+		return ap
+	}
+	generated := map[string]string{"app.kubernetes.io/managed-by": "maas-controller", "maas.opendatahub.io/model": "llm"}
+
+	p := authPolicyChangedForMaaSAuthPolicy()
+	if !p.Create(event.TypedCreateEvent[*unstructured.Unstructured]{Object: authPolicy(nil, "True")}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.TypedDeleteEvent[*unstructured.Unstructured]{Object: authPolicy(nil, "True")}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name           string
+		oldObj, newObj *unstructured.Unstructured
+		want           bool
+	}{
+		{
+			name:   "condition transition on a generated policy passes",
+			oldObj: authPolicy(generated, "False"),
+			newObj: authPolicy(generated, "True"),
+			want:   true,
+		},
+		{
+			name:   "condition transition on a foreign policy is dropped",
+			oldObj: authPolicy(nil, "False"),
+			newObj: authPolicy(nil, "True"),
+			want:   false,
+		},
+		{
+			name:   "managed-by label flip passes",
+			oldObj: authPolicy(nil, "True"),
+			newObj: authPolicy(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"}, "True"),
+			want:   true,
+		},
+		{
+			name:   "spec change on a foreign policy passes",
+			oldObj: authPolicy(nil, "True"),
+			newObj: func() *unstructured.Unstructured {
+				ap := authPolicy(nil, "True")
+				ap.SetGeneration(2)
+				return ap
+			}(),
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.TypedUpdateEvent[*unstructured.Unstructured]{ObjectOld: tt.oldObj, ObjectNew: tt.newObj}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}

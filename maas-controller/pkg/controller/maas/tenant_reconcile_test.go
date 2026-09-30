@@ -23,6 +23,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -871,6 +872,94 @@ func TestTenantReconcile_UsageLogsEnvoyFilterDeleteErrorIsReturned(t *testing.T)
 	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
 	g.Expect(err).To(MatchError(deleteErr))
 	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
+	g.Expect(ready.Reason).To(Equal("UsageLogsCleanupFailed"))
+	g.Expect(ready.Message).To(ContainSubstring(deleteErr.Error()))
+}
+
+func TestTenantReconcile_RecordFailureKeepsStatusWriteErrorRetryable(t *testing.T) {
+	g := NewWithT(t)
+	conflict := apierrors.NewConflict(maasv1alpha1.GroupVersion.WithResource("maastenantconfigs").GroupResource(),
+		maasv1alpha1.MaasTenantConfigInstanceName, errors.New("object was modified"))
+	r, tenant := newPlatformTenantFixture(t, func(b *fake.ClientBuilder) *fake.ClientBuilder {
+		return b.WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+				return conflict
+			},
+		})
+	})
+
+	err := r.recordFailure(t.Context(), tenant, "PlatformReconcileFailed", reconcile.TerminalError(errors.New("kustomize: missing overlay")))
+
+	g.Expect(apierrors.IsConflict(err)).To(BeTrue())
+	g.Expect(errors.Is(err, reconcile.TerminalError(nil))).To(BeFalse())
+	g.Expect(err).To(MatchError(ContainSubstring("kustomize: missing overlay")))
+}
+
+// markAITenantManaged turns the platform fixture tenant config into one AITenant aitenantName
+// owns, so the reconcile resolves its gateway from that AITenant.
+func markAITenantManaged(t *testing.T, r *TenantReconciler, tenant *maasv1alpha1.MaasTenantConfig, aitenantName string) {
+	t.Helper()
+
+	g := NewWithT(t)
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), tenant)).To(Succeed())
+	tenant.Labels = map[string]string{
+		tenantreconcile.LabelManagedByAITenant: "true",
+		tenantreconcile.LabelTenantName:        aitenantName,
+		tenantreconcile.LabelTenantNamespace:   tenant.Namespace,
+	}
+	tenant.Annotations = map[string]string{
+		tenantreconcile.AnnotationAITenantName:      aitenantName,
+		tenantreconcile.AnnotationAITenantNamespace: tenant.Namespace,
+	}
+	g.Expect(r.Update(t.Context(), tenant)).To(Succeed())
+}
+
+func TestTenantReconcile_MissingAITenantWaitsForWatch(t *testing.T) {
+	g := NewWithT(t)
+	r, tenant := newPlatformTenantFixture(t, nil)
+	markAITenantManaged(t, r, tenant, "team-a")
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("InvalidGateway"))
+}
+
+func TestTenantReconcile_AITenantReadFailureIsReturned(t *testing.T) {
+	g := NewWithT(t)
+	readErr := errors.New("connection refused")
+	r, tenant := newPlatformTenantFixture(t, func(b *fake.ClientBuilder) *fake.ClientBuilder {
+		return b.WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*maasv1alpha1.AITenant); ok {
+					return readErr
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		})
+	})
+	markAITenantManaged(t, r, tenant, "team-a")
+
+	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
+	g.Expect(err).To(MatchError(readErr))
+	g.Expect(res).To(Equal(ctrl.Result{}))
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("InvalidGateway"))
 }
 
 func TestTenantReconcile_ManifestPathUnsetDoesNotRequeue(t *testing.T) {
@@ -906,6 +995,8 @@ func TestTenantReconcile_PlatformReconcileErrorIsReturnedWithStatus(t *testing.T
 
 	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
 	g.Expect(err).To(MatchError(ContainSubstring("tenant platform reconcile")))
+	// A missing overlay stays missing until the process restarts, so retrying is pointless.
+	g.Expect(errors.Is(err, reconcile.TerminalError(nil))).To(BeTrue())
 	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var updated maasv1alpha1.MaasTenantConfig

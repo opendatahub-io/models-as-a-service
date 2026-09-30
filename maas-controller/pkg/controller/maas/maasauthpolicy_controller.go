@@ -2006,15 +2006,22 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
 	const authPolicyCRD = "authpolicies.kuadrant.io"
 	authPolicyExists := crdExists(context.Background(), mgr.GetAPIReader(), authPolicyCRD)
+	authPolicySource := func() source.Source {
+		authPolicy := &unstructured.Unstructured{}
+		authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		// On update both the old and the new object are mapped, so a policy retargeted away
+		// from a route still clears its conflict.
+		return source.Kind(mgr.GetCache(), authPolicy,
+			handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+				func(ctx context.Context, ap *unstructured.Unstructured) []reconcile.Request {
+					return r.mapAuthPolicyToMaaSAuthPolicies(ctx, ap)
+				},
+			),
+			authPolicyChangedForMaaSAuthPolicy(),
+		)
+	}
 	if authPolicyExists {
-		generatedAuthPolicy := &unstructured.Unstructured{}
-		generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-		b = b.Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
-			r.mapAuthPolicyToMaaSAuthPolicies,
-		), builder.WithPredicates(predicate.Or(
-			predicate.GenerationChangedPredicate{},
-			unstructuredConditionsChangedPredicate{},
-		)))
+		b = b.WatchesRawSource(authPolicySource())
 	} else {
 		ctrl.Log.Info("AuthPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
@@ -2068,41 +2075,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 
 	if !authPolicyExists {
-		if err := registerWatchWhenCRDAppears(c, mgr, authPolicyCRD, func() source.Source {
-			authPolicy := &unstructured.Unstructured{}
-			authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
-			return source.Kind(mgr.GetCache(), authPolicy,
-				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
-					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						if e.ObjectOld == nil || e.ObjectNew == nil {
-							return
-						}
-						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
-							unstructuredConditionSignature(e.ObjectOld) == unstructuredConditionSignature(e.ObjectNew) {
-							return
-						}
-						// Map both sides, like EnqueueRequestsFromMapFunc, so a policy
-						// retargeted away from a route still clears its conflict.
-						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.ObjectOld) {
-							q.Add(req)
-						}
-						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.ObjectNew) {
-							q.Add(req)
-						}
-					},
-					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-						for _, req := range r.mapAuthPolicyToMaaSAuthPolicies(ctx, e.Object) {
-							q.Add(req)
-						}
-					},
-				},
-			)
-		}); err != nil {
+		if err := registerWatchWhenCRDAppears(c, mgr, authPolicyCRD, authPolicySource); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for AuthPolicy: %w", err)
 		}
 	}
@@ -2291,10 +2264,32 @@ func (r *MaaSAuthPolicyReconciler) findAnyAuthPolicyForModel(ctx context.Context
 // generated policy or, for a foreign policy, to the MaaSAuthPolicies whose conflict check it
 // can change.
 func (r *MaaSAuthPolicyReconciler) mapAuthPolicyToMaaSAuthPolicies(ctx context.Context, obj client.Object) []reconcile.Request {
-	if obj.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller" {
+	if isGeneratedAuthPolicy(obj) {
 		return r.mapGeneratedAuthPolicyToParent(ctx, obj)
 	}
 	return r.mapForeignAuthPolicyToMaaSAuthPolicies(ctx, obj)
+}
+
+func isGeneratedAuthPolicy(obj client.Object) bool {
+	return obj.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
+}
+
+// authPolicyChangedForMaaSAuthPolicy admits the AuthPolicy updates the MaaSAuthPolicy
+// reconcile reads. Spec and labels pass: the managed-by label decides whether a policy is
+// generated or foreign, and the model labels route a generated one to its parent. Condition
+// transitions pass only for generated policies, whose status the parent reports; conflict
+// detection reads a foreign policy's labels and targetRef, not its status.
+func authPolicyChangedForMaaSAuthPolicy() predicate.TypedPredicate[*unstructured.Unstructured] {
+	return predicate.Or[*unstructured.Unstructured](
+		predicate.TypedGenerationChangedPredicate[*unstructured.Unstructured]{},
+		predicate.TypedLabelChangedPredicate[*unstructured.Unstructured]{},
+		predicate.TypedFuncs[*unstructured.Unstructured]{
+			UpdateFunc: func(e event.TypedUpdateEvent[*unstructured.Unstructured]) bool {
+				return isGeneratedAuthPolicy(e.ObjectNew) &&
+					unstructuredConditionSignature(e.ObjectOld) != unstructuredConditionSignature(e.ObjectNew)
+			},
+		},
+	)
 }
 
 // mapForeignAuthPolicyToMaaSAuthPolicies enqueues the MaaSAuthPolicies referencing models in
