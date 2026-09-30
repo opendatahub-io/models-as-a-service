@@ -715,6 +715,24 @@ type authPolicyRef struct {
 	ModelNamespace string
 }
 
+// subscriptionInfoStringHeader injects a non-empty field from the resolved
+// MaaSSubscription (Authorino subscription-info metadata) as an X-MaaS-* header.
+func subscriptionInfoStringHeader(jsonField string) map[string]any {
+	path := fmt.Sprintf(`auth.metadata["subscription-info"].%s`, jsonField)
+	return map[string]any{
+		"when": []any{
+			map[string]any{
+				"predicate": fmt.Sprintf(`has(%s) && %s != ""`, path, path),
+			},
+		},
+		"plain": map[string]any{
+			"expression": path,
+		},
+		"metrics":  false,
+		"priority": int64(0),
+	}
+}
+
 // buildGatewayAuthPolicySpec returns the Authorino AuthPolicy spec for the singleton
 // Gateway-level policy. Model identity is resolved dynamically via CEL on every request
 // rather than being baked in per-model, so this spec is the same for all MaaSAuthPolicy CRs.
@@ -854,6 +872,12 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					},
 					map[string]any{
 						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-organization-id" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-cost-center" in request.headers)`,
 					},
 				},
 			},
@@ -1129,6 +1153,11 @@ allow {
 					"x-gateway-inference-objective":   subscriptionInfoHeader("objective"),
 					"x-llm-d-inference-fairness-id":   subscriptionInfoHeader("fairnessId"),
 					"x-gateway-inference-fairness-id": subscriptionInfoHeader("fairnessId"),
+					// Organization and cost center come from the resolved MaaSSubscription
+					// (subscription-info), not the client. Injected only when set so empty
+					// values do not appear as identity headers.
+					"X-MaaS-Organization-Id": subscriptionInfoStringHeader("organizationId"),
+					"X-MaaS-Cost-Center":     subscriptionInfoStringHeader("costCenter"),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{

@@ -2,13 +2,17 @@
 #
 # Emits structured usage logs for inference requests via OTel Access Log Service.
 #
-# Identity:  subscription, groups, and key_name from X-MaaS-Subscription /
-#            X-MaaS-Group / X-MaaS-KeyName (still present on Limitador 429
-#            local replies) or from header_to_metadata captured before
+# Identity:  subscription, groups, key_name, and cost_center from
+#            X-MaaS-Subscription / X-MaaS-Group / X-MaaS-KeyName /
+#            X-MaaS-Cost-Center (still present on Limitador 429 local
+#            replies) or from header_to_metadata captured before
 #            payload-processing ext_proc strips the headers.
 #            user_id (X-MaaS-Username) is NOT captured by default; it is
 #            injected at runtime by the tenant reconciler when
 #            MaasTenantConfig.spec.telemetry.logs.captureUser is true.
+#            organization_id (X-MaaS-Organization-Id) is injected at
+#            runtime by default; omitted when logs.captureOrganization
+#            is false.
 # Model:     Composite filter wraps json_to_metadata, executing only on
 #            inference paths (suffix match: /v1/chat/completions,
 #            /v1/completions, /v1/embeddings).
@@ -73,9 +77,12 @@ spec:
 
   # ── Identity header capture: header_to_metadata ───────────────────────────
   #
-  # Captures X-MaaS-Username, X-MaaS-Subscription, X-MaaS-Group, and
-  # X-MaaS-KeyName into dynamic metadata BEFORE payload-processing ext_proc
-  # drops them.
+  # Captures X-MaaS-Username, X-MaaS-Subscription, X-MaaS-Group,
+  # X-MaaS-KeyName, X-MaaS-Organization-Id, and X-MaaS-Cost-Center into
+  # dynamic metadata BEFORE payload-processing ext_proc drops them.
+  # Username is injected at apply time when logs.captureUser is true.
+  # Organization-Id is injected by default; omitted when
+  # logs.captureOrganization is false.
   #
   # INSERT_AFTER wasm + priority 20 ensures correct ordering:
   # - payload-processing EnvoyFilter has priority 10 (applied first)
@@ -125,6 +132,11 @@ spec:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: key_name
               type: STRING
+          - header: X-MaaS-Cost-Center
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: cost_center
+              type: STRING
   # ODH/community Kuadrant injects auth via WasmPlugin (no envoy.filters.http.wasm).
   # Only one of this patch and the wasm INSERT_AFTER above matches per cluster.
   - applyTo: HTTP_FILTER
@@ -157,6 +169,11 @@ spec:
             on_header_present:
               metadata_namespace: envoy.filters.http.header_to_metadata
               key: key_name
+              type: STRING
+          - header: X-MaaS-Cost-Center
+            on_header_present:
+              metadata_namespace: envoy.filters.http.header_to_metadata
+              key: cost_center
               type: STRING
 
   # ── Composite filter: json_to_metadata with path-based pattern matching ────
@@ -467,6 +484,10 @@ spec:
                 - key: key_name
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["key_name"] : request.headers["x-maas-keyname"])%'
+                # organization_id is injected here by the tenant reconciler unless logs.captureOrganization=false.
+                - key: cost_center
+                  value:
+                    string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["cost_center"] : request.headers["x-maas-cost-center"])%'
                 # ── Tokens (json_to_metadata → dynamic metadata) ──
                 - key: tokens_total
                   value:
