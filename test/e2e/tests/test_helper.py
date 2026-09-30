@@ -1452,6 +1452,53 @@ def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
     )
 
 
+def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
+    """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
+
+    The controller writes the Ready condition's observedGeneration at the end of
+    every reconcile, after the TRLP step, on success and failure paths alike. A
+    matching value means the controller processed that spec, not that the TRLP
+    step succeeded: callers that need that must check phase and modelRefStatuses
+    on the returned CR. Unlike phase or TRLP readiness, this does not depend on
+    Kuadrant.
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    cr = None
+    ready = {}
+    observed = None
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            ready = next(
+                (
+                    c for c in cr.get("status", {}).get("conditions", [])
+                    if c.get("type") == "Ready"
+                ),
+                {},
+            )
+            observed = ready.get("observedGeneration")
+            if observed is not None and observed >= generation:
+                log.info(
+                    "MaaSSubscription %s/%s reconciled at generation %s",
+                    namespace,
+                    name,
+                    observed,
+                )
+                return cr
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"MaaSSubscription {namespace}/{name} was not reconciled at generation "
+        f"{generation} within {timeout}s: "
+        f"current generation={(cr or {}).get('metadata', {}).get('generation')}, "
+        f"Ready observedGeneration={observed}, "
+        f"status={ready.get('status')}, reason={ready.get('reason')}, "
+        f"message={ready.get('message')}"
+    )
+
+
 def _wait_for_subscription_trlp_status(
     name,
     expected_ready=True,
