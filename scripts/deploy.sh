@@ -787,6 +787,20 @@ EOF
     apply_infra_secret_migration_rbac "$infra_namespace" "$NAMESPACE"
   fi
 
+  # The infra namespace is derived from NAMESPACE (the controller namespace), so a
+  # wrong NAMESPACE silently sends the wait below to a namespace that will never
+  # get a maas-api. Catch that now rather than after the full timeout.
+  if ! kubectl get deployment maas-controller -n "$NAMESPACE" &>/dev/null; then
+    local controller_ns
+    controller_ns=$(kubectl get deployment -A -o jsonpath='{range .items[?(@.metadata.name=="maas-controller")]}{.metadata.namespace}{" "}{end}' 2>/dev/null || true)
+    log_error "No maas-controller deployment in NAMESPACE=$NAMESPACE"
+    if [ -n "${controller_ns// /}" ]; then
+      log_error "maas-controller is actually in: ${controller_ns% }"
+      log_error "Re-run with NAMESPACE=${controller_ns%% *} so the infra namespace derives correctly"
+    fi
+    return 1
+  fi
+
   local maas_api_timeout="${CUSTOM_RESOURCE_TIMEOUT:-600}"
   local elapsed=0
   while [[ $elapsed -lt $maas_api_timeout ]]; do
@@ -807,6 +821,12 @@ EOF
   if ! kubectl get deployment maas-api -n "$infra_namespace" &>/dev/null; then
     log_error "maas-api deployment not created by Tenant reconciler after ${maas_api_timeout}s"
     log_error "Expected in namespace: $infra_namespace"
+    local actual_ns
+    actual_ns=$(kubectl get deployment -A -o jsonpath='{range .items[?(@.metadata.name=="maas-api")]}{.metadata.namespace}{" "}{end}' 2>/dev/null || true)
+    if [ -n "${actual_ns// /}" ]; then
+      log_error "But maas-api does exist in: ${actual_ns% }"
+      log_error "This usually means INFRA_NAMESPACE/NAMESPACE disagree with the running controller (ODH vs RHOAI flavor)"
+    fi
     log_error "Check maas-controller logs: kubectl logs -l app.kubernetes.io/name=maas-controller -n $NAMESPACE"
     return 1
   fi
@@ -1038,10 +1058,57 @@ deploy_keycloak() {
 # OPTIONAL OPERATORS (cert-manager, LWS)
 #──────────────────────────────────────────────────────────────
 
+# Create an operator namespace and, only if it has no OperatorGroup yet, an
+# OperatorGroup. OLM fails a CSV with TooManyOperatorGroups when a namespace has
+# more than one, so re-running deploy against a cluster where the operator was
+# installed under a differently-named OperatorGroup must not add a second.
+ensure_operator_group() {
+  local namespace="$1"
+  local og_name="$2"
+  local target_namespace="${3:-}"
+
+  kubectl create namespace "$namespace" --dry-run=client -o yaml | kubectl apply -f - >/dev/null
+
+  local existing
+  existing=$(kubectl get operatorgroup -n "$namespace" \
+    -o jsonpath='{range .items[*]}{.metadata.name}{" "}{end}' 2>/dev/null || true)
+  if [[ -n "${existing// /}" ]]; then
+    log_info "OperatorGroup already present in ${namespace} (${existing% }); skipping creation"
+    return 0
+  fi
+
+  log_info "Creating OperatorGroup ${og_name} in ${namespace}"
+  if [[ -n "$target_namespace" ]]; then
+    kubectl apply -f - <<EOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${og_name}
+  namespace: ${namespace}
+spec:
+  targetNamespaces:
+  - ${target_namespace}
+EOF
+  else
+    kubectl apply -f - <<EOF
+apiVersion: operators.coreos.com/v1
+kind: OperatorGroup
+metadata:
+  name: ${og_name}
+  namespace: ${namespace}
+EOF
+  fi
+}
+
 install_optional_operators() {
   log_info "Installing optional operators in parallel..."
 
   local data_dir="${SCRIPT_DIR}/data"
+
+  # Namespaces and OperatorGroups first: the Subscription manifests intentionally
+  # omit them so a pre-existing OperatorGroup is reused rather than duplicated.
+  ensure_operator_group "cert-manager-operator" "cert-manager-operator" || return 1
+  ensure_operator_group "openshift-lws-operator" "leader-worker-set" "openshift-lws-operator" || return 1
 
   # Apply both subscriptions in parallel (they're independent)
   log_info "Applying cert-manager and LeaderWorkerSet subscriptions..."

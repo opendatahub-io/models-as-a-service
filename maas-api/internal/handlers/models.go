@@ -125,6 +125,8 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 	var accessDeniedErr *subscription.AccessDeniedError
 	var notFoundErr *subscription.SubscriptionNotFoundError
 	var noSubErr *subscription.NoSubscriptionError
+	var modelUnhealthyErr *subscription.ModelUnhealthyError
+	var modelNotInSubErr *subscription.ModelNotInSubscriptionError
 
 	// For consistency with inferencing (which uses Authorino and returns 403 for all
 	// subscription errors), we return 403 Forbidden for all subscription-related errors.
@@ -142,9 +144,27 @@ func (h *ModelsHandler) handleSubscriptionSelectionError(c *gin.Context, err err
 		return
 	}
 
-	// Unify "access denied" and "not found" responses to prevent callers from
-	// probing whether a subscription exists. (CWE-639 / FIND-009)
-	if errors.As(err, &accessDeniedErr) || errors.As(err, &notFoundErr) {
+	// A model that is missing or unhealthy is user-visible state, not a server
+	// fault: a subscription whose modelRefs do not resolve reaches Failed and must
+	// not surface as a 500. ModelUnhealthyError's message is deliberately static
+	// (it omits the model name), so it is safe to return verbatim.
+	if errors.As(err, &modelUnhealthyErr) {
+		h.logger.Debug("Requested model unhealthy in subscription",
+			"phase", modelUnhealthyErr.Phase,
+			"reason", modelUnhealthyErr.Reason,
+		)
+		c.JSON(http.StatusForbidden, gin.H{
+			"error": gin.H{
+				"message": err.Error(),
+				"type":    "permission_error",
+			}})
+		return
+	}
+
+	// Unify "access denied", "not found" and "model not in subscription" responses
+	// to prevent callers from probing whether a subscription exists or what it
+	// contains. (CWE-639 / FIND-009)
+	if errors.As(err, &accessDeniedErr) || errors.As(err, &notFoundErr) || errors.As(err, &modelNotInSubErr) {
 		h.logger.Debug("Subscription access denied or not found")
 		c.JSON(http.StatusForbidden, gin.H{
 			"error": gin.H{

@@ -352,7 +352,9 @@ ODH_FOUND=false
 ODH_TOTAL_PODS=0
 
 if kubectl get namespace opendatahub &>/dev/null; then
-    ODH_PODS=$(kubectl get pods -n opendatahub --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    # grep -c already prints 0 when nothing matches; `|| echo 0` would append a
+    # second line and break the arithmetic below.
+    ODH_PODS=$(kubectl get pods -n opendatahub --no-headers 2>/dev/null | grep -c "Running" || true)
     ODH_TOTAL_PODS=$((ODH_TOTAL_PODS + ODH_PODS))
     ODH_FOUND=true
     if [ "$ODH_PODS" -gt 0 ]; then
@@ -361,7 +363,7 @@ if kubectl get namespace opendatahub &>/dev/null; then
 fi
 
 if kubectl get namespace redhat-ods-applications &>/dev/null; then
-    RHOAI_PODS=$(kubectl get pods -n redhat-ods-applications --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    RHOAI_PODS=$(kubectl get pods -n redhat-ods-applications --no-headers 2>/dev/null | grep -c "Running" || true)
     ODH_TOTAL_PODS=$((ODH_TOTAL_PODS + RHOAI_PODS))
     ODH_FOUND=true
     if [ "$RHOAI_PODS" -gt 0 ]; then
@@ -382,7 +384,7 @@ fi
 # Check LLM namespace
 print_check "LLM namespace and models"
 if kubectl get namespace llm &>/dev/null; then
-    LLM_PODS=$(kubectl get pods -n llm --no-headers 2>/dev/null | grep -c "Running" || echo "0")
+    LLM_PODS=$(kubectl get pods -n llm --no-headers 2>/dev/null | grep -c "Running" || true)
     LLM_SERVICES=$(kubectl get llminferenceservices -n llm --no-headers 2>/dev/null | wc -l || echo "0")
     if [ "$LLM_SERVICES" -gt 0 ]; then
         print_success "Found $LLM_SERVICES LLMInferenceService(s) with $LLM_PODS running pod(s)"

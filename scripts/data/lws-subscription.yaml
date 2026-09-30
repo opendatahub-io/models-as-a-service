@@ -1,18 +1,7 @@
 ---
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: openshift-lws-operator
----
-apiVersion: operators.coreos.com/v1
-kind: OperatorGroup
-metadata:
-  name: leader-worker-set
-  namespace: openshift-lws-operator
-spec:
-  targetNamespaces:
-  - openshift-lws-operator
----
+# Namespace and OperatorGroup are created by ensure_operator_group() in deploy.sh,
+# which skips creation when the namespace already has one. See the note in
+# cert-manager-subscription.yaml.
 apiVersion: operators.coreos.com/v1alpha1
 kind: Subscription
 metadata:
