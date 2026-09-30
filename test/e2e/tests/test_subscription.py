@@ -97,6 +97,7 @@ from test_helper import (
     _scale_kuadrant_controller_up,
     _wait_for_subscription_trlp_status,
     _wait_for_subscription_discovery_ready,
+    _wait_for_subscription_generation_observed,
     _wait_for_subscription_inference_ready,
     _wait_for_cr_absent,
 )
@@ -1650,12 +1651,15 @@ class TestManagedAnnotation:
                 SIMULATOR_SUBSCRIPTION,
             )
 
-            # 6. Wait for reconciliation
-            _wait_for_subscription_inference_ready(
+            # 6. Wait for the controller to reconcile the edited spec
+            modified = _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION, ns)
+            assert modified, (
+                f"MaaSSubscription {SIMULATOR_SUBSCRIPTION} disappeared after update"
+            )
+            _wait_for_subscription_generation_observed(
                 SIMULATOR_SUBSCRIPTION,
-                MODEL_REF,
-                model_namespace=MODEL_NAMESPACE,
-                timeout=180,
+                modified["metadata"]["generation"],
+                namespace=ns,
             )
 
             # 7. Re-read the TRLP and compare spec

@@ -1452,6 +1452,45 @@ def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
     )
 
 
+def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
+    """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
+
+    The controller reconciles the TokenRateLimitPolicies before it writes status,
+    so the Ready condition's observedGeneration reaching ``generation`` means the
+    TRLPs were reconciled against that spec. Unlike phase or TRLP readiness, this
+    does not depend on Kuadrant.
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    observed = None
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            ready = next(
+                (
+                    c for c in cr.get("status", {}).get("conditions", [])
+                    if c.get("type") == "Ready"
+                ),
+                {},
+            )
+            observed = ready.get("observedGeneration")
+            if observed is not None and observed >= generation:
+                log.info(
+                    "MaaSSubscription %s/%s reconciled at generation %s",
+                    namespace,
+                    name,
+                    observed,
+                )
+                return cr
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"MaaSSubscription {namespace}/{name} was not reconciled at generation "
+        f"{generation} within {timeout}s (Ready observedGeneration={observed})"
+    )
+
+
 def _wait_for_subscription_trlp_status(
     name,
     expected_ready=True,
