@@ -345,9 +345,24 @@ collect_namespace_pod_logs() {
   local outdir="${2:-$ARTIFACTS_DIR/pod-logs}"
   mkdir -p "$outdir"
   echo "Collecting pod logs from namespace $ns to $outdir"
+  local pod container pods_json
   for pod in $(kubectl get pods -n "$ns" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
     kubectl logs -n "$ns" "$pod" --all-containers --tail=500 2>/dev/null | redact_tokens > "${outdir}/${pod}.log" || true
   done
+  # Restarts and their cause (e.g. OOMKilled) live only in pod status, and the
+  # crashed container's logs only behind --previous.
+  pods_json=$(kubectl get pods -n "$ns" -o json 2>/dev/null || echo '{"items":[]}')
+  jq -r '.items[] | .metadata.name as $pod | .status.containerStatuses[]?
+    | [$pod, .name, "ready=\(.ready)", "state=\(.state | keys | first // "-")",
+       "restarts=\(.restartCount)",
+       "lastState=\(.lastState.terminated.reason // "-")/\(.lastState.terminated.exitCode // "-")",
+       "finishedAt=\(.lastState.terminated.finishedAt // "-")"]
+    | @tsv' <<<"$pods_json" > "${outdir}/pods.txt" 2>/dev/null || true
+  while read -r pod container; do
+    kubectl logs -n "$ns" "$pod" -c "$container" --previous --tail=500 2>/dev/null \
+      | redact_tokens > "${outdir}/${pod}.${container}.previous.log" || true
+  done < <(jq -r '.items[] | .metadata.name as $pod | .status.containerStatuses[]?
+    | select(.restartCount > 0) | "\($pod) \(.name)"' <<<"$pods_json" 2>/dev/null || true)
   local count
   count=$(ls -1 "$outdir"/*.log 2>/dev/null | wc -l || echo 0)
   echo "  Saved $count pod log file(s) to $outdir"

@@ -99,9 +99,11 @@ jobs:
             MINOR_BRANCH="release-$TAG"
           fi
           
-          echo "version_tag=$TAG" >> $GITHUB_OUTPUT
-          echo "minor_version=$MINOR_VERSION" >> $GITHUB_OUTPUT
-          echo "minor_release_branch=$MINOR_BRANCH" >> $GITHUB_OUTPUT
+          {
+            echo "version_tag=$TAG"
+            echo "minor_version=$MINOR_VERSION"
+            echo "minor_release_branch=$MINOR_BRANCH"
+          } >> "$GITHUB_OUTPUT"
           
           echo "Release tag: $TAG"
           echo "Minor version: $MINOR_VERSION"
@@ -305,11 +307,11 @@ jobs:
         run: |
           if [ -n "$QUAY_REPO" ]; then
             echo "Using custom repository from secret: $QUAY_REPO"
-            echo "repo=$QUAY_REPO" >> $GITHUB_OUTPUT
+            echo "repo=$QUAY_REPO" >> "$GITHUB_OUTPUT"
             make build-push-image REPO="$QUAY_REPO" TAG="$VERSION_TAG" CONTAINER_ENGINE=docker
           else
             echo "Using Makefile default repository: quay.io/opendatahub/maas-api"
-            echo "repo=quay.io/opendatahub/maas-api" >> $GITHUB_OUTPUT
+            echo "repo=quay.io/opendatahub/maas-api" >> "$GITHUB_OUTPUT"
             make build-push-image TAG="$VERSION_TAG" CONTAINER_ENGINE=docker
           fi
 
