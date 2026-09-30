@@ -7,14 +7,20 @@ import (
 	autov1 "k8s.io/api/autoscaling/v1"
 	autov2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
+	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -470,22 +476,51 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 		return obj
 	}
 
-	startWatches := func(ctx SpecContext) {
+	// startWatches is startWatchManager with the cache the manager binary builds: the
+	// operand scopes and managed fields stripped. It returns that cache.
+	startWatches := func(ctx SpecContext) cache.Cache {
 		GinkgoHelper()
 
+		scopes, err := client.New(envTest.Config, client.Options{Scheme: watchScheme()})
+		Expect(err).NotTo(HaveOccurred())
+		mgr, err := ctrl.NewManager(envTest.Config, ctrl.Options{
+			Scheme: watchScheme(),
+			Cache: cache.Options{
+				ByObject:         TenantOperandCacheByObject(ctx, scopes, appNamespace, gatewayNamespace),
+				DefaultTransform: cache.TransformStripManagedFields(),
+			},
+			Metrics:                metricsserver.Options{BindAddress: "0"},
+			HealthProbeBindAddress: "0",
+			Controller:             config.Controller{SkipNameValidation: ptr.To(true)},
+		})
+		Expect(err).NotTo(HaveOccurred())
 		r := &TenantReconciler{
+			Client:                          mgr.GetClient(),
+			Scheme:                          mgr.GetScheme(),
 			AppNamespace:                    appNamespace,
 			OperatorNamespace:               appNamespace,
 			TenantNamespace:                 survivor.Namespace,
 			GatewayNamespace:                gatewayNamespace,
 			TenantNamespaceDiscoveryEnabled: true,
 		}
-		startWatchManager(ctx, func(mgr ctrl.Manager) error {
-			r.Client, r.Scheme = mgr.GetClient(), mgr.GetScheme()
-			return r.setupWithManager(mgr, recorder)
-		})
+		Expect(r.setupWithManager(mgr, recorder)).To(Succeed())
+
+		stopped := make(chan struct{})
+		go func() {
+			defer GinkgoRecover()
+			defer close(stopped)
+			Expect(mgr.Start(ctx)).To(Succeed())
+		}()
+		DeferCleanup(func() { Eventually(stopped).Should(BeClosed()) })
+		Expect(mgr.GetCache().WaitForCacheSync(ctx)).To(BeTrue())
+
 		Eventually(recorder.all).WithTimeout(watchSettleTimeout).Should(ContainElement(survivor))
 		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+		return mgr.GetCache()
+	}
+
+	since := func(mark int) func() []reconcile.Request {
+		return func() []reconcile.Request { return recorder.since(mark) }
 	}
 
 	It("wakes the remaining tenants when a shared operand last applied by a departed tenant is deleted", func(ctx SpecContext) {
@@ -498,6 +533,99 @@ var _ = Describe("Tenant operand watches through a manager", func() {
 
 		Expect(envTest.Delete(ctx, sa)).To(Succeed())
 
-		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(survivor))
+		Eventually(since(mark)).Should(ContainElement(survivor))
+	})
+
+	It("delivers operand events through the namespace-scoped metadata cache", func(ctx SpecContext) {
+		cached := startWatches(ctx)
+		mark := recorder.mark()
+
+		Expect(envTest.Create(ctx, stampedFor(fixture.OperandServiceAccount(appNamespace, "maas-api"), survivor.Namespace))).To(Succeed())
+
+		Eventually(since(mark)).Should(ContainElement(survivor))
+		// The scope is in force: the cache holds no ServiceAccounts outside the app and
+		// gateway namespaces.
+		outside := &metav1.PartialObjectMetadata{}
+		outside.SetGroupVersionKind(tenantreconcile.GVKServiceAccount)
+		err := cached.Get(ctx, client.ObjectKey{Namespace: survivor.Namespace, Name: "default"}, outside)
+		Expect(err).To(MatchError(ContainSubstring("unknown namespace")))
+	})
+
+	It("sees a ClusterRole that loses its tracking labels as a delete carrying the old labels", func(ctx SpecContext) {
+		role := stampedFor(fixture.OperandClusterRole(appNamespace), survivor.Namespace)
+		Expect(envTest.Create(ctx, role)).To(Succeed())
+		cached := startWatches(ctx)
+		mark := recorder.mark()
+
+		role.SetLabels(nil)
+		Expect(envTest.Update(ctx, role)).To(Succeed())
+
+		// The label-scoped informer drops the object; only its old labels name the tenant.
+		Eventually(since(mark)).Should(ContainElement(survivor))
+		gone := &metav1.PartialObjectMetadata{}
+		gone.SetGroupVersionKind(gvkClusterRole)
+		Expect(apierrors.IsNotFound(cached.Get(ctx, client.ObjectKeyFromObject(role), gone))).To(BeTrue())
+	})
+
+	It("registers a CRD-backed operand watch once the CRD is served, and wakes the tenants", func(ctx SpecContext) {
+		Expect(envTest.Serves(tenantreconcile.GVKCertificate)).To(BeFalse(), "another spec installed the Certificate CRD")
+		startWatches(ctx)
+		mark := recorder.mark()
+
+		// A CRD with no objects yet produces no operand event of its own.
+		_, err := envtest.InstallCRDs(envTest.Config, envtest.CRDInstallOptions{CRDs: []*extv1.CustomResourceDefinition{{
+			ObjectMeta: metav1.ObjectMeta{Name: "certificates.cert-manager.io"},
+			Spec: extv1.CustomResourceDefinitionSpec{
+				Group: tenantreconcile.GVKCertificate.Group,
+				Names: extv1.CustomResourceDefinitionNames{Plural: "certificates", Singular: "certificate", Kind: "Certificate", ListKind: "CertificateList"},
+				Scope: extv1.NamespaceScoped,
+				Versions: []extv1.CustomResourceDefinitionVersion{{
+					Name: tenantreconcile.GVKCertificate.Version, Served: true, Storage: true,
+					Schema: &extv1.CustomResourceValidation{OpenAPIV3Schema: &extv1.JSONSchemaProps{
+						Type: "object", XPreserveUnknownFields: ptr.To(true),
+					}},
+				}},
+			},
+		}}})
+		Expect(err).NotTo(HaveOccurred())
+		Eventually(since(mark)).Should(ContainElement(survivor))
+
+		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+		mark = recorder.mark()
+		certificate := &unstructured.Unstructured{}
+		certificate.SetGroupVersionKind(tenantreconcile.GVKCertificate)
+		certificate.SetNamespace(appNamespace)
+		certificate.SetName(tenantreconcile.MaaSAPIServingCertName(""))
+		Expect(envTest.Create(ctx, stampedFor(certificate, survivor.Namespace))).To(Succeed())
+
+		Eventually(since(mark)).Should(ContainElement(survivor))
+	})
+
+	Describe("stays quiet", func() {
+		It("on status the autoscaler writes", func(ctx SpecContext) {
+			hpa := fixture.OperandHPA(gatewayNamespace, "payload-processing", "payload-processing")
+			stampedFor(hpa, survivor.Namespace)
+			Expect(envTest.Create(ctx, hpa)).To(Succeed())
+			startWatches(ctx)
+			mark := recorder.mark()
+
+			hpa.Status = autov2.HorizontalPodAutoscalerStatus{CurrentReplicas: 2, DesiredReplicas: 3}
+			Expect(envTest.Status().Update(ctx, hpa)).To(Succeed())
+
+			Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(BeEmpty())
+		})
+
+		It("when another live tenant restamps a shared operand", func(ctx SpecContext) {
+			other := pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("other")).Name
+			Expect(envTest.Create(ctx, predTenantConfig(other))).To(Succeed())
+			role := stampedFor(fixture.OperandClusterRole(appNamespace), survivor.Namespace)
+			Expect(envTest.Create(ctx, role)).To(Succeed())
+			startWatches(ctx)
+			mark := recorder.mark()
+
+			Expect(envTest.Update(ctx, stampedFor(role, other))).To(Succeed())
+
+			Consistently(since(mark)).WithTimeout(watchQuietPeriod).Should(BeEmpty())
+		})
 	})
 })
