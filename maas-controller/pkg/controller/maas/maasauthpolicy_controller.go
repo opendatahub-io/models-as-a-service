@@ -444,6 +444,10 @@ const (
 // All MaaSAuthPolicy CRs share this one policy; model identity is resolved dynamically.
 const maasGatewayAuthPolicyName = "maas-gateway-auth"
 
+// gatewayAuthPolicyPartOf is the app.kubernetes.io/part-of value on every per-gateway
+// AuthPolicy, including tenant gateways whose policy is not named maasGatewayAuthPolicyName.
+const gatewayAuthPolicyPartOf = "maas-gateway-auth"
+
 // legacyGatewayDefaultAuthPolicyName is the pre-#912 static deny AuthPolicy removed in
 // favor of maas-gateway-auth. Kept only for upgrade cleanup of stale cluster resources.
 const legacyGatewayDefaultAuthPolicyName = "gateway-default-auth"
@@ -1379,7 +1383,7 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	gwPolicy.SetNamespace(gatewayNamespace)
 	gwPolicy.SetLabels(map[string]string{
 		"app.kubernetes.io/managed-by": "maas-controller",
-		"app.kubernetes.io/part-of":    "maas-gateway-auth",
+		"app.kubernetes.io/part-of":    gatewayAuthPolicyPartOf,
 		"app.kubernetes.io/component":  "gateway-auth",
 	})
 

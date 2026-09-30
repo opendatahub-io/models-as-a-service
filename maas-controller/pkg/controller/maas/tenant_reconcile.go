@@ -27,6 +27,8 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apiextensions-apiserver/pkg/apihelpers"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +56,29 @@ const (
 	tenantFinalizer       = "maas.opendatahub.io/tenant-cleanup"
 	legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 )
+
+const (
+	// kuadrantRecheckInterval bounds how long router-anchored payload processing outlives
+	// Kuadrant wiring its wasm filter through a WasmPlugin, which get-only RBAC cannot
+	// watch. Until the next render, wasm runs before ipp-pre and body-routed /v1/* skips
+	// AuthPolicy and TRLP, so the window is kept well under the old 5m resync; the cost is
+	// one render and apply per affected tenant, only while detection is degraded.
+	kuadrantRecheckInterval = 2 * time.Minute
+
+	// dependencyDiscoveryRetry covers the gap between a dependency CRD turning Established,
+	// which fires the CRD watch, and discovery serving its kind to the REST mapper. No
+	// further CRD event arrives once that gap closes.
+	dependencyDiscoveryRetry = 10 * time.Second
+)
+
+// kuadrantRecheck requeues while payload processing runs on the router fallback or the
+// Kuadrant wasm filter could not be verified; both hinge on a WasmPlugin no watch covers.
+func kuadrantRecheck(runRes *tenantreconcile.RunResult) ctrl.Result {
+	if runRes != nil && (runRes.KuadrantRouterFallback || runRes.KuadrantDetectionWarning != "") {
+		return ctrl.Result{RequeueAfter: kuadrantRecheckInterval}
+	}
+	return ctrl.Result{}
+}
 
 // tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
 // The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
@@ -207,7 +232,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.attemptLegacyCleanup(ctx, log)
 
 	// Set final status
-	return r.setFinalStatus(ctx, &tenant)
+	return r.setFinalStatus(ctx, &tenant, runRes)
 }
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
@@ -224,7 +249,8 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 			return ctrl.Result{}, err
 		}
 		if !subscriptionsDeleted || !authPoliciesDeleted {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			// Their delete events re-enqueue this tenant (see mapDeletedTenantChildToMaasTenantConfig).
+			return ctrl.Result{}, nil
 		}
 
 		if err := r.cleanupTenantResources(ctx, log, tenant); err != nil {
@@ -296,8 +322,8 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", err.Error()); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// The Gateway watch re-enqueues tenants that reference it once it is created.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	if r.ManifestPath == "" {
@@ -320,7 +346,11 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", err.Error()); err2 != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
+		// The dependency CRD watch re-enqueues every tenant when the CRD appears.
+		res := ctrl.Result{}
+		if r.dependencyCRDsEstablished(ctx) {
+			res.RequeueAfter = dependencyDiscoveryRetry
+		}
 		return tenantreconcile.PrerequisiteReport{}, &res, nil
 	}
 	setDependenciesCondition(tenant, true, "")
@@ -343,8 +373,8 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 		if err := r.Status().Update(ctx, tenant); err != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return tenantreconcile.PrerequisiteReport{}, &res, nil
+		// The only blocking prerequisite is the maas-db-config Secret, which is watched.
+		return tenantreconcile.PrerequisiteReport{}, &ctrl.Result{}, nil
 	}
 
 	return rep, nil, nil
@@ -389,7 +419,9 @@ func (r *TenantReconciler) reconcilePlatform(
 		if err := r.Status().Update(ctx, tenant); err != nil {
 			return nil, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 20 * time.Second}
+		// Rollout progress, EnvoyFilter changes and the payload-processing handshake
+		// annotation on this tenant config all re-enqueue through watches.
+		res := kuadrantRecheck(runRes)
 		return nil, &res, nil
 	}
 
@@ -474,7 +506,7 @@ func (r *TenantReconciler) attemptLegacyCleanup(ctx context.Context, log logr.Lo
 	}
 }
 
-func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
+func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, runRes *tenantreconcile.RunResult) (ctrl.Result, error) {
 	tenant.Status.Phase = "Active"
 	if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
 		tenant.Status.Phase = "Degraded"
@@ -492,7 +524,22 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Operand drift re-enqueues through the operand watches; only the Kuadrant wasm
+	// detection is polled.
+	return kuadrantRecheck(runRes), nil
+}
+
+// dependencyCRDsEstablished reports whether every dependency CRD is already Established,
+// so a failed dependency check is discovery lag rather than a missing CRD.
+func (r *TenantReconciler) dependencyCRDsEstablished(ctx context.Context) bool {
+	for _, d := range tenantreconcile.Dependencies {
+		var crd extv1.CustomResourceDefinition
+		if err := r.Get(ctx, client.ObjectKey{Name: d.CRD}, &crd); err != nil ||
+			!apihelpers.IsCRDConditionTrue(&crd, extv1.Established) {
+			return false
+		}
+	}
+	return true
 }
 
 // readyConfigOrWait returns the singleton Config when it exists, is not deleting,

@@ -58,7 +58,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		}
 
 		if skipConfigControllerOwnerRef(u, appNs) {
-			setTenantTrackingLabels(u, tenant)
+			SetTenantTrackingLabels(u, tenant)
 		} else {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
@@ -70,7 +70,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 					return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
 				}
 			}
-			setTenantTrackingLabels(u, tenant)
+			SetTenantTrackingLabels(u, tenant)
 		}
 		preparePayloadProcessingPluginsConfigMapApply(ctx, c, u)
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
@@ -194,7 +194,9 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 	return false
 }
 
-func setTenantTrackingLabels(obj *unstructured.Unstructured, tenant client.Object) {
+// SetTenantTrackingLabels stamps the metadata labels that map an operand back to its
+// tenant config. Never pod template or selector labels: those would roll or orphan pods.
+func SetTenantTrackingLabels(obj, tenant client.Object) {
 	labels := obj.GetLabels()
 	if labels == nil {
 		labels = make(map[string]string)

@@ -422,7 +422,7 @@ func TestTenantReconcile_AITenantManagedDefaultDeletionWaitsForMaaSCRFinalizers(
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}), "MaaS CR delete events re-enqueue the tenant; no polling")
 
 	var deletingSubscription maasv1alpha1.MaaSSubscription
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(subscription), &deletingSubscription)).To(Succeed())

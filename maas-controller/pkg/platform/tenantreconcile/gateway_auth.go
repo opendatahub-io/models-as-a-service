@@ -3,6 +3,7 @@ package tenantreconcile
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -18,8 +19,17 @@ var gvkWasmPlugin = schema.GroupVersionKind{
 	Kind:    "WasmPlugin",
 }
 
+const kuadrantGatewayResourcePrefix = "kuadrant-"
+
 func kuadrantGatewayResourceName(gatewayName string) string {
-	return fmt.Sprintf("kuadrant-%s", gatewayName)
+	return kuadrantGatewayResourcePrefix + gatewayName
+}
+
+// KuadrantGatewayForResource returns the gateway a Kuadrant-owned EnvoyFilter or
+// WasmPlugin is named after; RunPlatform's wasm detection looks those up by that name.
+func KuadrantGatewayForResource(name string) (string, bool) {
+	gateway, ok := strings.CutPrefix(name, kuadrantGatewayResourcePrefix)
+	return gateway, ok && gateway != ""
 }
 
 // gatewayHasKuadrantWasmAuth reports whether Kuadrant auth is wired on the gateway via

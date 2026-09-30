@@ -22,6 +22,7 @@ import (
 	stderrors "errors"
 	"flag"
 	"fmt"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -961,6 +962,17 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 	return nil
 }
 
+// mustPreManagerClient returns a direct client for setup reads made before the manager
+// and its cache exist.
+func mustPreManagerClient(cfg *rest.Config) client.Client { //nolint:ireturn // client.New only returns the interface.
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create pre-manager Kubernetes client")
+		os.Exit(1)
+	}
+	return c
+}
+
 func main() {
 	var metricsAddr string
 	var secureMetrics bool
@@ -1139,6 +1151,13 @@ func main() {
 			"tenantNamespaceLabel", tenantreconcile.LabelAIGatewayTenant,
 			"compatTenantNamespaceLabel", tenantreconcile.LabelManagedByAITenant)
 	}
+	// Operand informer scoping is merged after the namespace-mode choice above because
+	// both branches build a fresh ByObject map, and it needs a direct client because
+	// cache options are fixed before the manager exists. Operand kinds must stay
+	// disjoint from the kinds above: the cache keys ByObject by GVK while ranging
+	// over the map, so two entries for one kind resolve in random order.
+	preManagerClient := mustPreManagerClient(cfg)
+	maps.Copy(cacheOpts.ByObject, maas.TenantOperandCacheByObject(context.Background(), preManagerClient, infraNamespace, gatewayNamespace))
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 

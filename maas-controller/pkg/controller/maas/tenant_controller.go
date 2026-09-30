@@ -312,7 +312,7 @@ func isManagedTenantNetworkPolicyLabels(labels map[string]string) bool {
 	case "models-as-a-service", "maas":
 		return true
 	}
-	return labels[tenantreconcile.LabelTenantName] != "" || labels[tenantreconcile.LabelTenantNamespace] != ""
+	return hasTenantTrackingLabels(labels)
 }
 
 func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
@@ -416,6 +416,7 @@ func (r *TenantReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.R
 	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{RateLimiter: tenantReconcileRateLimiter()}).
 		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(tenantConfigChangedForTenant())).
+		// Config changes (e.g. the usageLogging toggle) apply to every tenant's operands.
 		Watches(
 			&maasv1alpha1.Config{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
@@ -474,5 +475,5 @@ func (r *TenantReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.R
 		}
 	}
 
-	return nil
+	return r.setupTenantPlatformWatches(ctx, c, mgr)
 }

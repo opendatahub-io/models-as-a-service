@@ -514,3 +514,43 @@ func TestTenantReconcile_ConfigChangeEnqueuesAllMaasTenantConfigs(t *testing.T) 
 		reconcile.Request{NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-beta"}},
 	))
 }
+
+func TestApplyUsageLogsEnvoyFilterMetadataStampsTrackingLabels(t *testing.T) {
+	newFilter := func() *unstructured.Unstructured {
+		ef := &unstructured.Unstructured{}
+		ef.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
+		ef.SetName(tenantreconcile.UsageLogsEnvoyFilterName(""))
+		g := NewWithT(t)
+		g.Expect(unstructured.SetNestedStringMap(ef.Object,
+			map[string]string{"gateway.networking.k8s.io/gateway-name": "maas-default-gateway"},
+			"spec", "workloadSelector", "labels")).To(Succeed())
+		return ef
+	}
+
+	t.Run("legacy default tenant config without AITenant labels", func(t *testing.T) {
+		g := NewWithT(t)
+		legacy := &maasv1alpha1.MaasTenantConfig{ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: usageLogsTestDefaultTenant,
+		}}
+		ef := newFilter()
+		spec := ef.Object["spec"]
+
+		applyUsageLogsEnvoyFilterMetadata(ef, legacy)
+
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, maasv1alpha1.MaasTenantConfigInstanceName))
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantNamespace, usageLogsTestDefaultTenant))
+		g.Expect(ef.Object["spec"]).To(Equal(spec), "only metadata labels change")
+	})
+
+	t.Run("AITenant-managed tenant config keeps its tracking values", func(t *testing.T) {
+		g := NewWithT(t)
+		tenant := usageLogsTenantConfig("ai-tenant-redteam", "redteam", usageLogsTestAITenantNS)
+		ef := newFilter()
+
+		applyUsageLogsEnvoyFilterMetadata(ef, tenant)
+
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantName, "redteam"))
+		g.Expect(ef.GetLabels()).To(HaveKeyWithValue(tenantreconcile.LabelTenantNamespace, "ai-tenant-redteam"))
+	})
+}

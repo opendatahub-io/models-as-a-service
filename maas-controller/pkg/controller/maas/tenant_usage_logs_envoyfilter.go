@@ -204,6 +204,9 @@ func applyUsageLogsEnvoyFilterMetadata(obj client.Object, tenant *maasv1alpha1.M
 		}
 	}
 	obj.SetLabels(labels)
+	// A legacy default tenant config carries no tracking labels to copy; the operand
+	// watch maps the filter back to its tenant only through these.
+	tenantreconcile.SetTenantTrackingLabels(obj, tenant)
 
 	annotations := obj.GetAnnotations()
 	if annotations == nil {
