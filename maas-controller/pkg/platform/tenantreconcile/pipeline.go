@@ -86,7 +86,7 @@ func RunPlatform(
 
 	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, monitoringNamespace, log)
 	if err != nil {
-		return nil, reconcile.TerminalError(fmt.Errorf("build params: %w", err))
+		return nil, fmt.Errorf("build params: %w", err)
 	}
 
 	bundledPostgres, err := resolveBundledPostgres(ctx, c, appNs)

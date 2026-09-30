@@ -869,17 +869,36 @@ func TestTenantReconcile_UsageLogsEnvoyFilterDeleteErrorIsReturned(t *testing.T)
 		})
 	})
 
+	markTenantReady(t, r, tenant)
+
 	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(tenant)})
 	g.Expect(err).To(MatchError(deleteErr))
 	g.Expect(res).To(Equal(ctrl.Result{}))
 
+	// A failure that retries shows as Degraded; Ready stays, so the AITenant and
+	// Lifecycle watches do not see readiness flap on a transient error.
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
-	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
-	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(ready.Reason).To(Equal("UsageLogsCleanupFailed"))
-	g.Expect(ready.Message).To(ContainSubstring(deleteErr.Error()))
+	g.Expect(apimeta.IsStatusConditionTrue(updated.Status.Conditions, tenantreconcile.ReadyConditionType)).To(BeTrue())
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(degraded.Reason).To(Equal("UsageLogsCleanupFailed"))
+	g.Expect(degraded.Message).To(ContainSubstring(deleteErr.Error()))
+}
+
+// markTenantReady records a completed platform pass on the fixture tenant config.
+func markTenantReady(t *testing.T, r *TenantReconciler, tenant *maasv1alpha1.MaasTenantConfig) {
+	t.Helper()
+
+	g := NewWithT(t)
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), tenant)).To(Succeed())
+	tenant.Status.Phase = "Active"
+	apimeta.SetStatusCondition(&tenant.Status.Conditions, metav1.Condition{
+		Type: tenantreconcile.ReadyConditionType, Status: metav1.ConditionTrue, Reason: "Reconciled",
+		ObservedGeneration: tenant.Generation,
+	})
+	g.Expect(r.Status().Update(t.Context(), tenant)).To(Succeed())
 }
 
 func TestTenantReconcile_RecordFailureKeepsStatusWriteErrorRetryable(t *testing.T) {
@@ -957,9 +976,10 @@ func TestTenantReconcile_AITenantReadFailureIsReturned(t *testing.T) {
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
-	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
-	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Reason).To(Equal("InvalidGateway"))
+	g.Expect(apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)).To(BeNil())
+	degraded := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(degraded).NotTo(BeNil())
+	g.Expect(degraded.Reason).To(Equal("PlatformContextReadFailed"))
 }
 
 func TestTenantReconcile_ManifestPathUnsetDoesNotRequeue(t *testing.T) {
@@ -1002,13 +1022,14 @@ func TestTenantReconcile_PlatformReconcileErrorIsReturnedWithStatus(t *testing.T
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal("Failed"))
+	// Its own reason tells a render that needs an edit from an apply that is retrying.
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
-	g.Expect(ready.Reason).To(Equal("PlatformReconcileFailed"))
+	g.Expect(ready.Reason).To(Equal("PlatformRenderFailed"))
 	deployments := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ConditionDeploymentsAvailable)
 	g.Expect(deployments).NotTo(BeNil())
 	g.Expect(deployments.Status).To(Equal(metav1.ConditionFalse))
-	g.Expect(deployments.Reason).To(Equal("PlatformReconcileFailed"))
+	g.Expect(deployments.Reason).To(Equal("PlatformRenderFailed"))
 }
 
 func TestTenantReconcile_AppNamespaceUsesConfiguredAppNamespace(t *testing.T) {
@@ -1204,6 +1225,14 @@ func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testi
 		NamespacedName: types.NamespacedName{Name: tenant.Name, Namespace: tenantNS},
 	})
 	g.Expect(err).To(MatchError(ContainSubstring("tenant-name is missing")))
+	// Only a label fix helps, and that passes the MaasTenantConfig watch.
+	g.Expect(errors.Is(err, reconcile.TerminalError(nil))).To(BeTrue())
+
+	var updated maasv1alpha1.MaasTenantConfig
+	g.Expect(r.Get(t.Context(), client.ObjectKeyFromObject(tenant), &updated)).To(Succeed())
+	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
+	g.Expect(ready).NotTo(BeNil())
+	g.Expect(ready.Reason).To(Equal("InvalidTenantIdentity"))
 }
 
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {

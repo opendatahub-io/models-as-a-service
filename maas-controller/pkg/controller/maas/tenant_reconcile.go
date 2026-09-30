@@ -36,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -138,7 +139,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
 	if err != nil {
-		return ctrl.Result{}, err
+		// Only a label fix helps, and that passes the MaasTenantConfig watch.
+		return ctrl.Result{}, r.recordFailure(ctx, &tenant, "InvalidTenantIdentity", reconcile.TerminalError(err))
 	}
 
 	if usesCleanupFinalizer {
@@ -278,11 +280,8 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 
 	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
 	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackGatewayRef)
-	if err != nil && errors.Unwrap(err) != nil && !apierrors.IsNotFound(err) {
-		// Only a failed AITenant read wraps a cause, and a retry can fix it. Missing tenant
-		// labels or annotations, a missing AITenant and an unset status.gatewayRef wait for
-		// the MaasTenantConfig and AITenant watches.
-		return nil, tenantreconcile.PlatformContext{}, nil, r.recordFailure(ctx, tenant, "InvalidGateway", err)
+	if err != nil && !errors.Is(err, tenantreconcile.ErrPlatformContextNotReady) {
+		return nil, tenantreconcile.PlatformContext{}, nil, r.recordFailure(ctx, tenant, "PlatformContextReadFailed", err)
 	}
 	if err != nil {
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
@@ -361,8 +360,15 @@ func (r *TenantReconciler) reconcilePlatform(
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
-		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
-		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", r.recordFailure(ctx, tenant, "PlatformReconcileFailed", err))
+		// Any platform failure sets Ready=False. The reason tells a render that needs an edit
+		// from an apply that is retrying.
+		reason := "PlatformReconcileFailed"
+		if errors.Is(err, reconcile.TerminalError(nil)) {
+			reason = "PlatformRenderFailed"
+		}
+		setDeploymentsAvailableCondition(tenant, false, reason, err.Error())
+		statusErr := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, reason, err.Error())
+		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", failureAfterStatus(reason, statusErr, err))
 	}
 
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
@@ -562,12 +568,23 @@ func validateGatewayExists(ctx context.Context, c client.Client, namespace, name
 	return nil
 }
 
-// recordFailure sets Ready=False with reason and err, then returns err, so a failure that
-// keeps retrying shows in status and not only in the controller log. When the status write
-// fails, only its error stays in the chain: that write is always worth a retry, even after
-// a terminal err.
+// recordFailure records err in status under reason and returns it, so a failure shows in
+// status and not only in the controller log. A terminal err sets Ready=False: the tenant
+// config needs an edit. Any other err sets Degraded=True and leaves Ready alone, so a
+// transient failure does not flap readiness for the AITenant and Lifecycle watches; the
+// next complete pass clears Degraded.
 func (r *TenantReconciler) recordFailure(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, reason string, err error) error {
-	if statusErr := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, reason, err.Error()); statusErr != nil {
+	if errors.Is(err, reconcile.TerminalError(nil)) {
+		return failureAfterStatus(reason, r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, reason, err.Error()), err)
+	}
+	setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue, reason, err.Error())
+	return failureAfterStatus(reason, r.Status().Update(ctx, tenant), err)
+}
+
+// failureAfterStatus returns err unless recording it in status failed. Then only the status
+// error stays in the chain: that write is always worth a retry, even after a terminal err.
+func failureAfterStatus(reason string, statusErr, err error) error {
+	if statusErr != nil {
 		return fmt.Errorf("record %s in status: %w (after: %s)", reason, statusErr, err.Error())
 	}
 	return err
