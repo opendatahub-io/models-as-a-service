@@ -9,16 +9,20 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
+	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -80,7 +84,10 @@ var _ = Describe("TenantReconciler watches", func() {
 			GatewayNamespace:                gatewayNamespace,
 			TenantNamespaceDiscoveryEnabled: true,
 		}
-		startTenantWatches(ctx, r, recorder)
+		startWatchManager(ctx, func(mgr ctrl.Manager) error {
+			r.Client, r.Scheme = mgr.GetClient(), mgr.GetScheme()
+			return r.setupWithManager(mgr, recorder)
+		})
 
 		By("letting both tenants apply the shared NetworkPolicy and settle")
 		// The controller starts its workers once every watch has synced, which takes a few
@@ -171,21 +178,77 @@ var _ = Describe("TenantReconciler watches", func() {
 	})
 })
 
-// startTenantWatches runs a manager with r's watches feeding target until the spec ends.
-func startTenantWatches(ctx SpecContext, r *TenantReconciler, target reconcile.Reconciler) {
+var _ = Describe("AITenantReconciler watches", func() {
+	It("re-enqueues the AITenant when its MaasTenantConfig reports Ready", func(ctx SpecContext) {
+		installGatewayCRD()
+		aitenant := reconcile.Request{NamespacedName: types.NamespacedName{
+			Name:      "team-a",
+			Namespace: pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("infra")).Name,
+		}}
+		recorder := newTenantRequestRecorder(func(context.Context, reconcile.Request) error { return nil })
+		r := &AITenantReconciler{}
+		startWatchManager(ctx, func(mgr ctrl.Manager) error { return r.setupWithManager(mgr, recorder) })
+
+		tenantConfig := predTenantConfig(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("tenant")).Name)
+		tenantConfig.Annotations = map[string]string{
+			aitenantNameAnnotation:      aitenant.Name,
+			aitenantNamespaceAnnotation: aitenant.Namespace,
+		}
+		Expect(envTest.Create(ctx, tenantConfig)).To(Succeed())
+		Eventually(recorder.all).WithTimeout(watchSettleTimeout).Should(ContainElement(aitenant))
+		Eventually(recorder.idleFor).WithTimeout(watchSettleTimeout).Should(BeNumerically(">=", watchQuietPeriod))
+		mark := recorder.mark()
+
+		apimeta.SetStatusCondition(&tenantConfig.Status.Conditions, metav1.Condition{
+			Type: tenantreconcile.ReadyConditionType, Status: metav1.ConditionTrue,
+			Reason: "Reconciled", ObservedGeneration: tenantConfig.Generation,
+		})
+		Expect(envTest.Status().Update(ctx, tenantConfig)).To(Succeed())
+
+		Eventually(func() []reconcile.Request { return recorder.since(mark) }).Should(ContainElement(aitenant))
+	})
+})
+
+// installGatewayCRD serves a schemaless Gateway API Gateway, which the AITenant controller
+// watches. The environment installs only the MaaS CRDs.
+func installGatewayCRD() {
+	GinkgoHelper()
+
+	gatewayCRD := &extv1.CustomResourceDefinition{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "gateways." + gatewayapiv1.GroupName,
+			// The API server protects *.k8s.io groups; the upstream CRD carries the same approval.
+			Annotations: map[string]string{"api-approved.kubernetes.io": "https://github.com/kubernetes-sigs/gateway-api/pull/4530"},
+		},
+		Spec: extv1.CustomResourceDefinitionSpec{
+			Group: gatewayapiv1.GroupName,
+			Names: extv1.CustomResourceDefinitionNames{Plural: "gateways", Singular: "gateway", Kind: "Gateway", ListKind: "GatewayList"},
+			Scope: extv1.NamespaceScoped,
+			Versions: []extv1.CustomResourceDefinitionVersion{{
+				Name: "v1", Served: true, Storage: true,
+				Schema: &extv1.CustomResourceValidation{OpenAPIV3Schema: &extv1.JSONSchemaProps{
+					Type: "object", XPreserveUnknownFields: ptr.To(true),
+				}},
+			}},
+		},
+	}
+	_, err := envtest.InstallCRDs(envTest.Config, envtest.CRDInstallOptions{CRDs: []*extv1.CustomResourceDefinition{gatewayCRD}})
+	Expect(err).NotTo(HaveOccurred())
+}
+
+// startWatchManager runs a manager with the watches setup registers until the spec ends.
+func startWatchManager(ctx SpecContext, setup func(ctrl.Manager) error) {
 	GinkgoHelper()
 
 	mgr, err := ctrl.NewManager(envTest.Config, ctrl.Options{
-		Scheme:                 tenantWatchScheme(),
+		Scheme:                 watchScheme(),
 		Metrics:                metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress: "0",
 		// Every spec builds the same controller in a fresh manager.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	Expect(err).NotTo(HaveOccurred())
-	r.Client = mgr.GetClient()
-	r.Scheme = mgr.GetScheme()
-	Expect(r.setupWithManager(mgr, target)).To(Succeed())
+	Expect(setup(mgr)).To(Succeed())
 
 	stopped := make(chan struct{})
 	go func() {
@@ -197,11 +260,12 @@ func startTenantWatches(ctx SpecContext, r *TenantReconciler, target reconcile.R
 	Expect(mgr.GetCache().WaitForCacheSync(ctx)).To(BeTrue())
 }
 
-func tenantWatchScheme() *runtime.Scheme {
+func watchScheme() *runtime.Scheme {
 	s := runtime.NewScheme()
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	utilruntime.Must(extv1.AddToScheme(s))
+	utilruntime.Must(gatewayapiv1.Install(s))
 	return s
 }
 

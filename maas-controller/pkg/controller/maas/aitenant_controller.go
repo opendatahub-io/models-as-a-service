@@ -268,7 +268,8 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 		if err := r.updateAITenantStatus(ctx, &aitenant, statusSnapshot); err != nil {
 			return ctrl.Result{}, err
 		}
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		// The MaasTenantConfig watch admits the Ready flip.
+		return ctrl.Result{}, nil
 	}
 
 	setAITenantPhase(&aitenant, "Active", "Reconciled", "AITenant bootstrap resources are reconciled")
@@ -280,6 +281,12 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 
 // SetupWithManager registers the AITenant controller.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the AITenant reconcile.
+func (r *AITenantReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	if r.Recorder == nil {
 		r.Recorder = mgr.GetEventRecorderFor("maas-aitenant-controller")
 	}
@@ -300,7 +307,7 @@ func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			handler.EnqueueRequestsFromMapFunc(r.enqueueAITenantForGateway),
 			builder.WithPredicates(predicate.GenerationChangedPredicate{}),
 		).
-		Complete(r)
+		Complete(target)
 }
 
 // enqueueAITenantForTenantConfig maps MaasTenantConfig events back to the

@@ -595,7 +595,8 @@ func TestAITenantReconcile_RetriesTenantConfigAfterNamespaceNotFound(t *testing.
 
 	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+	// The MaasTenantConfig watch admits the Ready flip, so waiting for it needs no timer.
+	g.Expect(res).To(Equal(ctrl.Result{}))
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{
 		Name:      maasv1alpha1.MaasTenantConfigInstanceName,
 		Namespace: tenantNamespace,
@@ -701,7 +702,8 @@ func TestAITenantReconcile_MigratesAndDeletesPreExistingTenant(t *testing.T) {
 
 	res, err = r.Reconcile(context.Background(), ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+	// The MaasTenantConfig watch admits the Ready flip, so waiting for it needs no timer.
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	var readyConfig maasv1alpha1.MaasTenantConfig
 	readyConfigKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-adoptcfg"}
@@ -1455,7 +1457,8 @@ func TestAITenantReconcile_DeletingTenantConfigBlocksActive(t *testing.T) {
 	// but remain Pending until the tenant controller reports the runtime Ready.
 	res, err = r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(30 * time.Second))
+	// The MaasTenantConfig watch admits the Ready flip, so waiting for it needs no timer.
+	g.Expect(res).To(Equal(ctrl.Result{}))
 
 	g.Expect(cl.Get(ctx, key, &updated)).To(Succeed())
 	g.Expect(updated.Status.Phase).To(Equal("Pending"))
