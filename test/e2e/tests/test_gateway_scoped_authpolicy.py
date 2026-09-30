@@ -49,8 +49,8 @@ def _gateway_auth_rego(context) -> str:
 class TestGatewayAuthPolicyStructure:
     """S10: AuthPolicy targets Gateway; no legacy per-model policies."""
 
-    def test_target_ref_points_to_gateway(self, worker_tenant_context):
-        """6.1: maas-gateway-auth targetRef must be Gateway, not HTTPRoute."""
+    def test_gateway_auth_policy_contract(self, worker_tenant_context):
+        """Gateway AuthPolicy targets the Gateway and replaces per-model policies."""
         context = worker_tenant_context
         ap = get_gateway_authpolicy(name=context.gateway_authpolicy_name)
         assert ap is not None, (
@@ -69,11 +69,8 @@ class TestGatewayAuthPolicyStructure:
         assert accepted and accepted[0].get("status") == "True", (
             f"{context.gateway_authpolicy_name} must be Accepted, got {conditions!r}"
         )
-
-    def test_no_per_model_authpolicy_for_fixture_model(self, worker_tenant_context):
-        """6.2: Gateway-only mode must not create maas-auth-{model} in model namespace."""
         assert_no_per_model_authpolicy(
-            worker_tenant_context.model_ref, worker_tenant_context.model_namespace,
+            context.model_ref, context.model_namespace,
         )
 
 
@@ -171,8 +168,8 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
     on clusters with zero subscriptions.
     """
 
-    def test_gateway_auth_group_membership_has_when_guard(self, worker_tenant_context):
-        """require-group-membership must have a when guard to skip management endpoints."""
+    def test_management_rules_have_model_identity_guards(self, worker_tenant_context):
+        """Management authorization rules run only when a model is targeted."""
         ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
         assert ap is not None
 
@@ -194,11 +191,6 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
             f"(path-based + header-based check), got: {predicate}"
         )
 
-    def test_gateway_auth_subscription_check_gated_by_model_identity(self, worker_tenant_context):
-        """subscription-valid authorization must only run when a model is targeted."""
-        ap = get_gateway_authpolicy(name=worker_tenant_context.gateway_authpolicy_name)
-        assert ap is not None
-
         defaults = (ap.get("spec") or {}).get("defaults") or {}
         authorization = defaults.get("rules", {}).get("authorization") or {}
         sub_valid = authorization.get("subscription-valid") or {}
@@ -216,6 +208,8 @@ class TestGatewayAuthPolicyManagementEndpointAccess:
     def test_gateway_default_auth_scoped_if_present(self, worker_tenant_context):
         """If gateway-default-auth exists, it must scope deny-all to model paths only."""
         _ = worker_tenant_context
+        # Retain this skipped compatibility check as executable documentation for
+        # deployments that still expose the legacy policy.
         pytest.skip("legacy gateway-default-auth is scoped to the shared default gateway")
 
         default_auth = get_json_or_none(

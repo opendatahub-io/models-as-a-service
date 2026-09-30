@@ -18,8 +18,6 @@ import requests
 
 from multitenancy_helpers import (
     create_api_key_at,
-    delete_maas_auth_policy,
-    delete_maas_subscription,
     get_api_key_at,
     list_subscriptions_at,
     make_tenant_model_accessible,
@@ -31,7 +29,7 @@ from multitenancy_helpers import (
     tenant_internal_url,
     validate_api_key_at,
 )
-from test_helper import _get_cluster_token, _delete_cr
+from test_helper import _delete_cr, _delete_governance_and_wait, _get_cluster_token
 
 pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
@@ -124,7 +122,7 @@ def tenant_env(shared_test_tenants):
         _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tenant_auth_setup(tenant_env):
     tenant_a, tenant_b = tenant_env
     suffix = uuid.uuid4().hex[:6]
@@ -138,6 +136,7 @@ def tenant_auth_setup(tenant_env):
                 policy_name,
                 subscription_name,
                 gateway_name=tenant["gateway_name"],
+                require_trlp_ready=False,
             )
         yield {
             "tenant_a": tenant_a,
@@ -146,9 +145,16 @@ def tenant_auth_setup(tenant_env):
             "subscription": subscription_name,
         }
     finally:
-        for tenant in tenant_env:
-            delete_maas_auth_policy(policy_name, tenant["namespace"])
-            delete_maas_subscription(subscription_name, tenant["namespace"])
+        _delete_governance_and_wait(
+            subscriptions=[
+                (subscription_name, tenant["namespace"])
+                for tenant in tenant_env
+            ],
+            auth_policies=[
+                (policy_name, tenant["namespace"])
+                for tenant in tenant_env
+            ],
+        )
 
 
 @pytest.fixture

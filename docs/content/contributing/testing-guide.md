@@ -153,9 +153,11 @@ fi
     export GATEWAY_HOST="maas.apps.your-cluster.example.com"
     export E2E_SKIP_TLS_VERIFY=true
 
-    pytest tests/ -v                                    # all tests
-    pytest tests/test_subscription.py -v                # one module
-    pytest tests/test_api_keys.py::TestAPIKeyCreation -v  # one class
+    # Mixed-marker modules need separate passes (or use run_e2e_tests.sh for the full suite).
+    pytest tests/ -m "not serial" -v
+    pytest tests/ -m serial -v
+    pytest tests/test_subscription.py -m "not serial" -v
+    pytest tests/test_api_keys.py::TestAPIKeyCRUD -m "not serial" -v
     ```
 
 ### Key Environment Variables
@@ -171,18 +173,18 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `E2E_SKIP_TLS_VERIFY` | Set `true` to skip TLS verification |
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
-| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count (default `7`, one per group). Set to `1` for serial debugging. |
+| `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`, one per group). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 
 ### Parallel E2E (pytest-xdist)
 
-The E2E suite runs in **two passes** with `E2E_PARALLEL_WORKERS=7` (default):
+`run_e2e_tests.sh` and `run-tests-quick.sh` run **two marker-filtered passes** by default (default `E2E_PARALLEL_WORKERS=7`). Use `--serial-only` to run pass 2 only (`-m serial`); that mode does not execute non-serial tests. Direct `pytest` invocations must use the same split when a module mixes `@serial` and worker-tenant tests.
 
-1. **Pass 1 (parallel)**: `-m "not serial"` with `--dist=loadgroup -n 7` — tests distributed by `xdist_group` marker, one group per worker
+1. **Pass 1**: `-m "not serial"` — with `--dist=loadgroup -n 7` when workers > 1, or single-worker execution when `E2E_PARALLEL_WORKERS=1`
 2. **Pass 2 (serial)**: `-m serial` — tests that mutate shared cluster state (subscription delete/restore, controller/Kuadrant scaling)
 
-Set `E2E_PARALLEL_WORKERS=1` for a single serial pass (useful for debugging).
+Set `E2E_PARALLEL_WORKERS=1` to disable xdist on pass 1 while keeping the serial/non-serial split (useful for debugging on shared clusters). Pass `./run_e2e_tests.sh --serial-only` only when intentionally limiting the run to serial mutators.
 
 #### xdist Groups
 
@@ -378,6 +380,18 @@ If your change affects how MaaS integrates with the ODH operator or other ODH co
 | Interaction with ODH operator, KServe, or Authorino | `opendatahub-tests` repo |
 | End-to-end model serving through the full ODH stack | `opendatahub-tests` repo |
 | Bug fix with regression test | In-repo (unit or E2E depending on scope) |
+
+## Test Ownership Across the AI Gateway Stack (AIGO / AIGC / MaaS)
+
+AI Gateway now spans three repos: [ai-gateway-operator](https://github.com/opendatahub-io/ai-gateway-operator) (AIGO), [ai-gateway-controller](https://github.com/opendatahub-io/ai-gateway-controller) (AIGC), and this repo (MaaS). Where a test belongs depends on what it needs to observe, not which repo you happen to be changing:
+
+| Repo | Owns | What it tests | Test suite |
+|------|------|----------------|------------|
+| **AIGO** | Component setup & dependency management | `AIGateway` CR reconciles to `Ready`; sibling controller Deployments (`maas-controller`, `ai-gateway-controller`, `batch-gateway-operator`) become `Available`; aggregate status (`ModelsAsAServiceReady`, etc.) rolls up correctly. Never the request path. | `test/e2e/*_test.go` (Go — deploy prereqs, create CR, assert status) |
+| **AIGC** | Deploying the Praxis-backed stack + AIGC's own control-plane logic | Its own reconciliation logic (`pkg/tenant`, `pkg/render`, `pkg/controller` for ExternalModel/ExternalProvider) via real fixtures. For MaaS-level/request-path behavior, AIGC does **not** write new test content — it fetches and re-runs **this repo's own pytest suite** against its Praxis-backed deployment, pinned via `test/maas-e2e.lock`, proving the same behavior holds under Praxis as under IPP. | `test/kind-env`, `test/openshift-env` (real fixtures) + a vendored copy of `test/e2e/tests/` from this repo, fetched at a pinned commit |
+| **MaaS** (this repo) | The single source of truth for MaaS-level resource/request behavior | Subscription enforcement, auth policy, rate limiting, API-key lifecycle, and anything visible at the MaaS API/Gateway boundary — including OpenAI resource-API routing and identity-header propagation. Written once here, run twice: in-repo against IPP, and via AIGC's vendored fetch against Praxis. | `test/e2e/tests/*.py` (pytest) |
+
+**The upstream-first rule:** if MaaS-level behavior has a coverage gap that's exposed while working in AIGC or AIGO, add the test to **this repo's** `test/e2e/tests/` first (skip-gated with `pytest.mark.skipif` if the behavior is genuinely Praxis-only, mirroring the existing `EXTERNAL_OIDC` skip pattern — see [Group Assignment Rules](#group-assignment-rules)), then have the downstream repo bump its pin to pick it up. Don't accept a parallel Go/mock test in AIGO, and don't let a bespoke copy accumulate in AIGC. [`ai-gateway-controller#37`](https://github.com/opendatahub-io/ai-gateway-controller/pull/37) is a worked example of this lifecycle: a gap was fixed upstream in MaaS ([#1508](https://github.com/opendatahub-io/models-as-a-service/pull/1508)); once it landed, AIGC removed its own side-workarounds and re-pinned `test/maas-e2e.lock`.
 
 ## Checklist: Adding a New Test
 
