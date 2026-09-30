@@ -208,11 +208,7 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 
 	operandHandler := handler.EnqueueRequestsFromMapFunc(r.mapTenantOperandToMaasTenantConfig)
 	for _, op := range tenantOperands() {
-		pred := predicate.Predicate(r.tenantOperandChanged(op))
-		if op.rollout != nil {
-			pred = predicate.Or(pred, op.rollout(r))
-		}
-		if err := watchWhenServed(ctx, c, mgr, op.crd, op.gvk.Version, kind(op.newObject(), operandHandler, pred)); err != nil {
+		if err := watchWhenServed(ctx, c, mgr, op.crd, op.gvk.Version, kind(op.newObject(), operandHandler, r.operandPredicate(op))); err != nil {
 			return err
 		}
 	}
@@ -302,6 +298,16 @@ func (r *TenantReconciler) mapTenantOperandToMaasTenantConfig(ctx context.Contex
 		}
 	}
 	return r.enqueueDefaultTenant(ctx, obj)
+}
+
+// operandPredicate is the predicate the watch on op uses: drift, plus the rollout
+// transitions a Pending tenant config waits for.
+func (r *TenantReconciler) operandPredicate(op tenantOperand) predicate.Predicate { //nolint:ireturn // predicate.Or returns the interface.
+	changed := r.tenantOperandChanged(op)
+	if op.rollout == nil {
+		return changed
+	}
+	return predicate.Or[client.Object](changed, op.rollout(r))
 }
 
 // tenantOperandChanged admits operand creates and deletes, and updates that may be
