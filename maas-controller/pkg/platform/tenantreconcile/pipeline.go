@@ -53,16 +53,19 @@ var Dependencies = []Dependency{
 	{GVK: GVKAuthConfig, CRD: "authconfigs.authorino.kuadrant.io"},
 }
 
-// CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
-func CheckDependencies(ctx context.Context, c client.Client) error {
+// CheckDependencies reports the first required CRD (AuthConfig) the cluster does not
+// serve. An error means discovery could not be asked, not that anything is missing.
+func CheckDependencies(ctx context.Context, c client.Client) (missing string, err error) {
 	for _, d := range Dependencies {
-		if ok, err := IsGVKAvailable(ctx, c, d.GVK); err != nil {
-			return fmt.Errorf("dependencies: %w", err)
-		} else if !ok {
-			return fmt.Errorf("dependency missing: %s CRD (%s) not available on cluster", d.GVK.Kind, d.GVK.GroupVersion())
+		ok, err := IsGVKAvailable(ctx, c, d.GVK)
+		if err != nil {
+			return "", fmt.Errorf("dependencies: %w", err)
+		}
+		if !ok {
+			return fmt.Sprintf("dependency missing: %s CRD (%s) not available on cluster", d.GVK.Kind, d.GVK.GroupVersion()), nil
 		}
 	}
-	return nil
+	return "", nil
 }
 
 // RunPlatform runs kustomize render, apply, and deployment readiness after dependencies and prerequisites
@@ -247,8 +250,10 @@ func Run(
 		return nil, fmt.Errorf("manifest path: %w", err)
 	}
 
-	if err := CheckDependencies(ctx, c); err != nil {
+	if missing, err := CheckDependencies(ctx, c); err != nil {
 		return nil, err
+	} else if missing != "" {
+		return nil, errors.New(missing)
 	}
 
 	appNs := tenant.GetNamespace()

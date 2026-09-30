@@ -669,12 +669,20 @@ type waitingTenant struct {
 	restMapper   apimeta.RESTMapper
 	manifestPath string
 	objs         []client.Object
+	interceptors interceptor.Funcs
 }
 
 // reconcileWaitingTenant runs one reconcile of a tenant config with a live Config
 // anchor, so it gets past the Config gate into the gateway, dependency, prerequisite
 // and platform gates.
 func reconcileWaitingTenant(t *testing.T, w waitingTenant) (ctrl.Result, *maasv1alpha1.MaasTenantConfig) {
+	t.Helper()
+	res, tenant, err := reconcileTenantOnce(t, w)
+	NewWithT(t).Expect(err).NotTo(HaveOccurred())
+	return res, tenant
+}
+
+func reconcileTenantOnce(t *testing.T, w waitingTenant) (ctrl.Result, *maasv1alpha1.MaasTenantConfig, error) {
 	t.Helper()
 	g := NewWithT(t)
 
@@ -696,18 +704,116 @@ func reconcileWaitingTenant(t *testing.T, w waitingTenant) (ctrl.Result, *maasv1
 	if w.restMapper != nil {
 		b = b.WithRESTMapper(w.restMapper)
 	}
-	c := b.Build()
+	c := b.WithInterceptorFuncs(w.interceptors).Build()
 	r := operandTestReconciler(c, false)
 	r.Scheme = s
 	r.ManifestPath = w.manifestPath
 
 	key := client.ObjectKeyFromObject(w.tenant)
 	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
-	g.Expect(err).NotTo(HaveOccurred())
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(c.Get(t.Context(), key, &updated)).To(Succeed())
-	return res, &updated
+	return res, &updated, err
+}
+
+// readErrorRESTMapper fails lookups of one kind the way an unreachable discovery
+// endpoint does, as opposed to the NoMatch of a kind that is not installed.
+type readErrorRESTMapper struct {
+	apimeta.RESTMapper
+	gvk schema.GroupVersionKind
+}
+
+func (m readErrorRESTMapper) RESTMapping(gk schema.GroupKind, versions ...string) (*apimeta.RESTMapping, error) {
+	if gk == m.gvk.GroupKind() {
+		return nil, errors.New("discovery unavailable")
+	}
+	return m.RESTMapper.RESTMapping(gk, versions...)
+}
+
+func TestTenantReconcile_ReadErrorsRetryInsteadOfWaiting(t *testing.T) {
+	gateway := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: operandGateway, Namespace: operandGatewayNS}}
+	dbSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.MaaSDBSecretName, Namespace: operandInfraNS},
+		Data:       map[string][]byte{tenantreconcile.MaaSDBSecretKey: []byte("postgresql://maas@db.example.com:5432/maas")},
+	}
+	unavailable := errors.New("apiserver unavailable")
+	failGet := func(match func(client.ObjectKey, client.Object) bool) interceptor.Funcs {
+		return interceptor.Funcs{Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if match(key, obj) {
+				return unavailable
+			}
+			return c.Get(ctx, key, obj, opts...)
+		}}
+	}
+	failList := func(kind string) interceptor.Funcs {
+		return interceptor.Funcs{List: func(ctx context.Context, c client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if u, ok := list.(*unstructured.UnstructuredList); ok && u.GetKind() == kind+"List" {
+				return unavailable
+			}
+			return c.List(ctx, list, opts...)
+		}}
+	}
+	isGateway := func(_ client.ObjectKey, obj client.Object) bool { _, ok := obj.(*gwapiv1.Gateway); return ok }
+	isDBSecret := func(key client.ObjectKey, obj client.Object) bool {
+		_, ok := obj.(*corev1.Secret)
+		return ok && key.Name == tenantreconcile.MaaSDBSecretName
+	}
+	withAuthConfig := restMapperWith(t, tenantreconcile.GVKAuthConfig)
+	withAuthorino := restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKAuthorino)
+
+	tests := []struct {
+		name       string
+		w          waitingTenant
+		wantReason string
+	}{
+		{
+			name:       "gateway read fails",
+			w:          waitingTenant{interceptors: failGet(isGateway)},
+			wantReason: "GatewayCheckFailed",
+		},
+		{
+			name: "dependency discovery fails",
+			w: waitingTenant{
+				objs:       []client.Object{gateway},
+				restMapper: readErrorRESTMapper{RESTMapper: withAuthConfig, gvk: tenantreconcile.GVKAuthConfig},
+			},
+			wantReason: "DependencyCheckFailed",
+		},
+		{
+			name:       "database Secret read fails",
+			w:          waitingTenant{objs: []client.Object{gateway}, restMapper: withAuthConfig, interceptors: failGet(isDBSecret)},
+			wantReason: "PrerequisiteCheckFailed",
+		},
+		{
+			name: "Authorino discovery fails",
+			w: waitingTenant{
+				objs:       []client.Object{gateway, dbSecret},
+				restMapper: readErrorRESTMapper{RESTMapper: withAuthorino, gvk: tenantreconcile.GVKAuthorino},
+			},
+			wantReason: "PrerequisiteCheckFailed",
+		},
+		{
+			name:       "Authorino list fails",
+			w:          waitingTenant{objs: []client.Object{gateway, dbSecret}, restMapper: withAuthorino, interceptors: failList(tenantreconcile.GVKAuthorino.Kind)},
+			wantReason: "PrerequisiteCheckFailed",
+		},
+		{
+			name:       "DSCInitialization list fails",
+			w:          waitingTenant{objs: []client.Object{gateway, dbSecret}, restMapper: withAuthConfig, interceptors: failList("DSCInitialization")},
+			wantReason: "PrerequisiteCheckFailed",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			// Absent and could-not-check look alike to the caller unless the error surfaces;
+			// only the error path retries, with backoff.
+			_, tenant, err := reconcileTenantOnce(t, tt.w)
+			g.Expect(err).To(HaveOccurred())
+			g.Expect(readyReason(tenant)).To(Equal(tt.wantReason))
+		})
+	}
 }
 
 func readyReason(tenant *maasv1alpha1.MaasTenantConfig) string {

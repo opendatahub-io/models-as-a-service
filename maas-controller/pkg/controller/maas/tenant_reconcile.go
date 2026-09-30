@@ -223,6 +223,9 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if result != nil {
 		return *result, err
 	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Run platform reconciliation
 	runRes, result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
@@ -330,9 +333,13 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
-	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
-		log.Info("gateway validation failed", "error", err)
-		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", err.Error()); err2 != nil {
+	missingGateway, err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+	if err != nil {
+		return nil, tenantreconcile.PlatformContext{}, nil, r.recordFailure(ctx, tenant, "GatewayCheckFailed", err)
+	}
+	if missingGateway != "" {
+		log.Info("gateway validation failed", "reason", missingGateway)
+		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", missingGateway); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
 		// The Gateway watch re-enqueues tenants that reference it once it is created.
@@ -352,11 +359,15 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 }
 
 func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (tenantreconcile.PrerequisiteReport, *ctrl.Result, error) {
-	if err := tenantreconcile.CheckDependencies(ctx, r.Client); err != nil {
-		setDependenciesCondition(tenant, false, err.Error())
-		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", err.Error())
+	missing, err := tenantreconcile.CheckDependencies(ctx, r.Client)
+	if err != nil {
+		return tenantreconcile.PrerequisiteReport{}, nil, r.recordFailure(ctx, tenant, "DependencyCheckFailed", err)
+	}
+	if missing != "" {
+		setDependenciesCondition(tenant, false, missing)
+		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", missing)
 		prerequisitesUnevaluatedCondition(tenant, "Prerequisites were not evaluated because required dependencies are not met")
-		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", err.Error()); err2 != nil {
+		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", missing); err2 != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err2
 		}
 		// The CRD watch re-enqueues every tenant when the CRD appears; retryAfterDiscoveryLag
@@ -366,7 +377,10 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 	setDependenciesCondition(tenant, true, "")
 
 	appNs := r.appNamespaceForTenant()
-	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
+	rep, err := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
+	if err != nil {
+		return tenantreconcile.PrerequisiteReport{}, nil, r.recordFailure(ctx, tenant, "PrerequisiteCheckFailed", err)
+	}
 	setPrerequisiteConditionsFromReport(tenant, rep)
 	if len(rep.Blocking) > 0 {
 		tenant.Status.Phase = "Failed"
@@ -626,16 +640,18 @@ func (r *TenantReconciler) appNamespaceForTenant() string {
 	return r.AppNamespace
 }
 
-func validateGatewayExists(ctx context.Context, c client.Client, namespace, name string) error {
+// validateGatewayExists reports why the gateway cannot be used when it does not exist.
+// An error means the read failed, which says nothing about the gateway.
+func validateGatewayExists(ctx context.Context, c client.Client, namespace, name string) (missing string, err error) {
 	gw := &gwapiv1.Gateway{}
 	key := types.NamespacedName{Namespace: namespace, Name: name}
 	if err := c.Get(ctx, key, gw); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("gateway %s/%s not found: the specified Gateway must exist before enabling MaaS platform reconcile", namespace, name)
+			return fmt.Sprintf("gateway %s/%s not found: the specified Gateway must exist before enabling MaaS platform reconcile", namespace, name), nil
 		}
-		return fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
+		return "", fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
 	}
-	return nil
+	return "", nil
 }
 
 // recordFailure records err in status under reason and returns it, so a failure shows in
