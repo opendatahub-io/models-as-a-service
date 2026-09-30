@@ -1947,6 +1947,12 @@ func (r *MaaSAuthPolicyReconciler) ValidateCacheTTLs() error {
 }
 
 func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the MaaSAuthPolicy reconcile.
+func (r *MaaSAuthPolicyReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	// Validate cache TTL configuration
 	log := ctrl.Log.WithName("maas-authpolicy-controller")
 
@@ -2069,7 +2075,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return err
 	}
 
-	c, err := b.Build(r)
+	c, err := b.Build(target)
 	if err != nil {
 		return err
 	}

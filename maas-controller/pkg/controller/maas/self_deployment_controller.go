@@ -964,6 +964,12 @@ func formatTenantList(tenants []string, maxItems int) string {
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the lifecycle reconcile.
+func (r *LifecycleReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
 	})
@@ -1063,7 +1069,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
 			})),
 		).
-		Complete(r)
+		Complete(target)
 }
 
 // aitenantReadyChanged admits an AITenant event only when the Ready condition

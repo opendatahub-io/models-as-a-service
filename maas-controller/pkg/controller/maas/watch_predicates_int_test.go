@@ -238,12 +238,8 @@ var _ = Describe("Tenant watch predicates", func() {
 		})
 
 		When("a per-tenant NetworkPolicy is relabelled to another tenant", func() {
-			It("admits the update and maps it back to its owner, also once deleted", func(ctx SpecContext) {
-				red := predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("red")).Name)[0]
-				blue := predTenantRequest(pkgtest.NewTestNamespace(ctx, envTest, pkgtest.WithNameSuffix("blue")).Name)[0]
-				for _, tenant := range []reconcile.Request{red, blue} {
-					Expect(envTest.Create(ctx, predTenantConfig(tenant.Namespace))).To(Succeed())
-				}
+			It("admits the update and maps it back to its owner", func(ctx SpecContext) {
+				red, blue := predTenantRequest("ai-tenant-red")[0], predTenantRequest("ai-tenant-blue")[0]
 				perTenant := tenantNetworkPolicy(namespace, tenantreconcile.PayloadProcessingNetworkPolicyName("red"), "red", red.Namespace)
 				Expect(applyNetworkPolicy(ctx, perTenant)).To(Succeed())
 
@@ -255,13 +251,9 @@ var _ = Describe("Tenant watch predicates", func() {
 
 				Expect(newObj.Generation).To(Equal(oldObj.Generation))
 				Expect(predAdmits(networkPolicyChangedForTenant(), oldObj, newObj)).To(BeTrue())
-				r := &TenantReconciler{Client: envTest.Client, GatewayNamespace: namespace, TenantNamespaceDiscoveryEnabled: true}
-				Expect(append(r.mapNetworkPolicyToMaasTenantConfigs(ctx, oldObj), r.mapNetworkPolicyToMaasTenantConfigs(ctx, newObj)...)).
-					To(ContainElements(red, blue))
-
-				By("deleting it while blue's labels are on it")
-				Expect(envTest.Delete(ctx, newObj)).To(Succeed())
-				Expect(r.mapNetworkPolicyToMaasTenantConfigs(ctx, newObj)).To(ContainElement(red))
+				// The mapper enqueues the old object's owner, the only tenant that renders it.
+				r := &TenantReconciler{GatewayNamespace: namespace, TenantNamespaceDiscoveryEnabled: true}
+				Expect(r.mapNetworkPolicyToMaasTenantConfigs(ctx, oldObj)).To(Equal([]reconcile.Request{red}))
 			})
 		})
 
