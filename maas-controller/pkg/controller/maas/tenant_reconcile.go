@@ -58,17 +58,15 @@ const (
 
 const (
 	// kuadrantRecheckInterval bounds how long router-anchored payload processing outlives
-	// Kuadrant wiring its wasm filter through a WasmPlugin, which get-only RBAC cannot
-	// watch. Until the next render, wasm runs before ipp-pre and body-routed /v1/* skips
-	// AuthPolicy and TRLP, so the window is kept well under the old 5m resync; the cost is
-	// one render and apply per affected tenant, only while detection is degraded.
+	// Kuadrant wiring its wasm filter. Until the next render, wasm runs before ipp-pre and
+	// body-routed /v1/* skips AuthPolicy and TRLP, so the window is kept well under the old
+	// 5m resync; the cost is one render and apply per affected tenant, only while degraded.
 	kuadrantRecheckInterval = 2 * time.Minute
 
-	// kuadrantWasmPluginRecheckInterval is how often a gateway whose wasm filter a
-	// WasmPlugin carries is re-detected. Losing the plugin leaves ext_proc anchored to a
-	// filter that no longer exists, a silent no-op that breaks body-routed inference. On
-	// ODH/community Kuadrant this is the steady state, so it matches the 5m resync every
-	// tenant ran before watches replaced it: no slower to notice, no more expensive.
+	// kuadrantWasmPluginRecheckInterval is how often the WasmPlugin probe re-detects the
+	// Kuadrant carrier, and how often a tenant whose WasmPlugin could not be read is
+	// re-rendered. It matches the 5m resync every tenant ran before watches replaced it.
+	// The unreadable case keeps the Kuadrant anchors, so the auth window above does not apply.
 	kuadrantWasmPluginRecheckInterval = 5 * time.Minute
 
 	// discoveryLagRetry covers the gap between a CRD turning Established, which fires the
@@ -77,18 +75,38 @@ const (
 	discoveryLagRetry = 10 * time.Second
 )
 
-// kuadrantRecheck requeues while the Kuadrant wasm detection depends on a WasmPlugin,
-// which no watch covers: while payload processing runs on the router fallback or could
-// not be verified (a plugin may appear), and while a plugin carries the filter (it may
-// go away). The kuadrant-<gateway> EnvoyFilter carrier is watched.
-func kuadrantRecheck(runRes *tenantreconcile.RunResult) ctrl.Result {
+// kuadrantRouterFallbackWarning is static so the periodic recheck never rewrites status.
+var kuadrantRouterFallbackWarning = "Kuadrant wasm auth was not found on the gateway; payload processing " +
+	"runs on router anchors until it appears, re-detected every " + kuadrantRecheckInterval.String()
+
+type timerReasonKey struct{}
+
+// timerReason is why a reconcile asked to come back on a timer rather than wait for a
+// watch event; Reconcile logs it, as nothing else shows a tenant waiting on a timer.
+type timerReason struct{ reason string }
+
+func withTimerReason(ctx context.Context) (context.Context, *timerReason) {
+	reason := &timerReason{}
+	return context.WithValue(ctx, timerReasonKey{}, reason), reason
+}
+
+func requeueOnTimer(ctx context.Context, after time.Duration, reason string) ctrl.Result {
+	if holder, ok := ctx.Value(timerReasonKey{}).(*timerReason); ok {
+		holder.reason = reason
+	}
+	return ctrl.Result{RequeueAfter: after}
+}
+
+// kuadrantRecheck requeues while the Kuadrant wasm detection cannot be left to a watch or
+// to the WasmPlugin probe: on the router fallback, and while the WasmPlugin cannot be read.
+func kuadrantRecheck(ctx context.Context, runRes *tenantreconcile.RunResult) ctrl.Result {
 	switch {
 	case runRes == nil:
 		return ctrl.Result{}
-	case runRes.KuadrantRouterFallback || runRes.KuadrantDetectionWarning != "":
-		return ctrl.Result{RequeueAfter: kuadrantRecheckInterval}
-	case runRes.KuadrantWasmPlugin:
-		return ctrl.Result{RequeueAfter: kuadrantWasmPluginRecheckInterval}
+	case runRes.KuadrantRouterFallback:
+		return requeueOnTimer(ctx, kuadrantRecheckInterval, "Kuadrant wasm auth not found on the gateway; payload processing runs on the router fallback")
+	case runRes.KuadrantDetectionWarning != "":
+		return requeueOnTimer(ctx, kuadrantWasmPluginRecheckInterval, "Kuadrant wasm auth could not be verified: "+runRes.KuadrantDetectionWarning)
 	}
 	return ctrl.Result{}
 }
@@ -425,6 +443,8 @@ func (r *TenantReconciler) reconcilePlatform(
 		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", failureAfterStatus(reason, statusErr, err))
 	}
 
+	r.kuadrantProbe.observe(types.NamespacedName{Namespace: platformContext.GatewayRef.Namespace, Name: platformContext.GatewayRef.Name}, runRes)
+
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
 		return nil, nil, fmt.Errorf("ensure gateway management auth: %w", r.recordFailure(ctx, tenant, "GatewayAuthPolicyFailed", err))
 	}
@@ -445,7 +465,7 @@ func (r *TenantReconciler) reconcilePlatform(
 		}
 		// Rollout progress, EnvoyFilter changes and the payload-processing handshake
 		// annotation on this tenant config all re-enqueue through watches.
-		res := kuadrantRecheck(runRes)
+		res := kuadrantRecheck(ctx, runRes)
 		return nil, &res, nil
 	}
 
@@ -463,6 +483,7 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	hasPlatformWarnings := runRes != nil && len(runRes.Warnings) > 0
 	hasKuadrantWarning := runRes != nil && runRes.KuadrantDetectionWarning != ""
 	hasUsageLogsWarning := usageLogsWarning != ""
+	hasRouterFallback := runRes != nil && runRes.KuadrantRouterFallback
 
 	if hasPrereqWarnings {
 		allWarnings = append(allWarnings, prereqReport.Warnings...)
@@ -475,6 +496,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	}
 	if hasUsageLogsWarning {
 		allWarnings = append(allWarnings, usageLogsWarning)
+	}
+	if hasRouterFallback {
+		allWarnings = append(allWarnings, kuadrantRouterFallbackWarning)
 	}
 
 	if len(allWarnings) > 0 {
@@ -491,6 +515,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 		if hasUsageLogsWarning {
 			warningKinds++
 		}
+		if hasRouterFallback {
+			warningKinds++
+		}
 
 		var reason string
 		switch {
@@ -502,6 +529,8 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 			reason = "InvalidReplicaAnnotation"
 		case hasKuadrantWarning:
 			reason = "KuadrantDetectionUnverified"
+		case hasRouterFallback:
+			reason = "KuadrantRouterFallback"
 		default:
 			reason = "UsageLoggingNotProvided"
 		}
@@ -550,7 +579,7 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 
 	// Operand drift re-enqueues through the operand watches; only the Kuadrant wasm
 	// detection is polled.
-	return kuadrantRecheck(runRes), nil
+	return kuadrantRecheck(ctx, runRes), nil
 }
 
 // retryAfterDiscoveryLag brings the reconcile back soon when it skipped a kind the REST
@@ -571,8 +600,7 @@ func (r *TenantReconciler) retryAfterDiscoveryLag(ctx context.Context, kinds []s
 		crd := &crds.Items[i]
 		for _, gvk := range kinds {
 			if crd.Spec.Group == gvk.Group && crd.Spec.Names.Kind == gvk.Kind && crdServesVersion(crd, gvk.Version) {
-				result.RequeueAfter = discoveryLagRetry
-				return result
+				return requeueOnTimer(ctx, discoveryLagRetry, "discovery does not serve "+gvk.Kind+" yet although its CRD is established")
 			}
 		}
 	}

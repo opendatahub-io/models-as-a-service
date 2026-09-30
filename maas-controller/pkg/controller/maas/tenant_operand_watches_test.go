@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr/funcr"
 	appsv1 "k8s.io/api/apps/v1"
 	autov2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -29,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -670,6 +672,7 @@ type waitingTenant struct {
 	manifestPath string
 	objs         []client.Object
 	interceptors interceptor.Funcs
+	logs         *[]string
 }
 
 // reconcileWaitingTenant runs one reconcile of a tenant config with a live Config
@@ -709,8 +712,14 @@ func reconcileTenantOnce(t *testing.T, w waitingTenant) (ctrl.Result, *maasv1alp
 	r.Scheme = s
 	r.ManifestPath = w.manifestPath
 
+	ctx := t.Context()
+	if w.logs != nil {
+		ctx = log.IntoContext(ctx, funcr.New(func(prefix, args string) {
+			*w.logs = append(*w.logs, prefix+" "+args)
+		}, funcr.Options{Verbosity: 1}))
+	}
 	key := client.ObjectKeyFromObject(w.tenant)
-	res, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: key})
+	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 
 	var updated maasv1alpha1.MaasTenantConfig
 	g.Expect(c.Get(t.Context(), key, &updated)).To(Succeed())
@@ -842,9 +851,9 @@ func TestTenantReconcile_WaitsOnWatchesInsteadOfPolling(t *testing.T) {
 	kuadrantFilter.SetGroupVersionKind(tenantreconcile.GVKEnvoyFilter)
 	kuadrantFilter.SetNamespace(operandGatewayNS)
 	kuadrantFilter.SetName("kuadrant-" + operandGateway)
-	gvkWasmPlugin := schema.GroupVersionKind{Group: "extensions.istio.io", Version: "v1alpha1", Kind: "WasmPlugin"}
+	GVKWasmPlugin := schema.GroupVersionKind{Group: "extensions.istio.io", Version: "v1alpha1", Kind: "WasmPlugin"}
 	kuadrantPlugin := &unstructured.Unstructured{}
-	kuadrantPlugin.SetGroupVersionKind(gvkWasmPlugin)
+	kuadrantPlugin.SetGroupVersionKind(GVKWasmPlugin)
 	kuadrantPlugin.SetNamespace(operandGatewayNS)
 	kuadrantPlugin.SetName("kuadrant-" + operandGateway)
 
@@ -914,29 +923,28 @@ func TestTenantReconcile_WaitsOnWatchesInsteadOfPolling(t *testing.T) {
 			w: waitingTenant{
 				tenant:       awaitingPeer,
 				manifestPath: odhOverlay,
-				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, gvkWasmPlugin),
+				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, GVKWasmPlugin),
 				objs:         []client.Object{gateway, dbSecret, kuadrantFilter},
 			},
 			wantReason: "DeploymentsNotReady",
 		},
 		{
-			// A WasmPlugin cannot be watched, so its removal is only seen by rechecking.
-			name: "deployment pending with Kuadrant wasm from a WasmPlugin keeps rechecking",
+			// A WasmPlugin cannot be watched; the probe re-detects it without a re-render.
+			name: "deployment pending with Kuadrant wasm from a WasmPlugin leaves it to the probe",
 			w: waitingTenant{
 				tenant:       awaitingPeer,
 				manifestPath: odhOverlay,
-				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, gvkWasmPlugin),
+				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, GVKWasmPlugin),
 				objs:         []client.Object{gateway, dbSecret, kuadrantPlugin},
 			},
-			wantReason:  "DeploymentsNotReady",
-			wantRequeue: kuadrantWasmPluginRecheckInterval,
+			wantReason: "DeploymentsNotReady",
 		},
 		{
 			name: "deployment pending on the router fallback rechecks Kuadrant",
 			w: waitingTenant{
 				tenant:       awaitingPeer,
 				manifestPath: odhOverlay,
-				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, gvkWasmPlugin),
+				restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, GVKWasmPlugin),
 				objs:         []client.Object{gateway, dbSecret},
 			},
 			wantReason:  "DeploymentsNotReady",
@@ -962,8 +970,9 @@ func TestTenantReconcile_SuccessRequeuesOnlyForKuadrantDetection(t *testing.T) {
 	}{
 		{name: "Kuadrant wasm carried by the watched EnvoyFilter", runRes: &tenantreconcile.RunResult{}, want: ctrl.Result{}},
 		{name: "router fallback", runRes: &tenantreconcile.RunResult{KuadrantRouterFallback: true}, want: ctrl.Result{RequeueAfter: kuadrantRecheckInterval}},
-		{name: "detection unverified", runRes: &tenantreconcile.RunResult{KuadrantDetectionWarning: "cannot get WasmPlugin"}, want: ctrl.Result{RequeueAfter: kuadrantRecheckInterval}},
-		{name: "Kuadrant wasm carried by a WasmPlugin", runRes: &tenantreconcile.RunResult{KuadrantWasmPlugin: true}, want: ctrl.Result{RequeueAfter: kuadrantWasmPluginRecheckInterval}},
+		// Kuadrant anchors stay in place when the WasmPlugin cannot be read.
+		{name: "detection unverified", runRes: &tenantreconcile.RunResult{KuadrantDetectionWarning: "cannot get WasmPlugin"}, want: ctrl.Result{RequeueAfter: 5 * time.Minute}},
+		{name: "Kuadrant wasm carried by a WasmPlugin", runRes: &tenantreconcile.RunResult{KuadrantWasmPlugin: true}, want: ctrl.Result{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1251,4 +1260,68 @@ func TestTenantReconcile_OptionalKindAwaitingDiscovery(t *testing.T) {
 			g.Expect(res).To(Equal(ctrl.Result{RequeueAfter: tt.wantRequeue}))
 		})
 	}
+}
+
+func TestTenantReconcile_LogsTimerWaits(t *testing.T) {
+	g := NewWithT(t)
+	gateway := &gwapiv1.Gateway{ObjectMeta: metav1.ObjectMeta{Name: operandGateway, Namespace: operandGatewayNS}}
+	dbSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: tenantreconcile.MaaSDBSecretName, Namespace: operandInfraNS},
+		Data:       map[string][]byte{tenantreconcile.MaaSDBSecretKey: []byte("postgresql://maas@db.example.com:5432/maas")},
+	}
+	_, file, _, ok := goruntime.Caller(0)
+	g.Expect(ok).To(BeTrue())
+	awaitingPeer := defaultTenantConfig()
+	awaitingPeer.Annotations = map[string]string{tenantreconcile.AnnotationPayloadProcessingStatus: "praxis-owned"}
+	GVKWasmPlugin := schema.GroupVersionKind{Group: "extensions.istio.io", Version: "v1alpha1", Kind: "WasmPlugin"}
+
+	// A tenant on the router fallback waits on a timer; nothing but the log says so.
+	var logs []string
+	res, _ := reconcileWaitingTenant(t, waitingTenant{
+		tenant:       awaitingPeer,
+		manifestPath: filepath.Join(filepath.Dir(file), "..", "..", "..", "..", "maas-api", "deploy", "overlays", "odh"),
+		restMapper:   restMapperWith(t, tenantreconcile.GVKAuthConfig, tenantreconcile.GVKEnvoyFilter, GVKWasmPlugin),
+		objs:         []client.Object{gateway, dbSecret},
+		logs:         &logs,
+	})
+
+	g.Expect(res.RequeueAfter).To(Equal(kuadrantRecheckInterval))
+	g.Expect(logs).To(ContainElement(And(
+		ContainSubstring(`"reason"="Kuadrant wasm auth not found`),
+		ContainSubstring(`"requeueAfter"="2m0s"`),
+	)))
+}
+
+func TestKuadrantWasmPluginProbe(t *testing.T) {
+	g := NewWithT(t)
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(gatewayTenantFixtures()...).Build()
+	r := operandTestReconciler(c, true)
+	probe := newKuadrantWasmPluginProbe(r, time.Minute)
+	defaultGateway := types.NamespacedName{Namespace: operandGatewayNS, Name: operandGateway}
+	redGateway := types.NamespacedName{Namespace: operandGatewayNS, Name: "red-gateway"}
+	plugin := func(gateway types.NamespacedName) *unstructured.Unstructured {
+		p := &unstructured.Unstructured{}
+		p.SetGroupVersionKind(tenantreconcile.GVKWasmPlugin)
+		p.SetNamespace(gateway.Namespace)
+		p.SetName(tenantreconcile.KuadrantGatewayResourceName(gateway.Name))
+		return p
+	}
+
+	// The default tenant rendered on the router fallback; red rendered against its plugin.
+	probe.observe(defaultGateway, &tenantreconcile.RunResult{KuadrantRouterFallback: true})
+	g.Expect(c.Create(t.Context(), plugin(redGateway))).To(Succeed())
+	probe.observe(redGateway, &tenantreconcile.RunResult{KuadrantWasmPlugin: true})
+
+	g.Expect(probe.changed(t.Context())).To(BeEmpty(), "nothing changed since the tenants rendered")
+
+	g.Expect(c.Create(t.Context(), plugin(defaultGateway))).To(Succeed())
+	g.Expect(c.Delete(t.Context(), plugin(redGateway))).To(Succeed())
+	g.Expect(probe.changed(t.Context())).To(ConsistOf(tenantRequest(operandDefaultNS), tenantRequest(operandRedNS)))
+
+	g.Expect(probe.changed(t.Context())).To(BeEmpty(), "a change is reported once")
+
+	// The watched EnvoyFilter carrier needs no probe.
+	probe.observe(defaultGateway, &tenantreconcile.RunResult{})
+	g.Expect(c.Delete(t.Context(), plugin(defaultGateway))).To(Succeed())
+	g.Expect(probe.changed(t.Context())).To(BeEmpty())
 }

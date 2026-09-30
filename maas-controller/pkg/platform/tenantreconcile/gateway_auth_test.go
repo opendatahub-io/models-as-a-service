@@ -71,8 +71,8 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 	forbiddenWasmPlugin := interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if obj.GetObjectKind().GroupVersionKind().Kind == gvkWasmPlugin.Kind {
-				return apierrors.NewForbidden(schema.GroupResource{Group: gvkWasmPlugin.Group, Resource: "wasmplugins"},
+			if obj.GetObjectKind().GroupVersionKind().Kind == GVKWasmPlugin.Kind {
+				return apierrors.NewForbidden(schema.GroupResource{Group: GVKWasmPlugin.Group, Resource: "wasmplugins"},
 					key.Name, errors.New("cannot get wasmplugins"))
 			}
 			return apierrors.NewNotFound(schema.GroupResource{Group: GVKEnvoyFilter.Group, Resource: "envoyfilters"}, key.Name)
@@ -102,8 +102,8 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 	t.Run("WasmPlugin API not installed enables router fallback", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if obj.GetObjectKind().GroupVersionKind().Kind == gvkWasmPlugin.Kind {
-					return &meta.NoKindMatchError{GroupKind: gvkWasmPlugin.GroupKind(), SearchedVersions: []string{gvkWasmPlugin.Version}}
+				if obj.GetObjectKind().GroupVersionKind().Kind == GVKWasmPlugin.Kind {
+					return &meta.NoKindMatchError{GroupKind: GVKWasmPlugin.GroupKind(), SearchedVersions: []string{GVKWasmPlugin.Version}}
 				}
 				return apierrors.NewNotFound(schema.GroupResource{Group: GVKEnvoyFilter.Group, Resource: "envoyfilters"}, key.Name)
 			},
@@ -117,5 +117,5 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 }
 
 func TestKuadrantGatewayResourceName(t *testing.T) {
-	assert.Equal(t, "kuadrant-maas-default-gateway", kuadrantGatewayResourceName("maas-default-gateway"))
+	assert.Equal(t, "kuadrant-maas-default-gateway", KuadrantGatewayResourceName("maas-default-gateway"))
 }

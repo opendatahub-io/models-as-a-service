@@ -91,6 +91,8 @@ type TenantReconciler struct {
 	// UsageLogsManifestPath is the directory containing usage-logs kustomize manifests
 	// (--usage-logs-manifest-path). The EnvoyFilter YAML is resolved from this path at reconcile time.
 	UsageLogsManifestPath string
+	// kuadrantProbe re-detects Kuadrant WasmPlugins; SetupWithManager starts it.
+	kuadrantProbe *kuadrantWasmPluginProbe
 }
 
 // Tenant platform pipeline — resources the TenantReconciler creates and manages on behalf of maas-api.
@@ -152,6 +154,7 @@ type TenantReconciler struct {
 func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	ctx = oteljson.IntoContext(ctx)
 	ctx, unserved := tenantreconcile.WithUnservedKinds(ctx)
+	ctx, timer := withTimerReason(ctx)
 	result, err := r.reconcile(ctx, req)
 	if apierrors.IsConflict(err) && isMaasTenantConfigConflict(err, req) {
 		// Stale-cache conflict on the MaasTenantConfig itself: the in-memory object's
@@ -164,6 +167,10 @@ func (r *TenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 	if err == nil {
 		result = r.retryAfterDiscoveryLag(ctx, unserved.Kinds(), result)
+	}
+	if result.RequeueAfter > 0 && timer.reason != "" {
+		oteljson.FromContext(ctx).V(1).Info("tenant waits on a timer rather than a watch event",
+			"reason", timer.reason, "requeueAfter", result.RequeueAfter.String())
 	}
 	return result, err
 }

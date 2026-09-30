@@ -253,7 +253,15 @@ func (r *TenantReconciler) setupTenantPlatformWatches(ctx context.Context, c con
 			return err
 		}
 	}
-	return nil
+
+	r.kuadrantProbe = newKuadrantWasmPluginProbe(r, kuadrantWasmPluginRecheckInterval)
+	probeRequests := source.Channel(r.kuadrantProbe.events, handler.TypedEnqueueRequestsFromMapFunc(
+		func(_ context.Context, req reconcile.Request) []reconcile.Request { return []reconcile.Request{req} },
+	))
+	if err := c.Watch(probeRequests); err != nil {
+		return err
+	}
+	return mgr.Add(r.kuadrantProbe)
 }
 
 // watchWhenServed starts a watch now for built-in kinds and served CRDs, and defers it

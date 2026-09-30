@@ -1235,6 +1235,24 @@ func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testi
 	g.Expect(ready.Reason).To(Equal("InvalidTenantIdentity"))
 }
 
+func TestAggregateWarningsReportsRouterFallback(t *testing.T) {
+	g := NewWithT(t)
+	tenant := &maasv1alpha1.MaasTenantConfig{}
+
+	(&TenantReconciler{}).aggregateWarningsAndSetDegraded(tenant, tenantreconcile.PrerequisiteReport{},
+		&tenantreconcile.RunResult{KuadrantRouterFallback: true}, "")
+	first := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(first).NotTo(BeNil())
+	g.Expect(first.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(first.Reason).To(Equal("KuadrantRouterFallback"))
+	g.Expect(first.Message).To(ContainSubstring("router"))
+
+	// Static text: a periodic recheck must not rewrite status.
+	(&TenantReconciler{}).aggregateWarningsAndSetDegraded(tenant, tenantreconcile.PrerequisiteReport{},
+		&tenantreconcile.RunResult{KuadrantRouterFallback: true}, "")
+	g.Expect(apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded).Message).To(Equal(first.Message))
+}
+
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 	tests := []struct {
 		name             string

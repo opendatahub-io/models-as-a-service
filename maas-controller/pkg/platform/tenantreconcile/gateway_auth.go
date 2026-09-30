@@ -12,7 +12,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-var gvkWasmPlugin = schema.GroupVersionKind{
+// GVKWasmPlugin is the Istio kind ODH/community Kuadrant carries its wasm filter in.
+var GVKWasmPlugin = schema.GroupVersionKind{
 	Group:   "extensions.istio.io",
 	Version: "v1alpha1",
 	Kind:    "WasmPlugin",
@@ -20,7 +21,9 @@ var gvkWasmPlugin = schema.GroupVersionKind{
 
 const kuadrantGatewayResourcePrefix = "kuadrant-"
 
-func kuadrantGatewayResourceName(gatewayName string) string {
+// KuadrantGatewayResourceName is the name of the EnvoyFilter or WasmPlugin Kuadrant
+// creates for a gateway.
+func KuadrantGatewayResourceName(gatewayName string) string {
 	return kuadrantGatewayResourcePrefix + gatewayName
 }
 
@@ -47,7 +50,7 @@ const (
 // gatewayHasKuadrantWasmAuth reports where Kuadrant auth is wired on the gateway. A
 // non-empty warning means this could not be verified and Kuadrant was assumed present.
 func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNamespace, gatewayName string) (kuadrantWasm, string, error) {
-	name := kuadrantGatewayResourceName(gatewayName)
+	name := KuadrantGatewayResourceName(gatewayName)
 	key := types.NamespacedName{Namespace: gatewayNamespace, Name: name}
 
 	ef := &unstructured.Unstructured{}
@@ -61,12 +64,12 @@ func gatewayHasKuadrantWasmAuth(ctx context.Context, c client.Client, gatewayNam
 	}
 
 	wp := &unstructured.Unstructured{}
-	wp.SetGroupVersionKind(gvkWasmPlugin)
+	wp.SetGroupVersionKind(GVKWasmPlugin)
 	err := c.Get(ctx, key, wp)
 	switch {
 	case err == nil:
 		return kuadrantWasmPlugin, "", nil
-	case apierrors.IsNotFound(err), KindNotServed(ctx, gvkWasmPlugin, err):
+	case apierrors.IsNotFound(err), KindNotServed(ctx, GVKWasmPlugin, err):
 		// No kuadrant-{gateway} WasmPlugin CR (or no WasmPlugin API at all): use the
 		// router-anchored ext_proc fallback.
 		return kuadrantWasmNone, "", nil
