@@ -24,7 +24,6 @@ import (
 	"sync"
 	"time"
 
-	"golang.org/x/time/rate"
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
@@ -184,11 +183,7 @@ var dsciGVK = schema.GroupVersionKind{Group: "dscinitialization.opendatahub.io",
 const tenantReconcileMaxBackoff = 2 * time.Minute
 
 func tenantReconcileRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
-	return workqueue.NewTypedMaxOfRateLimiter(
-		workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](5*time.Millisecond, tenantReconcileMaxBackoff),
-		// Overall retry rate as in controller-runtime's default limiter: 10 qps, burst 100.
-		&workqueue.TypedBucketRateLimiter[reconcile.Request]{Limiter: rate.NewLimiter(rate.Limit(10), 100)},
-	)
+	return workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](5*time.Millisecond, tenantReconcileMaxBackoff)
 }
 
 func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Object) []reconcile.Request {
@@ -209,10 +204,9 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 	}}}
 }
 
-// mapToAllMaasTenantConfigs maps a cluster-wide input to every MaasTenantConfig the reconciler
-// owns: Config (the usageLogging toggle reaches every tenant's usage-logs EnvoyFilter) and
-// DSCInitialization (monitoring prerequisites feed every tenant's Degraded condition).
-func (r *TenantReconciler) mapToAllMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
+// enqueueAllTenants maps a change that applies to every tenant to all the
+// MaasTenantConfigs this reconciler owns.
+func (r *TenantReconciler) enqueueAllTenants(ctx context.Context, _ client.Object) []reconcile.Request {
 	if !r.TenantNamespaceDiscoveryEnabled {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
@@ -222,7 +216,7 @@ func (r *TenantReconciler) mapToAllMaasTenantConfigs(ctx context.Context, _ clie
 
 	var tenantList maasv1alpha1.MaasTenantConfigList
 	if err := r.List(ctx, &tenantList); err != nil {
-		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for cluster-wide change mapping")
+		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for fan-out mapping")
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(tenantList.Items))
@@ -398,7 +392,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(tenantConfigChangedForTenant())).
 		Watches(
 			&maasv1alpha1.Config{},
-			handler.EnqueueRequestsFromMapFunc(r.mapToAllMaasTenantConfigs),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
 			builder.WithPredicates(configResourceDefault(), configSpecOrDeletionChanged()),
 		).
 		Watches(
@@ -428,7 +422,7 @@ func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return source.Kind(mgr.GetCache(), dsci,
 			handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
 				func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-					return r.mapToAllMaasTenantConfigs(ctx, obj)
+					return r.enqueueAllTenants(ctx, obj)
 				},
 			),
 			dsciMonitoringChanged(),
