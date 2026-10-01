@@ -10,10 +10,13 @@ spec:
   podSelector:
     matchLabels:
       app: maas-api-cleanup
+  # Ingress in policyTypes with no ingress rules denies all ingress. Leave the
+  # field out rather than writing `ingress: []`: the API server stores the empty
+  # list as nil, so every server-side apply bumps generation and the tenant
+  # NetworkPolicy watch turns that into a reconcile loop.
   policyTypes:
   - Egress
   - Ingress
-  ingress: []
   egress:
   - to:
     - podSelector:

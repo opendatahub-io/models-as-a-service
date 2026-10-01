@@ -148,7 +148,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		}
 	}
 
-	log.Info("Built platform params",
+	log.V(1).Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
 		"subscriptionNamespace", params.SubscriptionNamespace,

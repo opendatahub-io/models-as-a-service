@@ -47,6 +47,8 @@ LABEL_TENANT_NAMESPACE = "maas.opendatahub.io/tenant-namespace"
 LABEL_TENANT_INSTANCE = "maas.opendatahub.io/tenant-instance"
 ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
+ANNOTATION_PAYLOAD_PROCESSING_TYPE = "maas.opendatahub.io/payload-processing-type"
+PAYLOAD_PROCESSING_TYPE_PRAXIS = "praxis"
 
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 
@@ -817,6 +819,51 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
     wait_for_route_admitted(route_name)
 
 
+def payload_processing_type_from_env() -> Optional[str]:
+    value = os.environ.get("E2E_PAYLOAD_PROCESSING_TYPE", "").strip()
+    if not value:
+        return None
+    if value != PAYLOAD_PROCESSING_TYPE_PRAXIS:
+        raise RuntimeError(
+            f"Unsupported E2E_PAYLOAD_PROCESSING_TYPE={value!r}; "
+            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r}"
+        )
+    return value
+
+
+def ensure_payload_processing_type_on_tenant_config(tenant_namespace: str) -> None:
+    """Patch MaasTenantConfig when nightly (or local) opts all tenants into praxis."""
+    payload_type = payload_processing_type_from_env()
+    if not payload_type:
+        return
+    current = _oc_run(
+        [
+            "get",
+            TENANT_CONFIG_KIND,
+            TENANT_CR_NAME,
+            "-n",
+            tenant_namespace,
+            "-o",
+            f"jsonpath={{.metadata.annotations['{ANNOTATION_PAYLOAD_PROCESSING_TYPE}']}}",
+        ],
+        timeout=60,
+    )
+    if current.returncode == 0 and (current.stdout or "").strip() == payload_type:
+        return
+    patch_body = json.dumps(
+        {"metadata": {"annotations": {ANNOTATION_PAYLOAD_PROCESSING_TYPE: payload_type}}}
+    )
+    result = _oc_run(
+        ["patch", TENANT_CONFIG_KIND, TENANT_CR_NAME, "-n", tenant_namespace, "--type=merge", "-p", patch_body],
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to set {ANNOTATION_PAYLOAD_PROCESSING_TYPE}={payload_type} on "
+            f"{TENANT_CR_NAME}/{tenant_namespace}: {(result.stderr or result.stdout or '').strip()}"
+        )
+
+
 def apply_aitenant(case: dict[str, str]) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
@@ -825,11 +872,16 @@ def apply_aitenant(case: dict[str, str]) -> None:
     if oidc:
         spec["oidc"] = oidc
 
+    metadata: dict[str, Any] = {"name": case["tenant_label_name"], "namespace": AITENANT_NAMESPACE}
+    payload_type = payload_processing_type_from_env()
+    if payload_type:
+        metadata["annotations"] = {ANNOTATION_PAYLOAD_PROCESSING_TYPE: payload_type}
+
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "AITenant",
-            "metadata": {"name": case["tenant_label_name"], "namespace": AITENANT_NAMESPACE},
+            "metadata": metadata,
             "spec": spec,
         }
     )
@@ -874,6 +926,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),
     )
+    ensure_payload_processing_type_on_tenant_config(case["tenant_ns"])
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(

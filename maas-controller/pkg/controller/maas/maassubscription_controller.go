@@ -1116,7 +1116,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSSubscriptions,
-		)).
+		), builder.WithPredicates(httpRouteChangedForSubscription())).
 		// Watch MaaSModelRefs so we re-reconcile when a model is created or deleted.
 		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSModelRefToMaaSSubscriptions,
@@ -1331,6 +1331,19 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 		requests = append(requests, reconcile.Request{NamespacedName: key})
 	}
 	return requests
+}
+
+// httpRouteChangedForSubscription drops HTTPRoute status writes, which gateway and
+// Kuadrant controllers make as policies attach. MaaSSubscription reconcile resolves a
+// model's route by existence, name and labels, checks spec.parentRefs against the tenant
+// Gateway and owns the TokenRateLimitPolicy by the route; it never reads route status.
+// TokenRateLimitPolicy status reaches it through the TokenRateLimitPolicy watch.
+func httpRouteChangedForSubscription() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.Funcs{UpdateFunc: uidChanged},
+	)
 }
 
 // mapHTTPRouteToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions

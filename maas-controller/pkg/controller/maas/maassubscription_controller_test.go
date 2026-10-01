@@ -31,6 +31,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -1498,5 +1499,69 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	}
 	if !strings.Contains(ready.Message, "spec is required") {
 		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	}
+}
+
+func TestHTTPRouteChangedForSubscription(t *testing.T) {
+	base := newLLMISvcRoute("llm", "llm-ns")
+	base.UID = "route-uid"
+	base.Generation = 1
+
+	p := httpRouteChangedForSubscription()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*gatewayapiv1.HTTPRoute)
+		want   bool
+	}{
+		{
+			name: "status.parents write is dropped",
+			mutate: func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = []gatewayapiv1.RouteParentStatus{{
+					ParentRef:      gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(testGatewayName)},
+					ControllerName: "kuadrant.io/policy-controller",
+					Conditions: []metav1.Condition{
+						{Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionTrue},
+						{Type: "kuadrant.io/TokenRateLimitPolicyAffected", Status: metav1.ConditionTrue},
+					},
+				}}
+			},
+			want: false,
+		},
+		{
+			name:   "annotation change is dropped",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Annotations = map[string]string{"example.com/note": "x"} },
+			want:   false,
+		},
+		{
+			name:   "label change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Labels["app.kubernetes.io/name"] = "other" },
+			want:   true,
+		},
+		{
+			name:   "spec change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Generation = 2 },
+			want:   true,
+		},
+		{
+			name:   "route recreated under the same name passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.UID = "recreated-uid" },
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newRoute := base.DeepCopy()
+			tt.mutate(newRoute)
+			if got := p.Update(event.UpdateEvent{ObjectOld: base.DeepCopy(), ObjectNew: newRoute}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
