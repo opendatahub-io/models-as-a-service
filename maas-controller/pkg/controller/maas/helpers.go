@@ -29,6 +29,14 @@ func deletionTimestampSet(e event.UpdateEvent) bool {
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
+// uidChanged returns true when an Update event carries a different UID. An informer
+// relist reports an object deleted and recreated under the same name while the watch
+// was down as an Update, and the recreated object can match the old one on generation
+// and labels.
+func uidChanged(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetUID() != e.ObjectNew.GetUID()
+}
+
 // unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
 // and Update events only when the object's generation changed or its status.conditions
 // actually transitioned (type+status pairs differ). This filters out noise from
