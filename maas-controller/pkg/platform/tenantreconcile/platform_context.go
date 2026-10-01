@@ -2,8 +2,10 @@ package tenantreconcile
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -39,6 +41,22 @@ type PlatformContext struct {
 	Source       string
 }
 
+// ErrPlatformContextNotReady marks a platform context that stays unresolved until the tenant
+// config or its AITenant changes. Any other ResolvePlatformContext error is a failed read.
+var ErrPlatformContextNotReady = errors.New("platform context not ready")
+
+// AITenantPlatformInputs is the part of an AITenant that ResolvePlatformContext reads.
+// Watches compare it to decide whether an AITenant change can alter a tenant's platform.
+type AITenantPlatformInputs struct {
+	GatewayRef maasv1alpha1.TenantGatewayRef
+	OIDC       *maasv1alpha1.TenantExternalOIDCConfig
+}
+
+// AITenantPlatformInputsOf returns the AITenant fields ResolvePlatformContext reads.
+func AITenantPlatformInputsOf(aitenant *maasv1alpha1.AITenant) AITenantPlatformInputs {
+	return AITenantPlatformInputs{GatewayRef: aitenant.Status.GatewayRef, OIDC: aitenant.Spec.OIDC}
+}
+
 // ResolvePlatformContext resolves gateway and OIDC values for a tenant config object.
 //
 // AITenant-managed configs use their owning AITenant as the source of platform
@@ -62,7 +80,7 @@ func ResolvePlatformContext(ctx context.Context, c client.Reader, tenant client.
 		case ref.Name == "" && ref.Namespace == "":
 			ref = fallbackGatewayRef
 		case ref.Name == "" || ref.Namespace == "":
-			return PlatformContext{}, fmt.Errorf("tenant %s/%s spec.gatewayRef must set both name and namespace", legacy.Namespace, legacy.Name)
+			return PlatformContext{}, fmt.Errorf("%w: tenant %s/%s spec.gatewayRef must set both name and namespace", ErrPlatformContextNotReady, legacy.Namespace, legacy.Name)
 		}
 
 		return PlatformContext{
@@ -81,32 +99,37 @@ func ResolvePlatformContext(ctx context.Context, c client.Reader, tenant client.
 func resolveAITenantPlatformContext(ctx context.Context, c client.Reader, tenant client.Object) (PlatformContext, error) {
 	tenantName := tenant.GetLabels()[LabelTenantName]
 	if tenantName == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), LabelTenantName)
+		return PlatformContext{}, fmt.Errorf("%w: AITenant-managed tenant config %s/%s is missing %s", ErrPlatformContextNotReady, tenant.GetNamespace(), tenant.GetName(), LabelTenantName)
 	}
 
 	aitenantName := annotationValue(tenant, AnnotationAITenantName)
 	if aitenantName == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantName)
+		return PlatformContext{}, fmt.Errorf("%w: AITenant-managed tenant config %s/%s is missing %s", ErrPlatformContextNotReady, tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantName)
 	}
 	aitenantNamespace := annotationValue(tenant, AnnotationAITenantNamespace)
 	if aitenantNamespace == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant-managed tenant config %s/%s is missing %s", tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantNamespace)
+		return PlatformContext{}, fmt.Errorf("%w: AITenant-managed tenant config %s/%s is missing %s", ErrPlatformContextNotReady, tenant.GetNamespace(), tenant.GetName(), AnnotationAITenantNamespace)
 	}
 
 	var aitenant maasv1alpha1.AITenant
 	key := client.ObjectKey{Name: aitenantName, Namespace: aitenantNamespace}
 	if err := c.Get(ctx, key, &aitenant); err != nil {
-		return PlatformContext{}, fmt.Errorf("get owning AITenant %s/%s for tenant config %s/%s: %w", key.Namespace, key.Name, tenant.GetNamespace(), tenant.GetName(), err)
+		err = fmt.Errorf("get owning AITenant %s/%s for tenant config %s/%s: %w", key.Namespace, key.Name, tenant.GetNamespace(), tenant.GetName(), err)
+		if apierrors.IsNotFound(err) {
+			return PlatformContext{}, fmt.Errorf("%w: %w", ErrPlatformContextNotReady, err)
+		}
+		return PlatformContext{}, err
 	}
 
-	ref := aitenant.Status.GatewayRef
+	inputs := AITenantPlatformInputsOf(&aitenant)
+	ref := inputs.GatewayRef
 	if ref.Name == "" || ref.Namespace == "" {
-		return PlatformContext{}, fmt.Errorf("AITenant %s/%s status.gatewayRef is not ready", aitenant.Namespace, aitenant.Name)
+		return PlatformContext{}, fmt.Errorf("%w: AITenant %s/%s status.gatewayRef is not ready", ErrPlatformContextNotReady, aitenant.Namespace, aitenant.Name)
 	}
 
 	return PlatformContext{
 		GatewayRef:   ref,
-		ExternalOIDC: aitenant.Spec.OIDC.DeepCopy(),
+		ExternalOIDC: inputs.OIDC.DeepCopy(),
 		SkipIPP:      resolveSkipIPP(tenant),
 		Source:       "aitenant",
 	}, nil

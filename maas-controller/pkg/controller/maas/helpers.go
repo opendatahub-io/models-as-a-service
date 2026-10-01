@@ -37,6 +37,25 @@ func uidChanged(e event.UpdateEvent) bool {
 	return e.ObjectOld.GetUID() != e.ObjectNew.GetUID()
 }
 
+// informerResync admits the periodic informer resync (an update with an unchanged
+// resourceVersion) so the manager SyncPeriod stays a backstop behind filtering predicates.
+func informerResync(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetResourceVersion() == e.ObjectNew.GetResourceVersion()
+}
+
+// updateOf builds an update-only predicate over the concrete watched type. Create,
+// Delete and Generic events pass. A type mismatch cannot happen on a typed watch and
+// counts as no change.
+func updateOf[T client.Object](changed func(oldObj, newObj T) bool) predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			oldObj, okOld := e.ObjectOld.(T)
+			newObj, okNew := e.ObjectNew.(T)
+			return okOld && okNew && changed(oldObj, newObj)
+		},
+	}
+}
+
 // unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
 // and Update events only when the object's generation changed or its status.conditions
 // actually transitioned (type+status pairs differ). This filters out noise from

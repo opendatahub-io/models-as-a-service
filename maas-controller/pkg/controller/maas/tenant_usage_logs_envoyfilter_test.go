@@ -508,7 +508,7 @@ func TestTenantReconcile_ConfigChangeEnqueuesAllMaasTenantConfigs(t *testing.T) 
 		TenantNamespaceDiscoveryEnabled: true,
 	}
 
-	requests := r.mapConfigToMaasTenantConfigs(ctx, cfg)
+	requests := r.enqueueAllTenants(ctx, cfg)
 	g.Expect(requests).To(ConsistOf(
 		reconcile.Request{NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: usageLogsTestDefaultTenant}},
 		reconcile.Request{NamespacedName: types.NamespacedName{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-beta"}},

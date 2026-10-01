@@ -24,6 +24,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
@@ -1519,4 +1520,98 @@ func TestFormatTenantList(t *testing.T) {
 	g.Expect(formatTenantList([]string{"ns/a", "ns/b", "ns/c"}, 5)).To(Equal("ns/a, ns/b, ns/c"))
 	g.Expect(formatTenantList([]string{"ns/a", "ns/b", "ns/c"}, 2)).To(Equal("ns/a, ns/b (and 1 more)"))
 	g.Expect(formatTenantList([]string{"a", "b", "c", "d", "e", "f"}, 3)).To(Equal("a, b, c (and 3 more)"))
+}
+
+func TestTenantConfigChangedForLifecycle(t *testing.T) {
+	notReady := func(message string) []metav1.Condition {
+		return []metav1.Condition{{
+			Type:    tenantreconcile.ReadyConditionType,
+			Status:  metav1.ConditionFalse,
+			Reason:  "GatewayNotReady",
+			Message: message,
+		}}
+	}
+	base := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace:  "models-as-a-service",
+			Generation: 1,
+		},
+		Status: maasv1alpha1.MaasTenantConfigStatus{Phase: "Pending", Conditions: notReady("gateway not found")},
+	}
+
+	expectPredicate(t, tenantConfigChangedForLifecycle(), base, []predicateUpdateCase[*maasv1alpha1.MaasTenantConfig]{
+		{
+			name: "unrelated status write is dropped",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Phase = "Failed"
+				mtc.Status.InfraNamespace = "opendatahub"
+				apimeta.SetStatusCondition(&mtc.Status.Conditions, metav1.Condition{
+					Type: tenantreconcile.ConditionTypeDegraded, Status: metav1.ConditionTrue, Reason: "PrerequisitesWarning",
+				})
+			},
+			want: false,
+		},
+		{
+			name: "spec or label change is dropped",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.SetGeneration(2)
+				mtc.SetLabels(map[string]string{"a": "b"})
+			},
+			want: false,
+		},
+		{
+			name: "Ready message change passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Conditions = notReady("database Secret missing")
+			},
+			want: true,
+		},
+		{
+			name: "Ready status change passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Conditions[0].Status = metav1.ConditionTrue
+			},
+			want: true,
+		},
+		{
+			name: "Ready removed passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.Status.Conditions = nil
+			},
+			want: true,
+		},
+		{
+			name: "Config ownerReference change passes",
+			mutate: func(mtc *maasv1alpha1.MaasTenantConfig) {
+				mtc.SetOwnerReferences([]metav1.OwnerReference{{
+					APIVersion: maasv1alpha1.GroupVersion.String(),
+					Kind:       maasv1alpha1.ConfigKind,
+					Name:       maasv1alpha1.ConfigInstanceName,
+					UID:        "cfg-uid",
+				}})
+			},
+			want: true,
+		},
+	})
+
+	t.Run("Ready message change while ready is dropped", func(t *testing.T) {
+		g := NewWithT(t)
+		oldTenant := base.DeepCopy()
+		oldTenant.Status.Conditions = []metav1.Condition{{
+			Type: tenantreconcile.ReadyConditionType, Status: metav1.ConditionTrue, Reason: "Reconciled", Message: "applied",
+		}}
+		newTenant := oldTenant.DeepCopy()
+		newTenant.Status.Conditions[0].Message = "applied again"
+		g.Expect(tenantConfigChangedForLifecycle().Update(event.UpdateEvent{ObjectOld: oldTenant, ObjectNew: newTenant})).To(BeFalse())
+	})
+
+	t.Run("phase change without Ready passes", func(t *testing.T) {
+		g := NewWithT(t)
+		oldTenant := base.DeepCopy()
+		oldTenant.Status.Conditions = nil
+		newTenant := oldTenant.DeepCopy()
+		newTenant.Status.Phase = "Failed"
+		g.Expect(tenantConfigChangedForLifecycle().Update(event.UpdateEvent{ObjectOld: oldTenant, ObjectNew: newTenant})).To(BeTrue())
+	})
 }

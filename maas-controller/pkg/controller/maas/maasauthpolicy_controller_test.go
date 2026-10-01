@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +34,8 @@ import (
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -3299,5 +3302,191 @@ func TestMaaSAuthPolicyReconciler_NoRequeueWhenUnchanged(t *testing.T) {
 	}
 	if result.RequeueAfter != 0 {
 		t.Errorf("second Reconcile: RequeueAfter = %s, want 0 (no spec change, no enforcement wait needed)", result.RequeueAfter)
+	}
+}
+
+func TestHTTPRouteChangedForAuthPolicy(t *testing.T) {
+	base := newHTTPRoute("llm", "llm-ns")
+	base.Generation = 1
+	base.Labels = map[string]string{"app.kubernetes.io/name": "llm"}
+
+	p := httpRouteChangedForAuthPolicy()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*gatewayapiv1.HTTPRoute)
+		want   bool
+	}{
+		{
+			name: "status.parents write is dropped",
+			mutate: func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = []gatewayapiv1.RouteParentStatus{{
+					ParentRef:      gatewayapiv1.ParentReference{Name: "maas-default-gateway"},
+					ControllerName: "kuadrant.io/policy-controller",
+					Conditions: []metav1.Condition{
+						{Type: "kuadrant.io/AuthPolicyAffected", Status: metav1.ConditionTrue},
+					},
+				}}
+			},
+			want: false,
+		},
+		{
+			name:   "label change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Labels = map[string]string{"app.kubernetes.io/name": "other"} },
+			want:   true,
+		},
+		{
+			name:   "spec change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Generation = 2 },
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newRoute := base.DeepCopy()
+			tt.mutate(newRoute)
+			if got := p.Update(event.UpdateEvent{ObjectOld: base.DeepCopy(), ObjectNew: newRoute}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMapAuthPolicyToMaaSAuthPolicies(t *testing.T) {
+	const (
+		tenantNS = "models-as-a-service"
+		modelNS  = "llm-ns"
+	)
+	model := newMaaSModelRef("llm", modelNS, "ExternalModel", "llm")
+	otherModel := newMaaSModelRef("other", "other-ns", "ExternalModel", "other")
+	policy := newMaaSAuthPolicy("llm-access", tenantNS, "team-a", maasv1alpha1.ModelRef{Name: "llm", Namespace: modelNS})
+	unrelated := newMaaSAuthPolicy("other-access", tenantNS, "team-b", maasv1alpha1.ModelRef{Name: "other", Namespace: "other-ns"})
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model, otherModel, policy, unrelated).Build()
+	r := &MaaSAuthPolicyReconciler{Client: c, Scheme: scheme, TenantNamespace: tenantNS}
+
+	authPolicy := func(name string, labels map[string]string, targetKind string) *unstructured.Unstructured {
+		ap := &unstructured.Unstructured{}
+		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		ap.SetName(name)
+		ap.SetNamespace(modelNS)
+		ap.SetLabels(labels)
+		targetRef := map[string]any{"group": gatewayapiv1.GroupName, "kind": targetKind, "name": "llm"}
+		if err := unstructured.SetNestedMap(ap.Object, targetRef, "spec", "targetRef"); err != nil {
+			t.Fatalf("set targetRef: %v", err)
+		}
+		return ap
+	}
+	generatedLabels := map[string]string{
+		"app.kubernetes.io/managed-by":        "maas-controller",
+		"maas.opendatahub.io/model":           "llm",
+		"maas.opendatahub.io/model-namespace": modelNS,
+	}
+	llmAccess := []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "llm-access", Namespace: tenantNS}}}
+
+	tests := []struct {
+		name string
+		ap   *unstructured.Unstructured
+		want []reconcile.Request
+	}{
+		{
+			name: "foreign policy on an HTTPRoute maps to policies referencing models in its namespace",
+			ap:   authPolicy("rogue", nil, "HTTPRoute"),
+			want: llmAccess,
+		},
+		{
+			name: "foreign policy on a Gateway is ignored",
+			ap:   authPolicy("rogue-gateway", nil, "Gateway"),
+			want: nil,
+		},
+		{
+			name: "generated policy maps to its parent",
+			ap:   authPolicy("maas-auth-llm", generatedLabels, "HTTPRoute"),
+			want: llmAccess,
+		},
+		{
+			name: "generated policy without a model label is ignored",
+			ap:   authPolicy("maas-auth-unknown", map[string]string{"app.kubernetes.io/managed-by": "maas-controller"}, "HTTPRoute"),
+			want: nil,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := r.mapAuthPolicyToMaaSAuthPolicies(t.Context(), tt.ap); !slices.Equal(got, tt.want) {
+				t.Errorf("mapAuthPolicyToMaaSAuthPolicies() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthPolicyChangedForMaaSAuthPolicy(t *testing.T) {
+	authPolicy := func(labels map[string]string, enforced string) *unstructured.Unstructured {
+		ap := &unstructured.Unstructured{}
+		ap.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+		ap.SetName("llm-auth")
+		ap.SetNamespace("llm-ns")
+		ap.SetGeneration(1)
+		ap.SetLabels(labels)
+		conditions := []any{map[string]any{"type": "Enforced", "status": enforced}}
+		if err := unstructured.SetNestedSlice(ap.Object, conditions, "status", "conditions"); err != nil {
+			t.Fatalf("set conditions: %v", err)
+		}
+		return ap
+	}
+	generated := map[string]string{"app.kubernetes.io/managed-by": "maas-controller", "maas.opendatahub.io/model": "llm"}
+
+	p := authPolicyChangedForMaaSAuthPolicy()
+	if !p.Create(event.TypedCreateEvent[*unstructured.Unstructured]{Object: authPolicy(nil, "True")}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.TypedDeleteEvent[*unstructured.Unstructured]{Object: authPolicy(nil, "True")}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name           string
+		oldObj, newObj *unstructured.Unstructured
+		want           bool
+	}{
+		{
+			name:   "condition transition on a generated policy passes",
+			oldObj: authPolicy(generated, "False"),
+			newObj: authPolicy(generated, "True"),
+			want:   true,
+		},
+		{
+			name:   "condition transition on a foreign policy is dropped",
+			oldObj: authPolicy(nil, "False"),
+			newObj: authPolicy(nil, "True"),
+			want:   false,
+		},
+		{
+			name:   "managed-by label flip passes",
+			oldObj: authPolicy(nil, "True"),
+			newObj: authPolicy(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"}, "True"),
+			want:   true,
+		},
+		{
+			name:   "spec change on a foreign policy passes",
+			oldObj: authPolicy(nil, "True"),
+			newObj: func() *unstructured.Unstructured {
+				ap := authPolicy(nil, "True")
+				ap.SetGeneration(2)
+				return ap
+			}(),
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.TypedUpdateEvent[*unstructured.Unstructured]{ObjectOld: tt.oldObj, ObjectNew: tt.newObj}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -35,6 +36,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 	gwapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -137,7 +139,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	usesCleanupFinalizer, err := tenantUsesCleanupFinalizer(&tenant)
 	if err != nil {
-		return ctrl.Result{}, err
+		// Only a label fix helps, and that passes the MaasTenantConfig watch.
+		return ctrl.Result{}, r.recordFailure(ctx, &tenant, "InvalidTenantIdentity", reconcile.TerminalError(err))
 	}
 
 	if usesCleanupFinalizer {
@@ -159,8 +162,8 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	tenant.Status.InfraNamespace = r.appNamespaceForTenant()
 
 	if err := r.deleteUsageLogsEnvoyFilterIfDisabled(ctx, log, &tenant); err != nil {
-		log.Error(err, "failed to delete usage-logs EnvoyFilter after usageLogging disabled")
-		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+		return ctrl.Result{}, fmt.Errorf("delete usage-logs EnvoyFilter after usageLogging disabled: %w",
+			r.recordFailure(ctx, &tenant, "UsageLogsCleanupFailed", err))
 	}
 
 	// Handle management states
@@ -194,7 +197,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	usageLogsWarning, err := r.ensureUsageLogsEnvoyFilter(ctx, log, &tenant, platformContext, mcfg)
 	if err != nil {
-		return ctrl.Result{}, err
+		return ctrl.Result{}, r.recordFailure(ctx, &tenant, "UsageLogsReconcileFailed", err)
 	}
 
 	// Aggregate all warnings and set Degraded condition once
@@ -249,8 +252,8 @@ func (r *TenantReconciler) handleManagementState(ctx context.Context, log logr.L
 			fmt.Sprintf("unsupported %s=%q", managementStateAnnotation, ms)); err != nil {
 			return nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return &res, nil
+		// Correcting the annotation passes the MaasTenantConfig watch predicate.
+		return &ctrl.Result{}, nil
 	}
 
 	return nil, nil
@@ -271,18 +274,21 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 			"management state is Removed; platform reconcile is suspended until the Config anchor is deleted by component GC"); err != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// Config deletion and a management-state change both pass the watch predicates.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	fallbackGatewayRef := fallbackTenantGatewayRef(r.GatewayName, r.GatewayNamespace)
 	platformContext, err := tenantreconcile.ResolvePlatformContext(ctx, r.Client, tenant, fallbackGatewayRef)
+	if err != nil && !errors.Is(err, tenantreconcile.ErrPlatformContextNotReady) {
+		return nil, tenantreconcile.PlatformContext{}, nil, r.recordFailure(ctx, tenant, "PlatformContextReadFailed", err)
+	}
 	if err != nil {
 		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "InvalidGateway", err.Error()); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// Platform context comes from this tenant config and its AITenant; both are watched.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
@@ -299,8 +305,8 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 			"MAAS_PLATFORM_MANIFESTS is not set and no default kustomize path resolved; cannot apply platform manifests"); err != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 2 * time.Minute}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// ManifestPath is fixed at process start; only a restart can change it.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	return mcfg, platformContext, nil, nil
@@ -354,19 +360,19 @@ func (r *TenantReconciler) reconcilePlatform(
 	appNs := r.appNamespaceForTenant()
 	runRes, err := tenantreconcile.RunPlatform(ctx, log, r.Client, r.Scheme, tenant, platformContext, r.ManifestPath, appNs, r.ControllerNamespace, r.ClusterAudience, r.MonitoringNamespace, mcfg)
 	if err != nil {
-		log.Error(err, "Tenant platform reconcile failed")
-		setDeploymentsAvailableCondition(tenant, false, "PlatformReconcileFailed", err.Error())
-		if err2 := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, "PlatformReconcileFailed", err.Error()); err2 != nil {
-			return nil, nil, err2
+		// Any platform failure sets Ready=False. The reason tells a render that needs an edit
+		// from an apply that is retrying.
+		reason := "PlatformReconcileFailed"
+		if errors.Is(err, reconcile.TerminalError(nil)) {
+			reason = "PlatformRenderFailed"
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return nil, &res, nil
+		setDeploymentsAvailableCondition(tenant, false, reason, err.Error())
+		statusErr := r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, reason, err.Error())
+		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", failureAfterStatus(reason, statusErr, err))
 	}
 
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
-		log.Error(err, "failed to ensure gateway management auth, will retry")
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return nil, &res, nil
+		return nil, nil, fmt.Errorf("ensure gateway management auth: %w", r.recordFailure(ctx, tenant, "GatewayAuthPolicyFailed", err))
 	}
 
 	if runRes.DeploymentPending {
@@ -501,8 +507,8 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 				fmt.Sprintf("Config %q is required before platform apply", maasv1alpha1.ConfigInstanceName)); err2 != nil {
 				return nil, nil, err2
 			}
-			res := ctrl.Result{RequeueAfter: 10 * time.Second}
-			return nil, &res, nil
+			// The Config watch admits its create event.
+			return nil, &ctrl.Result{}, nil
 		}
 		return nil, nil, err
 	}
@@ -512,8 +518,8 @@ func (r *TenantReconciler) readyConfigOrWait(ctx context.Context, log logr.Logge
 			fmt.Sprintf("Config %q is deleting; platform reconcile is suspended until the anchor is gone or recreated", ct.Name)); err != nil {
 			return nil, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 10 * time.Second}
-		return nil, &res, nil
+		// The Config watch admits the delete event and any recreate.
+		return nil, &ctrl.Result{}, nil
 	}
 	if ct.UID == "" {
 		if err := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "WaitingForConfigUID",
@@ -560,6 +566,28 @@ func validateGatewayExists(ctx context.Context, c client.Client, namespace, name
 		return fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
 	}
 	return nil
+}
+
+// recordFailure records err in status under reason and returns it, so a failure shows in
+// status and not only in the controller log. A terminal err sets Ready=False: the tenant
+// config needs an edit. Any other err sets Degraded=True and leaves Ready alone, so a
+// transient failure does not flap readiness for the AITenant and Lifecycle watches; the
+// next complete pass clears Degraded.
+func (r *TenantReconciler) recordFailure(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, reason string, err error) error {
+	if errors.Is(err, reconcile.TerminalError(nil)) {
+		return failureAfterStatus(reason, r.patchStatus(ctx, tenant, "Failed", metav1.ConditionFalse, reason, err.Error()), err)
+	}
+	setTenantCondition(tenant, tenantreconcile.ConditionTypeDegraded, metav1.ConditionTrue, reason, err.Error())
+	return failureAfterStatus(reason, r.Status().Update(ctx, tenant), err)
+}
+
+// failureAfterStatus returns err unless recording it in status failed. Then only the status
+// error stays in the chain: that write is always worth a retry, even after a terminal err.
+func failureAfterStatus(reason string, statusErr, err error) error {
+	if statusErr != nil {
+		return fmt.Errorf("record %s in status: %w (after: %s)", reason, statusErr, err.Error())
+	}
+	return err
 }
 
 func (r *TenantReconciler) patchStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, phase string, status metav1.ConditionStatus, reason, message string) error {

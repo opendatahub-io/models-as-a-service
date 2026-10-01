@@ -181,17 +181,29 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 		}
 	}
 
-	// Check MonitoringStackAvailable, MonitoringReady, and PersesAvailable conditions
-	conditionsSlice, found, err := unstructured.NestedSlice(dsci.Object, "status", "conditions")
+	msg, err := DSCIMonitoringWarning(dsci)
 	if err != nil {
 		log.Error(err, "unable to read DSCI conditions")
+	}
+	return msg
+}
+
+// DSCIMonitoringWarning derives the prerequisite warning from a DSCInitialization's
+// MonitoringStackAvailable, MonitoringReady, and PersesAvailable conditions. The warning
+// is valid even when err is non-nil; err only explains an unreadable status.conditions
+// for logging. The TenantReconciler DSCI watch compares the warning for the old and new
+// object, so it must remain a pure function of the DSCI and the only DSCI data the
+// tenant reconcile consumes.
+func DSCIMonitoringWarning(dsci *unstructured.Unstructured) (string, error) {
+	conditionsSlice, found, err := unstructured.NestedSlice(dsci.Object, "status", "conditions")
+	if err != nil {
 		return "unable to verify DSCI monitoring conditions due to a status read error. " +
-			"Ensure monitoring stack is deployed in DSCInitialization"
+			"Ensure monitoring stack is deployed in DSCInitialization", err
 	}
 	if !found || len(conditionsSlice) == 0 {
 		return "DSCI monitoring status not available: no conditions found. " +
 			"Monitoring stack may still be deploying. " +
-			"Showback/FinOps usage views will not work until monitoring is ready"
+			"Showback/FinOps usage views will not work until monitoring is ready", nil
 	}
 
 	type conditionStatus struct {
@@ -231,7 +243,7 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 		cond := conditions["MonitoringReady"]
 		if cond.status == "" {
 			return "DSCI monitoring is not ready: MonitoringReady condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until monitoring is ready"
+				"Showback/FinOps usage views will not work until monitoring is ready", nil
 		}
 		msg := fmt.Sprintf("DSCI monitoring is not ready (MonitoringReady=%s", cond.status)
 		if cond.reason != "" {
@@ -241,14 +253,14 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 			msg += fmt.Sprintf(": %s", cond.message)
 		}
 		msg += "). Showback/FinOps usage views will not work until monitoring is ready"
-		return msg
+		return msg, nil
 	}
 
 	if conditions["MonitoringStackAvailable"].status != "True" {
 		cond := conditions["MonitoringStackAvailable"]
 		if cond.status == "" {
 			return "DSCI monitoring stack is not available: MonitoringStackAvailable condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until monitoring stack is available"
+				"Showback/FinOps usage views will not work until monitoring stack is available", nil
 		}
 		msg := fmt.Sprintf("DSCI monitoring stack is not available (MonitoringStackAvailable=%s", cond.status)
 		if cond.reason != "" {
@@ -258,14 +270,14 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 			msg += fmt.Sprintf(": %s", cond.message)
 		}
 		msg += "). Showback/FinOps usage views will not work until monitoring stack is available"
-		return msg
+		return msg, nil
 	}
 
 	if conditions["PersesAvailable"].status != "True" {
 		cond := conditions["PersesAvailable"]
 		if cond.status == "" {
 			return "DSCI Perses is not available: PersesAvailable condition not found in DSCInitialization status. " +
-				"Showback/FinOps usage views will not work until Perses is available"
+				"Showback/FinOps usage views will not work until Perses is available", nil
 		}
 		msg := fmt.Sprintf("DSCI Perses is not available (PersesAvailable=%s", cond.status)
 		if cond.reason != "" {
@@ -275,8 +287,8 @@ func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
 			msg += fmt.Sprintf(": %s", cond.message)
 		}
 		msg += "). Showback/FinOps usage views will not work until Perses is available"
-		return msg
+		return msg, nil
 	}
 
-	return ""
+	return "", nil
 }

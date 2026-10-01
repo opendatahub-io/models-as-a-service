@@ -32,6 +32,7 @@ import (
 	netwv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -779,6 +780,20 @@ func truncateConditionMessage(msg string) string {
 	return truncated + suffix
 }
 
+// tenantConfigModuleStatus is the MaasTenantConfig status syncModuleStatus reads;
+// tenantConfigChangedForLifecycle compares it to drop other status writes. Unlike
+// maasTenantConfigReady it ignores observedGeneration: Config status mirrors the last
+// Ready condition the TenantReconciler reported.
+func tenantConfigModuleStatus(tenant *maasv1alpha1.MaasTenantConfig) (ready bool, msg string) {
+	if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ReadyConditionType) {
+		return true, ""
+	}
+	if cond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ReadyConditionType); cond != nil {
+		return false, cond.Message
+	}
+	return false, fmt.Sprintf("MaasTenantConfig phase=%s", tenant.Status.Phase)
+}
+
 // syncModuleStatus aggregates the Ready condition from the default AITenant and the default
 // MaasTenantConfig into Config.Status.Conditions so that the platform operator (DSC) can
 // surface configuration errors (e.g. missing gateway, missing postgres secret) without
@@ -821,14 +836,7 @@ func (r *LifecycleReconciler) syncModuleStatus(ctx context.Context, cfg *maasv1a
 		var tenant maasv1alpha1.MaasTenantConfig
 		switch err := r.Get(ctx, tKey, &tenant); {
 		case err == nil:
-			tenantReady = apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ReadyConditionType)
-			if !tenantReady {
-				if cond := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ReadyConditionType); cond != nil {
-					tenantMsg = cond.Message
-				} else {
-					tenantMsg = fmt.Sprintf("MaasTenantConfig phase=%s", tenant.Status.Phase)
-				}
-			}
+			tenantReady, tenantMsg = tenantConfigModuleStatus(&tenant)
 		case apierrors.IsNotFound(err):
 			tenantMsg = "default MaasTenantConfig not yet created"
 		default:
@@ -956,6 +964,12 @@ func formatTenantList(tenants []string, maxItems int) string {
 
 // SetupWithManager registers the controller to watch only the maas-controller Deployment.
 func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the lifecycle reconcile.
+func (r *LifecycleReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	selfOnly := predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == r.DeploymentName && o.GetNamespace() == r.DeploymentNS
 	})
@@ -992,7 +1006,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					Name:      r.DeploymentName,
 				}}}
 			}),
-			builder.WithPredicates(defaultTenant),
+			builder.WithPredicates(defaultTenant, tenantConfigChangedForLifecycle()),
 		).
 		Watches(
 			&maasv1alpha1.AITenant{},
@@ -1055,7 +1069,7 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 					o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
 			})),
 		).
-		Complete(r)
+		Complete(target)
 }
 
 // aitenantReadyChanged admits an AITenant event only when the Ready condition
@@ -1083,6 +1097,18 @@ func aitenantReadyChanged() predicate.Predicate {
 			return e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration()
 		},
 	}
+}
+
+// tenantConfigChangedForLifecycle admits MaasTenantConfig updates that change what the
+// LifecycleReconciler reads from it: the readiness summary synced into Config status
+// and the Config ownerReference converged by ensureTenantReferencesConfig.
+func tenantConfigChangedForLifecycle() predicate.Predicate {
+	return updateOf(func(oldTenant, newTenant *maasv1alpha1.MaasTenantConfig) bool {
+		oldReady, oldMsg := tenantConfigModuleStatus(oldTenant)
+		newReady, newMsg := tenantConfigModuleStatus(newTenant)
+		return oldReady != newReady || oldMsg != newMsg ||
+			!equality.Semantic.DeepEqual(oldTenant.OwnerReferences, newTenant.OwnerReferences)
+	})
 }
 
 // crdInOptionalAPIGroup matches CRDs belonging to optional platform operator API groups

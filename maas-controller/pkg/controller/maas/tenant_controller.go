@@ -20,20 +20,25 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"sync"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	netwv1 "k8s.io/api/networking/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
+	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -171,7 +176,20 @@ func isMaasTenantConfigConflict(err error, req ctrl.Request) bool {
 	return details != nil && details.Name == req.Name
 }
 
-const openshiftAuthenticationClusterName = "cluster"
+var dsciGVK = schema.GroupVersionKind{Group: "dscinitialization.opendatahub.io", Version: "v1", Kind: "DSCInitialization"}
+
+// Error retry bounds. A failed pass is a full render and apply, so retries start at a
+// second instead of the controller-runtime default of 5ms. Several failures clear on
+// changes no watch reports (a webhook coming back, an RBAC grant, a CRD installed later),
+// so the default cap of 1000s would stall recovery.
+const (
+	tenantReconcileBaseBackoff = time.Second
+	tenantReconcileMaxBackoff  = 2 * time.Minute
+)
+
+func tenantReconcileRateLimiter() workqueue.TypedRateLimiter[reconcile.Request] {
+	return workqueue.NewTypedItemExponentialFailureRateLimiter[reconcile.Request](tenantReconcileBaseBackoff, tenantReconcileMaxBackoff)
+}
 
 func (r *TenantReconciler) enqueueDefaultTenant(_ context.Context, _ client.Object) []reconcile.Request {
 	return []reconcile.Request{{NamespacedName: types.NamespacedName{
@@ -191,9 +209,9 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 	}}}
 }
 
-// mapConfigToMaasTenantConfigs maps a Config change to reconcile requests for MaasTenantConfig
-// resources so usageLogging toggle changes propagate to every tenant's usage-logs EnvoyFilter.
-func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ client.Object) []reconcile.Request {
+// enqueueAllTenants maps a change that applies to every tenant to all the
+// MaasTenantConfigs this reconciler owns.
+func (r *TenantReconciler) enqueueAllTenants(ctx context.Context, _ client.Object) []reconcile.Request {
 	if !r.TenantNamespaceDiscoveryEnabled {
 		return []reconcile.Request{{NamespacedName: types.NamespacedName{
 			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
@@ -203,7 +221,7 @@ func (r *TenantReconciler) mapConfigToMaasTenantConfigs(ctx context.Context, _ c
 
 	var tenantList maasv1alpha1.MaasTenantConfigList
 	if err := r.List(ctx, &tenantList); err != nil {
-		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for Config change mapping")
+		oteljson.FromContext(ctx).Error(err, "failed to list MaasTenantConfigs for fan-out mapping")
 		return nil
 	}
 	requests := make([]reconcile.Request, 0, len(tenantList.Items))
@@ -255,6 +273,34 @@ func managedTenantNetworkPolicy() predicate.Predicate {
 	})
 }
 
+// networkPolicyChangedForTenant drops updates that only move the tenant tracking labels
+// of a shared NetworkPolicy (isSharedTenantOperand). Every tenant applies those and each
+// apply stamps that tenant's labels, so admitting the relabel makes tenants re-enqueue each
+// other indefinitely. A relabel of a per-tenant NetworkPolicy is drift and passes, so its
+// owner restores the labels; under the other tenant's labels the policy looks shared, so
+// that restamp does not bounce back.
+func networkPolicyChangedForTenant() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+		predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
+			oldLabels, newLabels := e.ObjectOld.GetLabels(), e.ObjectNew.GetLabels()
+			if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), e.ObjectOld) {
+				oldLabels, newLabels = withoutTenantTrackingLabels(oldLabels), withoutTenantTrackingLabels(newLabels)
+			}
+			return !maps.Equal(oldLabels, newLabels)
+		}},
+	)
+}
+
+func withoutTenantTrackingLabels(labels map[string]string) map[string]string {
+	out := maps.Clone(labels)
+	delete(out, tenantreconcile.LabelTenantName)
+	delete(out, tenantreconcile.LabelTenantNamespace)
+	return out
+}
+
 func isManagedTenantNetworkPolicyLabels(labels map[string]string) bool {
 	if labels == nil {
 		return false
@@ -273,6 +319,10 @@ func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
 	return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
 }
 
+// mapNetworkPolicyToMaasTenantConfigs enqueues the tenants that apply a NetworkPolicy. A
+// shared one (isSharedTenantOperand) carries the tracking labels of whichever tenant applied
+// it last, which may be gone, so every tenant is enqueued to restore it. So is a per-tenant
+// one under another tenant's labels, since its owner is the only tenant that renders it.
 func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
 	np, ok := obj.(*netwv1.NetworkPolicy)
 	if !ok {
@@ -280,6 +330,9 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	}
 	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
 		return nil
+	}
+	if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), np) {
+		return r.enqueueAllTenants(ctx, obj)
 	}
 	if r.TenantNamespaceDiscoveryEnabled {
 		tenantNs := np.GetLabels()[tenantreconcile.LabelTenantNamespace]
@@ -293,108 +346,130 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	return r.enqueueDefaultTenant(ctx, obj)
 }
 
-func authenticationClusterSingleton() predicate.Predicate {
-	return predicate.NewPredicateFuncs(func(o client.Object) bool {
-		return o.GetName() == openshiftAuthenticationClusterName
-	})
-}
-
 func configResourceDefault() predicate.Predicate {
 	return predicate.NewPredicateFuncs(func(o client.Object) bool {
 		return o.GetName() == maasv1alpha1.ConfigInstanceName
 	})
 }
 
+// tenantConfigChangedForTenant drops status-only MaasTenantConfig writes. The reconcile
+// reads spec, labels (tenant identity), annotations (management state and the
+// payload-processing handshake with ai-gateway-controller) and deletion, never its
+// own status.
+func tenantConfigChangedForTenant() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.AnnotationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.Funcs{UpdateFunc: deletionTimestampSet},
+		predicate.Funcs{UpdateFunc: informerResync},
+	)
+}
+
+// aitenantPlatformContextChanged admits AITenant updates that can change the tenant
+// platform context.
+func aitenantPlatformContextChanged() predicate.Predicate {
+	return predicate.Or(
+		updateOf(func(oldAITenant, newAITenant *maasv1alpha1.AITenant) bool {
+			return !equality.Semantic.DeepEqual(
+				tenantreconcile.AITenantPlatformInputsOf(oldAITenant),
+				tenantreconcile.AITenantPlatformInputsOf(newAITenant),
+			)
+		}),
+		predicate.Funcs{UpdateFunc: deletionTimestampSet},
+	)
+}
+
+// configSpecOrDeletionChanged drops Config status writes (LifecycleReconciler
+// aggregates operand health there). The tenant reconcile reads only existence, UID,
+// deletion and spec.usageLogging.
+func configSpecOrDeletionChanged() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.Funcs{UpdateFunc: deletionTimestampSet},
+	)
+}
+
+// dsciMonitoringChanged admits DSCInitialization updates only when the derived
+// monitoring prerequisite warning changes. The reconcile reads no DSCI spec.
+func dsciMonitoringChanged() predicate.TypedFuncs[*unstructured.Unstructured] {
+	return predicate.TypedFuncs[*unstructured.Unstructured]{
+		UpdateFunc: func(e event.TypedUpdateEvent[*unstructured.Unstructured]) bool {
+			// The error only explains a read failure for logging; the warning is what reaches status.
+			oldWarning, _ := tenantreconcile.DSCIMonitoringWarning(e.ObjectOld)
+			newWarning, _ := tenantreconcile.DSCIMonitoringWarning(e.ObjectNew)
+			return oldWarning != newWarning
+		},
+	}
+}
+
 // SetupWithManager registers the MaasTenantConfig controller.
 func (r *TenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	return r.setupWithManager(mgr, r)
+}
+
+// setupWithManager wires the watches to target, so specs can see what the watches enqueue
+// without running the platform reconcile.
+func (r *TenantReconciler) setupWithManager(mgr ctrl.Manager, target reconcile.Reconciler) error {
 	ctx := context.Background()
 
 	b := ctrl.NewControllerManagedBy(mgr).
-		For(&maasv1alpha1.MaasTenantConfig{}).
+		WithOptions(controller.Options{RateLimiter: tenantReconcileRateLimiter()}).
+		For(&maasv1alpha1.MaasTenantConfig{}, builder.WithPredicates(tenantConfigChangedForTenant())).
 		Watches(
 			&maasv1alpha1.Config{},
-			handler.EnqueueRequestsFromMapFunc(r.mapConfigToMaasTenantConfigs),
-			builder.WithPredicates(configResourceDefault()),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
+			builder.WithPredicates(configResourceDefault(), configSpecOrDeletionChanged()),
 		).
 		Watches(
 			&maasv1alpha1.AITenant{},
 			handler.EnqueueRequestsFromMapFunc(r.enqueueTenantForAITenant),
+			builder.WithPredicates(aitenantPlatformContextChanged()),
 		).
 		Watches(
 			&extv1.CustomResourceDefinition{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
 			builder.WithPredicates(crdLabeledForMaaSComponent()),
 		).
 		Watches(
 			&corev1.Secret{},
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
+			handler.EnqueueRequestsFromMapFunc(r.enqueueAllTenants),
 			builder.WithPredicates(secretNamedMaaSDB(), r.inTenantWorkNamespaces()),
 		).
 		Watches(
 			&netwv1.NetworkPolicy{},
 			handler.EnqueueRequestsFromMapFunc(r.mapNetworkPolicyToMaasTenantConfigs),
-			builder.WithPredicates(r.inTenantPlatformNamespaces(), managedTenantNetworkPolicy()),
+			builder.WithPredicates(r.inTenantPlatformNamespaces(), managedTenantNetworkPolicy(), networkPolicyChangedForTenant()),
 		)
 
-	const authCRD = "authentications.config.openshift.io"
-	authExists := crdExists(ctx, mgr.GetAPIReader(), authCRD)
-	if authExists {
-		authMeta := &metav1.PartialObjectMetadata{}
-		authMeta.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "config.openshift.io",
-			Version: "v1",
-			Kind:    "Authentication",
-		})
-		b = b.WatchesMetadata(
-			authMeta,
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(authenticationClusterSingleton()),
+	dsciSource := func() source.Source {
+		dsci := &unstructured.Unstructured{}
+		dsci.SetGroupVersionKind(dsciGVK)
+		return source.Kind(mgr.GetCache(), dsci,
+			handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
+				func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
+					return r.enqueueAllTenants(ctx, obj)
+				},
+			),
+			dsciMonitoringChanged(),
 		)
-	} else {
-		ctrl.Log.Info("Authentication CRD not registered; skipping static watch")
 	}
 
 	const dsciCRD = "dscinitializations.dscinitialization.opendatahub.io"
 	dsciExists := crdExists(ctx, mgr.GetAPIReader(), dsciCRD)
 	if dsciExists {
-		dsci := &unstructured.Unstructured{}
-		dsci.SetGroupVersionKind(schema.GroupVersionKind{
-			Group:   "dscinitialization.opendatahub.io",
-			Version: "v1",
-			Kind:    "DSCInitialization",
-		})
-		b = b.Watches(
-			dsci,
-			handler.EnqueueRequestsFromMapFunc(r.enqueueDefaultTenant),
-			builder.WithPredicates(predicate.ResourceVersionChangedPredicate{}),
-		)
+		b = b.WatchesRawSource(dsciSource())
 	} else {
 		ctrl.Log.Info("DSCInitialization CRD not registered; skipping static watch")
 	}
 
-	c, err := b.Build(r)
+	c, err := b.Build(target)
 	if err != nil {
 		return err
 	}
 
-	// No dynamic watch for Authentication CRD: it ships with OpenShift itself,
-	// so it is either present at boot (OCP) or will never appear (xKS).
-
 	if !dsciExists {
-		if err := registerWatchWhenCRDAppears(c, mgr, dsciCRD, func() source.Source {
-			dsci := &unstructured.Unstructured{}
-			dsci.SetGroupVersionKind(schema.GroupVersionKind{
-				Group: "dscinitialization.opendatahub.io", Version: "v1", Kind: "DSCInitialization",
-			})
-			return source.Kind(mgr.GetCache(), dsci,
-				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
-					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-						return r.enqueueDefaultTenant(ctx, obj)
-					},
-				),
-				predicate.TypedResourceVersionChangedPredicate[*unstructured.Unstructured]{},
-			)
-		}); err != nil {
+		if err := registerWatchWhenCRDAppears(c, mgr, dsciCRD, dsciSource); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for DSCInitialization: %w", err)
 		}
 	}
