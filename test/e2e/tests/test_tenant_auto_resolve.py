@@ -22,6 +22,7 @@ import pytest
 
 from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
+    MODEL_BACKEND_READY_TIMEOUT,
     _apply,
     apply_gateway_fixture,
     bootstrap_aitenant_tenant,
@@ -33,6 +34,7 @@ from multitenancy_helpers import (
     require_tenant_namespace_discovery,
     wait_for_gateway_programmed,
     wait_for_httproute_accepted,
+    wait_for_llmisvc_backend_ready,
     wait_for_status_phase,
     apply_gateway_access_label,
 )
@@ -96,6 +98,13 @@ class TestTenantAutoResolve:
                 case["tenant_ns"],
                 case["gateway_name"],
                 timeout=180,
+            )
+            wait_for_llmisvc_backend_ready(
+                model_name,
+                case["tenant_ns"],
+                case["gateway_name"],
+                GATEWAY_NAMESPACE,
+                timeout=MODEL_BACKEND_READY_TIMEOUT,
             )
 
             _create_maas_model_ref_with_tenant(model_name, case["tenant_ns"], model_name)

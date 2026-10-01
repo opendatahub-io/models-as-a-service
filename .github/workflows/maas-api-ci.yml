@@ -28,7 +28,7 @@ jobs:
         id: golangci-version
         run: |
           VERSION=$(grep '^GOLANGCI_LINT_VERSION' tools.mk | cut -d'=' -f2 | tr -d ' ?')
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
         with:

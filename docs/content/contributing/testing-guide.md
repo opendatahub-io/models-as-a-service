@@ -337,18 +337,7 @@ func TestMyReconciler_Succeeds(t *testing.T) {
 
 5. **Add test resources if needed** — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under `test/e2e/fixtures/` and include it in the base `kustomization.yaml`.
 
-6. **Register new modules in CI** — `prow_run_smoke_test.sh` runs an **explicit file list**. If you create a new test module, add it to the `e2e_test_files` array in `run_e2e_tests()`:
-
-    ```bash
-    # In test/e2e/scripts/prow_run_smoke_test.sh, inside run_e2e_tests()
-    local -a e2e_test_files=(
-        ...
-        "$test_dir/tests/test_my_new_feature.py"  # ← add here
-    )
-    ```
-
-    !!! warning
-        `run-tests-quick.sh` auto-discovers all files under `tests/`, but `prow_run_smoke_test.sh` does **not**. Your new module will not run in Konflux CI unless you add it to the `e2e_test_files` array.
+6. **Use pytest discovery for CI** — `run_e2e_tests.sh` collects every `test_*.py` module under `test/e2e/tests/`. New modules do not need a separate CI registration step. Give the module an appropriate `xdist_group` marker and mark cluster-wide mutations as `serial`.
 
 7. **Use skip markers for optional features** — if your test depends on optional infrastructure (e.g., external OIDC, IPP ExternalModel CRD), gate it with `pytest.mark.skipif` so the same module runs cleanly in all environments.
 
@@ -381,6 +370,18 @@ If your change affects how MaaS integrates with the ODH operator or other ODH co
 | End-to-end model serving through the full ODH stack | `opendatahub-tests` repo |
 | Bug fix with regression test | In-repo (unit or E2E depending on scope) |
 
+## Test Ownership Across the AI Gateway Stack (AIGO / AIGC / MaaS)
+
+AI Gateway now spans three repos: [ai-gateway-operator](https://github.com/opendatahub-io/ai-gateway-operator) (AIGO), [ai-gateway-controller](https://github.com/opendatahub-io/ai-gateway-controller) (AIGC), and this repo (MaaS). Where a test belongs depends on what it needs to observe, not which repo you happen to be changing:
+
+| Repo | Owns | What it tests | Test suite |
+|------|------|----------------|------------|
+| **AIGO** | Component setup & dependency management | `AIGateway` CR reconciles to `Ready`; sibling controller Deployments (`maas-controller`, `ai-gateway-controller`, `batch-gateway-operator`) become `Available`; aggregate status (`ModelsAsAServiceReady`, etc.) rolls up correctly. Never the request path. | `test/e2e/*_test.go` (Go — deploy prereqs, create CR, assert status) |
+| **AIGC** | Deploying the Praxis-backed stack + AIGC's own control-plane logic | Its own reconciliation logic (`pkg/tenant`, `pkg/render`, `pkg/controller` for ExternalModel/ExternalProvider) via real fixtures. For MaaS-level/request-path behavior, AIGC does **not** write new test content — it fetches and re-runs **this repo's own pytest suite** against its Praxis-backed deployment, pinned via `test/maas-e2e.lock`, proving the same behavior holds under Praxis as under IPP. | `test/kind-env`, `test/openshift-env` (real fixtures) + a vendored copy of `test/e2e/tests/` from this repo, fetched at a pinned commit |
+| **MaaS** (this repo) | The single source of truth for MaaS-level resource/request behavior | Subscription enforcement, auth policy, rate limiting, API-key lifecycle, and anything visible at the MaaS API/Gateway boundary — including OpenAI resource-API routing and identity-header propagation. Written once here, run twice: in-repo against IPP, and via AIGC's vendored fetch against Praxis. | `test/e2e/tests/*.py` (pytest) |
+
+**The upstream-first rule:** if MaaS-level behavior has a coverage gap that's exposed while working in AIGC or AIGO, add the test to **this repo's** `test/e2e/tests/` first (skip-gated with `pytest.mark.skipif` if the behavior is genuinely Praxis-only, mirroring the existing `EXTERNAL_OIDC` skip pattern — see [Group Assignment Rules](#group-assignment-rules)), then have the downstream repo bump its pin to pick it up. Don't accept a parallel Go/mock test in AIGO, and don't let a bespoke copy accumulate in AIGC. [`ai-gateway-controller#37`](https://github.com/opendatahub-io/ai-gateway-controller/pull/37) is a worked example of this lifecycle: a gap was fixed upstream in MaaS ([#1508](https://github.com/opendatahub-io/models-as-a-service/pull/1508)); once it landed, AIGC removed its own side-workarounds and re-pinned `test/maas-e2e.lock`.
+
 ## Checklist: Adding a New Test
 
 - [ ] **Unit test**: Add `*_test.go` alongside your source in `maas-api/` or `maas-controller/`; run `make test`
@@ -388,7 +389,7 @@ If your change affects how MaaS integrates with the ODH operator or other ODH co
 - [ ] **xdist group**: Ensure the test file has a `pytestmark = pytest.mark.xdist_group("group_name")` marker (see [group assignment rules](#group-assignment-rules))
 - [ ] **Serial marker**: Add `@pytest.mark.serial` if the test mutates shared fixtures or scales operators
 - [ ] **Test fixtures**: If new CRs are needed, add a kustomize overlay in `test/e2e/fixtures/`
-- [ ] **CI registration**: Add new E2E modules to the `e2e_test_files` array in `prow_run_smoke_test.sh`
+- [ ] **Pytest discovery**: Confirm the new module follows the `test_*.py` naming convention and is collected with `pytest tests/ --collect-only -q`
 - [ ] **Skip markers**: Use `pytest.mark.skipif` for tests requiring optional infrastructure
 - [ ] **Local validation**: Run `make test` and/or `./test/e2e/run-tests-quick.sh` before pushing
 - [ ] **Integration tests**: If your change affects ODH operator integration, update tests in [opendatahub-tests](https://github.com/opendatahub-io/opendatahub-tests)

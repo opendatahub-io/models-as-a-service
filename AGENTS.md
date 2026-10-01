@@ -133,6 +133,7 @@ If multiple rules apply, use the **highest** justified rating and explain the ma
 ## Testing conventions
 
 - Go tests use `testing` + `gomega` or `testify` — match the style of the package you're editing.
+- Behaviour that needs a real API server (defaulting, update strategies, server-side apply) is covered by Ginkgo specs on envtest: `maas-controller/pkg/testing` starts it, a `fixture` package next to the specs builds inputs, and `make test` downloads the binaries (plain `go test` skips these specs).
 - E2E tests are pytest under `test/e2e/tests/`.
 - New functionality must include tests.
 

@@ -26,6 +26,7 @@ from test_helper import (
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
+    SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
@@ -47,6 +48,8 @@ LABEL_TENANT_NAMESPACE = "maas.opendatahub.io/tenant-namespace"
 LABEL_TENANT_INSTANCE = "maas.opendatahub.io/tenant-instance"
 ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
+ANNOTATION_PAYLOAD_PROCESSING_TYPE = "maas.opendatahub.io/payload-processing-type"
+PAYLOAD_PROCESSING_TYPE_PRAXIS = "praxis"
 
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 
@@ -733,25 +736,74 @@ def wait_for_llmisvc_backend_ready(
             condition_type="Ready",
             timeout=timeout,
         )
+        wait_for_llmisvc_route_ready(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            timeout=timeout,
+        )
+        wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
+        return llmisvc
     except AssertionError as exc:
-        deploy = get_json_or_none("deployment", deploy_name, namespace)
-        deploy_status = (deploy or {}).get("status") if deploy is not None else None
-        raise AssertionError(
-            f"{exc}\n"
-            f"Hint: LLMIS Ready=False often means {deploy_name} is still unavailable "
-            f"(MinimumReplicasUnavailable / image pull / probe). "
-            f"deployment/{deploy_name} status: {deploy_status}"
-        ) from None
+        diagnostics = _llmisvc_readiness_diagnostics(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            deploy_name,
+        )
+        raise AssertionError(f"{exc}\nBackend readiness snapshot: {diagnostics}") from None
 
-    wait_for_llmisvc_route_ready(
-        name,
-        namespace,
-        gateway_name,
-        gateway_namespace,
-        timeout=timeout,
-    )
-    wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
-    return llmisvc
+
+def _llmisvc_readiness_diagnostics(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str,
+    deployment_name: str,
+) -> str:
+    """Capture route, Gateway, namespace, and workload state for readiness failures."""
+
+    def _get(kind: str, resource_name: str, resource_namespace: Optional[str]) -> Optional[dict]:
+        try:
+            return get_json_or_none(kind, resource_name, resource_namespace)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+            return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+    llmisvc = _get("llminferenceservice", name, namespace) or {}
+    route = _get("httproute", f"{name}-kserve-route", namespace) or {}
+    gateway = _get("gateway", gateway_name, gateway_namespace) or {}
+    tenant_namespace = _get("namespace", namespace, None) or {}
+    deployment = _get("deployment", deployment_name, namespace) or {}
+
+    llmisvc_status = llmisvc.get("status") or {}
+    route_status = route.get("status") or {}
+    gateway_status = gateway.get("status") or {}
+    snapshot = {
+        "llminferenceservice": {
+            "conditions": llmisvc_status.get("conditions"),
+            "router": llmisvc_status.get("router"),
+            "workloads": llmisvc_status.get("workloads"),
+            "diagnosticError": llmisvc.get("diagnosticError"),
+        },
+        "httpRoute": {
+            "parentRefs": (route.get("spec") or {}).get("parentRefs"),
+            "parents": route_status.get("parents"),
+            "diagnosticError": route.get("diagnosticError"),
+        },
+        "gateway": {
+            "listeners": (gateway.get("spec") or {}).get("listeners"),
+            "conditions": gateway_status.get("conditions"),
+            "listenerStatuses": gateway_status.get("listeners"),
+            "diagnosticError": gateway.get("diagnosticError"),
+        },
+        "namespaceLabels": (tenant_namespace.get("metadata") or {}).get("labels"),
+        "namespaceDiagnosticError": tenant_namespace.get("diagnosticError"),
+        "deploymentStatus": deployment.get("status"),
+        "deploymentDiagnosticError": deployment.get("diagnosticError"),
+    }
+    return json.dumps(snapshot, sort_keys=True, default=str)
 
 
 def wait_for_llmisvc_route_ready(
@@ -817,6 +869,51 @@ def apply_gateway_route_fixture(gateway_name: str, *, fixture_label: str) -> Non
     wait_for_route_admitted(route_name)
 
 
+def payload_processing_type_from_env() -> Optional[str]:
+    value = os.environ.get("E2E_PAYLOAD_PROCESSING_TYPE", "").strip()
+    if not value:
+        return None
+    if value != PAYLOAD_PROCESSING_TYPE_PRAXIS:
+        raise RuntimeError(
+            f"Unsupported E2E_PAYLOAD_PROCESSING_TYPE={value!r}; "
+            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r}"
+        )
+    return value
+
+
+def ensure_payload_processing_type_on_tenant_config(tenant_namespace: str) -> None:
+    """Patch MaasTenantConfig when nightly (or local) opts all tenants into praxis."""
+    payload_type = payload_processing_type_from_env()
+    if not payload_type:
+        return
+    current = _oc_run(
+        [
+            "get",
+            TENANT_CONFIG_KIND,
+            TENANT_CR_NAME,
+            "-n",
+            tenant_namespace,
+            "-o",
+            f"jsonpath={{.metadata.annotations['{ANNOTATION_PAYLOAD_PROCESSING_TYPE}']}}",
+        ],
+        timeout=60,
+    )
+    if current.returncode == 0 and (current.stdout or "").strip() == payload_type:
+        return
+    patch_body = json.dumps(
+        {"metadata": {"annotations": {ANNOTATION_PAYLOAD_PROCESSING_TYPE: payload_type}}}
+    )
+    result = _oc_run(
+        ["patch", TENANT_CONFIG_KIND, TENANT_CR_NAME, "-n", tenant_namespace, "--type=merge", "-p", patch_body],
+        timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"Failed to set {ANNOTATION_PAYLOAD_PROCESSING_TYPE}={payload_type} on "
+            f"{TENANT_CR_NAME}/{tenant_namespace}: {(result.stderr or result.stdout or '').strip()}"
+        )
+
+
 def apply_aitenant(case: dict[str, str]) -> None:
     spec: dict[str, Any] = {
         "gateway": {"name": case["gateway_name"]},
@@ -825,11 +922,16 @@ def apply_aitenant(case: dict[str, str]) -> None:
     if oidc:
         spec["oidc"] = oidc
 
+    metadata: dict[str, Any] = {"name": case["tenant_label_name"], "namespace": AITENANT_NAMESPACE}
+    payload_type = payload_processing_type_from_env()
+    if payload_type:
+        metadata["annotations"] = {ANNOTATION_PAYLOAD_PROCESSING_TYPE: payload_type}
+
     _apply(
         {
             "apiVersion": "maas.opendatahub.io/v1alpha1",
             "kind": "AITenant",
-            "metadata": {"name": case["tenant_label_name"], "namespace": AITENANT_NAMESPACE},
+            "metadata": metadata,
             "spec": spec,
         }
     )
@@ -874,6 +976,7 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),
     )
+    ensure_payload_processing_type_on_tenant_config(case["tenant_ns"])
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(
@@ -977,7 +1080,7 @@ def provision_tenant_model(
     tenant_namespace: str,
     gateway_name: str,
     *,
-    ready_timeout: int = 180,
+    ready_timeout: int = MODEL_BACKEND_READY_TIMEOUT,
 ) -> None:
     """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
 
@@ -1013,7 +1116,7 @@ def make_tenant_model_accessible(
     token_limit: int = 100,
     window: str = "1m",
     priority: Optional[int] = None,
-    trlp_timeout: int = 120,
+    trlp_timeout: int = SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     require_trlp_ready: bool = True,
     gateway_name: str | None = None,
     gateway_namespace: str = GATEWAY_NAMESPACE,

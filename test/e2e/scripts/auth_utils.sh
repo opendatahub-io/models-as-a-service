@@ -116,7 +116,7 @@ MAAS_API_DEPLOYMENT_NAMESPACE="${MAAS_API_DEPLOYMENT_NAMESPACE:-$(_auth_debug_re
 ARTIFACTS_DIR="${ARTIFACTS_DIR:-${ARTIFACT_DIR:-${ARTIFACTS:-${LOG_DIR:-$PROJECT_ROOT/test/e2e/reports}}}}"
 
 # -----------------------------------------------------------------------------
-# Redact token-like values from log output (JWT, Bearer tokens, token fields,
+# Redact token-like values from log output (JWT, MaaS API keys, Bearer tokens, token fields,
 # and common secret environment variable values in YAML/JSON)
 # -----------------------------------------------------------------------------
 redact_tokens() {
@@ -124,7 +124,8 @@ redact_tokens() {
     -e 's/eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+/****REDACTED_JWT****/g' \
     -e 's/"token":"[^"]*"/"token":"****"/g' \
     -e 's/"token": "[^"]*"/"token": "****"/g' \
-    -e 's/(Bearer )[^[:space:]]+/\1****/g' \
+    -e 's/sk-oai-[A-Za-z0-9_-]+/sk-oai-****/g' \
+    -e 's/(Bearer )[^[:space:]",\\]+/\1****/g' \
     -e 's/("spec":\s*\{[^}]*"token":\s*)"[^"]*"/\1"****"/g' \
     -e 's/token=[A-Za-z0-9_-]+\.?[A-Za-z0-9_-]*\.?[A-Za-z0-9_-]*/token=****/g' \
     -e 's/(name:\s*(HF_TOKEN|HUGGING_FACE_HUB_TOKEN|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|AZURE_CLIENT_SECRET|API_KEY|SECRET_KEY|PASSWORD|CREDENTIALS)[[:space:]]*$)/\1/g' \
@@ -345,9 +346,29 @@ collect_namespace_pod_logs() {
   local outdir="${2:-$ARTIFACTS_DIR/pod-logs}"
   mkdir -p "$outdir"
   echo "Collecting pod logs from namespace $ns to $outdir"
+  local pod container pods_json log_tail
+  # A 500-line tail covers only minutes of these controllers' logs, and the
+  # serial pass replaces their pods, so keep all of it for failure timelines.
+  local full_log_pods='^(kuadrant-operator-controller-manager|maas-controller)-[a-z0-9]+-[a-z0-9]{5}$'
   for pod in $(kubectl get pods -n "$ns" -o jsonpath='{.items[*].metadata.name}' 2>/dev/null); do
-    kubectl logs -n "$ns" "$pod" --all-containers --tail=500 2>/dev/null | redact_tokens > "${outdir}/${pod}.log" || true
+    log_tail=500; [[ "$pod" =~ $full_log_pods ]] && log_tail=-1
+    kubectl logs -n "$ns" "$pod" --all-containers --tail="$log_tail" 2>/dev/null | redact_tokens > "${outdir}/${pod}.log" || true
   done
+  # Restarts and their cause (e.g. OOMKilled) live only in pod status, and the
+  # crashed container's logs only behind --previous.
+  pods_json=$(kubectl get pods -n "$ns" -o json 2>/dev/null || echo '{"items":[]}')
+  jq -r '.items[] | .metadata.name as $pod | .status.containerStatuses[]?
+    | [$pod, .name, "ready=\(.ready)", "state=\(.state | keys | first // "-")",
+       "restarts=\(.restartCount)",
+       "lastState=\(.lastState.terminated.reason // "-")/\(.lastState.terminated.exitCode // "-")",
+       "finishedAt=\(.lastState.terminated.finishedAt // "-")"]
+    | @tsv' <<<"$pods_json" > "${outdir}/pods.txt" 2>/dev/null || true
+  while read -r pod container; do
+    log_tail=500; [[ "$pod" =~ $full_log_pods ]] && log_tail=-1
+    kubectl logs -n "$ns" "$pod" -c "$container" --previous --tail="$log_tail" 2>/dev/null \
+      | redact_tokens > "${outdir}/${pod}.${container}.previous.log" || true
+  done < <(jq -r '.items[] | .metadata.name as $pod | .status.containerStatuses[]?
+    | select(.restartCount > 0) | "\($pod) \(.name)"' <<<"$pods_json" 2>/dev/null || true)
   local count
   count=$(ls -1 "$outdir"/*.log 2>/dev/null | wc -l || echo 0)
   echo "  Saved $count pod log file(s) to $outdir"

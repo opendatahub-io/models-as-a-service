@@ -162,8 +162,56 @@ def embedding_path_governance(_worker_embedding_context):
         )
 
 
+def _post_embedding_with_cluster_token():
+    """POST path-based /v1/embeddings using the cluster admin token (no API key)."""
+    oc_token = _get_cluster_token()
+    url = f"{_gateway_url()}{EMBEDDING_MODEL_PATH}/v1/embeddings"
+    headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
+    return requests.post(
+        url,
+        headers=headers,
+        json={"model": EMBEDDING_MODEL_NAME, "input": "Hello world"},
+        timeout=TIMEOUT,
+        verify=TLS_VERIFY,
+    )
+
+
+def _wait_for_embedding_default_deny(timeout=60, poll_interval=2):
+    """Poll until embedding inference is denied without governance CRs."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = _post_embedding_with_cluster_token()
+        if last.status_code == 403:
+            return last
+        time.sleep(poll_interval)
+    assert last is not None
+    assert last.status_code == 403, (
+        f"Expected 403 without auth/subscription within {timeout}s, "
+        f"got {last.status_code}: {last.text[:500]}"
+    )
+    return last
+
+
+class TestEmbeddingDefaultDeny:
+    """Default-deny must run before routing/governance tests on the same model ref."""
+
+    pytestmark = pytest.mark.serial
+
+    def test_embedding_default_deny_403(self):
+        """Embedding model with no auth policy or subscription gets 403."""
+        model = _get_cr("maasmodelref", EMBEDDING_MODEL_REF, namespace=MODEL_NAMESPACE)
+        if not model:
+            pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
+
+        r = _wait_for_embedding_default_deny()
+        log.info(f"[embedding-deny] No auth/subscription -> {r.status_code}")
+
+
 class TestEmbeddingPathRouting:
     """Path-based and BBR embedding inference (read-only, uses existing fixtures)."""
+
+    pytestmark = pytest.mark.serial
 
     def test_embedding_path_based_200(self, embedding_path_governance):
         """POST /{ns}/{model}/v1/embeddings returns valid embedding response."""
@@ -207,29 +255,9 @@ class TestEmbeddingPathRouting:
 
 
 class TestEmbeddingGovernance:
-    """Embedding TRLP enforcement and default-deny tests.
-
-    Uses the dedicated e2e-embedding-simulated fixture for isolation.
-    """
+    """Embedding TRLP enforcement and governed-access tests."""
 
     pytestmark = pytest.mark.serial
-
-    def test_embedding_default_deny_403(self):
-        """Embedding model with no auth policy or subscription gets 403."""
-        model = _get_cr("maasmodelref", EMBEDDING_MODEL_REF, namespace=MODEL_NAMESPACE)
-        if not model:
-            pytest.skip(f"MaaSModelRef {EMBEDDING_MODEL_REF} not deployed")
-
-        oc_token = _get_cluster_token()
-        url = f"{_gateway_url()}{EMBEDDING_MODEL_PATH}/v1/embeddings"
-        headers = {"Authorization": f"Bearer {oc_token}", "Content-Type": "application/json"}
-        r = requests.post(
-            url, headers=headers,
-            json={"model": EMBEDDING_MODEL_NAME, "input": "Hello world"},
-            timeout=TIMEOUT, verify=TLS_VERIFY,
-        )
-        log.info(f"[embedding-deny] No auth/subscription -> {r.status_code}")
-        assert r.status_code == 403, f"Expected 403, got {r.status_code}: {r.text[:500]}"
 
     def test_embedding_trlp_429(self):
         """Embedding requests get 429 when token budget is exhausted."""
