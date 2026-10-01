@@ -48,6 +48,8 @@ Environment variables (all optional unless noted):
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
+  - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
+  - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
 """
 
 import base64
@@ -95,6 +97,11 @@ GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSIN
 # Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
 AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
 MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
+# Parallel group-test can backlog Kuadrant TRLP reconciliation; 180s flaked on worker tenants.
+SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
+    os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
+)
+SUBSCRIPTION_TRLP_STATUS_TIMEOUT = int(os.environ.get("E2E_SUBSCRIPTION_TRLP_TIMEOUT", "180"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -1573,7 +1580,7 @@ def _wait_for_subscription_inference_ready(
     *,
     namespace=None,
     model_namespace=MODEL_NAMESPACE,
-    timeout=180,
+    timeout=SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
 ):
     """Wait for model discovery plus direct and mirrored TRLP enforcement."""
     namespace = namespace or _ns()

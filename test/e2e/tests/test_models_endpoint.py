@@ -24,6 +24,7 @@ import uuid
 import pytest
 import requests
 
+from multitenancy_helpers import wait_for_llmisvc_backend_ready
 from test_helper import (
     DISTINCT_MODEL_2_ID,
     DISTINCT_MODEL_2_REF,
@@ -64,6 +65,7 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_subscription_discovery_ready,
+    _wait_for_subscription_inference_ready,
     _wait_for_subscription_trlp_status,
     _wait_for_model_ready,
     _wait_for_token_rate_limit_policy,
@@ -231,9 +233,12 @@ def _wait_for_central_models_in_subscription(
     *,
     timeout=90,
     poll_interval=5,
+    extra_headers=None,
 ):
     """Poll central /v1/models until at least one model is tied to subscription_name."""
     headers = {"Authorization": f"Bearer {api_key}"}
+    if extra_headers:
+        headers.update(extra_headers)
     deadline = time.time() + timeout
     last_status = None
     last_model_ids = []
@@ -810,25 +815,25 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            # Wait for subscription to reconcile before creating API key
-            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                MODEL_REF,
+                namespace=maas_ns,
+                model_namespace=MODEL_NAMESPACE,
+            )
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-dedup-test-key", subscription=subscription_name)
 
             _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns, require_enforced=False)
 
-            # Query /v1/models with our custom subscription
             log.info(f"Querying /v1/models with subscription: {subscription_name}")
-            r = _get_models_with_gateway_retry(
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "x-maas-subscription": subscription_name,
-                },
+            data, _in_subscription = _wait_for_central_models_in_subscription(
+                api_key,
+                subscription_name,
+                timeout=120,
+                extra_headers={"x-maas-subscription": subscription_name},
             )
-
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
             models = data.get("data") or []
 
             # Models should be a list
@@ -916,6 +921,13 @@ class TestModelsEndpoint:
                     "maas-default-gateway",
                     GATEWAY_NAMESPACE,
                     model_name=shared_served_id,
+                )
+                wait_for_llmisvc_backend_ready(
+                    ref,
+                    MODEL_NAMESPACE,
+                    "maas-default-gateway",
+                    GATEWAY_NAMESPACE,
+                    timeout=180,
                 )
                 _create_maas_model_ref(ref, MODEL_NAMESPACE, ref)
 

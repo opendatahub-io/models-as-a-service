@@ -26,6 +26,7 @@ from test_helper import (
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
+    SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
@@ -735,25 +736,74 @@ def wait_for_llmisvc_backend_ready(
             condition_type="Ready",
             timeout=timeout,
         )
+        wait_for_llmisvc_route_ready(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            timeout=timeout,
+        )
+        wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
+        return llmisvc
     except AssertionError as exc:
-        deploy = get_json_or_none("deployment", deploy_name, namespace)
-        deploy_status = (deploy or {}).get("status") if deploy is not None else None
-        raise AssertionError(
-            f"{exc}\n"
-            f"Hint: LLMIS Ready=False often means {deploy_name} is still unavailable "
-            f"(MinimumReplicasUnavailable / image pull / probe). "
-            f"deployment/{deploy_name} status: {deploy_status}"
-        ) from None
+        diagnostics = _llmisvc_readiness_diagnostics(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            deploy_name,
+        )
+        raise AssertionError(f"{exc}\nBackend readiness snapshot: {diagnostics}") from None
 
-    wait_for_llmisvc_route_ready(
-        name,
-        namespace,
-        gateway_name,
-        gateway_namespace,
-        timeout=timeout,
-    )
-    wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
-    return llmisvc
+
+def _llmisvc_readiness_diagnostics(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str,
+    deployment_name: str,
+) -> str:
+    """Capture route, Gateway, namespace, and workload state for readiness failures."""
+
+    def _get(kind: str, resource_name: str, resource_namespace: Optional[str]) -> Optional[dict]:
+        try:
+            return get_json_or_none(kind, resource_name, resource_namespace)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+            return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+    llmisvc = _get("llminferenceservice", name, namespace) or {}
+    route = _get("httproute", f"{name}-kserve-route", namespace) or {}
+    gateway = _get("gateway", gateway_name, gateway_namespace) or {}
+    tenant_namespace = _get("namespace", namespace, None) or {}
+    deployment = _get("deployment", deployment_name, namespace) or {}
+
+    llmisvc_status = llmisvc.get("status") or {}
+    route_status = route.get("status") or {}
+    gateway_status = gateway.get("status") or {}
+    snapshot = {
+        "llminferenceservice": {
+            "conditions": llmisvc_status.get("conditions"),
+            "router": llmisvc_status.get("router"),
+            "workloads": llmisvc_status.get("workloads"),
+            "diagnosticError": llmisvc.get("diagnosticError"),
+        },
+        "httpRoute": {
+            "parentRefs": (route.get("spec") or {}).get("parentRefs"),
+            "parents": route_status.get("parents"),
+            "diagnosticError": route.get("diagnosticError"),
+        },
+        "gateway": {
+            "listeners": (gateway.get("spec") or {}).get("listeners"),
+            "conditions": gateway_status.get("conditions"),
+            "listenerStatuses": gateway_status.get("listeners"),
+            "diagnosticError": gateway.get("diagnosticError"),
+        },
+        "namespaceLabels": (tenant_namespace.get("metadata") or {}).get("labels"),
+        "namespaceDiagnosticError": tenant_namespace.get("diagnosticError"),
+        "deploymentStatus": deployment.get("status"),
+        "deploymentDiagnosticError": deployment.get("diagnosticError"),
+    }
+    return json.dumps(snapshot, sort_keys=True, default=str)
 
 
 def wait_for_llmisvc_route_ready(
@@ -1030,7 +1080,7 @@ def provision_tenant_model(
     tenant_namespace: str,
     gateway_name: str,
     *,
-    ready_timeout: int = 180,
+    ready_timeout: int = MODEL_BACKEND_READY_TIMEOUT,
 ) -> None:
     """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
 
@@ -1066,7 +1116,7 @@ def make_tenant_model_accessible(
     token_limit: int = 100,
     window: str = "1m",
     priority: Optional[int] = None,
-    trlp_timeout: int = 120,
+    trlp_timeout: int = SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     require_trlp_ready: bool = True,
     gateway_name: str | None = None,
     gateway_namespace: str = GATEWAY_NAMESPACE,

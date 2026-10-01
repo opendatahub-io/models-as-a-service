@@ -506,8 +506,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// No finalizer needed — there are no AuthPolicies to clean up.
 	if reflect.DeepEqual(policy.Spec, maasv1alpha1.MaaSAuthPolicySpec{}) {
 		statusSnapshot := policy.Status.DeepCopy()
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
 	// Add finalizer if not present
@@ -526,16 +525,14 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
 	if err != nil {
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot, err)
 	}
 	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
 
 	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
 	if err != nil {
 		log.Error(err, "failed to fetch gateway info")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to fetch gateway info: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to fetch gateway info: %v", err), statusSnapshot, err)
 	}
 
 	// Reconcile the gateway-level AuthPolicy for this tenant's gateway.
@@ -555,22 +552,19 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			"gatewayName", gatewayName)
 		// Still mark the policy as Active since the model-level auth rules are aggregated correctly,
 		// even though we're not updating the gateway policy
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
 	}
 
 	legacyPolicyExists, err := r.hasLegacyModelAuthPolicy(ctx, policy.Namespace)
 	if err != nil {
 		log.Error(err, "failed to check for legacy model AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check upgrade cutover safety: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check upgrade cutover safety: %v", err), statusSnapshot, err)
 	}
 	if legacyPolicyExists {
 		targetReady, readyErr := r.targetMaaSAPIReady(ctx, tenantID)
 		if readyErr != nil {
 			log.Error(readyErr, "failed to check target maas-api readiness")
-			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check target maas-api readiness: %v", readyErr), statusSnapshot)
-			return ctrl.Result{}, readyErr
+			return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check target maas-api readiness: %v", readyErr), statusSnapshot, readyErr)
 		}
 		if !targetReady {
 			message := fmt.Sprintf(
@@ -579,23 +573,20 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				tenantreconcile.MaaSAPIServiceName(tenantID),
 			)
 			log.Info(message)
-			r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return r.reconcilePending(ctx, policy, message, statusSnapshot)
 		}
 	}
 
 	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot)
-		return ctrl.Result{}, reconcileErr
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot, reconcileErr)
 	}
 	if gwChanged || legacyPolicyExists || policy.Status.Phase != maasv1alpha1.PhaseActive {
 		gatewayPolicyReady, readinessMessage, readinessErr := r.gatewayAuthPolicyReady(ctx, gatewayNs, gatewayName)
 		if readinessErr != nil {
 			log.Error(readinessErr, "failed to check gateway AuthPolicy readiness")
-			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check gateway AuthPolicy readiness: %v", readinessErr), statusSnapshot)
-			return ctrl.Result{}, readinessErr
+			return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check gateway AuthPolicy readiness: %v", readinessErr), statusSnapshot, readinessErr)
 		}
 		if !gatewayPolicyReady {
 			message := fmt.Sprintf(
@@ -605,8 +596,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				readinessMessage,
 			)
 			log.Info(message)
-			r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return r.reconcilePending(ctx, policy, message, statusSnapshot)
 		}
 	}
 
@@ -614,8 +604,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if err != nil {
 		log.Error(err, "failed to reconcile model group AuthPolicies")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot, err)
 	}
 
 	// Update per-AuthPolicy status
@@ -661,8 +650,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Derive final phase based on model and AuthPolicy health
 	phase, message := r.deriveAuthPolicyPhase(policy, missingModels)
-	r.updateStatus(ctx, policy, phase, message, statusSnapshot)
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.updateStatus(ctx, policy, phase, message, statusSnapshot)
 }
 
 // findMissingModelRefs returns a list of model refs that don't exist or couldn't be fetched.
@@ -1905,7 +1893,35 @@ func getAuthPolicyReadyState(ap *unstructured.Unstructured) (ready bool, reason 
 	return false, maasv1alpha1.ReasonNotEnforced, enforcedMsg
 }
 
-func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) {
+// reconcileFailed records PhaseFailed and returns cause. A status write error is only logged:
+// cause already requeues the policy and is the more useful error to surface.
+func (r *MaaSAuthPolicyReconciler) reconcileFailed(
+	ctx context.Context,
+	log logr.Logger,
+	policy *maasv1alpha1.MaaSAuthPolicy,
+	message string,
+	statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus,
+	cause error,
+) (ctrl.Result, error) {
+	if statusErr := r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, message, statusSnapshot); statusErr != nil {
+		log.Error(statusErr, "failed to persist reconcile failure")
+	}
+	return ctrl.Result{}, cause
+}
+
+// reconcilePending records PhasePending and polls again after 10s. A status write error
+// replaces the poll so the write is retried through the error-driven requeue.
+func (r *MaaSAuthPolicyReconciler) reconcilePending(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) (ctrl.Result, error) {
+	if err := r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// updateStatus returns the status write error so Reconcile can hand it to controller-runtime.
+// The For() watch drops status-only events, so a failed write is only retried through that
+// error-driven requeue.
+func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) error {
 	policy.Status.Phase = phase
 
 	var status metav1.ConditionStatus
@@ -1937,13 +1953,13 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	})
 
 	if equality.Semantic.DeepEqual(*statusSnapshot, policy.Status) {
-		return
+		return nil
 	}
 
 	if err := r.Status().Update(ctx, policy); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
-		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
+		return fmt.Errorf("failed to update MaaSAuthPolicy status: %w", err)
 	}
+	return nil
 }
 
 // ValidateCacheTTLs validates that cache TTL configuration is valid.

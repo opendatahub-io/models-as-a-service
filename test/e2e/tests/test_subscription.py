@@ -1723,7 +1723,6 @@ class TestManagedAnnotation:
                     SIMULATOR_SUBSCRIPTION,
                     MODEL_REF,
                     model_namespace=MODEL_NAMESPACE,
-                    timeout=180,
                 )
 
 

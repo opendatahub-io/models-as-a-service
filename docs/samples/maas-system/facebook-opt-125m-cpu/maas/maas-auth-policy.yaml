@@ -2,10 +2,11 @@ apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSAuthPolicy
 metadata:
   name: facebook-opt-125m-cpu-access
-  namespace: opendatahub
+  namespace: models-as-a-service
 spec:
   modelRefs:
-    - facebook-opt-125m-cpu
+    - name: facebook-opt-125m-cpu
+      namespace: llm
   subjects:
     groups:
       - name: system:authenticated
