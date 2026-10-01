@@ -44,22 +44,24 @@ jobs:
 
           # Show summary
           if [ -f openapi-validation-report.json ]; then
-            echo "## OpenAPI Validation Summary" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "## OpenAPI Validation Summary" >> "$GITHUB_STEP_SUMMARY"
+            echo "" >> "$GITHUB_STEP_SUMMARY"
 
             ERROR_COUNT=$(jq '[.[] | select(.severity == 0)] | length' openapi-validation-report.json)
             WARN_COUNT=$(jq '[.[] | select(.severity == 1)] | length' openapi-validation-report.json)
             INFO_COUNT=$(jq '[.[] | select(.severity == 2)] | length' openapi-validation-report.json)
             HINT_COUNT=$(jq '[.[] | select(.severity == 3)] | length' openapi-validation-report.json)
 
-            echo "- ❌ Errors: $ERROR_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- ⚠️  Warnings: $WARN_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- ℹ️  Info: $INFO_COUNT" >> $GITHUB_STEP_SUMMARY
-            echo "- 💡 Hints: $HINT_COUNT" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "- ❌ Errors: $ERROR_COUNT"
+              echo "- ⚠️  Warnings: $WARN_COUNT"
+              echo "- ℹ️  Info: $INFO_COUNT"
+              echo "- 💡 Hints: $HINT_COUNT"
+            } >> "$GITHUB_STEP_SUMMARY"
 
             if [ "$ERROR_COUNT" -eq 0 ]; then
-              echo "" >> $GITHUB_STEP_SUMMARY
-              echo "✅ **No errors found!** Spec is valid." >> $GITHUB_STEP_SUMMARY
+              echo "" >> "$GITHUB_STEP_SUMMARY"
+              echo "✅ **No errors found!** Spec is valid." >> "$GITHUB_STEP_SUMMARY"
             fi
           fi
 
@@ -122,17 +124,21 @@ jobs:
           # "No breaking changes to report, but the specs are different" when only
           # non-breaking changes (e.g. new optional fields) are present. Both are safe.
           if [ -s breaking-changes.txt ] && ! grep -qE "^No changes detected$|^No breaking changes" breaking-changes.txt; then
-            echo "has_breaking_changes=true" >> $GITHUB_OUTPUT
-            echo "## ⚠️  Breaking Changes Detected" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
-            cat breaking-changes.txt >> $GITHUB_STEP_SUMMARY
-            echo '```' >> $GITHUB_STEP_SUMMARY
+            echo "has_breaking_changes=true" >> "$GITHUB_OUTPUT"
+            {
+              echo "## ⚠️  Breaking Changes Detected"
+              echo ""
+              echo '```'
+              cat breaking-changes.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "has_breaking_changes=false" >> $GITHUB_OUTPUT
-            echo "## ✅ No Breaking Changes" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "This PR does not introduce any breaking API changes." >> $GITHUB_STEP_SUMMARY
+            echo "has_breaking_changes=false" >> "$GITHUB_OUTPUT"
+            {
+              echo "## ✅ No Breaking Changes"
+              echo ""
+              echo "This PR does not introduce any breaking API changes."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
       - name: Upload Breaking Changes Report
@@ -176,9 +182,9 @@ jobs:
           fi
 
           if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "maas-api/openapi3.yaml"; then
-            echo "changed=true" >> $GITHUB_OUTPUT
+            echo "changed=true" >> "$GITHUB_OUTPUT"
           else
-            echo "changed=false" >> $GITHUB_OUTPUT
+            echo "changed=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Verify Changelog Entry
@@ -196,16 +202,18 @@ jobs:
 
           # Check if there's an API changelog file
           if [ ! -f docs/content/release-notes/api-changelog.md ]; then
-            echo "⚠️  No API changelog found at docs/content/release-notes/api-changelog.md" >> $GITHUB_STEP_SUMMARY
-            echo "   Consider creating one to track API changes over time." >> $GITHUB_STEP_SUMMARY
+            echo "⚠️  No API changelog found at docs/content/release-notes/api-changelog.md" >> "$GITHUB_STEP_SUMMARY"
+            echo "   Consider creating one to track API changes over time." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
           # Check if changelog was updated in this PR
           if git diff --name-only "origin/$BASE_REF...HEAD" | grep -q "docs/content/release-notes/api-changelog.md"; then
-            echo "✅ API changelog updated" >> $GITHUB_STEP_SUMMARY
+            echo "✅ API changelog updated" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "⚠️  API spec changed but changelog not updated" >> $GITHUB_STEP_SUMMARY
-            echo "" >> $GITHUB_STEP_SUMMARY
-            echo "Consider adding an entry to docs/content/release-notes/api-changelog.md" >> $GITHUB_STEP_SUMMARY
+            {
+              echo "⚠️  API spec changed but changelog not updated"
+              echo ""
+              echo "Consider adding an entry to docs/content/release-notes/api-changelog.md"
+            } >> "$GITHUB_STEP_SUMMARY"
           fi

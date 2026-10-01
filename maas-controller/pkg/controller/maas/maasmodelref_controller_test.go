@@ -154,15 +154,16 @@ func defaultTestAITenant() *maasv1alpha1.AITenant {
 }
 
 // newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
-// with the field index and status subresource for MaaSModelRef. LLMInferenceService is
-// intentionally NOT a status subresource so that plain Update() can set its status.
+// with the field index and status subresources for MaaSModelRef and HTTPRoute.
+// LLMInferenceService is intentionally NOT a status subresource so that plain Update()
+// can set its status.
 // A default AITenant is included so auto-resolution from HTTPRoute gateway works.
 func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
 	allObjects := append([]client.Object{defaultTestAITenant()}, objects...)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(allObjects...).
-		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}, &gatewayapiv1.HTTPRoute{}).
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, tenantAssociationIndex, tenantAssociationIndexer).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
@@ -951,6 +952,249 @@ func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
 	requests := r.mapHTTPRouteToMaaSModelRefs(ctx, route)
 	if len(requests) != 0 {
 		t.Errorf("mapHTTPRouteToMaaSModelRefs() with List error returned %d requests, want 0", len(requests))
+	}
+}
+
+func TestHTTPRouteChangedForModelRef(t *testing.T) {
+	const (
+		istio    = gatewayapiv1.GatewayController("istio.io/gateway-controller")
+		kuadrant = gatewayapiv1.GatewayController("kuadrant.io/policy-controller")
+	)
+	accepted := string(gatewayapiv1.RouteConditionAccepted)
+	resolvedRefs := string(gatewayapiv1.RouteConditionResolvedRefs)
+	condition := func(condType string, status metav1.ConditionStatus) metav1.Condition {
+		return metav1.Condition{Type: condType, Status: status, ObservedGeneration: 1, LastTransitionTime: metav1.Unix(100, 0)}
+	}
+	parent := func(gateway string, controller gatewayapiv1.GatewayController, conditions ...metav1.Condition) gatewayapiv1.RouteParentStatus {
+		return gatewayapiv1.RouteParentStatus{
+			ParentRef:      gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(gateway), Namespace: new(gatewayapiv1.Namespace(testGatewayNamespace))},
+			ControllerName: controller,
+			Conditions:     conditions,
+		}
+	}
+
+	base := newLLMISvcRoute("llm", "llm-ns")
+	base.UID = "route-uid"
+	base.Generation = 1
+	base.Status.Parents = []gatewayapiv1.RouteParentStatus{
+		parent(testGatewayName, istio, condition(accepted, metav1.ConditionTrue), condition(resolvedRefs, metav1.ConditionTrue)),
+	}
+	changed := func(mutate func(*gatewayapiv1.HTTPRoute)) *gatewayapiv1.HTTPRoute {
+		r := base.DeepCopy()
+		mutate(r)
+		return r
+	}
+	notAccepted := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse })
+	twoListeners := changed(func(r *gatewayapiv1.HTTPRoute) {
+		second := parent(testGatewayName, istio, condition(accepted, metav1.ConditionTrue))
+		second.ParentRef.SectionName = new(gatewayapiv1.SectionName("https"))
+		r.Status.Parents = append(r.Status.Parents, second)
+	})
+	oneListenerRejected := twoListeners.DeepCopy()
+	oneListenerRejected.Status.Parents[1].Conditions[0].Status = metav1.ConditionFalse
+	sameNamespaceGateway := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].ParentRef.Namespace = nil })
+
+	p := httpRouteChangedForModelRef()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name     string
+		old, new *gatewayapiv1.HTTPRoute
+		want     bool
+	}{
+		{
+			name: "kuadrant policy-affected parent is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent(testGatewayName, kuadrant,
+					condition("kuadrant.io/AuthPolicyAffected", metav1.ConditionTrue),
+					condition("kuadrant.io/TokenRateLimitPolicyAffected", metav1.ConditionTrue)))
+			}),
+			want: false,
+		},
+		{
+			name: "ResolvedRefs flip is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[1].Status = metav1.ConditionFalse }),
+			want: false,
+		},
+		{
+			name: "lastTransitionTime-only rewrite is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents[0].Conditions[0].LastTransitionTime = metav1.Unix(200, 0)
+			}),
+			want: false,
+		},
+		{
+			name: "observedGeneration-only rewrite is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].ObservedGeneration = 2 }),
+			want: false,
+		},
+		{
+			name: "parent without Accepted=True is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionFalse)))
+			}),
+			want: false,
+		},
+		{
+			name: "annotation change is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Annotations = map[string]string{"example.com/note": "x"} }),
+			want: false,
+		},
+		{
+			name: "one of two listeners on the accepting gateway rejecting is dropped",
+			old:  twoListeners,
+			new:  oneListenerRejected,
+			want: false,
+		},
+		{
+			name: "omitted parentRef namespace defaults to the route's",
+			old:  sameNamespaceGateway,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents[0].ParentRef.Namespace = new(gatewayapiv1.Namespace(r.Namespace))
+			}),
+			want: false,
+		},
+		{
+			name: "Accepted True to False passes",
+			old:  base,
+			new:  notAccepted,
+			want: true,
+		},
+		{
+			name: "Accepted False to True passes",
+			old:  notAccepted,
+			new:  base,
+			want: true,
+		},
+		{
+			name: "accepted parent added passes",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionTrue)))
+			}),
+			want: true,
+		},
+		{
+			name: "accepted parent removed passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents = nil }),
+			want: true,
+		},
+		{
+			name: "acceptance moving to another gateway passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].ParentRef.Name = "other-gateway" }),
+			want: true,
+		},
+		{
+			name: "route recreated under the same name passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.UID = "recreated-uid" }),
+			want: true,
+		},
+		{
+			name: "label change passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Labels["app.kubernetes.io/name"] = "other" }),
+			want: true,
+		},
+		{
+			name: "spec change passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Generation = 2 }),
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Moving the watch to unstructured or metadata-only objects must not silently drop Accepted flips.
+	notRoute := &unstructured.Unstructured{}
+	if !routeAcceptedParentsChanged(event.UpdateEvent{ObjectOld: notRoute, ObjectNew: notRoute}) {
+		t.Error("non-HTTPRoute objects should pass")
+	}
+}
+
+func TestIPPExternalModelChangedForModelRef(t *testing.T) {
+	base := &unstructured.Unstructured{}
+	base.SetGroupVersionKind(inferenceExternalModelGVK)
+	base.SetName("gpt-4o")
+	base.SetNamespace("default")
+	base.SetGeneration(1)
+	changed := func(mutate func(*unstructured.Unstructured)) *unstructured.Unstructured {
+		em := base.DeepCopy()
+		mutate(em)
+		return em
+	}
+	setStatus := func(field, value string) func(*unstructured.Unstructured) {
+		return func(em *unstructured.Unstructured) {
+			if err := unstructured.SetNestedField(em.Object, value, "status", field); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+		}
+	}
+	withRouteName := changed(setStatus("httpRouteName", "gpt-4o"))
+
+	p := ippExternalModelChangedForModelRef()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name     string
+		old, new client.Object
+		want     bool
+	}{
+		{name: "unrelated status write is dropped", old: base, new: changed(setStatus("phase", "Ready")), want: false},
+		{name: "status.httpRouteName recorded passes", old: base, new: withRouteName, want: true},
+		{name: "status.httpRouteName changed passes", old: withRouteName, new: changed(setStatus("httpRouteName", "other-route")), want: true},
+		{name: "spec change passes", old: base, new: changed(func(em *unstructured.Unstructured) { em.SetGeneration(2) }), want: true},
+		{name: "non-unstructured objects pass", old: newHTTPRoute("r", "default"), new: newHTTPRoute("r", "default"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMapIPPExternalModelToMaaSModelRefs(t *testing.T) {
+	em := &unstructured.Unstructured{}
+	em.SetGroupVersionKind(inferenceExternalModelGVK)
+	em.SetName("gpt-4o")
+	em.SetNamespace("default")
+	r, _ := newTestReconciler(
+		newMaaSModelRef("external", "default", "ExternalModel", "gpt-4o"),
+		newMaaSModelRef("llmisvc-same-name", "default", "LLMInferenceService", "gpt-4o"),
+		newMaaSModelRef("external-other-ns", "other-ns", "ExternalModel", "gpt-4o"),
+		newMaaSModelRef("external-other-name", "default", "ExternalModel", "claude"),
+	)
+
+	got := r.mapIPPExternalModelToMaaSModelRefs(t.Context(), em)
+	want := []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "external", Namespace: "default"}}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("mapIPPExternalModelToMaaSModelRefs() = %v, want %v", got, want)
 	}
 }
 

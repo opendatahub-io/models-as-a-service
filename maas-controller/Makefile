@@ -67,10 +67,16 @@ $(BUILD_DIR):
 run: binary ##	build and run manager locally
 	"$(BUILD_DIR)/$(BINARY_NAME)"
 
+.PHONY: setup-envtest
+setup-envtest: $(SETUP_ENVTEST) ##	download the envtest binaries for ENVTEST_K8S_VERSION
+	"$(SETUP_ENVTEST)" use "$(ENVTEST_K8S_VERSION)" --bin-dir "$(LOCALBIN)"
+
+# setup-envtest stops the build when the binaries cannot be downloaded; the lookup
+# below only reads what it installed (-i), so it cannot fail on the network.
 TEST_FLAGS ?= -race -coverprofile=coverage.out
 .PHONY: test
-test: tidy ##	run tests with coverage
-	go test $(TEST_FLAGS) ./...
+test: tidy setup-envtest ##	run tests with coverage, including envtest-backed tests
+	KUBEBUILDER_ASSETS="$$("$(SETUP_ENVTEST)" use "$(ENVTEST_K8S_VERSION)" --bin-dir "$(LOCALBIN)" -i -p path)" go test $(TEST_FLAGS) ./...
 	@go tool cover -html=coverage.out -o coverage.html
 	@echo "Test coverage report generated: $(abspath coverage.html)"
 
