@@ -39,6 +39,8 @@ from test_helper import (
     kubectl_curl,
 )
 
+AUTH_REASON_HEADER = "x-ext-auth-reason"
+
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
 TENANT_CONFIG_KIND = "maastenantconfig"
@@ -147,7 +149,26 @@ def redact_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
 
 
 def response_summary(response: requests.Response, *, max_body: int = 300) -> str:
-    return f"status={response.status_code} body={redact_sensitive(response.text, max_length=max_body)}"
+    reason = response.headers.get(AUTH_REASON_HEADER)
+    return (
+        f"status={response.status_code} {AUTH_REASON_HEADER}={reason!r} "
+        f"body={redact_sensitive(response.text, max_length=max_body)}"
+    )
+
+
+def is_gateway_auth_denial(response: requests.Response) -> bool:
+    """True when a 401/403 is the gateway AuthPolicy's verdict, not a reload gap.
+
+    Authorino's denials carry ``x-ext-auth-reason`` and the wasm-shim forwards it
+    even when the body is empty. Unknown API keys get exactly that: maas-api
+    validation returns no groups, the ``subscription-info`` metadata is never
+    fetched, and the policy's unauthorized body expression renders empty. The
+    header's value varies across Authorino versions, so only its presence counts.
+    Empty 401/403 without it stay transient (``_is_transient_gateway_response``).
+    """
+    if response.status_code not in (401, 403):
+        return False
+    return AUTH_REASON_HEADER in response.headers or not _is_transient_gateway_response(response)
 
 
 def _apply(obj: dict) -> None:
@@ -355,12 +376,11 @@ def wait_for_route_auth_enforced(
 
     ``model_url`` is the model's OpenAI base URL (ending in ``/v1``). AuthPolicy
     Enforced does not cover a route Kuadrant has not programmed yet: the
-    wasm-shim passes unmatched routes through, so any key gets a 200, and an
-    empty 401/403 (``_is_transient_gateway_response``) is not a verdict either.
-    The real rejection of an unknown key is the gateway AuthPolicy's auth-valid
-    rule: a 403 with a body. Tenant gateways' istio-proxy also crashes once on
-    the first Kuadrant wasm load, so rejections must hold across ``stable_for``
-    seconds, not one probe.
+    wasm-shim passes unmatched routes through, so any key gets a 200. The real
+    rejection of an unknown key is the gateway AuthPolicy's auth-valid rule,
+    recognised by ``is_gateway_auth_denial``. Tenant gateways' istio-proxy also
+    crashes once on the first Kuadrant wasm load, so rejections must hold across
+    ``stable_for`` seconds, not one probe.
     """
     url = f"{model_url}/chat/completions"
     headers = bearer_headers(f"sk-oai-probe-{uuid.uuid4().hex[:16]}")
@@ -374,7 +394,7 @@ def wait_for_route_auth_enforced(
         except requests.RequestException:
             rejected_since = None
             raise
-        if response.status_code not in (401, 403) or _is_transient_gateway_response(response):
+        if not is_gateway_auth_denial(response):
             rejected_since = None
             raise AssertionError(response_summary(response))
         now = time.time()

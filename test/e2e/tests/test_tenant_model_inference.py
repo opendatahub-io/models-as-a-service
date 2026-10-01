@@ -33,12 +33,14 @@ from multitenancy_helpers import (
     delete_maas_auth_policy,
     delete_maas_subscription,
     get_json_or_none,
+    is_gateway_auth_denial,
     make_tenant_model_accessible,
     new_named_tenant_case,
     per_tenant_gateway_policy_names,
     provision_tenant_model,
     redact_sensitive,
     require_aitenant_crd,
+    response_summary,
     wait_for_route_auth_enforced,
 )
 
@@ -47,7 +49,6 @@ from test_helper import (
     _create_llmis,
     _delete_cr,
     _get_cluster_token,
-    _is_transient_gateway_response,
     _poll_status,
     _request_with_gateway_retry,
     chat,
@@ -269,7 +270,7 @@ class TestTenantModelInference:
         )
 
         # Try to access tenant B's model through tenant B's gateway using tenant A's API key.
-        # Transient replies (empty 401/403) are retried; any other status is B's verdict.
+        # Empty 401/403 are retried; the last reply is checked as B's verdict.
         with _tenant_gateway_auth_policy(case_b["gateway_name"]):
             response = _request_with_gateway_retry(
                 requests.post,
@@ -279,10 +280,10 @@ class TestTenantModelInference:
             )
 
         # Should be rejected (401 Unauthorized or 403 Forbidden) by B's auth
-        assert response.status_code in (401, 403) and not _is_transient_gateway_response(response), (
+        assert is_gateway_auth_denial(response), (
             f"Expected B's auth to reject tenant A's key with 401/403, got {response.status_code}. "
             f"Tenant A should not access tenant B's model via B's gateway. "
-            f"Response: {redact_sensitive(response.text[:500])}"
+            f"Response: {response_summary(response, max_body=500)}"
         )
 
 
