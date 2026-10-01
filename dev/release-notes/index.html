@@ -604,6 +604,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#unreleased-rhoai-36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased (RHOAI 3.6)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unreleased (RHOAI 3.6)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Fixes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#v021" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -638,7 +677,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#key-fixes" class="md-nav__link">
+  <a href="#key-fixes_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Key Fixes
@@ -979,6 +1018,34 @@
     
   
     Upgrade to 3.5
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../migration/upgrade-to-3.6/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.6
   
 
     
@@ -3446,6 +3513,45 @@
 </li>
       
         <li class="md-nav__item">
+  <a href="#unreleased-rhoai-36" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Unreleased (RHOAI 3.6)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Unreleased (RHOAI 3.6)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#upgrade-notes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Upgrade notes
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#key-fixes" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Fixes
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
   <a href="#v021" class="md-nav__link">
     <span class="md-ellipsis">
       
@@ -3480,7 +3586,7 @@
 </li>
         
           <li class="md-nav__item">
-  <a href="#key-fixes" class="md-nav__link">
+  <a href="#key-fixes_1" class="md-nav__link">
     <span class="md-ellipsis">
       
         Key Fixes
@@ -3720,6 +3826,13 @@
 </thead>
 <tbody>
 <tr>
+<td>3.6</td>
+<td>TBD</td>
+<td><code>v3.6</code></td>
+<td>Planned</td>
+<td>Short subscription rate-limit IDs in TRLP; see <a href="../migration/upgrade-to-3.6/">Upgrade Guide</a></td>
+</tr>
+<tr>
 <td>3.5</td>
 <td>v0.2.1</td>
 <td><code>v3.5</code></td>
@@ -3755,6 +3868,20 @@
 <li><strong>Downstream (RHOAI):</strong> <code>registry.redhat.io/rhoai/odh-maas-api-rhel9:&lt;tag&gt;</code>, <code>registry.redhat.io/rhoai/odh-maas-controller-rhel9:&lt;tag&gt;</code></li>
 </ul>
 <p>For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see <a href="../install/prerequisites/#version-compatibility">Version Compatibility</a>.</p>
+<hr />
+<h2 id="unreleased-rhoai-36">Unreleased (RHOAI 3.6)</h2>
+<p><strong>Release Date:</strong> TBD</p>
+<h3 id="upgrade-notes">Upgrade notes</h3>
+<p>See <a href="../migration/upgrade-to-3.6/">Upgrade to 3.6</a> for full guidance. Summary:</p>
+<ul>
+<li><strong>Recommended short downtime</strong> when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).</li>
+<li><strong>Token rate-limit counters reset</strong> on upgrade (limit keys become rate-grouped <code>tokens-*</code>, counters use <code>selected_subscription_id</code>). Limitador enforcement budgets start fresh for the current window.</li>
+<li><strong>Prometheus and Loki usage history are unaffected</strong> — telemetry still labels by subscription name (<code>selected_subscription</code> / <code>X-MaaS-Subscription</code>), not the rate-limit ID.</li>
+</ul>
+<h3 id="key-fixes">Key Fixes</h3>
+<ul>
+<li><strong>Short subscription rate-limit IDs in TokenRateLimitPolicy:</strong> TRLP <code>when</code> predicates and counters use a stable 16-hex SHA-256 of <code>namespace/name@modelNs/model</code> (<code>selected_subscription_id</code>) so Kuadrant WASM / EnvoyFilter size no longer embeds long subscription strings. Limit map keys stay rate-grouped (<code>tokens-&lt;limit&gt;-per-&lt;window&gt;</code>). Human-readable <code>selected_subscription_key</code> remains for telemetry.</li>
+</ul>
 <hr />
 <h2 id="v021">v0.2.1</h2>
 <p><strong>Release Date:</strong> TBD</p>
@@ -3839,7 +3966,7 @@
 <ul>
 <li>Model access checks moved from inline allowlists in the gateway AuthPolicy to <code>accessAllowed</code> metadata returned by maas-api during subscription selection. The gateway authorization rule is now fixed-size regardless of how many subscriptions or models exist, removing a scaling limit caused by per-model allowlists growing the AuthPolicy CR.</li>
 </ul>
-<h3 id="key-fixes">Key Fixes</h3>
+<h3 id="key-fixes_1">Key Fixes</h3>
 <ul>
 <li><strong>Gateway wasm config exceeding the etcd size limit (RHOAIENG-95277):</strong> each model's <code>TokenRateLimitPolicy</code> now has one limit per distinct rate set instead of one per subscription. A subscription at an existing rate adds a predicate clause (about 3 KB per listener) to the gateway's <code>kuadrant-{gateway-name}</code> EnvoyFilter (WasmPlugin on Kuadrant 1.4.x) instead of a whole limit (about 27 KB). Budgets stay separate per subscription and per user. See <a href="../advanced-administration/subscription-cardinality/#gateway-config-size">Subscription Cardinality</a>.<ul>
 <li><strong>Upgrade note:</strong> limit names change from <code>{namespace}-{subscription}-{model}-tokens</code> to <code>tokens-{limit}-per-{window}</code>, so Limitador starts fresh counters once on upgrade (and again on rollback). With long windows (for example <code>24h</code>), users can spend up to twice their budget in the window that spans the change.</li>
@@ -4004,7 +4131,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 26, 2026 01:54:46 UTC">September 26, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 20:17:12 UTC">October 1, 2026</span>
   </span>
 
     

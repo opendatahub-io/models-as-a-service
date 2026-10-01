@@ -689,6 +689,34 @@
 
               
             
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../migration/upgrade-to-3.6/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Upgrade to 3.6
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
           </ul>
         </nav>
       
@@ -3454,18 +3482,22 @@
 <li>
 <p><strong>AuthPolicy <code>filters.identity</code></strong> copies resolved fields onto <strong><code>auth.identity</code></strong>, including:</p>
 </li>
-<li>
-<p><strong><code>selected_subscription_key</code></strong> — model-scoped key of the form<br />
+<li><strong><code>selected_subscription_key</code></strong> — model-scoped key of the form<br />
 <code>{subscriptionNamespace}/{subscriptionName}@{modelNamespace}/{modelName}</code><br />
+     Kept for telemetry and debugging.</li>
+<li>
+<p><strong><code>selected_subscription_id</code></strong> — first 16 hex chars of SHA-256 over that key (from
+     maas-api <code>subscription-info.rateLimitId</code>). Also mirrored as response header
+     <strong><code>X-MaaS-Subscription-Rate-Limit-Id</code></strong> without replacing existing headers.
      This is the value <strong>rate limiting</strong> keys off.</p>
 </li>
 <li>
 <p><strong>TokenRateLimitPolicy</strong> (aggregated per model by the MaaSSubscription reconciler) defines <strong>one limit entry per distinct rate set</strong> among the subscriptions that apply to that model. Each limit’s <strong><code>when</code></strong> predicate matches requests where
-   <code>auth.identity.selected_subscription_key</code> equals the scoped key of any subscription in that group (and inference paths are distinguished from discovery; <code>/v1/models</code> is exempt from token consumption limits where configured). Its counters are <code>selected_subscription_key</code> and <code>userid</code>, so subscriptions sharing a limit keep separate budgets; see <a href="../reconciliation-flow/#maassubscription-reconciler">Reconciliation Flow</a>.</p>
+   <code>auth.identity.selected_subscription_id</code> equals the short ID of any subscription in that group (and inference paths are distinguished from discovery; <code>/v1/models</code> is exempt from token consumption limits where configured). Its counters are <code>selected_subscription_id</code> and <code>userid</code>, so subscriptions sharing a limit keep separate budgets; see <a href="../reconciliation-flow/#maassubscription-reconciler">Reconciliation Flow</a>.</p>
 </li>
 </ol>
-<p>So enforcement is: <strong>subscription resolved in AuthPolicy → same key matched in TRLP</strong>. Group-based <strong>authorization</strong> is resolved during subscription selection: <strong>maas-api</strong> evaluates <strong>MaaSAuthPolicy</strong> rules for the caller and returns <code>accessAllowed</code> in <strong><code>subscription-info</code></strong> metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. <strong>Rate limit selection</strong> follows the resolved subscription key, not a separate “group split” expression on TRLP.</p>
-<p><strong>TRLP predicates vs other identity:</strong> TokenRateLimitPolicy <strong><code>when</code></strong> clauses use <strong><code>selected_subscription_key</code> only</strong>—not <code>groups_str</code>, group arrays, or header mirrors. Anything else on <code>auth.identity</code> is <strong>not</strong> part of TRLP matching; it exists for <strong>subscription selection</strong> (inputs to maas-api), <strong>Authorino cache/metadata</strong>, and <strong>telemetry</strong> at the gateway/mesh. That matches post–EA2 behavior: limits follow the resolved subscription key; maintainers often describe the remaining decoration as <strong>chiefly telemetry-facing</strong>, aside from selection/caching.</p>
+<p>So enforcement is: <strong>subscription resolved in AuthPolicy → same short ID matched in TRLP</strong>. Group-based <strong>authorization</strong> is resolved during subscription selection: <strong>maas-api</strong> evaluates <strong>MaaSAuthPolicy</strong> rules for the caller and returns <code>accessAllowed</code> in <strong><code>subscription-info</code></strong> metadata. The gateway authorization rule simply reads that boolean rather than embedding per-model allowlists, keeping the AuthPolicy CR fixed-size at any subscription count. <strong>Rate limit selection</strong> follows the resolved subscription ID, not a separate “group split” expression on TRLP.</p>
+<p><strong>TRLP predicates vs other identity:</strong> TokenRateLimitPolicy <strong><code>when</code></strong> clauses use <strong><code>selected_subscription_id</code> only</strong>—not <code>selected_subscription_key</code>, <code>groups_str</code>, group arrays, or header mirrors. Anything else on <code>auth.identity</code> is <strong>not</strong> part of TRLP matching; it exists for <strong>subscription selection</strong> (inputs to maas-api), <strong>Authorino cache/metadata</strong>, and <strong>telemetry</strong> at the gateway/mesh.</p>
 <hr />
 <h2 id="identity-metadata-groups-groups_str-and-telemetry">Identity metadata: groups, <code>groups_str</code>, and telemetry</h2>
 <p>Behavior is split between <strong><code>filters.identity</code></strong> (what gets serialized onto <strong><code>auth.identity</code></strong> for downstream consumers) and <strong><code>celGroups</code></strong> (what the controller uses for subscription selection and cache keys). Both are defined in <strong><code>maasauthpolicy_controller.go</code></strong>.</p>
@@ -3483,7 +3515,7 @@
 <h3 id="oidc-path">OIDC path</h3>
 <p>When a JWT carries a groups claim, Authorino may populate <strong><code>auth.identity.groups</code></strong>. <strong><code>celGroups</code></strong> uses that branch before falling back to <strong><code>auth.identity.user.groups</code></strong>.</p>
 <h3 id="tokenratelimitpolicy-maassubscription_controllergo">TokenRateLimitPolicy (<code>maassubscription_controller.go</code>)</h3>
-<p>TRLP <strong><code>when</code></strong> predicates match <strong><code>auth.identity.selected_subscription_key</code> only</strong>. Using <strong><code>groups_str</code></strong> for rate limits is <strong>obsolete</strong>.</p>
+<p>TRLP <strong><code>when</code></strong> predicates match <strong><code>auth.identity.selected_subscription_id</code> only</strong>. Using <strong><code>groups_str</code></strong> or the long <strong><code>selected_subscription_key</code></strong> for rate limits is <strong>obsolete</strong>.</p>
 <h3 id="troubleshooting-which-field-to-inspect">Troubleshooting: which field to inspect</h3>
 <table>
 <thead>
@@ -3515,7 +3547,13 @@
 </tr>
 <tr>
 <td>Rate limiting</td>
-<td><strong><code>auth.identity.selected_subscription_key</code></strong> after successful select</td>
+<td><strong><code>auth.identity.selected_subscription_id</code></strong> after successful select</td>
+<td>Same</td>
+<td>Same</td>
+</tr>
+<tr>
+<td>Telemetry / debug subscription@model</td>
+<td><strong><code>auth.identity.selected_subscription_key</code></strong></td>
 <td>Same</td>
 <td>Same</td>
 </tr>
@@ -3569,7 +3607,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 26, 2026 01:54:46 UTC">September 26, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 20:17:12 UTC">October 1, 2026</span>
   </span>
 
     
