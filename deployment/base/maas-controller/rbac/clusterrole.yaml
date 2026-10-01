@@ -36,6 +36,15 @@ rules:
   - patch
 - apiGroups:
   - ""
+  resourceNames:
+  - maas-gateway-identity
+  resources:
+  - secrets
+  verbs:
+  - create
+  - get
+- apiGroups:
+  - ""
   resources:
   - namespaces
   verbs:
