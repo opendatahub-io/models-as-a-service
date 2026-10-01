@@ -3272,6 +3272,17 @@
   
 </li>
         
+          <li class="md-nav__item">
+  <a href="#tenantlogsconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TenantLogsConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
       </ul>
     </nav>
   
@@ -3583,6 +3594,17 @@
     <span class="md-ellipsis">
       
         TenantMetricsConfig
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#tenantlogsconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TenantLogsConfig
       
     </span>
   </a>
@@ -4002,6 +4024,13 @@
 <td>-</td>
 <td>Fine-grained control over metric dimensions</td>
 </tr>
+<tr>
+<td>logs</td>
+<td>TenantLogsConfig</td>
+<td>No</td>
+<td>-</td>
+<td>Fine-grained control over usage-log identity fields</td>
+</tr>
 </tbody>
 </table>
 <h3 id="tenantmetricsconfig">TenantMetricsConfig</h3>
@@ -4043,6 +4072,27 @@
 <td>No</td>
 <td><code>true</code></td>
 <td>Capture per-model usage metrics</td>
+</tr>
+</tbody>
+</table>
+<h3 id="tenantlogsconfig">TenantLogsConfig</h3>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Type</th>
+<th>Required</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>captureUser</td>
+<td>bool</td>
+<td>No</td>
+<td><code>false</code></td>
+<td>Include the authenticated user ID as <code>user_id</code> on usage logs. Independent of <code>metrics.captureUser</code>. May have privacy implications; ensure compliance before enabling.</td>
 </tr>
 </tbody>
 </table>
@@ -4170,6 +4220,8 @@
 <a id="__codelineno-4-13" name="__codelineno-4-13" href="#__codelineno-4-13"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 <a id="__codelineno-4-14" name="__codelineno-4-14" href="#__codelineno-4-14"></a><span class="w">      </span><span class="nt">captureGroup</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 <a id="__codelineno-4-15" name="__codelineno-4-15" href="#__codelineno-4-15"></a><span class="w">      </span><span class="nt">captureModelUsage</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<a id="__codelineno-4-16" name="__codelineno-4-16" href="#__codelineno-4-16"></a><span class="w">    </span><span class="nt">logs</span><span class="p">:</span>
+<a id="__codelineno-4-17" name="__codelineno-4-17" href="#__codelineno-4-17"></a><span class="w">      </span><span class="nt">captureUser</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
 </code></pre></div>
 <hr />
 <h2 id="migration-notes">Migration Notes</h2>
@@ -4206,7 +4258,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 1, 2026 17:39:46 UTC">September 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 15:38:44 UTC">October 1, 2026</span>
   </span>
 
     
