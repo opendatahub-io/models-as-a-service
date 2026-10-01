@@ -21,13 +21,14 @@ const ssaFieldOwner = "maas-controller"
 // ApplyRendered server-side-applies rendered objects with Config as controller owner.
 //
 // The cluster-scoped Config is a valid owner for namespaced resources in any namespace
-// and for cluster-scoped operands. Tenant tracking labels are always applied so the
-// reconciler can correlate resources with the namespace-local config object for status and debugging.
+// and for cluster-scoped operands. Rendered objects already carry the tenant tracking
+// labels or the shared-operand marker PostRender stamped, so ApplyRendered applies them
+// as given and does not touch labels itself.
 //
 // Objects matched by skipConfigControllerOwnerRef (see configOwnerRefSkips) do not receive a
-// Config controller ownerReference; they still receive tenant tracking labels. Add predicates
-// there for future exceptions (e.g. shared config that must outlive Config GC).
-func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, tenant client.Object, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
+// Config controller ownerReference. Add predicates there for future exceptions (e.g. shared
+// config that must outlive Config GC).
+func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme, appNs string, mcfg *maasv1alpha1.Config, objs []unstructured.Unstructured) error {
 	if mcfg == nil || mcfg.UID == "" {
 		return errors.New("config with UID is required for platform apply")
 	}
@@ -57,9 +58,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			continue
 		}
 
-		if skipConfigControllerOwnerRef(u, appNs) {
-			SetTenantTrackingLabels(u, tenant)
-		} else {
+		if !skipConfigControllerOwnerRef(u, appNs) {
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
@@ -70,7 +69,6 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 					return fmt.Errorf("set controller reference (Config) on %s %s/%s: %w", u.GetKind(), u.GetNamespace(), u.GetName(), err)
 				}
 			}
-			SetTenantTrackingLabels(u, tenant)
 		}
 		preparePayloadProcessingPluginsConfigMapApply(ctx, c, u)
 		unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
@@ -196,6 +194,10 @@ func isOwnedByExternalController(ctx context.Context, c client.Client, rendered 
 
 // SetTenantTrackingLabels stamps the metadata labels that map an operand back to its
 // tenant config. Never pod template or selector labels: those would roll or orphan pods.
+//
+// PostRender's per-tenant rename sites use renameForTenant instead, which stamps the
+// same labels from an already-resolved PlatformParams. This one remains for operands
+// that stamp themselves outside the render pipeline, such as the usage-logs EnvoyFilter.
 func SetTenantTrackingLabels(obj, tenant client.Object) {
 	labels := obj.GetLabels()
 	if labels == nil {

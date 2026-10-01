@@ -48,7 +48,7 @@ var _ = Describe("Tenant operands", func() {
 
 					apply := func() {
 						Expect(tenantreconcile.ApplyRendered(ctx, envTest.Client, envTest.Environment.Scheme,
-							fixture.DefaultTenantConfig(), appNamespace, fixture.ConfigAnchor(), served)).To(Succeed())
+							appNamespace, fixture.ConfigAnchor(), served)).To(Succeed())
 					}
 
 					apply()

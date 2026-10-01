@@ -216,12 +216,15 @@ func TestNetworkPolicyChangedForTenant(t *testing.T) {
 
 	expectPredicate(t, networkPolicyChangedForTenant(), base, []predicateUpdateCase[*netwv1.NetworkPolicy]{
 		{
-			name: "another tenant restamping the tracking labels of a shared policy is dropped",
+			// Real shared policies never carry tracking labels (the shared marker
+			// replaces them post-render), so this relabel cannot happen through the
+			// pipeline. Relabel suppression is gone either way: any label change is drift.
+			name: "restamping the tracking labels is drift now that relabel suppression is gone",
 			mutate: func(np *netwv1.NetworkPolicy) {
 				np.Labels[tenantreconcile.LabelTenantName] = "tenant-b"
 				np.Labels[tenantreconcile.LabelTenantNamespace] = "ai-tenant-tenant-b"
 			},
-			want: false,
+			want: true,
 		},
 		{
 			name:   "spec change passes",
@@ -260,12 +263,13 @@ func TestNetworkPolicyChangedForTenant(t *testing.T) {
 		{name: "relabelling a per-tenant policy to another tenant passes", mutate: relabel("tenant-b"), want: true},
 	})
 
-	// Under another tenant's labels the per-tenant name looks shared, so the owner
-	// restoring its labels does not bounce back.
+	// The owner restoring its own labels is drift too: recovery comes from the mapped
+	// handler invoking the mapper on both the old and the new object on Update
+	// (controller-runtime), not from the predicate admitting only one direction.
 	relabelled := perTenant.DeepCopy()
 	relabel("tenant-b")(relabelled)
 	expectPredicate(t, networkPolicyChangedForTenant(), relabelled, []predicateUpdateCase[*netwv1.NetworkPolicy]{
-		{name: "the owner restoring its labels on a per-tenant policy is dropped", mutate: relabel("tenant-a"), want: false},
+		{name: "the owner restoring its labels on a per-tenant policy passes", mutate: relabel("tenant-a"), want: true},
 	})
 }
 

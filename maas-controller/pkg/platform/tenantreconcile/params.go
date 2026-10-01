@@ -32,6 +32,14 @@ type PlatformParams struct {
 	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
 	TenantIdentifier string
 
+	// TenantTrackingName and TenantTrackingNamespace are the tracking-label values
+	// renameForTenant stamps on every object a rename site claims for this tenant. They
+	// come from tenantTrackingName and the tenant config's own namespace, the same values
+	// ApplyRendered used to stamp on everything; here they are resolved once and carried
+	// through PostRender instead.
+	TenantTrackingName      string
+	TenantTrackingNamespace string
+
 	MaaSAPIImage           string
 	PayloadProcessingImage string
 	MaaSAPIKeyCleanupImage string
@@ -102,6 +110,8 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		ModelNamespace:          tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
+		TenantTrackingName:      tenantTrackingName(tenant),
+		TenantTrackingNamespace: tenant.GetNamespace(),
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
@@ -393,6 +403,22 @@ func applyPlatformParams(log logr.Logger, resources []unstructured.Unstructured,
 	return nil
 }
 
+// renameForTenant renames r to name and stamps the tracking labels that mark it
+// per-tenant. Every render-time rename site must go through this: PostRender's final
+// pass marks anything left without these labels as a shared operand, so an object's
+// per-tenant status is decided once, where its name is decided, with no separate
+// bookkeeping pass or name inference downstream.
+func renameForTenant(r *unstructured.Unstructured, name string, params PlatformParams) {
+	r.SetName(name)
+	labels := r.GetLabels()
+	if labels == nil {
+		labels = make(map[string]string)
+	}
+	labels[LabelTenantName] = params.TenantTrackingName
+	labels[LabelTenantNamespace] = params.TenantTrackingNamespace
+	r.SetLabels(labels)
+}
+
 // patchResource applies tenant-specific patches to a single resource.
 func patchResource(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	gvk := r.GroupVersionKind()
@@ -402,62 +428,62 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 	switch {
 	case gvk == GVKDeployment && name == baseMaaSAPIDeploymentName:
 		// Rename and patch maas-api Deployment for this tenant
-		r.SetName(MaaSAPIDeploymentName(tenantID))
+		renameForTenant(r, MaaSAPIDeploymentName(tenantID), params)
 		return patchMaaSAPIDeployment(log, r, params)
 	case gvk == GVKDeployment && name == PayloadProcessingName:
-		r.SetName(PayloadProcessingDeploymentName(tenantID))
+		renameForTenant(r, PayloadProcessingDeploymentName(tenantID), params)
 		return patchPayloadProcessingDeployment(log, r, params)
 	case gvk == GVKCronJob && name == baseMaaSAPIKeyCleanupCronJobName:
 		// Rename and patch cleanup CronJob for this tenant
-		r.SetName(MaaSAPIKeyCleanupCronJobName(tenantID))
+		renameForTenant(r, MaaSAPIKeyCleanupCronJobName(tenantID), params)
 		return patchCleanupCronJobImage(log, r, params)
 	case gvk == GVKHTTPRoute && name == baseMaaSAPIRouteName:
 		// Rename and patch HTTPRoute for this tenant
-		r.SetName(MaaSAPIRouteName(tenantID))
+		renameForTenant(r, MaaSAPIRouteName(tenantID), params)
 		return patchHTTPRoute(log, r, params)
 	case gvk == GVKDestinationRule && name == baseGatewayDestinationRuleName:
 		// Rename and patch DestinationRule for this tenant
-		r.SetName(GatewayDestinationRuleName(tenantID))
+		renameForTenant(r, GatewayDestinationRuleName(tenantID), params)
 		return patchMaaSAPIDestinationRule(log, r, params)
 	case gvk == GVKDestinationRule && (name == PayloadProcessingName || name == PayloadPreProcessingName):
 		if name == PayloadPreProcessingName {
-			r.SetName(PayloadPreProcessingDeploymentName(tenantID))
+			renameForTenant(r, PayloadPreProcessingDeploymentName(tenantID), params)
 		} else {
-			r.SetName(PayloadProcessingDeploymentName(tenantID))
+			renameForTenant(r, PayloadProcessingDeploymentName(tenantID), params)
 		}
 		return patchPayloadDestinationRule(log, r, params)
 	case gvk == GVKEnvoyFilter && name == PayloadProcessingName:
-		r.SetName(PayloadProcessingEnvoyFilterName(tenantID))
+		renameForTenant(r, PayloadProcessingEnvoyFilterName(tenantID), params)
 		return patchPayloadProcessingEnvoyFilter(log, r, params)
 	case gvk == GVKDeployment && name == PayloadPreProcessingName:
-		r.SetName(PayloadPreProcessingDeploymentName(tenantID))
+		renameForTenant(r, PayloadPreProcessingDeploymentName(tenantID), params)
 		return patchPreProcessingDeployment(log, r, params)
 	case gvk == GVKService && name == baseMaaSAPIServiceName:
 		// Rename and patch maas-api Service for this tenant
-		r.SetName(MaaSAPIServiceName(tenantID))
+		renameForTenant(r, MaaSAPIServiceName(tenantID), params)
 		return patchMaaSAPIService(log, r, params)
 	case gvk == GVKService && (name == PayloadProcessingName || name == PayloadPreProcessingName):
 		if name == PayloadPreProcessingName {
-			r.SetName(PayloadPreProcessingServiceName(tenantID))
+			renameForTenant(r, PayloadPreProcessingServiceName(tenantID), params)
 			return patchPayloadPreProcessingService(log, r, params)
 		}
-		r.SetName(PayloadProcessingServiceName(tenantID))
+		renameForTenant(r, PayloadProcessingServiceName(tenantID), params)
 		return patchPayloadProcessingService(log, r, params)
 	case gvk == GVKServiceAccount && name == PayloadProcessingName:
-		r.SetName(PayloadProcessingServiceAccountName(tenantID))
+		renameForTenant(r, PayloadProcessingServiceAccountName(tenantID), params)
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKConfigMap && name == PayloadProcessingPluginsConfigMapName:
-		r.SetName(PayloadProcessingPluginsConfigMapForTenant(tenantID))
+		renameForTenant(r, PayloadProcessingPluginsConfigMapForTenant(tenantID), params)
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
 		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
-		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
+		renameForTenant(r, PayloadProcessingNetworkPolicyName(tenantID), params)
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
 	case gvk == GVKClusterRoleBinding && name == PayloadProcessingReaderClusterRoleBindingName:
-		r.SetName(PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID))
+		renameForTenant(r, PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID), params)
 		return patchPayloadProcessingClusterRoleBinding(r, params)
 	case gvk == GVKCertificate && name == baseMaaSAPIServingCertName:
 		return patchMaaSAPIServingCert(log, r, params)
@@ -605,7 +631,7 @@ func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
 func patchMaaSAPIServingCert(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	tenantID := params.TenantIdentifier
 	certName := MaaSAPIServingCertName(tenantID)
-	r.SetName(certName)
+	renameForTenant(r, certName, params)
 
 	secretName := certName
 	if err := unstructured.SetNestedField(r.Object, secretName, "spec", "secretName"); err != nil {

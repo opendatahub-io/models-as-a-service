@@ -20,7 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"maps"
+	"sort"
 	"sync"
 	"time"
 
@@ -29,6 +29,7 @@ import (
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -37,6 +38,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -220,6 +222,87 @@ func (r *TenantReconciler) enqueueTenantForAITenant(_ context.Context, obj clien
 	}}}
 }
 
+// enqueueSharedOperandRepairer maps a shared-operand event (the LabelSharedOperand
+// marker) to the tenants that re-apply it: normally one, not every tenant.
+//
+// Every shared operand renders byte-identical content for every tenant (verified by
+// tenantreconcile.TestSharedOperandMarkingInvariant), so one tenant's pass repairs it
+// and fanning the event out to N tenants buys nothing. Shared-operand writes are not
+// rare: ai-gateway-controller force-applies narrower payload-processing-reader
+// ClusterRole rules on every praxis tenant reconcile (5m resync), and each of those
+// would otherwise cost every maas tenant a reconcile.
+//
+// The one tenant must actually reach apply. A Managed tenant can stop before it (gateway
+// not ready, render failure, the legacy IPP handshake, an earlier object failing to
+// apply), and with polling gone nothing else would repair the object. Ready=True says
+// the tenant's last pass applied everything, so the pick is the default tenant if Ready,
+// else the first Ready tenant in namespace/name order. When none is Ready every
+// reconcilable tenant is enqueued: rare, bounded, and correct.
+func (r *TenantReconciler) enqueueSharedOperandRepairer(ctx context.Context, obj client.Object) []reconcile.Request {
+	log := oteljson.FromContext(ctx).WithValues(
+		"kind", r.objectKind(obj), "namespace", obj.GetNamespace(), "name", obj.GetName())
+	if !r.TenantNamespaceDiscoveryEnabled {
+		requests := r.enqueueDefaultTenant(ctx, obj)
+		log.V(1).Info("shared operand changed; enqueueing the tenant that repairs it", "tenants", requests)
+		return requests
+	}
+
+	var list maasv1alpha1.MaasTenantConfigList
+	if err := r.List(ctx, &list); err != nil {
+		log.Error(err, "failed to list MaasTenantConfigs for shared-operand repair mapping")
+		return nil
+	}
+	sort.Slice(list.Items, func(i, j int) bool {
+		return client.ObjectKeyFromObject(&list.Items[i]).String() < client.ObjectKeyFromObject(&list.Items[j]).String()
+	})
+
+	var reconcilable []reconcile.Request
+	var chosen *reconcile.Request
+	for i := range list.Items {
+		t := &list.Items[i]
+		ms := managementState(t.Annotations)
+		if r.tenantConfigSkipReason(t) != "" || !t.DeletionTimestamp.IsZero() || (ms != "" && ms != managementStateManaged) {
+			continue
+		}
+		request := reconcile.Request{NamespacedName: client.ObjectKeyFromObject(t)}
+		reconcilable = append(reconcilable, request)
+		if !apimeta.IsStatusConditionTrue(t.Status.Conditions, tenantreconcile.ReadyConditionType) {
+			continue
+		}
+		if t.Namespace == r.TenantNamespace && t.Name == maasv1alpha1.MaasTenantConfigInstanceName {
+			chosen = &request
+			break
+		}
+		if chosen == nil {
+			chosen = &request
+		}
+	}
+
+	switch {
+	case len(reconcilable) == 0:
+		log.Info("shared operand changed, but no tenant config can repair it: none is reconciled, live and Managed")
+		return nil
+	case chosen == nil:
+		log.V(1).Info("shared operand changed and no tenant is Ready; enqueueing every reconcilable tenant", "tenants", reconcilable)
+		return reconcilable
+	}
+	log.V(1).Info("shared operand changed; enqueueing the tenant that repairs it", "tenants", []reconcile.Request{*chosen})
+	return []reconcile.Request{*chosen}
+}
+
+// objectKind names obj's kind for logs; typed objects from the cache carry no TypeMeta.
+func (r *TenantReconciler) objectKind(obj client.Object) string {
+	if kind := obj.GetObjectKind().GroupVersionKind().Kind; kind != "" {
+		return kind
+	}
+	if r.Scheme != nil {
+		if gvk, err := apiutil.GVKForObject(obj, r.Scheme); err == nil {
+			return gvk.Kind
+		}
+	}
+	return fmt.Sprintf("%T", obj)
+}
+
 // enqueueAllTenants maps a change that applies to every tenant to all the
 // MaasTenantConfigs this reconciler owns.
 func (r *TenantReconciler) enqueueAllTenants(ctx context.Context, _ client.Object) []reconcile.Request {
@@ -284,32 +367,17 @@ func managedTenantNetworkPolicy() predicate.Predicate {
 	})
 }
 
-// networkPolicyChangedForTenant drops updates that only move the tenant tracking labels
-// of a shared NetworkPolicy (isSharedTenantOperand). Every tenant applies those and each
-// apply stamps that tenant's labels, so admitting the relabel makes tenants re-enqueue each
-// other indefinitely. A relabel of a per-tenant NetworkPolicy is drift and passes, so its
-// owner restores the labels; under the other tenant's labels the policy looks shared, so
-// that restamp does not bounce back.
+// networkPolicyChangedForTenant admits any label change along with generation,
+// annotation and deletion. Whether a NetworkPolicy is shared is now decided at render
+// time (the shared-operand marker), so a label change can no longer mean "every tenant
+// restamped this the same way"; there is nothing left to suppress.
 func networkPolicyChangedForTenant() predicate.Predicate {
 	return predicate.Or(
 		predicate.GenerationChangedPredicate{},
 		predicate.AnnotationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
 		predicate.Funcs{UpdateFunc: deletionTimestampSet},
-		predicate.Funcs{UpdateFunc: func(e event.UpdateEvent) bool {
-			oldLabels, newLabels := e.ObjectOld.GetLabels(), e.ObjectNew.GetLabels()
-			if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), e.ObjectOld) {
-				oldLabels, newLabels = withoutTenantTrackingLabels(oldLabels), withoutTenantTrackingLabels(newLabels)
-			}
-			return !maps.Equal(oldLabels, newLabels)
-		}},
 	)
-}
-
-func withoutTenantTrackingLabels(labels map[string]string) map[string]string {
-	out := maps.Clone(labels)
-	delete(out, tenantreconcile.LabelTenantName)
-	delete(out, tenantreconcile.LabelTenantNamespace)
-	return out
 }
 
 func isManagedTenantNetworkPolicyLabels(labels map[string]string) bool {
@@ -330,10 +398,12 @@ func (r *TenantReconciler) isTenantPlatformNamespace(ns string) bool {
 	return ns == r.AppNamespace || ns == r.TenantNamespace || ns == r.GatewayNamespace || ns == r.operatorNamespace()
 }
 
-// mapNetworkPolicyToMaasTenantConfigs enqueues the tenants that apply a NetworkPolicy. A
-// shared one (isSharedTenantOperand) carries the tracking labels of whichever tenant applied
-// it last, which may be gone, so every tenant is enqueued to restore it. So is a per-tenant
-// one under another tenant's labels, since its owner is the only tenant that renders it.
+// mapNetworkPolicyToMaasTenantConfigs enqueues the tenant that repairs a NetworkPolicy. A
+// shared one (the marker) renders byte-identical for every tenant, so one live,
+// reconcilable tenant is enough (enqueueSharedOperandRepairer). A per-tenant one maps by
+// its tracking labels alone; a relabel to another tenant is recovered by the mapped
+// handler invoking this mapper on both the old and the new object on Update, not by
+// inference here, so the owner (whichever tenant the old labels name) restores it.
 func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Context, obj client.Object) []reconcile.Request {
 	np, ok := obj.(*netwv1.NetworkPolicy)
 	if !ok {
@@ -342,8 +412,8 @@ func (r *TenantReconciler) mapNetworkPolicyToMaasTenantConfigs(ctx context.Conte
 	if !r.isTenantPlatformNamespace(np.GetNamespace()) || !isManagedTenantNetworkPolicyLabels(np.GetLabels()) {
 		return nil
 	}
-	if isSharedTenantOperand(tenantreconcile.GVKNetworkPolicy.GroupKind(), np) {
-		return r.enqueueAllTenants(ctx, obj)
+	if isSharedOperand(np.GetLabels()) {
+		return r.enqueueSharedOperandRepairer(ctx, obj)
 	}
 	if r.TenantNamespaceDiscoveryEnabled {
 		tenantNs := np.GetLabels()[tenantreconcile.LabelTenantNamespace]

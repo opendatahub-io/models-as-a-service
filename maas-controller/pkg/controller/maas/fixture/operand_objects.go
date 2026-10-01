@@ -8,6 +8,8 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
 // The Operand* builders return the smallest valid object of each built-in kind the
@@ -57,10 +59,16 @@ func OperandConfigMap(namespace, name string) *corev1.ConfigMap {
 	}
 }
 
-// OperandClusterRole returns a ClusterRole granting read access to ConfigMaps.
+// OperandClusterRole returns a ClusterRole granting read access to ConfigMaps, carrying
+// the ODH component label postBuildTransform stamps on every rendered object. The
+// ClusterRole cache scope selects on that label (see operandSelector), so a ClusterRole
+// fixture without it would never enter the informer the tests exercise.
 func OperandClusterRole(name string) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:   name,
+			Labels: map[string]string{tenantreconcile.LabelODHAppPrefix + "/" + tenantreconcile.ComponentName: "true"},
+		},
 		Rules: []rbacv1.PolicyRule{{
 			APIGroups: []string{""},
 			Resources: []string{"configmaps"},
