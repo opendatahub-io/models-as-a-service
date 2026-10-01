@@ -68,6 +68,15 @@ spec:
           spec:
             description: AITenantSpec defines the tenant bootstrap contract.
             properties:
+              agenticBackendRef:
+                description: |-
+                  AgenticBackendRef identifies the backend for tenant OpenAI APIs.
+                  Formats: name, namespace:name, OGXServer::name, or OGXServer:namespace:name.
+                  An omitted namespace defaults to the tenant workload namespace.
+                maxLength: 137
+                minLength: 1
+                pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?:|OGXServer:([a-z0-9]([-a-z0-9]*[a-z0-9])?)?:)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                type: string
               gateway:
                 description: Gateway references the network-admin-provisioned Gateway
                   API Gateway for this tenant.

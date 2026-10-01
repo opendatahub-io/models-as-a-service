@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -87,6 +88,100 @@ func newReadyGatewayAuthPolicy(namespace, name string) *unstructured.Unstructure
 	}, "status", "conditions")
 	_ = unstructured.SetNestedField(authPolicy.Object, int64(1), "status", "observedGeneration")
 	return authPolicy
+}
+
+func TestOGXAPIAuthPolicyValidatesTenantAndProtectsHeaders(t *testing.T) {
+	ctx := context.Background()
+	const gatewayNS = "ingress"
+	const tenantNS = "ai-tenant-team-a"
+	base := &unstructured.Unstructured{}
+	base.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
+	base.SetName("gateway-maas-auth")
+	base.SetNamespace(gatewayNS)
+	base.SetLabels(map[string]string{"app.kubernetes.io/managed-by": "maas-controller"})
+	base.Object["spec"] = (&MaaSAuthPolicyReconciler{InfraNamespace: "maas-system"}).buildGatewayAuthPolicySpec(nil, true, "team-a", "team-a", gatewayNS, "gateway")
+	c := fake.NewClientBuilder().WithScheme(scheme).WithRESTMapper(testRESTMapper()).WithObjects(base).Build()
+	r := &AITenantReconciler{Client: c, GatewayNamespace: gatewayNS}
+	tenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "team-a"}}
+	tenant.Spec.AgenticBackendRef = "OGXServer:applications:ogx"
+	if err := r.ensureOGXAPIAuthPolicy(ctx, tenant, tenantNS, maasv1alpha1.TenantGatewayRef{Namespace: gatewayNS, Name: "gateway"}); err != nil {
+		t.Fatal(err)
+	}
+	policy := &unstructured.Unstructured{}
+	policy.SetGroupVersionKind(base.GroupVersionKind())
+	key := types.NamespacedName{Namespace: tenantNS, Name: "ogx-api-auth-team-a"}
+	if err := c.Get(ctx, key, policy); err != nil {
+		t.Fatal(err)
+	}
+	target, _, _ := unstructured.NestedString(policy.Object, "spec", "targetRef", "name")
+	if target != "ogx-api-team-a" {
+		t.Fatalf("targetRef.name = %q", target)
+	}
+	rules, _, err := unstructured.NestedMap(policy.Object, "spec", "defaults", "rules")
+	if err != nil {
+		t.Fatal(err)
+	}
+	rego := rules["authorization"].(map[string]any)["auth-valid"].(map[string]any)["opa"].(map[string]any)["rego"].(string)
+	if !strings.Contains(rego, `apiKeyValidation.tenant == "team-a"`) || !strings.Contains(rego, `apiKeyValidation.subscription != ""`) {
+		t.Fatalf("OGX owner validation missing: %s", rego)
+	}
+	defaultTenant := &maasv1alpha1.AITenant{ObjectMeta: metav1.ObjectMeta{Name: "models-as-a-service"}}
+	defaultSpec, err := ogxAPIAuthSpec(base, defaultTenant, "models-as-a-service", "ogx-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defaultRules := defaultSpec["defaults"].(map[string]any)["rules"].(map[string]any)
+	defaultRego := defaultRules["authorization"].(map[string]any)["auth-valid"].(map[string]any)["opa"].(map[string]any)["rego"].(string)
+	if !strings.Contains(defaultRego, `apiKeyValidation.tenant == "models-as-a-service"`) {
+		t.Fatalf("default tenant validation missing: %s", defaultRego)
+	}
+	owner := defaultRules["response"].(map[string]any)["success"].(map[string]any)["headers"].(map[string]any)["X-MaaS-Owner-Tenant"].(map[string]any)["plain"].(map[string]any)["expression"].(string)
+	if owner != `auth.metadata.apiKeyValidation.tenant + "_" + auth.metadata.apiKeyValidation.subscription` {
+		t.Fatalf("OGX tenant identity uses an invalid separator: %s", owner)
+	}
+	auth := rules["authentication"].(map[string]any)
+	if len(auth) != 2 || auth["api-keys"] == nil || auth["api-keys-x-api-key"] == nil {
+		t.Fatalf("OGX auth must accept only MaaS API keys: %#v", auth)
+	}
+	authz := rules["authorization"].(map[string]any)
+	for _, name := range []string{"deny-client-identity-headers", "deny-direct-ogx-path"} {
+		if authz[name] == nil {
+			t.Fatalf("missing OGX protection %s", name)
+		}
+	}
+	patterns := authz["deny-client-identity-headers"].(map[string]any)["patternMatching"].(map[string]any)["patterns"].([]any)
+	for _, header := range []string{"x-maas-owner-tenant", "x-maas-subscription", "x-ogx-route-tenant", "x-tenant-id", "x-user-id"} {
+		found := false
+		for _, pattern := range patterns {
+			if strings.Contains(pattern.(map[string]any)["predicate"].(string), `"`+header+`"`) {
+				found = true
+			}
+		}
+		if !found {
+			t.Fatalf("client-supplied %s is not denied", header)
+		}
+	}
+	// A ref removal must retain auth until the data-plane route is gone.
+	tenant.Spec.AgenticBackendRef = ""
+	route := newHTTPRoute("ogx-api-team-a", tenantNS)
+	if err := c.Create(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensureOGXAPIAuthPolicy(ctx, tenant, tenantNS, maasv1alpha1.TenantGatewayRef{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, key, policy); err != nil {
+		t.Fatalf("policy removed before route: %v", err)
+	}
+	if err := c.Delete(ctx, route); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.ensureOGXAPIAuthPolicy(ctx, tenant, tenantNS, maasv1alpha1.TenantGatewayRef{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Get(ctx, key, policy); !apierrors.IsNotFound(err) {
+		t.Fatalf("policy remains after route removal: %v", err)
+	}
 }
 
 // TestMaaSAuthPolicyReconciler_ManagedAnnotation verifies the opt-out behaviour of the
@@ -1758,7 +1853,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-	if err != nil || !found || len(patterns) != 3 {
+	if err != nil || !found || len(patterns) != 5 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1779,8 +1874,10 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-username" in request.headers)`,
 		`!("x-maas-group" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
+		`!("x-maas-owner-tenant" in request.headers)`,
+		`!("x-ogx-route-tenant" in request.headers)`,
 	}
-	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
 	}
 }

@@ -63,6 +63,15 @@ type AITenantSpec struct {
 	// +kubebuilder:validation:Optional
 	Gateway *AITenantGatewayRef `json:"gateway,omitempty"`
 
+	// AgenticBackendRef identifies the backend for tenant OpenAI APIs.
+	// Formats: name, namespace:name, OGXServer::name, or OGXServer:namespace:name.
+	// An omitted namespace defaults to the tenant workload namespace.
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=137
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]([-a-z0-9]*[a-z0-9])?:|OGXServer:([a-z0-9]([-a-z0-9]*[a-z0-9])?)?:)?[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	AgenticBackendRef string `json:"agenticBackendRef,omitempty"`
+
 	// OIDC contains non-MaaS-specific OIDC settings for this AI Gateway tenant.
 	// AITenant is the source of truth for this derived platform context; the
 	// bridge Tenant config object owns MaaS-specific user config only.
