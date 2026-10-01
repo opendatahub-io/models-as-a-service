@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +33,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -3322,5 +3325,162 @@ func TestMaaSAuthPolicyReconciler_NoRequeueWhenUnchanged(t *testing.T) {
 	}
 	if result.RequeueAfter != 0 {
 		t.Errorf("second Reconcile: RequeueAfter = %s, want 0 (no spec change, no enforcement wait needed)", result.RequeueAfter)
+	}
+}
+
+// TestMaaSAuthPolicyReconciler_StatusConflictRequeues verifies a conflicting status write
+// is returned from Reconcile. The For() watch drops status-only events, so that error is
+// the only thing that retries the write.
+func TestMaaSAuthPolicyReconciler_StatusConflictRequeues(t *testing.T) {
+	const (
+		modelName      = "llm"
+		namespace      = "default"
+		gatewayNS      = "openshift-ingress"
+		maasPolicyName = "policy-a"
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	maasPolicy := newMaaSAuthPolicy(maasPolicyName, namespace, "team-a",
+		maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace})
+
+	conflicted := false
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, maasPolicy, newReadyGatewayAuthPolicy(gatewayNS, maasGatewayAuthPolicyName)).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if !conflicted {
+					conflicted = true
+					return apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasauthpolicies"}, obj.GetName(), errors.New("stale resource version"))
+				}
+				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: gatewayNS,
+		GatewayName:      "maas-default-gateway",
+	}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasPolicyName, Namespace: namespace}}
+
+	_, err := r.Reconcile(t.Context(), req)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("first Reconcile error = %v, want a conflict so the policy is requeued", err)
+	}
+
+	got := &maasv1alpha1.MaaSAuthPolicy{}
+	if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get policy: %v", err)
+	}
+	if got.Status.Phase != "" {
+		t.Fatalf("phase after conflicting write = %q, want empty", got.Status.Phase)
+	}
+
+	// Requeued reconcile.
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("requeued Reconcile: %v", err)
+	}
+	if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get policy: %v", err)
+	}
+	if got.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("phase = %q, want %q", got.Status.Phase, maasv1alpha1.PhaseActive)
+	}
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionTrue, string(maasv1alpha1.ReasonReconciled))
+}
+
+func TestMaaSAuthPolicyReconciler_StatusWriteFailureReturned(t *testing.T) {
+	const (
+		modelName = "llm"
+		namespace = "default"
+	)
+
+	tests := []struct {
+		name    string
+		objects func() []client.Object
+	}{
+		{
+			name: "spec is required",
+			objects: func() []client.Object {
+				return []client.Object{&maasv1alpha1.MaaSAuthPolicy{ObjectMeta: metav1.ObjectMeta{Name: "policy-a", Namespace: namespace}}}
+			},
+		},
+		{
+			name: "waiting for gateway AuthPolicy enforcement",
+			objects: func() []client.Object {
+				return []client.Object{
+					newMaaSModelRef(modelName, namespace, "ExternalModel", modelName),
+					newHTTPRoute("maas-"+modelName, namespace),
+					newMaaSAuthPolicy("policy-a", namespace, "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: namespace}),
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			statusErr := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasauthpolicies"}, "policy-a", errors.New("stale resource version"))
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(tt.objects()...).
+				WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+				WithInterceptorFuncs(failStatusUpdates(statusErr)).
+				Build()
+
+			r := &MaaSAuthPolicyReconciler{
+				Client:           c,
+				Scheme:           scheme,
+				InfraNamespace:   "maas-system",
+				GatewayNamespace: "openshift-ingress",
+				GatewayName:      "maas-default-gateway",
+			}
+			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: "policy-a", Namespace: namespace}}
+			if _, err := r.Reconcile(t.Context(), req); !errors.Is(err, statusErr) {
+				t.Fatalf("Reconcile error = %v, want status error %v", err, statusErr)
+			}
+		})
+	}
+}
+
+func TestMaaSAuthPolicyReconciler_ReconcileErrorPreservedOnStatusFailure(t *testing.T) {
+	const namespace = "default"
+	listErr := errors.New("list MaaSAuthPolicies failed")
+	statusErr := errors.New("status write failed")
+
+	// hasLegacyModelAuthPolicy lists MaaSAuthPolicies before the gateway AuthPolicy is reconciled.
+	policy := newMaaSAuthPolicy("policy-a", namespace, "team-a", maasv1alpha1.ModelRef{Name: "llm", Namespace: namespace})
+	funcs := failStatusUpdates(statusErr)
+	funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		if _, ok := list.(*maasv1alpha1.MaaSAuthPolicyList); ok {
+			return listErr
+		}
+		return cl.List(ctx, list, opts...)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(policy).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
+		WithInterceptorFuncs(funcs).
+		Build()
+
+	r := &MaaSAuthPolicyReconciler{
+		Client:           c,
+		Scheme:           scheme,
+		InfraNamespace:   "maas-system",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+	}
+	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(policy)})
+	if !errors.Is(err, listErr) || errors.Is(err, statusErr) {
+		t.Fatalf("Reconcile error = %v, want original error %v", err, listErr)
 	}
 }

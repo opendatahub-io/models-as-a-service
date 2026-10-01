@@ -224,6 +224,18 @@ spec:
                   enabled:
                     default: true
                     type: boolean
+                  logs:
+                    description: TenantLogsConfig defines optional usage-log identity
+                      dimensions.
+                    properties:
+                      captureUser:
+                        default: false
+                        description: |-
+                          CaptureUser includes the authenticated user ID as user_id on usage logs.
+                          Defaults to false. Enabling this may have GDPR / privacy implications —
+                          ensure compliance before use. Independent of metrics.captureUser.
+                        type: boolean
+                    type: object
                   metrics:
                     description: TenantMetricsConfig defines optional metric dimensions.
                     properties:

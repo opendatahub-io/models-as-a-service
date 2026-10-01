@@ -14,6 +14,8 @@ Requirements:
 
 Environment:
   - DEPLOYMENT_NAMESPACE: namespace where maas-controller runs (default: opendatahub)
+  - E2E_RUN_CRD_WATCH_RESILIENCE=true: opt in only on a disposable cluster. This
+    module deletes the cluster-scoped KServe CRD and its custom resources.
 """
 import logging
 import subprocess
@@ -26,6 +28,14 @@ log = logging.getLogger(__name__)
 pytestmark = [
     pytest.mark.xdist_group("mt_lifecycle"),
     pytest.mark.serial,
+    pytest.mark.skipif(
+        os.environ.get("E2E_RUN_CRD_WATCH_RESILIENCE", "").lower()
+        not in {"1", "true", "yes"},
+        reason=(
+            "requires a disposable cluster: deletes the cluster-scoped KServe CRD; "
+            "set E2E_RUN_CRD_WATCH_RESILIENCE=true to opt in"
+        ),
+    ),
 ]
 
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")

@@ -296,17 +296,15 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 				return
 			}
 
-			// Pre-filter by modelRefs if available (optimization to reduce HTTP calls)
-			modelsToCheck := list
-			if len(sub.ModelRefs) > 0 {
-				h.logger.Debug("Pre-filtering models by subscription modelRefs",
-					"subscription", sub.Name,
-					"totalModels", len(list),
-					"modelRefsCount", len(sub.ModelRefs),
-				)
-				modelsToCheck = filterModelsBySubscription(list, sub.ModelRefs)
-				h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
-			}
+			// modelRefs are the access boundary: FilterModelsByAccess only checks readiness,
+			// so skipping this for a subscription without modelRefs would list every Ready model.
+			h.logger.Debug("Pre-filtering models by subscription modelRefs",
+				"subscription", sub.Name,
+				"totalModels", len(list),
+				"modelRefsCount", len(sub.ModelRefs),
+			)
+			modelsToCheck := filterModelsBySubscription(list, sub.ModelRefs)
+			h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
 
 			probeSubscriptionHeader := sub.Name
 			h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(modelsToCheck), "probeWithSubscriptionHeader", probeSubscriptionHeader != "")
@@ -474,11 +472,8 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 }
 
 // filterModelsBySubscription filters models to only those matching the subscription's modelRefs.
+// A subscription without modelRefs grants no models.
 func filterModelsBySubscription(modelList []models.Model, modelRefs []subscription.ModelRefInfo) []models.Model {
-	if len(modelRefs) == 0 {
-		return modelList
-	}
-
 	// Build map of allowed models for fast lookup
 	allowed := make(map[string]bool)
 	for _, ref := range modelRefs {
