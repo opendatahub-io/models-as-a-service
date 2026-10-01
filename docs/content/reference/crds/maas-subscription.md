@@ -36,6 +36,30 @@ Defines a subscription plan with per-model token rate limits. Creates Kuadrant T
 | limit | int64 | Yes | Maximum number of tokens allowed |
 | window | string | Yes | Time window (e.g., `1m`, `1h`, `24h`). Allowed units: `s`, `m`, `h` (1–9999). Pattern: `^[1-9]\d{0,3}(s\|m\|h)$`. **Breaking change:** `d` (days) is no longer accepted; use hours instead (e.g., `24h` not `1d`). |
 
+## Status: flowControlStatuses
+
+`status.flowControlStatuses` lists, for each referenced model, the InferencePool and InferenceObjective used for `inferencePriority`. Flow control is optional, so these entries do not affect the subscription phase.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| name | string | Name of the MaaSModelRef |
+| namespace | string | Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this namespace, alongside the LLMInferenceService. |
+| inferencePool | LocalObjectReference | InferencePool (`group`, `kind`, `name`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
+| objectiveName | string | InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when `inferencePriority` is unset. It does not change when `inferencePriority` changes. |
+| ready | bool | `true` when nothing is left to reconcile for this model (see reasons below) |
+| reason | string | Machine-readable reason for `ready` (see below). New reasons may be added. |
+| message | string | Human-readable detail for the reason |
+
+| Reason | ready | Meaning |
+|--------|-------|---------|
+| `ObjectiveReconciled` | `true` | The InferenceObjective matches `inferencePriority` |
+| `PriorityUnset` | `true` | `inferencePriority` is unset: no InferenceObjective is created and the scheduler applies priority `0` |
+| `NotApplicable` | `true` | The model is not served through an inference scheduler (for example, an ExternalModel) |
+| `PoolPending` | `false` | The model's InferencePool has not been observed yet |
+| `ObjectivePending` | `false` | `inferencePriority` is set but the InferenceObjective is not reconciled yet |
+| `Unsupported` | `false` | Request priority cannot be applied, for example because traffic is split across a routing group |
+| `ReconcileFailed` | `false` | Reconciling request priority for the model failed |
+
 ## Annotations
 
 MaaSSubscription supports standard Kubernetes and OpenShift annotations for use by `kubectl`, the OpenShift console, and other tooling.
