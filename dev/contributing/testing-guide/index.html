@@ -3853,7 +3853,7 @@
 <a id="__codelineno-0-17" name="__codelineno-0-17" href="#__codelineno-0-17"></a>└── requirements.txt             # Python dependencies
 </code></pre></div>
 <h3 id="e2e-test-modules-and-groups">E2E Test Modules and Groups</h3>
-<p>Tests are organized into <strong>xdist groups</strong> for parallel execution. Each group runs on a dedicated pytest-xdist worker. See <a href="#parallel-e2e-pytest-xdist">Parallel E2E</a> for details on how groups work.</p>
+<p>Tests are organized into <strong>xdist groups</strong> for parallel execution. All tests in a group run on the same pytest-xdist worker, and a worker takes the next queued group when it finishes one. See <a href="#parallel-e2e-pytest-xdist">Parallel E2E</a> for details on how groups work.</p>
 <table>
 <thead>
 <tr>
@@ -3975,11 +3975,6 @@
 </tr>
 <tr>
 <td><code>tenant_isolation</code></td>
-<td><code>test_tenant_model_inference.py</code></td>
-<td>Cross-gateway inference isolation</td>
-</tr>
-<tr>
-<td><code>tenant_isolation</code></td>
 <td><code>test_tenant_rate_limit_isolation.py</code></td>
 <td>Per-tenant rate limit independence</td>
 </tr>
@@ -3989,9 +3984,19 @@
 <td>Per-tenant subscription scoping</td>
 </tr>
 <tr>
-<td><code>tenant_isolation</code></td>
+<td><code>tenant_inference</code></td>
+<td><code>test_tenant_model_inference.py</code></td>
+<td>Cross-gateway inference isolation</td>
+</tr>
+<tr>
+<td><code>tenant_ipp</code></td>
 <td><code>test_per_tenant_ipp_isolation.py</code></td>
 <td>Per-tenant IPP stacks, routing isolation</td>
+</tr>
+<tr>
+<td><code>tenant_auto_resolve</code></td>
+<td><code>test_tenant_auto_resolve.py</code></td>
+<td>MaaSModelRef tenant auto-resolution from the gateway parentRef</td>
 </tr>
 <tr>
 <td><code>external</code></td>
@@ -4123,7 +4128,7 @@
 </tr>
 <tr>
 <td><code>E2E_PARALLEL_WORKERS</code></td>
-<td>pytest-xdist worker count for pass 1 (default <code>7</code>, one per group). Set to <code>1</code> for single-worker pass 1 without xdist; pass 2 stays serial.</td>
+<td>pytest-xdist worker count for pass 1 (default <code>7</code>). Set to <code>1</code> for single-worker pass 1 without xdist; pass 2 stays serial.</td>
 </tr>
 </tbody>
 </table>
@@ -4155,13 +4160,13 @@
 <p><strong>Read-only tests go in <code>readonly</code></strong>: Tests that only read cluster state (no creates, no deletes, no patches) belong in the <code>readonly</code> group. This group finishes fast and never conflicts with other groups.</p>
 </li>
 <li>
-<p><strong>Self-managing tenant tests go in <code>mt_lifecycle</code> or <code>tenant_isolation</code></strong>: Tests that create their own AITenant CRs belong in one of these groups. <code>mt_lifecycle</code> for lifecycle operations (create/delete/migrate), <code>tenant_isolation</code> for cross-tenant isolation assertions using the <code>shared_test_tenants</code> fixture.</p>
+<p><strong>Self-managing tenant tests go in <code>mt_lifecycle</code> or a <code>tenant_*</code> group</strong>: Tests that create their own AITenant CRs belong in one of these groups. <code>mt_lifecycle</code> for lifecycle operations (create/delete/migrate), <code>tenant_isolation</code> for cross-tenant isolation assertions using the <code>shared_test_tenants</code> fixture. A long isolation module that builds its own tenant pair gets its own group (<code>tenant_inference</code>, <code>tenant_ipp</code>), so its runtime doesn't add to <code>tenant_isolation</code>'s.</p>
 </li>
 <li>
 <p><strong>Externally-gated tests go in <code>external</code></strong>: Tests that require external infrastructure (Keycloak OIDC, external endpoints) and use <code>pytest.mark.skipif</code> to self-gate belong in the <code>external</code> group.</p>
 </li>
 <li>
-<p><strong>Prefer existing groups over new ones</strong>: Adding more groups increases worker count and cluster resource pressure. Only create a new group if the test's mutation scope genuinely conflicts with all existing groups.</p>
+<p><strong>Prefer existing groups over new ones</strong>: Adding more groups increases cluster resource pressure. Only create a new group if the test's mutation scope genuinely conflicts with all existing groups. The exception is wall clock: with <code>--dist=loadgroup</code> pass 1 cannot finish before its longest group, so split a group whose runtime alone sets the pass length, as long as the parts share no tenants or CRs and make no negative assertions (quiet logs, counters) on components the others touch. Pass 1 has more groups than workers: xdist starts the groups with the most tests first and hands the rest to whichever worker drains first, so a long group with few tests starts late.</p>
 </li>
 </ol>
 <h4 id="serial-marker">Serial Marker</h4>
@@ -4424,7 +4429,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 11:53:50 UTC">October 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 18:59:39 UTC">October 1, 2026</span>
   </span>
 
     
