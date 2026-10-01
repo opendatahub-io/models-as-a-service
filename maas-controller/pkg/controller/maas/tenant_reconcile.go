@@ -27,6 +27,7 @@ import (
 	"github.com/go-logr/logr"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -54,6 +55,61 @@ const (
 	tenantFinalizer       = "maas.opendatahub.io/tenant-cleanup"
 	legacyTenantFinalizer = "maas.opendatahub.io/tenant-finalizer"
 )
+
+const (
+	// kuadrantRecheckInterval bounds how long router-anchored payload processing outlives
+	// Kuadrant wiring its wasm filter. Until the next render, wasm runs before ipp-pre and
+	// body-routed /v1/* skips AuthPolicy and TRLP, so the window is kept well under the old
+	// 5m resync; the cost is one render and apply per affected tenant, only while degraded.
+	kuadrantRecheckInterval = 2 * time.Minute
+
+	// kuadrantWasmPluginRecheckInterval is how often the WasmPlugin probe re-detects the
+	// Kuadrant carrier, and how often a tenant whose WasmPlugin could not be read is
+	// re-rendered. It matches the 5m resync every tenant ran before watches replaced it.
+	// The unreadable case keeps the Kuadrant anchors, so the auth window above does not apply.
+	kuadrantWasmPluginRecheckInterval = 5 * time.Minute
+
+	// discoveryLagRetry covers the gap between a CRD turning Established, which fires the
+	// CRD watch, and discovery serving its kind to the REST mapper. No further event
+	// arrives once that gap closes.
+	discoveryLagRetry = 10 * time.Second
+)
+
+// kuadrantRouterFallbackWarning is static so the periodic recheck never rewrites status.
+var kuadrantRouterFallbackWarning = "Kuadrant wasm auth was not found on the gateway; payload processing " +
+	"runs on router anchors until it appears, re-detected every " + kuadrantRecheckInterval.String()
+
+type timerReasonKey struct{}
+
+// timerReason is why a reconcile asked to come back on a timer rather than wait for a
+// watch event; Reconcile logs it, as nothing else shows a tenant waiting on a timer.
+type timerReason struct{ reason string }
+
+func withTimerReason(ctx context.Context) (context.Context, *timerReason) {
+	reason := &timerReason{}
+	return context.WithValue(ctx, timerReasonKey{}, reason), reason
+}
+
+func requeueOnTimer(ctx context.Context, after time.Duration, reason string) ctrl.Result {
+	if holder, ok := ctx.Value(timerReasonKey{}).(*timerReason); ok {
+		holder.reason = reason
+	}
+	return ctrl.Result{RequeueAfter: after}
+}
+
+// kuadrantRecheck requeues while the Kuadrant wasm detection cannot be left to a watch or
+// to the WasmPlugin probe: on the router fallback, and while the WasmPlugin cannot be read.
+func kuadrantRecheck(ctx context.Context, runRes *tenantreconcile.RunResult) ctrl.Result {
+	switch {
+	case runRes == nil:
+		return ctrl.Result{}
+	case runRes.KuadrantRouterFallback:
+		return requeueOnTimer(ctx, kuadrantRecheckInterval, "Kuadrant wasm auth not found on the gateway; payload processing runs on the router fallback")
+	case runRes.KuadrantDetectionWarning != "":
+		return requeueOnTimer(ctx, kuadrantWasmPluginRecheckInterval, "Kuadrant wasm auth could not be verified: "+runRes.KuadrantDetectionWarning)
+	}
+	return ctrl.Result{}
+}
 
 // tenantUsesCleanupFinalizer reports whether this tenant config should carry tenant-cleanup.
 // The default platform tenant (no AITenant labels) relies on Config/default GC for teardown (TODO: fix in GA release);
@@ -185,6 +241,9 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if result != nil {
 		return *result, err
 	}
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 
 	// Run platform reconciliation
 	runRes, result, err := r.reconcilePlatform(ctx, log, &tenant, platformContext, mcfg)
@@ -207,7 +266,7 @@ func (r *TenantReconciler) reconcile(ctx context.Context, req ctrl.Request) (ctr
 	r.attemptLegacyCleanup(ctx, log)
 
 	// Set final status
-	return r.setFinalStatus(ctx, &tenant)
+	return r.setFinalStatus(ctx, &tenant, runRes)
 }
 
 func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
@@ -224,7 +283,8 @@ func (r *TenantReconciler) handleDeletion(ctx context.Context, log logr.Logger, 
 			return ctrl.Result{}, err
 		}
 		if !subscriptionsDeleted || !authPoliciesDeleted {
-			return ctrl.Result{RequeueAfter: 5 * time.Second}, nil
+			// Their delete events re-enqueue this tenant (see mapDeletedTenantChildToMaasTenantConfig).
+			return ctrl.Result{}, nil
 		}
 
 		if err := r.cleanupTenantResources(ctx, log, tenant); err != nil {
@@ -291,13 +351,17 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
-	if err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name); err != nil {
-		log.Info("gateway validation failed", "error", err)
-		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", err.Error()); err2 != nil {
+	missingGateway, err := validateGatewayExists(ctx, r.Client, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+	if err != nil {
+		return nil, tenantreconcile.PlatformContext{}, nil, r.recordFailure(ctx, tenant, "GatewayCheckFailed", err)
+	}
+	if missingGateway != "" {
+		log.Info("gateway validation failed", "reason", missingGateway)
+		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "GatewayNotReady", missingGateway); err2 != nil {
 			return nil, tenantreconcile.PlatformContext{}, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 30 * time.Second}
-		return nil, tenantreconcile.PlatformContext{}, &res, nil
+		// The Gateway watch re-enqueues tenants that reference it once it is created.
+		return nil, tenantreconcile.PlatformContext{}, &ctrl.Result{}, nil
 	}
 
 	if r.ManifestPath == "" {
@@ -313,20 +377,28 @@ func (r *TenantReconciler) validateConfigAndGateway(ctx context.Context, log log
 }
 
 func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (tenantreconcile.PrerequisiteReport, *ctrl.Result, error) {
-	if err := tenantreconcile.CheckDependencies(ctx, r.Client); err != nil {
-		setDependenciesCondition(tenant, false, err.Error())
-		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", err.Error())
+	missing, err := tenantreconcile.CheckDependencies(ctx, r.Client)
+	if err != nil {
+		return tenantreconcile.PrerequisiteReport{}, nil, r.recordFailure(ctx, tenant, "DependencyCheckFailed", err)
+	}
+	if missing != "" {
+		setDependenciesCondition(tenant, false, missing)
+		setDeploymentsAvailableCondition(tenant, false, "DependenciesNotMet", missing)
 		prerequisitesUnevaluatedCondition(tenant, "Prerequisites were not evaluated because required dependencies are not met")
-		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", err.Error()); err2 != nil {
+		if err2 := r.patchStatus(ctx, tenant, "Pending", metav1.ConditionFalse, "DependenciesNotAvailable", missing); err2 != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err2
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return tenantreconcile.PrerequisiteReport{}, &res, nil
+		// The CRD watch re-enqueues every tenant when the CRD appears; retryAfterDiscoveryLag
+		// covers a CRD that is already Established.
+		return tenantreconcile.PrerequisiteReport{}, &ctrl.Result{}, nil
 	}
 	setDependenciesCondition(tenant, true, "")
 
 	appNs := r.appNamespaceForTenant()
-	rep := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
+	rep, err := tenantreconcile.CollectPrerequisiteReport(ctx, r.Client, appNs)
+	if err != nil {
+		return tenantreconcile.PrerequisiteReport{}, nil, r.recordFailure(ctx, tenant, "PrerequisiteCheckFailed", err)
+	}
 	setPrerequisiteConditionsFromReport(tenant, rep)
 	if len(rep.Blocking) > 0 {
 		tenant.Status.Phase = "Failed"
@@ -343,8 +415,8 @@ func (r *TenantReconciler) checkDependenciesAndPrerequisites(ctx context.Context
 		if err := r.Status().Update(ctx, tenant); err != nil {
 			return tenantreconcile.PrerequisiteReport{}, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 45 * time.Second}
-		return tenantreconcile.PrerequisiteReport{}, &res, nil
+		// The only blocking prerequisite is the maas-db-config Secret, which is watched.
+		return tenantreconcile.PrerequisiteReport{}, &ctrl.Result{}, nil
 	}
 
 	return rep, nil, nil
@@ -371,6 +443,8 @@ func (r *TenantReconciler) reconcilePlatform(
 		return nil, nil, fmt.Errorf("tenant platform reconcile: %w", failureAfterStatus(reason, statusErr, err))
 	}
 
+	r.kuadrantProbe.observe(types.NamespacedName{Namespace: platformContext.GatewayRef.Namespace, Name: platformContext.GatewayRef.Name}, runRes)
+
 	if err := r.ensureGatewayManagementAuth(ctx, log, tenant); err != nil {
 		return nil, nil, fmt.Errorf("ensure gateway management auth: %w", r.recordFailure(ctx, tenant, "GatewayAuthPolicyFailed", err))
 	}
@@ -389,7 +463,9 @@ func (r *TenantReconciler) reconcilePlatform(
 		if err := r.Status().Update(ctx, tenant); err != nil {
 			return nil, nil, err
 		}
-		res := ctrl.Result{RequeueAfter: 20 * time.Second}
+		// Rollout progress, EnvoyFilter changes and the payload-processing handshake
+		// annotation on this tenant config all re-enqueue through watches.
+		res := kuadrantRecheck(ctx, runRes)
 		return nil, &res, nil
 	}
 
@@ -407,6 +483,7 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	hasPlatformWarnings := runRes != nil && len(runRes.Warnings) > 0
 	hasKuadrantWarning := runRes != nil && runRes.KuadrantDetectionWarning != ""
 	hasUsageLogsWarning := usageLogsWarning != ""
+	hasRouterFallback := runRes != nil && runRes.KuadrantRouterFallback
 
 	if hasPrereqWarnings {
 		allWarnings = append(allWarnings, prereqReport.Warnings...)
@@ -419,6 +496,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 	}
 	if hasUsageLogsWarning {
 		allWarnings = append(allWarnings, usageLogsWarning)
+	}
+	if hasRouterFallback {
+		allWarnings = append(allWarnings, kuadrantRouterFallbackWarning)
 	}
 
 	if len(allWarnings) > 0 {
@@ -435,6 +515,9 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 		if hasUsageLogsWarning {
 			warningKinds++
 		}
+		if hasRouterFallback {
+			warningKinds++
+		}
 
 		var reason string
 		switch {
@@ -446,6 +529,8 @@ func (r *TenantReconciler) aggregateWarningsAndSetDegraded(
 			reason = "InvalidReplicaAnnotation"
 		case hasKuadrantWarning:
 			reason = "KuadrantDetectionUnverified"
+		case hasRouterFallback:
+			reason = "KuadrantRouterFallback"
 		default:
 			reason = "UsageLoggingNotProvided"
 		}
@@ -474,7 +559,7 @@ func (r *TenantReconciler) attemptLegacyCleanup(ctx context.Context, log logr.Lo
 	}
 }
 
-func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig) (ctrl.Result, error) {
+func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alpha1.MaasTenantConfig, runRes *tenantreconcile.RunResult) (ctrl.Result, error) {
 	tenant.Status.Phase = "Active"
 	if apimeta.IsStatusConditionTrue(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded) {
 		tenant.Status.Phase = "Degraded"
@@ -492,7 +577,34 @@ func (r *TenantReconciler) setFinalStatus(ctx context.Context, tenant *maasv1alp
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{RequeueAfter: 5 * time.Minute}, nil
+	// Operand drift re-enqueues through the operand watches; only the Kuadrant wasm
+	// detection is polled.
+	return kuadrantRecheck(ctx, runRes), nil
+}
+
+// retryAfterDiscoveryLag brings the reconcile back soon when it skipped a kind the REST
+// mapper did not know although a CRD serving that kind is Established: discovery lags the
+// Established condition and nothing reports it catching up. A kind with no such CRD waits
+// for the CRD watch. CRDs are read from the cache the CRD watches keep, which the event
+// that started this reconcile has already updated.
+func (r *TenantReconciler) retryAfterDiscoveryLag(ctx context.Context, kinds []schema.GroupVersionKind, result ctrl.Result) ctrl.Result {
+	if len(kinds) == 0 || (result.RequeueAfter > 0 && result.RequeueAfter <= discoveryLagRetry) {
+		return result
+	}
+	var crds extv1.CustomResourceDefinitionList
+	if err := r.List(ctx, &crds, client.UnsafeDisableDeepCopy); err != nil {
+		oteljson.FromContext(ctx).Error(err, "failed to list CRDs for kinds skipped as not served", "kinds", kinds)
+		return result
+	}
+	for i := range crds.Items {
+		crd := &crds.Items[i]
+		for _, gvk := range kinds {
+			if crd.Spec.Group == gvk.Group && crd.Spec.Names.Kind == gvk.Kind && crdServesVersion(crd, gvk.Version) {
+				return requeueOnTimer(ctx, discoveryLagRetry, "discovery does not serve "+gvk.Kind+" yet although its CRD is established")
+			}
+		}
+	}
+	return result
 }
 
 // readyConfigOrWait returns the singleton Config when it exists, is not deleting,
@@ -556,16 +668,18 @@ func (r *TenantReconciler) appNamespaceForTenant() string {
 	return r.AppNamespace
 }
 
-func validateGatewayExists(ctx context.Context, c client.Client, namespace, name string) error {
+// validateGatewayExists reports why the gateway cannot be used when it does not exist.
+// An error means the read failed, which says nothing about the gateway.
+func validateGatewayExists(ctx context.Context, c client.Client, namespace, name string) (missing string, err error) {
 	gw := &gwapiv1.Gateway{}
 	key := types.NamespacedName{Namespace: namespace, Name: name}
 	if err := c.Get(ctx, key, gw); err != nil {
 		if apierrors.IsNotFound(err) {
-			return fmt.Errorf("gateway %s/%s not found: the specified Gateway must exist before enabling MaaS platform reconcile", namespace, name)
+			return fmt.Sprintf("gateway %s/%s not found: the specified Gateway must exist before enabling MaaS platform reconcile", namespace, name), nil
 		}
-		return fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
+		return "", fmt.Errorf("failed to look up gateway %s/%s: %w", namespace, name, err)
 	}
-	return nil
+	return "", nil
 }
 
 // recordFailure records err in status under reason and returns it, so a failure shows in

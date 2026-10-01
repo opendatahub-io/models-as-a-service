@@ -7,6 +7,7 @@ package tenantreconcile
 import (
 	"fmt"
 	"reflect"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -237,6 +238,16 @@ func IstioTelemetryName(tenantID string) string {
 
 func MaaSAPIDeploymentName(tenantID string) string {
 	return resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
+}
+
+// DefaultMaaSAPIDeploymentName is the default tenant's maas-api Deployment name.
+const DefaultMaaSAPIDeploymentName = baseMaaSAPIDeploymentName
+
+// IsMaaSAPIDeploymentName reports whether name has the shape MaaSAPIDeploymentName
+// produces: the base name, or the base name plus a tenant suffix. It matches any
+// "maas-api-*" name and does not identify the tenant; tracking labels do that.
+func IsMaaSAPIDeploymentName(name string) bool {
+	return name == baseMaaSAPIDeploymentName || strings.HasPrefix(name, baseMaaSAPIDeploymentName+"-")
 }
 
 func MaaSAPIServiceName(tenantID string) string {

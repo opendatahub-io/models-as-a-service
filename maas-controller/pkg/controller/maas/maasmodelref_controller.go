@@ -25,6 +25,7 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	"k8s.io/apiextensions-apiserver/pkg/apihelpers"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -465,13 +466,31 @@ func llmisvcReadyStatus(obj *kservev1alpha2.LLMInferenceService) string {
 // Uses the API reader directly — not the REST mapper (scheme-registered types cause
 // false positives) and not the cached client (cache not started at SetupWithManager time).
 func crdExists(ctx context.Context, reader client.Reader, crdName string) bool {
+	return lookupCRD(ctx, reader, crdName) != nil
+}
+
+// lookupCRD returns the named CRD, or nil when it is absent or cannot be read.
+func lookupCRD(ctx context.Context, reader client.Reader, crdName string) *apiextensionsv1.CustomResourceDefinition {
 	crd := &apiextensionsv1.CustomResourceDefinition{}
-	err := reader.Get(ctx, types.NamespacedName{Name: crdName}, crd)
-	if err == nil {
-		return true
+	if err := reader.Get(ctx, types.NamespacedName{Name: crdName}, crd); err != nil {
+		if !apierrors.IsNotFound(err) {
+			ctrl.Log.Error(err, "failed to check for CRD", "crdName", crdName)
+		}
+		return nil
 	}
-	if !apierrors.IsNotFound(err) {
-		ctrl.Log.Error(err, "failed to check for CRD", "crdName", crdName)
+	return crd
+}
+
+// crdServesVersion reports whether crd is established and serves version, the point
+// from which an informer for that version can list and watch.
+func crdServesVersion(crd *apiextensionsv1.CustomResourceDefinition, version string) bool {
+	if crd == nil || !apihelpers.IsCRDConditionTrue(crd, apiextensionsv1.Established) {
+		return false
+	}
+	for _, v := range crd.Spec.Versions {
+		if v.Name == version && v.Served {
+			return true
+		}
 	}
 	return false
 }
@@ -486,6 +505,19 @@ func registerWatchWhenCRDAppears(
 	crdName string,
 	makeSource func() source.Source,
 ) error {
+	return registerWatchWhenCRDServes(c, mgr, crdName, "", makeSource)
+}
+
+// registerWatchWhenCRDServes is registerWatchWhenCRDAppears that, for a non-empty
+// version, also waits until the CRD is established and serves that version. Registering
+// earlier leaves the Kind source retrying discovery every 10s, indefinitely when the CRD
+// exists but never serves the version.
+func registerWatchWhenCRDServes(
+	c controller.Controller,
+	mgr ctrl.Manager,
+	crdName, version string,
+	makeSource func() source.Source,
+) error {
 	log := ctrl.Log.WithName("crd-watcher").WithValues("crdName", crdName)
 	log.Info("CRD not yet registered at startup; will register watch dynamically when it appears")
 	var once sync.Once
@@ -494,7 +526,7 @@ func registerWatchWhenCRDAppears(
 		&apiextensionsv1.CustomResourceDefinition{},
 		handler.TypedEnqueueRequestsFromMapFunc[*apiextensionsv1.CustomResourceDefinition](
 			func(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition) []reconcile.Request {
-				if crd.Name != crdName {
+				if crd.Name != crdName || (version != "" && !crdServesVersion(crd, version)) {
 					return nil
 				}
 				once.Do(func() {

@@ -50,6 +50,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -961,6 +962,49 @@ func setupWebhooks(mgr ctrl.Manager, aitenantNamespace, gatewayNamespace string)
 	return nil
 }
 
+// mustPreManagerClient returns a direct client for setup reads made before the manager
+// and its cache exist.
+func mustPreManagerClient(cfg *rest.Config) client.Client { //nolint:ireturn // client.New only returns the interface.
+	c, err := client.New(cfg, client.Options{Scheme: scheme})
+	if err != nil {
+		setupLog.Error(err, "unable to create pre-manager Kubernetes client")
+		os.Exit(1)
+	}
+	return c
+}
+
+// mergeCacheByObject adds src to dst and refuses a GVK both configure: the cache keys
+// its options by GVK, so one would silently replace the other.
+func mergeCacheByObject(dst, src map[client.Object]cache.ByObject, s *runtime.Scheme) error {
+	configured := map[schema.GroupVersionKind]bool{}
+	for obj := range dst {
+		gvk, err := apiutil.GVKForObject(obj, s)
+		if err != nil {
+			return fmt.Errorf("cache options for %T: %w", obj, err)
+		}
+		configured[gvk] = true
+	}
+	for obj, opts := range src {
+		gvk, err := apiutil.GVKForObject(obj, s)
+		if err != nil {
+			return fmt.Errorf("cache options for %T: %w", obj, err)
+		}
+		if configured[gvk] {
+			return fmt.Errorf("cache options for %s are configured twice", gvk)
+		}
+		configured[gvk] = true
+		dst[obj] = opts
+	}
+	return nil
+}
+
+func mustMergeCacheByObject(dst, src map[client.Object]cache.ByObject) {
+	if err := mergeCacheByObject(dst, src, scheme); err != nil {
+		setupLog.Error(err, "unable to configure the cache")
+		os.Exit(1)
+	}
+}
+
 func main() {
 	var metricsAddr string
 	var secureMetrics bool
@@ -1139,6 +1183,16 @@ func main() {
 			"tenantNamespaceLabel", tenantreconcile.LabelAIGatewayTenant,
 			"compatTenantNamespaceLabel", tenantreconcile.LabelManagedByAITenant)
 	}
+	// Operand informer scoping is merged after the namespace-mode choice above because
+	// both branches build a fresh ByObject map, and it needs a direct client because
+	// cache options are fixed before the manager exists. Operand kinds must stay
+	// disjoint from the kinds above: the cache keys ByObject by GVK while ranging
+	// over the map, so two entries for one kind resolve in random order.
+	// The only managedFields reader checks unstructured objects, which the client reads
+	// from the API server, so cached objects do not need them.
+	cacheOpts.DefaultTransform = cache.TransformStripManagedFields()
+	preManagerClient := mustPreManagerClient(cfg)
+	mustMergeCacheByObject(cacheOpts.ByObject, maas.TenantOperandCacheByObject(context.Background(), preManagerClient, infraNamespace, gatewayNamespace))
 
 	ctx, cancel := context.WithCancel(ctrl.SetupSignalHandler())
 
@@ -1233,6 +1287,7 @@ func main() {
 
 	if err := (&externalmodel.Reconciler{
 		Client:           mgr.GetClient(),
+		APIReader:        mgr.GetAPIReader(),
 		Scheme:           mgr.GetScheme(),
 		Log:              ctrl.Log.WithName("controllers").WithName("ExternalModel"),
 		GatewayName:      gatewayName,

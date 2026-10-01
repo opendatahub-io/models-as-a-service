@@ -18,6 +18,7 @@ package externalmodel
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -32,7 +33,9 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -531,4 +534,37 @@ func TestIsManaged(t *testing.T) {
 			assert.Equal(t, tc.want, isManaged(obj))
 		})
 	}
+}
+
+func TestReconcile_ReadsServicesWithoutTheCache(t *testing.T) {
+	// A typed cached Service read starts a cluster-wide Service informer; the API reader
+	// avoids it.
+	const (
+		name     = "svc-reader"
+		ns       = "test-ns"
+		endpoint = "api.example.com"
+	)
+	resourceName := modelnaming.ExternalModelResourceName(name)
+	existingSvc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: resourceName, Namespace: ns},
+		Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeExternalName, ExternalName: "old.example.com"},
+	}
+	store := fake.NewClientBuilder().WithScheme(testScheme).
+		WithObjects(newTestExternalModel(name, ns, endpoint, nil), existingSvc).Build()
+	cached := interceptor.NewClient(store, interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Service); ok {
+				return errors.New("typed Service read through the cache")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	r := &Reconciler{Client: cached, APIReader: store, Scheme: testScheme, Log: ctrl.Log}
+
+	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: ns}})
+	require.NoError(t, err)
+
+	got := &corev1.Service{}
+	require.NoError(t, store.Get(t.Context(), types.NamespacedName{Name: resourceName, Namespace: ns}, got))
+	assert.Equal(t, endpoint, got.Spec.ExternalName)
 }

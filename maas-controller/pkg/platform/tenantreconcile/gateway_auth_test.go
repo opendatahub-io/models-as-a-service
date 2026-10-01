@@ -36,7 +36,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got)
+		assert.Equal(t, kuadrantWasmEnvoyFilter, got)
 		assert.Empty(t, warning)
 	})
 
@@ -56,7 +56,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got)
+		assert.Equal(t, kuadrantWasmPlugin, got)
 		assert.Empty(t, warning)
 	})
 
@@ -65,14 +65,14 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 
 	forbiddenWasmPlugin := interceptor.Funcs{
 		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if obj.GetObjectKind().GroupVersionKind().Kind == gvkWasmPlugin.Kind {
-				return apierrors.NewForbidden(schema.GroupResource{Group: gvkWasmPlugin.Group, Resource: "wasmplugins"},
+			if obj.GetObjectKind().GroupVersionKind().Kind == GVKWasmPlugin.Kind {
+				return apierrors.NewForbidden(schema.GroupResource{Group: GVKWasmPlugin.Group, Resource: "wasmplugins"},
 					key.Name, errors.New("cannot get wasmplugins"))
 			}
 			return apierrors.NewNotFound(schema.GroupResource{Group: GVKEnvoyFilter.Group, Resource: "envoyfilters"}, key.Name)
@@ -86,7 +86,7 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.True(t, got, "a forbidden read must not count as Kuadrant being absent")
+		assert.Equal(t, kuadrantWasmAssumed, got, "a forbidden read must not count as Kuadrant being absent")
 		assert.Contains(t, warning, "wasmplugins.extensions.istio.io")
 	})
 
@@ -95,15 +95,15 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 
 	t.Run("WasmPlugin API not installed enables router fallback", func(t *testing.T) {
 		cl := fake.NewClientBuilder().WithScheme(scheme).WithInterceptorFuncs(interceptor.Funcs{
 			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if obj.GetObjectKind().GroupVersionKind().Kind == gvkWasmPlugin.Kind {
-					return &meta.NoKindMatchError{GroupKind: gvkWasmPlugin.GroupKind(), SearchedVersions: []string{gvkWasmPlugin.Version}}
+				if obj.GetObjectKind().GroupVersionKind().Kind == GVKWasmPlugin.Kind {
+					return &meta.NoKindMatchError{GroupKind: GVKWasmPlugin.GroupKind(), SearchedVersions: []string{GVKWasmPlugin.Version}}
 				}
 				return apierrors.NewNotFound(schema.GroupResource{Group: GVKEnvoyFilter.Group, Resource: "envoyfilters"}, key.Name)
 			},
@@ -111,11 +111,11 @@ func TestGatewayHasKuadrantWasmAuth(t *testing.T) {
 
 		got, warning, err := gatewayHasKuadrantWasmAuth(context.Background(), cl, "openshift-ingress", "maas-default-gateway")
 		require.NoError(t, err)
-		assert.False(t, got)
+		assert.Equal(t, kuadrantWasmNone, got)
 		assert.Empty(t, warning)
 	})
 }
 
 func TestKuadrantGatewayResourceName(t *testing.T) {
-	assert.Equal(t, "kuadrant-maas-default-gateway", kuadrantGatewayResourceName("maas-default-gateway"))
+	assert.Equal(t, "kuadrant-maas-default-gateway", KuadrantGatewayResourceName("maas-default-gateway"))
 }

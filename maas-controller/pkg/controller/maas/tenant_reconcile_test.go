@@ -422,7 +422,7 @@ func TestTenantReconcile_AITenantManagedDefaultDeletionWaitsForMaaSCRFinalizers(
 
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(5 * time.Second))
+	g.Expect(res).To(Equal(ctrl.Result{}), "MaaS CR delete events re-enqueue the tenant; no polling")
 
 	var deletingSubscription maasv1alpha1.MaaSSubscription
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(subscription), &deletingSubscription)).To(Succeed())
@@ -1233,6 +1233,24 @@ func TestTenantReconcile_InvalidTenantIdentifierFailsAfterDeletionCheck(t *testi
 	ready := apimeta.FindStatusCondition(updated.Status.Conditions, tenantreconcile.ReadyConditionType)
 	g.Expect(ready).NotTo(BeNil())
 	g.Expect(ready.Reason).To(Equal("InvalidTenantIdentity"))
+}
+
+func TestAggregateWarningsReportsRouterFallback(t *testing.T) {
+	g := NewWithT(t)
+	tenant := &maasv1alpha1.MaasTenantConfig{}
+
+	(&TenantReconciler{}).aggregateWarningsAndSetDegraded(tenant, tenantreconcile.PrerequisiteReport{},
+		&tenantreconcile.RunResult{KuadrantRouterFallback: true}, "")
+	first := apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded)
+	g.Expect(first).NotTo(BeNil())
+	g.Expect(first.Status).To(Equal(metav1.ConditionTrue))
+	g.Expect(first.Reason).To(Equal("KuadrantRouterFallback"))
+	g.Expect(first.Message).To(ContainSubstring("router"))
+
+	// Static text: a periodic recheck must not rewrite status.
+	(&TenantReconciler{}).aggregateWarningsAndSetDegraded(tenant, tenantreconcile.PrerequisiteReport{},
+		&tenantreconcile.RunResult{KuadrantRouterFallback: true}, "")
+	g.Expect(apimeta.FindStatusCondition(tenant.Status.Conditions, tenantreconcile.ConditionTypeDegraded).Message).To(Equal(first.Message))
 }
 
 func TestAggregateWarningsAndSetDegraded(t *testing.T) {

@@ -34,16 +34,38 @@ type RunResult struct {
 	Warnings []string
 	// KuadrantDetectionWarning reports that Kuadrant auth on the gateway could not be verified.
 	KuadrantDetectionWarning string
+	// KuadrantRouterFallback reports that no Kuadrant wasm filter was found on the gateway
+	// and payload processing was anchored on the router instead.
+	KuadrantRouterFallback bool
+	// KuadrantWasmPlugin reports that a WasmPlugin carries Kuadrant's wasm filter.
+	// maas-controller may get WasmPlugins but not watch them, so their removal goes unseen.
+	KuadrantWasmPlugin bool
 }
 
-// CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
-func CheckDependencies(ctx context.Context, c client.Client) error {
-	if ok, err := IsGVKAvailable(c, GVKAuthConfig); err != nil {
-		return fmt.Errorf("dependencies: %w", err)
-	} else if !ok {
-		return errors.New("dependency missing: AuthConfig CRD (authorino.kuadrant.io/v1beta3) not available on cluster")
+// Dependency is a CRD the platform pipeline cannot run without.
+type Dependency struct {
+	GVK schema.GroupVersionKind
+	CRD string
+}
+
+// Dependencies lists the CRDs CheckDependencies requires.
+var Dependencies = []Dependency{
+	{GVK: GVKAuthConfig, CRD: "authconfigs.authorino.kuadrant.io"},
+}
+
+// CheckDependencies reports the first required CRD (AuthConfig) the cluster does not
+// serve. An error means discovery could not be asked, not that anything is missing.
+func CheckDependencies(ctx context.Context, c client.Client) (missing string, err error) {
+	for _, d := range Dependencies {
+		ok, err := IsGVKAvailable(ctx, c, d.GVK)
+		if err != nil {
+			return "", fmt.Errorf("dependencies: %w", err)
+		}
+		if !ok {
+			return fmt.Sprintf("dependency missing: %s CRD (%s) not available on cluster", d.GVK.Kind, d.GVK.GroupVersion()), nil
+		}
 	}
-	return nil
+	return "", nil
 }
 
 // RunPlatform runs kustomize render, apply, and deployment readiness after dependencies and prerequisites
@@ -100,8 +122,10 @@ func RunPlatform(
 		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
 	}
 
+	wasm := kuadrantWasmNone
 	if !params.SkipIPP {
-		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+		var warning string
+		wasm, warning, err = gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
 		if err != nil {
 			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
 		}
@@ -109,11 +133,24 @@ func RunPlatform(
 			log.Info(warning, "gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
 			params.KuadrantDetectionWarning = warning
 		}
-		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+		params.PayloadProcessingRouterExtProcFallback = wasm == kuadrantWasmNone
 		if params.PayloadProcessingRouterExtProcFallback {
 			log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
 				"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
 		}
+	}
+
+	result := RunResult{
+		Warnings:                 params.Warnings,
+		KuadrantDetectionWarning: params.KuadrantDetectionWarning,
+		KuadrantRouterFallback:   params.PayloadProcessingRouterExtProcFallback,
+		KuadrantWasmPlugin:       wasm == kuadrantWasmPlugin,
+	}
+	pending := func(detail string) *RunResult {
+		out := result
+		out.DeploymentPending = true
+		out.Detail = detail
+		return &out
 	}
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
@@ -155,13 +192,7 @@ func RunPlatform(
 			return nil, fmt.Errorf("ensure legacy may deploy: %w", err)
 		}
 		if !ready {
-			return &RunResult{
-				DeploymentPending: true,
-				Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
-				Warnings:          params.Warnings,
-
-				KuadrantDetectionWarning: params.KuadrantDetectionWarning,
-			}, nil
+			return pending("waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP"), nil
 		}
 		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
 			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
@@ -185,8 +216,7 @@ func RunPlatform(
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
 	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
-			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+		return pending(detail), nil
 	}
 	if !params.SkipIPP {
 		ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
@@ -194,11 +224,10 @@ func RunPlatform(
 			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
 		}
 		if !ready {
-			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
-				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+			return pending(detail), nil
 		}
 	}
-	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+	return &result, nil
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
@@ -221,8 +250,10 @@ func Run(
 		return nil, fmt.Errorf("manifest path: %w", err)
 	}
 
-	if err := CheckDependencies(ctx, c); err != nil {
+	if missing, err := CheckDependencies(ctx, c); err != nil {
 		return nil, err
+	} else if missing != "" {
+		return nil, errors.New(missing)
 	}
 
 	appNs := tenant.GetNamespace()
@@ -289,20 +320,28 @@ func MaasAPIDeploymentReady(ctx context.Context, c client.Client, appNamespace, 
 		}
 		return false, "", err
 	}
+	ready, detail = DeploymentRolledOut(dep)
+	return ready, detail, nil
+}
+
+// DeploymentRolledOut reports whether the Deployment controller has observed the
+// current spec and every desired replica is updated and available. The reconcile
+// readiness gate and the watch predicate that re-enqueues on its transitions share it.
+func DeploymentRolledOut(dep *appsv1.Deployment) (ready bool, detail string) {
 	desired := int32(1)
 	if dep.Spec.Replicas != nil {
 		desired = *dep.Spec.Replicas
 	}
 	if dep.Status.ObservedGeneration < dep.Generation {
-		return false, "waiting for deployment spec to be observed", nil
+		return false, "waiting for deployment spec to be observed"
 	}
 	if dep.Status.UpdatedReplicas < desired {
-		return false, fmt.Sprintf("updated replicas %d/%d", dep.Status.UpdatedReplicas, desired), nil
+		return false, fmt.Sprintf("updated replicas %d/%d", dep.Status.UpdatedReplicas, desired)
 	}
 	if dep.Status.AvailableReplicas < desired {
-		return false, fmt.Sprintf("available replicas %d/%d", dep.Status.AvailableReplicas, desired), nil
+		return false, fmt.Sprintf("available replicas %d/%d", dep.Status.AvailableReplicas, desired)
 	}
-	return true, "", nil
+	return true, ""
 }
 
 // PayloadProcessingEnvoyFilterReady verifies the per-tenant gateway EnvoyFilter that
