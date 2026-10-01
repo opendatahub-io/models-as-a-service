@@ -4304,17 +4304,7 @@
 <p><strong>Add test resources if needed</strong> — if your feature requires new MaaS CRs (models, subscriptions, auth policies), add a kustomize overlay under <code>test/e2e/fixtures/</code> and include it in the base <code>kustomization.yaml</code>.</p>
 </li>
 <li>
-<p><strong>Register new modules in CI</strong> — <code>prow_run_smoke_test.sh</code> runs an <strong>explicit file list</strong>. If you create a new test module, add it to the <code>e2e_test_files</code> array in <code>run_e2e_tests()</code>:</p>
-<div class="highlight"><pre><span></span><code><a id="__codelineno-13-1" name="__codelineno-13-1" href="#__codelineno-13-1"></a><span class="c1"># In test/e2e/scripts/prow_run_smoke_test.sh, inside run_e2e_tests()</span>
-<a id="__codelineno-13-2" name="__codelineno-13-2" href="#__codelineno-13-2"></a><span class="nb">local</span><span class="w"> </span>-a<span class="w"> </span><span class="nv">e2e_test_files</span><span class="o">=(</span>
-<a id="__codelineno-13-3" name="__codelineno-13-3" href="#__codelineno-13-3"></a><span class="w">    </span>...
-<a id="__codelineno-13-4" name="__codelineno-13-4" href="#__codelineno-13-4"></a><span class="w">    </span><span class="s2">&quot;</span><span class="nv">$test_dir</span><span class="s2">/tests/test_my_new_feature.py&quot;</span><span class="w">  </span><span class="c1"># ← add here</span>
-<a id="__codelineno-13-5" name="__codelineno-13-5" href="#__codelineno-13-5"></a><span class="o">)</span>
-</code></pre></div>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p><code>run-tests-quick.sh</code> auto-discovers all files under <code>tests/</code>, but <code>prow_run_smoke_test.sh</code> does <strong>not</strong>. Your new module will not run in Konflux CI unless you add it to the <code>e2e_test_files</code> array.</p>
-</div>
+<p><strong>Use pytest discovery for CI</strong> — <code>run_e2e_tests.sh</code> collects every <code>test_*.py</code> module under <code>test/e2e/tests/</code>. New modules do not need a separate CI registration step. Give the module an appropriate <code>xdist_group</code> marker and mark cluster-wide mutations as <code>serial</code>.</p>
 </li>
 <li>
 <p><strong>Use skip markers for optional features</strong> — if your test depends on optional infrastructure (e.g., external OIDC, IPP ExternalModel CRD), gate it with <code>pytest.mark.skipif</code> so the same module runs cleanly in all environments.</p>
@@ -4407,7 +4397,7 @@
 <li class="task-list-item"><input type="checkbox"/> <strong>xdist group</strong>: Ensure the test file has a <code>pytestmark = pytest.mark.xdist_group("group_name")</code> marker (see <a href="#group-assignment-rules">group assignment rules</a>)</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Serial marker</strong>: Add <code>@pytest.mark.serial</code> if the test mutates shared fixtures or scales operators</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Test fixtures</strong>: If new CRs are needed, add a kustomize overlay in <code>test/e2e/fixtures/</code></li>
-<li class="task-list-item"><input type="checkbox"/> <strong>CI registration</strong>: Add new E2E modules to the <code>e2e_test_files</code> array in <code>prow_run_smoke_test.sh</code></li>
+<li class="task-list-item"><input type="checkbox"/> <strong>Pytest discovery</strong>: Confirm the new module follows the <code>test_*.py</code> naming convention and is collected with <code>pytest tests/ --collect-only -q</code></li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Skip markers</strong>: Use <code>pytest.mark.skipif</code> for tests requiring optional infrastructure</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Local validation</strong>: Run <code>make test</code> and/or <code>./test/e2e/run-tests-quick.sh</code> before pushing</li>
 <li class="task-list-item"><input type="checkbox"/> <strong>Integration tests</strong>: If your change affects ODH operator integration, update tests in <a href="https://github.com/opendatahub-io/opendatahub-tests">opendatahub-tests</a></li>
@@ -4434,7 +4424,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 30, 2026 11:02:41 UTC">September 30, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 11:53:50 UTC">October 1, 2026</span>
   </span>
 
     
