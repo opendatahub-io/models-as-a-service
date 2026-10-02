@@ -364,14 +364,14 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 		return nil
 	}
 	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
-		name:          PayloadProcessingHPAName(params.TenantIdentifier),
-		deployment:    PayloadProcessingDeploymentName(params.TenantIdentifier),
-		namespace:     params.GatewayNamespace,
-		minReplicas:   params.PayloadProcessingReplicas,
-		maxReplicas:   params.PayloadProcessingMaxReplicas,
-		targetCPU:     params.PayloadProcessingTargetCPU,
-		targetMemory:  params.PayloadProcessingTargetMemory,
-		logLabel:      "payload-processing",
+		name:         PayloadProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadProcessingReplicas,
+		maxReplicas:  params.PayloadProcessingMaxReplicas,
+		targetCPU:    params.PayloadProcessingTargetCPU,
+		targetMemory: params.PayloadProcessingTargetMemory,
+		logLabel:     "payload-processing",
 	})
 }
 
@@ -381,14 +381,14 @@ func configurePayloadPreProcessingHPA(log logr.Logger, resources *[]unstructured
 		return nil
 	}
 	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
-		name:          PayloadPreProcessingHPAName(params.TenantIdentifier),
-		deployment:    PayloadPreProcessingDeploymentName(params.TenantIdentifier),
-		namespace:     params.GatewayNamespace,
-		minReplicas:   params.PayloadPreProcessingReplicas,
-		maxReplicas:   params.PayloadPreProcessingMaxReplicas,
-		targetCPU:     params.PayloadPreProcessingTargetCPU,
-		targetMemory:  params.PayloadPreProcessingTargetMemory,
-		logLabel:      "payload-pre-processing",
+		name:         PayloadPreProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadPreProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadPreProcessingReplicas,
+		maxReplicas:  params.PayloadPreProcessingMaxReplicas,
+		targetCPU:    params.PayloadPreProcessingTargetCPU,
+		targetMemory: params.PayloadPreProcessingTargetMemory,
+		logLabel:     "payload-pre-processing",
 	})
 }
 

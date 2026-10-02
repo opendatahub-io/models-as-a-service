@@ -464,12 +464,7 @@ class TestTenantLifecycle:
         if patch_result.returncode != 0:
             combined = (patch_result.stderr or "") + (patch_result.stdout or "")
             lowered = combined.lower()
-            if (
-                "payloadprocessing" in lowered
-                or "payloadpreprocessing" in lowered
-                or "unknown field" in lowered
-                or "not found" in lowered
-            ):
+            if "unknown field" in lowered:
                 pytest.skip(
                     "MaasTenantConfig payload resource fields not supported by installed "
                     f"CRD/controller; skipping: {combined.strip()}"
