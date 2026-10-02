@@ -5,11 +5,8 @@
 # python3.10 when present; as root on yum/dnf hosts, install python3.11 from AppStream.
 #
 # Source this file; it exports E2E_PYTHON (absolute or PATH name).
-
-# Already resolved in this shell.
-if [[ -n "${E2E_PYTHON:-}" ]] && command -v "${E2E_PYTHON}" >/dev/null 2>&1; then
-  return 0 2>/dev/null || exit 0
-fi
+# Intentionally does not set -euo pipefail — callers own shell options (all entry
+# scripts that source this already use set -euo pipefail).
 
 _e2e_python_version() {
   "$1" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null
@@ -33,6 +30,14 @@ _e2e_find_python() {
   done
   return 1
 }
+
+# Already resolved in this shell — only reuse if it meets the floor.
+if [[ -n "${E2E_PYTHON:-}" ]] && command -v "${E2E_PYTHON}" >/dev/null 2>&1 \
+  && _e2e_python_at_least_310 "${E2E_PYTHON}"; then
+  return 0 2>/dev/null || exit 0
+fi
+# Stale or too-old override: clear and continue discovery / install.
+unset E2E_PYTHON
 
 if E2E_PYTHON="$(_e2e_find_python)"; then
   export E2E_PYTHON

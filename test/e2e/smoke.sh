@@ -12,6 +12,12 @@ setup_python_venv() {
     # shellcheck source=scripts/ensure_e2e_python.sh
     source "${DIR}/scripts/ensure_e2e_python.sh"
 
+    # Recreate if an existing venv is older than Python 3.10 (pytest 9 floor).
+    if [[ -d "${VENV_DIR}" ]] && ! "${VENV_DIR}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+        echo "[smoke] Recreating venv (existing interpreter is older than Python 3.10)..."
+        rm -rf "${VENV_DIR}"
+    fi
+
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
         echo "[smoke] Creating virtual environment at ${VENV_DIR} ($E2E_PYTHON)"
