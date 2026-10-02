@@ -345,11 +345,12 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.False(t, targetRefsFound, "targetRefs must be cleared; mutually exclusive with workloadSelector")
 
 	// Verify dual-stage filter chain with dual WASM anchors (router fallback omitted when Kuadrant WASM present):
-	//   [0..3] WasmPlugin + RHCL wasm, [4..8] per-route disable MERGE on maas-api-route rules 0–4.
+	//   [0..3] WasmPlugin + RHCL wasm, [4..8] per-route disable MERGE on maas-api-route rules 0–4,
+	//   [9..10] EPP reorder.
 	configPatches, found, err := unstructured.NestedSlice(payloadEnvoyFilter.Object, "spec", "configPatches")
 	require.NoError(t, err)
 	require.True(t, found)
-	require.Len(t, configPatches, 9, "expected nine configPatches (4x filter insert + 5x MERGE)")
+	require.Len(t, configPatches, 11, "expected eleven configPatches (4x filter insert + 5x MERGE + 2x EPP reorder)")
 
 	wantWasmPluginAnchor := wasmpluginAnchorName(params.GatewayNamespace, params.GatewayName)
 	wantBeforeCluster := grpcClusterName(PayloadPreProcessingDeploymentName(tenantID), params.GatewayNamespace, 9004)
@@ -394,6 +395,8 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 		require.True(t, found, "configPatches[%d] ipp disabled field should exist", i)
 		assert.True(t, ippDisabled, "configPatches[%d] ipp should be disabled", i)
 	}
+
+	requireEPPReorderPatches(t, configPatches)
 
 	// Verify payload-pre-processing Deployment and Service are present and namespaced correctly.
 	payloadBeforeDeployment := requireResource(t, resources, GVKDeployment, PayloadPreProcessingDeploymentName(tenantID))

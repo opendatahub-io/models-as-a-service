@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -461,7 +462,9 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: httpRouteName, Namespace: modelNamespace},
 	}
 
-	// Subscription "gold" in tenant-a namespace (limit: 100)
+	// Subscription "gold" in tenant-a and tenant-b - SAME NAME, and the SAME rate
+	// so both land in the one grouped limit, exercising the case that actually
+	// matters: isolation now lives in the predicate/counters, not in the map key.
 	subA := &maasv1alpha1.MaaSSubscription{
 		ObjectMeta: metav1.ObjectMeta{Name: subscriptionName, Namespace: namespaceA},
 		Spec: maasv1alpha1.MaaSSubscriptionSpec{
@@ -478,7 +481,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		},
 	}
 
-	// Subscription "gold" in tenant-b namespace (limit: 10000) - SAME NAME!
+	// Subscription "gold" in tenant-b namespace - SAME NAME, SAME rate!
 	subB := &maasv1alpha1.MaaSSubscription{
 		ObjectMeta: metav1.ObjectMeta{Name: subscriptionName, Namespace: namespaceB},
 		Spec: maasv1alpha1.MaaSSubscriptionSpec{
@@ -489,7 +492,7 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 				{
 					Name:            modelName,
 					Namespace:       modelNamespace,
-					TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 10000, Window: "1m"}},
+					TokenRateLimits: []maasv1alpha1.TokenRateLimit{{Limit: 100, Window: "1m"}},
 				},
 			},
 		},
@@ -528,82 +531,67 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
 	}
 
-	// CRITICAL: Verify both subscriptions have UNIQUE limit entries
-	// Format: "{namespace}-{name}-{model}-tokens"
-	keyA := namespaceA + "-" + subscriptionName + "-" + modelName + "-tokens"
-	keyB := namespaceB + "-" + subscriptionName + "-" + modelName + "-tokens"
-
-	if keyA == keyB {
-		t.Fatalf("SECURITY BUG: Limit keys are identical (%q), this would cause quota isolation bypass!", keyA)
+	// Both subscriptions share the same name AND rate, so they land in the same
+	// grouped limit (tokens-100-per-1m). Isolation must therefore come from the
+	// predicate's distinct short IDs and the counters, not from the map key or
+	// from having separate limit objects.
+	if len(limitsMap) != 1 {
+		t.Fatalf("expected exactly 1 grouped limit, got %d: %v", len(limitsMap), getMapKeys(limitsMap))
+	}
+	limit, ok := limitsMap["tokens-100-per-1m"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected limit %q not found, got keys: %v", "tokens-100-per-1m", getMapKeys(limitsMap))
 	}
 
-	limitA, hasA := limitsMap[keyA]
-	limitB, hasB := limitsMap[keyB]
-
-	if !hasA {
-		t.Errorf("Limit entry for tenant-a subscription not found, expected key %q, got keys: %v", keyA, getMapKeys(limitsMap))
+	whenSlice, _, _ := unstructured.NestedSlice(limit, "when")
+	if len(whenSlice) != 1 {
+		t.Fatalf("expected 1 when predicate, got %d", len(whenSlice))
 	}
-	if !hasB {
-		t.Errorf("Limit entry for tenant-b subscription not found, expected key %q, got keys: %v", keyB, getMapKeys(limitsMap))
+	predMap, ok := whenSlice[0].(map[string]any)
+	if !ok {
+		t.Fatal("whenSlice[0] is not map[string]any")
+	}
+	pred, ok := predMap["predicate"].(string)
+	if !ok {
+		t.Fatal("predicate is not string")
 	}
 
-	// Verify predicate includes namespace to prevent cross-tenant matching
-	// Format: auth.identity.selected_subscription_key == "{namespace}/{name}@{modelNamespace}/{modelName}"
-	if hasA {
-		limitAMap, ok := limitA.(map[string]any)
-		if !ok {
-			t.Fatal("limitA is not map[string]any")
+	idA := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceA, subscriptionName, modelNamespace, modelName))
+	idB := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceB, subscriptionName, modelNamespace, modelName))
+	if idA == idB {
+		t.Fatalf("SECURITY BUG: short IDs collide (%q), this would cause quota isolation bypass!", idA)
+	}
+	clauseA := `auth.identity.selected_subscription_id == "` + idA + `"`
+	clauseB := `auth.identity.selected_subscription_id == "` + idB + `"`
+	// buildGroupLimit sorts short IDs lexicographically before OR-ing.
+	ids := []string{idA, idB}
+	sort.Strings(ids)
+	expectedPred := `(auth.identity.selected_subscription_id == "` + ids[0] + `" || ` +
+		`auth.identity.selected_subscription_id == "` + ids[1] + `") && !request.path.endsWith("/v1/models")`
+	if pred != expectedPred {
+		t.Errorf("grouped predicate = %q, want %q", pred, expectedPred)
+	}
+	// CRITICAL: each clause must name its own short ID (namespace is hashed in),
+	// so a request for tenant-a's "gold" cannot be counted (or capped) as tenant-b's.
+	if !containsString(pred, clauseA) {
+		t.Errorf("SECURITY BUG: predicate is missing tenant-a's short-ID clause: %s", pred)
+	}
+	if !containsString(pred, clauseB) {
+		t.Errorf("SECURITY BUG: predicate is missing tenant-b's short-ID clause: %s", pred)
+	}
+
+	// CRITICAL: counters must key on selected_subscription_id as well as userid,
+	// or tenant-a and tenant-b would share one Limitador bucket despite the OR.
+	counters, _, _ := unstructured.NestedSlice(limit, "counters")
+	wantCounters := []string{"auth.identity.selected_subscription_id", "auth.identity.userid"}
+	if len(counters) != len(wantCounters) {
+		t.Fatalf("expected %d counters, got %d: %v", len(wantCounters), len(counters), counters)
+	}
+	for i, want := range wantCounters {
+		c, ok := counters[i].(map[string]any)
+		if !ok || c["expression"] != want {
+			t.Errorf("counters[%d] = %v, want expression %q", i, counters[i], want)
 		}
-		whenSlice, _, _ := unstructured.NestedSlice(limitAMap, "when")
-		if len(whenSlice) > 0 {
-			predMap, ok := whenSlice[0].(map[string]any)
-			if !ok {
-				t.Fatal("whenSlice[0] is not map[string]any")
-			}
-			pred, ok := predMap["predicate"].(string)
-			if !ok {
-				t.Fatal("predicate is not string")
-			}
-			expectedPredA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
-			if pred != expectedPredA {
-				t.Errorf("Tenant-a predicate = %q, want %q", pred, expectedPredA)
-			}
-			// CRITICAL: Predicate must NOT match tenant-b's subscription
-			if !containsString(pred, namespaceA) {
-				t.Errorf("SECURITY BUG: Tenant-a predicate doesn't include namespace: %s", pred)
-			}
-		}
-	}
-
-	if hasB {
-		limitBMap, ok := limitB.(map[string]any)
-		if !ok {
-			t.Fatal("limitB is not map[string]any")
-		}
-		whenSlice, _, _ := unstructured.NestedSlice(limitBMap, "when")
-		if len(whenSlice) > 0 {
-			predMap, ok := whenSlice[0].(map[string]any)
-			if !ok {
-				t.Fatal("whenSlice[0] is not map[string]any")
-			}
-			pred, ok := predMap["predicate"].(string)
-			if !ok {
-				t.Fatal("predicate is not string")
-			}
-			expectedPredB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `" && !request.path.endsWith("/v1/models")`
-			if pred != expectedPredB {
-				t.Errorf("Tenant-b predicate = %q, want %q", pred, expectedPredB)
-			}
-			// CRITICAL: Predicate must NOT match tenant-a's subscription
-			if !containsString(pred, namespaceB) {
-				t.Errorf("SECURITY BUG: Tenant-b predicate doesn't include namespace: %s", pred)
-			}
-		}
-	}
-
-	// Verify both limit entries exist (no overwrite/collision)
-	if len(limitsMap) < 2 {
-		t.Errorf("Expected at least 2 limit entries (one per subscription), got %d: %v", len(limitsMap), getMapKeys(limitsMap))
 	}
 }
 

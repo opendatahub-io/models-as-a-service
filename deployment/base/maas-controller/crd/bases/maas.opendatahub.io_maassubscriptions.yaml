@@ -49,6 +49,56 @@ spec:
           spec:
             description: MaaSSubscriptionSpec defines the desired state of MaaSSubscription
             properties:
+              guardrails:
+                description: |-
+                  Guardrails attaches reusable AIGuardrail policies for every model accessed
+                  through this subscription. References resolve in the AITenant target
+                  namespace; a namespace must not be specified on the reference. Selections
+                  are additive with the tenant baseline and cannot remove checks contributed
+                  by another scope.
+                items:
+                  description: |-
+                    GuardrailAttachment attaches an AIGuardrail policy to a MaaS resource and
+                    selects which of the policy's checks apply.
+
+                    Attachments are additive across scopes (tenant, subscription): the effective
+                    set of checks is the union of every scope's selection, and one scope cannot
+                    remove checks contributed by another. Multiple entries referencing the same
+                    policy contribute a union of their selected checks.
+                  properties:
+                    checks:
+                      description: |-
+                        Checks selects check names from the referenced AIGuardrail's spec.checks.
+                        An omitted or empty list selects every check in the policy, including
+                        checks added to the policy later. A non-empty list selects only the named
+                        checks. Names must be unique and must exist in the referenced policy.
+                      items:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: set
+                    ref:
+                      description: Ref identifies the AIGuardrail policy to attach.
+                      properties:
+                        name:
+                          description: Name is the name of the AIGuardrail policy
+                            to attach.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - ref
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
               inferencePriority:
                 description: |-
                   InferencePriority is the scheduling priority applied to inference requests made under
@@ -78,6 +128,57 @@ spec:
                       required:
                       - perToken
                       type: object
+                    guardrails:
+                      description: |-
+                        Guardrails attaches reusable AIGuardrail policies for this specific model
+                        within the subscription. References resolve in the AITenant target
+                        namespace; a namespace must not be specified on the reference. Selections
+                        are additive with the subscription-wide guardrails and every other scope
+                        and cannot remove checks contributed elsewhere.
+                      items:
+                        description: |-
+                          GuardrailAttachment attaches an AIGuardrail policy to a MaaS resource and
+                          selects which of the policy's checks apply.
+
+                          Attachments are additive across scopes (tenant, subscription): the effective
+                          set of checks is the union of every scope's selection, and one scope cannot
+                          remove checks contributed by another. Multiple entries referencing the same
+                          policy contribute a union of their selected checks.
+                        properties:
+                          checks:
+                            description: |-
+                              Checks selects check names from the referenced AIGuardrail's spec.checks.
+                              An omitted or empty list selects every check in the policy, including
+                              checks added to the policy later. A non-empty list selects only the named
+                              checks. Names must be unique and must exist in the referenced policy.
+                            items:
+                              maxLength: 63
+                              minLength: 1
+                              pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                              type: string
+                            maxItems: 64
+                            type: array
+                            x-kubernetes-list-type: set
+                          ref:
+                            description: Ref identifies the AIGuardrail policy to
+                              attach.
+                            properties:
+                              name:
+                                description: Name is the name of the AIGuardrail policy
+                                  to attach.
+                                maxLength: 253
+                                minLength: 1
+                                pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                                type: string
+                            required:
+                            - name
+                            type: object
+                        required:
+                        - ref
+                        type: object
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: atomic
                     name:
                       description: Name is the name of the MaaSModelRef
                       maxLength: 63
@@ -90,8 +191,9 @@ spec:
                       minLength: 1
                       type: string
                     tokenRateLimits:
-                      description: TokenRateLimits defines token-based rate limits
-                        for this model
+                      description: |-
+                        TokenRateLimits defines token-based rate limits for this model.
+                        Required unless Unlimited is true.
                       items:
                         description: TokenRateLimit defines a token rate limit
                         properties:
@@ -119,11 +221,20 @@ spec:
                         type: object
                       minItems: 1
                       type: array
+                    unlimited:
+                      description: |-
+                        Unlimited grants access to this model without a token budget.
+                        Token usage is still metered. Mutually exclusive with TokenRateLimits.
+                      type: boolean
                   required:
                   - name
                   - namespace
-                  - tokenRateLimits
                   type: object
+                  x-kubernetes-validations:
+                  - message: tokenRateLimits is required unless unlimited is true
+                    rule: has(self.tokenRateLimits) || (has(self.unlimited) && self.unlimited)
+                  - message: tokenRateLimits must not be set when unlimited is true
+                    rule: '!(has(self.unlimited) && self.unlimited && has(self.tokenRateLimits))'
                 minItems: 1
                 type: array
               owner:

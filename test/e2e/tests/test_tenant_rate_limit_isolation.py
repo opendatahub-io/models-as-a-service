@@ -28,6 +28,7 @@ from test_helper import (
     TLS_VERIFY,
     _get_cluster_token,
     _delete_cr,
+    _poll_status,
     _wait_for_subscription_trlp_status,
 )
 
@@ -134,6 +135,22 @@ def tenant_rate_limit_setup(tenant_env):
             subscription=sub_b,
         )
         assert key_b_response.status_code in (200, 201), response_summary(key_b_response)
+        key_b = key_b_response.json()["key"]
+
+        # TRLP ready is only Kuadrant Accepted. Until the gateway loads the new
+        # limits, routes fall back to the tenant's zero-token gateway-default-deny
+        # and every request gets 429. Tenant B's budget absorbs this probe;
+        # Tenant A's does not, so _exhaust_until_429 covers A.
+        _poll_status(
+            key_b,
+            200,
+            path=tenant_b["model_path"],
+            model_name=tenant_b["backend_model_name"],
+            timeout=120,
+            inference_fn=lambda api_key, path, extra_headers, model_name: _inference_at(
+                tenant_b["base_url"], api_key, path, model_name
+            ),
+        )
 
         yield {
             "tenant_a": tenant_a,
@@ -142,7 +159,7 @@ def tenant_rate_limit_setup(tenant_env):
             "subscription_a": sub_a,
             "subscription_b": sub_b,
             "key_a": key_a_response.json()["key"],
-            "key_b": key_b_response.json()["key"],
+            "key_b": key_b,
         }
     finally:
         for tenant in tenant_env:
@@ -178,6 +195,12 @@ def _exhaust_until_429(
     timeout: int = 45,
     delay: float = 1.0,
 ) -> tuple[int, requests.Response]:
+    """Send inference until a 429 follows at least one 200.
+
+    A fresh budget always admits the first request (Limitador checks a delta of
+    1 and charges tokens after the response), so a 429 before any 200 means the
+    subscription's limits are not live on the gateway yet.
+    """
     successes = 0
     last = None
     deadline = time.time() + timeout
@@ -186,7 +209,8 @@ def _exhaust_until_429(
         if last.status_code == 200:
             successes += 1
         elif last.status_code == 429:
-            return successes, last
+            if successes:
+                return successes, last
         else:
             raise AssertionError(f"unexpected inference response: {response_summary(last)}")
         time.sleep(delay)
@@ -221,6 +245,7 @@ class TestTenantRateLimitIsolation:
             tenant_a["model_path"],
             tenant_a["backend_model_name"],
         )
+        assert successes > 0, f"Tenant A hit 429 before any successful inference: {response_summary(response)}"
         assert response.status_code == 429, (
             f"Tenant A did not hit rate limit after {successes} successes: {response_summary(response)}"
         )

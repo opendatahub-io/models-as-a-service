@@ -5,7 +5,9 @@ metadata:
 spec:
   model:
     uri: hf://facebook/opt-125m
-    name: facebook/opt-125m
+    # Distinct from the simulator samples (facebook/opt-125m) so both can run in
+    # one namespace - body-based routing needs a unique model identity.
+    name: facebook/opt-125m-cpu
   replicas: 1
   router:
     route: { }
@@ -17,10 +19,15 @@ spec:
   template:
     containers:
       - name: main
-        image: quay.io/pierdipi/vllm-cpu:latest
+        # The image declares no USER. OpenShift assigns a non-root UID; elsewhere set
+        # securityContext.runAsUser, or runAsNonRoot: false as KServe's own sample does.
+        image: docker.io/vllm/vllm-openai-cpu:v0.23.0
         env:
           - name: VLLM_LOGGING_LEVEL
             value: INFO
+          # KV cache size in GiB.
+          - name: VLLM_CPU_KVCACHE_SPACE
+            value: "1"
         resources:
           limits:
             cpu: '2'

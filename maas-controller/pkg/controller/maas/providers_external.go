@@ -19,6 +19,7 @@ package maas
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/go-logr/logr"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -27,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/sets"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -50,6 +52,11 @@ var inferenceExternalModelGVK = schema.GroupVersionKind{
 // externalModelHandler implements BackendHandler for kind "ExternalModel".
 type externalModelHandler struct {
 	r *MaaSModelRefReconciler
+
+	// notReadyReason and notReadyMessage carry the gateway's rejection from
+	// ReconcileRoute to the RuntimeReady condition.
+	notReadyReason  maasv1alpha1.ConditionReason
+	notReadyMessage string
 }
 
 // ReconcileRoute validates the HTTPRoute for an external model and populates status.
@@ -80,7 +87,7 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 				}
 			}
 		}
-		if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+		if name := ippExternalModelRouteName(inferenceEM); name != "" {
 			routeName = name
 		} else {
 			log.Info("inference ExternalModel found but status.httpRouteName not set yet, waiting for reconciler",
@@ -164,25 +171,11 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 		}
 	}
 
-	// Verify the gateway has accepted and programmed the route via status conditions
+	// Only Accepted is checked. Any route status read here has to go through
+	// acceptedRouteParents or routeRejections: the HTTPRoute watch drops every other
+	// status write.
 	if gatewayFound {
-		for _, parent := range route.Status.Parents {
-			pName := string(parent.ParentRef.Name)
-			pNS := routeNS
-			if parent.ParentRef.Namespace != nil {
-				pNS = string(*parent.ParentRef.Namespace)
-			}
-			if pName == expectedGatewayName && pNS == expectedGatewayNamespace {
-				for _, cond := range parent.Conditions {
-					if cond.Type == string(gatewayapiv1.RouteConditionAccepted) && cond.Status == metav1.ConditionTrue {
-						gatewayAccepted = true
-					}
-				}
-				if gatewayAccepted {
-					break
-				}
-			}
-		}
+		gatewayAccepted = acceptedRouteParents(route).Has(types.NamespacedName{Name: expectedGatewayName, Namespace: expectedGatewayNamespace})
 	}
 
 	var hostnames []string
@@ -200,11 +193,24 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	}
 
 	if !gatewayAccepted {
-		log.Info("HTTPRoute references correct gateway but not yet accepted and programmed",
+		if rejected, ok := routeRejections(route)[types.NamespacedName{Name: expectedGatewayName, Namespace: expectedGatewayNamespace}]; ok {
+			log = log.WithValues("gatewayReason", rejected.Reason, "gatewayMessage", rejected.Message)
+			message := fmt.Sprintf("Gateway %s/%s has not accepted HTTPRoute %s/%s (%s)",
+				expectedGatewayNamespace, expectedGatewayName, routeNS, routeName, rejected.Reason)
+			if rejected.Message != "" {
+				message += ": " + rejected.Message
+			}
+			h.notReadyReason = maasv1alpha1.ReasonNotAccepted
+			h.notReadyMessage = truncateConditionMessage(message)
+		}
+		log.Info("HTTPRoute references correct gateway but the gateway has not accepted it",
 			"routeName", routeName, "namespace", routeNS, "model", model.Name)
 		model.Status.HTTPRouteName = routeName
 		model.Status.HTTPRouteNamespace = routeNS
-		// Don't set gateway/hostname fields until route is accepted
+		// Clear what an earlier acceptance set: Status treats a gateway name as ready.
+		model.Status.HTTPRouteGatewayName = ""
+		model.Status.HTTPRouteGatewayNamespace = ""
+		model.Status.HTTPRouteHostnames = nil
 		return nil
 	}
 
@@ -222,6 +228,69 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	return nil
 }
 
+// acceptedRouteParents returns the parents reporting Accepted=True in the route status.
+// MaaSModelRef reconcile decides ExternalModel readiness on it, so the HTTPRoute watch
+// filters on it as well.
+func acceptedRouteParents(route *gatewayapiv1.HTTPRoute) sets.Set[types.NamespacedName] {
+	accepted := sets.New[types.NamespacedName]()
+	for _, parent := range route.Status.Parents {
+		if !slices.ContainsFunc(parent.Conditions, func(c metav1.Condition) bool {
+			return c.Type == string(gatewayapiv1.RouteConditionAccepted) && c.Status == metav1.ConditionTrue
+		}) {
+			continue
+		}
+		accepted.Insert(routeParentGateway(route, parent.ParentRef))
+	}
+	return accepted
+}
+
+// routeRejection is the reason and message of a gateway's Accepted=False condition.
+type routeRejection struct {
+	Reason, Message string
+}
+
+// routeRejections returns the gateways that reject the route and accept it on no other
+// listener. Accepted=Unknown means the gateway has not decided yet, so it is not a
+// rejection, and a gateway with several rejecting entries keeps the first. MaaSModelRef
+// reconcile reports these on a not-ready model, so the HTTPRoute watch filters on them
+// as well. Istio joins the messages of several rejecting listeners in no fixed order, so
+// such a route can pass the watch on a status rewrite that changes nothing.
+func routeRejections(route *gatewayapiv1.HTTPRoute) map[types.NamespacedName]routeRejection {
+	accepted := acceptedRouteParents(route)
+	rejections := map[types.NamespacedName]routeRejection{}
+	for _, parent := range route.Status.Parents {
+		cond := apimeta.FindStatusCondition(parent.Conditions, string(gatewayapiv1.RouteConditionAccepted))
+		if cond == nil || cond.Status != metav1.ConditionFalse {
+			continue
+		}
+		gateway := routeParentGateway(route, parent.ParentRef)
+		if _, seen := rejections[gateway]; seen || accepted.Has(gateway) {
+			continue
+		}
+		rejections[gateway] = routeRejection{Reason: cond.Reason, Message: cond.Message}
+	}
+	return rejections
+}
+
+// routeParentGateway returns the gateway a route parent status entry is for, with an
+// omitted parentRef namespace defaulting to the route's.
+func routeParentGateway(route *gatewayapiv1.HTTPRoute, ref gatewayapiv1.ParentReference) types.NamespacedName {
+	ns := route.Namespace
+	if ref.Namespace != nil {
+		ns = string(*ref.Namespace)
+	}
+	return types.NamespacedName{Name: string(ref.Name), Namespace: ns}
+}
+
+// ippExternalModelRouteName returns the HTTPRoute name the inference ExternalModel
+// reconciler records in status.httpRouteName, or "" until it does. This is the only
+// ExternalModel status MaaSModelRef reconcile reads, so the ExternalModel watch filters
+// on it as well.
+func ippExternalModelRouteName(em *unstructured.Unstructured) string {
+	name, _, _ := unstructured.NestedString(em.Object, "status", "httpRouteName")
+	return name
+}
+
 // Status returns the model endpoint URL and whether the model is ready.
 // ExternalModel is considered ready once the HTTPRoute is validated (no backend readiness probe).
 func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
@@ -235,6 +304,11 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 	}
 
 	return endpoint, true, nil
+}
+
+// NotReadyReason reports the gateway's rejection of the model's HTTPRoute, if ReconcileRoute found one.
+func (h *externalModelHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return h.notReadyReason, h.notReadyMessage
 }
 
 // GetModelEndpoint returns the shared gateway base URL for the ExternalModel.
@@ -305,7 +379,7 @@ func (externalModelRouteResolver) HTTPRouteForModel(ctx context.Context, c clien
 		inferenceEM := &unstructured.Unstructured{}
 		inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
 		if err := c.Get(ctx, key, inferenceEM); err == nil {
-			if name, found, _ := unstructured.NestedString(inferenceEM.Object, "status", "httpRouteName"); found && name != "" {
+			if name := ippExternalModelRouteName(inferenceEM); name != "" {
 				return name, routeNamespace, nil
 			}
 			return "", routeNamespace, fmt.Errorf("%w: inference ExternalModel %s/%s status.httpRouteName not set yet",

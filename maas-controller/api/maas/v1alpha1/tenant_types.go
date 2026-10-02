@@ -107,6 +107,9 @@ type TenantTelemetryConfig struct {
 
 	// +kubebuilder:validation:Optional
 	Metrics *TenantMetricsConfig `json:"metrics,omitempty"`
+
+	// +kubebuilder:validation:Optional
+	Logs *TenantLogsConfig `json:"logs,omitempty"`
 }
 
 // TenantMetricsConfig defines optional metric dimensions.
@@ -129,6 +132,16 @@ type TenantMetricsConfig struct {
 	// +kubebuilder:default=true
 	// +kubebuilder:validation:Optional
 	CaptureModelUsage *bool `json:"captureModelUsage,omitempty"`
+}
+
+// TenantLogsConfig defines optional usage-log identity dimensions.
+type TenantLogsConfig struct {
+	// CaptureUser includes the authenticated user ID as user_id on usage logs.
+	// Defaults to false. Enabling this may have GDPR / privacy implications —
+	// ensure compliance before use. Independent of metrics.captureUser.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	CaptureUser *bool `json:"captureUser,omitempty"`
 }
 
 // TenantAPIKeysConfig defines configuration options for API key management.

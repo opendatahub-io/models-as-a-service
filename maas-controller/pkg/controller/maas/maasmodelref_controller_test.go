@@ -47,6 +47,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 var (
@@ -58,13 +59,17 @@ var (
 type fakeHandler struct {
 	endpoint string
 	ready    bool
+	routeErr error
 }
 
 func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) error {
-	return nil
+	return f.routeErr
 }
 func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
 	return f.endpoint, f.ready, nil
+}
+func (f *fakeHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return "", ""
 }
 func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
 	return f.endpoint, nil
@@ -153,15 +158,16 @@ func defaultTestAITenant() *maasv1alpha1.AITenant {
 }
 
 // newTestReconciler creates a MaaSModelReconciler with a fake client pre-configured
-// with the field index and status subresource for MaaSModelRef. LLMInferenceService is
-// intentionally NOT a status subresource so that plain Update() can set its status.
+// with the field index and status subresources for MaaSModelRef and HTTPRoute.
+// LLMInferenceService is intentionally NOT a status subresource so that plain Update()
+// can set its status.
 // A default AITenant is included so auto-resolution from HTTPRoute gateway works.
 func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
 	allObjects := append([]client.Object{defaultTestAITenant()}, objects...)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithObjects(allObjects...).
-		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}, &gatewayapiv1.HTTPRoute{}).
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
 		WithIndex(&maasv1alpha1.MaaSModelRef{}, tenantAssociationIndex, tenantAssociationIndexer).
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
@@ -173,6 +179,58 @@ func newTestReconciler(objects ...client.Object) (*MaaSModelRefReconciler, clien
 		GatewayNamespace:  testGatewayNamespace,
 		AITenantNamespace: testAITenantNamespace,
 	}, c
+}
+
+type failingModelRefStatusClient struct {
+	client.Client
+	err error
+}
+
+func (c *failingModelRefStatusClient) Status() client.SubResourceWriter {
+	return &failingModelRefStatusWriter{SubResourceWriter: c.Client.Status(), err: c.err}
+}
+
+type failingModelRefStatusWriter struct {
+	client.SubResourceWriter
+	err error
+}
+
+func (w *failingModelRefStatusWriter) Update(_ context.Context, _ client.Object, _ ...client.SubResourceUpdateOption) error {
+	return w.err
+}
+
+func TestMaaSModelRef_StatusWriteFailureReturned(t *testing.T) {
+	conflict := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maasmodelrefs"}, "no-spec", errors.New("stale resource version"))
+	for _, statusErr := range []error{conflict, errors.New("status unavailable")} {
+		t.Run(statusErr.Error(), func(t *testing.T) {
+			model := &maasv1alpha1.MaaSModelRef{ObjectMeta: metav1.ObjectMeta{Name: "no-spec", Namespace: "default"}}
+			r, backing := newTestReconciler(model)
+			r.Client = &failingModelRefStatusClient{Client: backing, err: statusErr}
+			_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)})
+			if !errors.Is(err, statusErr) {
+				t.Fatalf("Reconcile error = %v, want status error %v", err, statusErr)
+			}
+		})
+	}
+}
+
+func TestMaaSModelRef_ReconcileErrorPreservedOnStatusFailure(t *testing.T) {
+	const kind = "_test_route_error_status_failure"
+	reconcileErr := errors.New("route reconciliation failed")
+	statusErr := errors.New("status write failed")
+	backendHandlerFactories[kind] = func(_ *MaaSModelRefReconciler) BackendHandler {
+		return &fakeHandler{routeErr: reconcileErr}
+	}
+	defer delete(backendHandlerFactories, kind)
+
+	model := newMaaSModelRef("route-failure", "default", kind, "backend")
+	model.Finalizers = []string{maasModelFinalizer}
+	r, backing := newTestReconciler(model)
+	r.Client = &failingModelRefStatusClient{Client: backing, err: statusErr}
+	_, err := r.Reconcile(context.Background(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)})
+	if !errors.Is(err, reconcileErr) || errors.Is(err, statusErr) {
+		t.Fatalf("Reconcile error = %v, want original error %v", err, reconcileErr)
+	}
 }
 
 // assertReadyCondition checks that the conditions slice contains a Ready condition
@@ -901,6 +959,313 @@ func TestMapHTTPRouteToMaaSModelRefs_ListError(t *testing.T) {
 	}
 }
 
+func TestHTTPRouteChangedForModelRef(t *testing.T) {
+	const (
+		istio    = gatewayapiv1.GatewayController("istio.io/gateway-controller")
+		kuadrant = gatewayapiv1.GatewayController("kuadrant.io/policy-controller")
+	)
+	accepted := string(gatewayapiv1.RouteConditionAccepted)
+	resolvedRefs := string(gatewayapiv1.RouteConditionResolvedRefs)
+	condition := func(condType string, status metav1.ConditionStatus) metav1.Condition {
+		return metav1.Condition{Type: condType, Status: status, ObservedGeneration: 1, LastTransitionTime: metav1.Unix(100, 0)}
+	}
+	parent := func(gateway string, controller gatewayapiv1.GatewayController, conditions ...metav1.Condition) gatewayapiv1.RouteParentStatus {
+		return gatewayapiv1.RouteParentStatus{
+			ParentRef:      gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(gateway), Namespace: new(gatewayapiv1.Namespace(testGatewayNamespace))},
+			ControllerName: controller,
+			Conditions:     conditions,
+		}
+	}
+
+	base := newLLMISvcRoute("llm", "llm-ns")
+	base.UID = "route-uid"
+	base.Generation = 1
+	base.Status.Parents = []gatewayapiv1.RouteParentStatus{
+		parent(testGatewayName, istio, condition(accepted, metav1.ConditionTrue), condition(resolvedRefs, metav1.ConditionTrue)),
+	}
+	changed := func(mutate func(*gatewayapiv1.HTTPRoute)) *gatewayapiv1.HTTPRoute {
+		r := base.DeepCopy()
+		mutate(r)
+		return r
+	}
+	notAccepted := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse })
+	twoListeners := changed(func(r *gatewayapiv1.HTTPRoute) {
+		second := parent(testGatewayName, istio, condition(accepted, metav1.ConditionTrue))
+		second.ParentRef.SectionName = new(gatewayapiv1.SectionName("https"))
+		r.Status.Parents = append(r.Status.Parents, second)
+	})
+	oneListenerRejected := twoListeners.DeepCopy()
+	oneListenerRejected.Status.Parents[1].Conditions[0].Status = metav1.ConditionFalse
+	sameNamespaceGateway := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].ParentRef.Namespace = nil })
+	rejectedWith := func(reason gatewayapiv1.RouteConditionReason, message string) *gatewayapiv1.HTTPRoute {
+		return changed(func(r *gatewayapiv1.HTTPRoute) {
+			r.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse
+			r.Status.Parents[0].Conditions[0].Reason = string(reason)
+			r.Status.Parents[0].Conditions[0].Message = message
+		})
+	}
+	pending := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].Status = metav1.ConditionUnknown })
+	noStatus := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents = nil })
+	rejected := rejectedWith(gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace llm-ns")
+	oneListenerRejectedReworded := oneListenerRejected.DeepCopy()
+	oneListenerRejectedReworded.Status.Parents[1].Conditions[0].Message = "listener https does not allow this route"
+
+	p := httpRouteChangedForModelRef()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name     string
+		old, new *gatewayapiv1.HTTPRoute
+		want     bool
+	}{
+		{
+			name: "kuadrant policy-affected parent is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent(testGatewayName, kuadrant,
+					condition("kuadrant.io/AuthPolicyAffected", metav1.ConditionTrue),
+					condition("kuadrant.io/TokenRateLimitPolicyAffected", metav1.ConditionTrue)))
+			}),
+			want: false,
+		},
+		{
+			name: "ResolvedRefs flip is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[1].Status = metav1.ConditionFalse }),
+			want: false,
+		},
+		{
+			name: "lastTransitionTime-only rewrite is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents[0].Conditions[0].LastTransitionTime = metav1.Unix(200, 0)
+			}),
+			want: false,
+		},
+		{
+			name: "observedGeneration-only rewrite is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].ObservedGeneration = 2 }),
+			want: false,
+		},
+		{
+			name: "parent pending acceptance is dropped",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionUnknown)))
+			}),
+			want: false,
+		},
+		{
+			name: "rejection lastTransitionTime and observedGeneration rewrite is dropped",
+			old:  rejected,
+			new: func() *gatewayapiv1.HTTPRoute {
+				r := rejected.DeepCopy()
+				r.Status.Parents[0].Conditions[0].LastTransitionTime = metav1.Unix(200, 0)
+				r.Status.Parents[0].Conditions[0].ObservedGeneration = 2
+				return r
+			}(),
+			want: false,
+		},
+		{
+			name: "kuadrant policy-affected parent on a rejected route is dropped",
+			old:  rejected,
+			new: func() *gatewayapiv1.HTTPRoute {
+				r := rejected.DeepCopy()
+				r.Status.Parents = append(r.Status.Parents, parent(testGatewayName, kuadrant,
+					condition("kuadrant.io/AuthPolicyAffected", metav1.ConditionTrue)))
+				return r
+			}(),
+			want: false,
+		},
+		{
+			name: "message change on a rejecting listener of the accepting gateway is dropped",
+			old:  oneListenerRejected,
+			new:  oneListenerRejectedReworded,
+			want: false,
+		},
+		{
+			name: "rejection of a route the gateway never accepted passes",
+			old:  noStatus,
+			new:  rejected,
+			want: true,
+		},
+		{
+			name: "rejection going back to pending passes",
+			old:  rejected,
+			new:  pending,
+			want: true,
+		},
+		{
+			name: "rejection reason change passes",
+			old:  rejected,
+			new:  rejectedWith(gatewayapiv1.RouteReasonNoMatchingListenerHostname, "no listener allows routes from namespace llm-ns"),
+			want: true,
+		},
+		{
+			name: "rejection message change passes",
+			old:  rejected,
+			new:  rejectedWith(gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace other-ns"),
+			want: true,
+		},
+		{
+			name: "annotation change is dropped",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Annotations = map[string]string{"example.com/note": "x"} }),
+			want: false,
+		},
+		{
+			name: "one of two listeners on the accepting gateway rejecting is dropped",
+			old:  twoListeners,
+			new:  oneListenerRejected,
+			want: false,
+		},
+		{
+			name: "omitted parentRef namespace defaults to the route's",
+			old:  sameNamespaceGateway,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents[0].ParentRef.Namespace = new(gatewayapiv1.Namespace(r.Namespace))
+			}),
+			want: false,
+		},
+		{
+			name: "Accepted True to False passes",
+			old:  base,
+			new:  notAccepted,
+			want: true,
+		},
+		{
+			name: "Accepted False to True passes",
+			old:  notAccepted,
+			new:  base,
+			want: true,
+		},
+		{
+			name: "accepted parent added passes",
+			old:  base,
+			new: changed(func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionTrue)))
+			}),
+			want: true,
+		},
+		{
+			name: "accepted parent removed passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents = nil }),
+			want: true,
+		},
+		{
+			name: "acceptance moving to another gateway passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].ParentRef.Name = "other-gateway" }),
+			want: true,
+		},
+		{
+			name: "route recreated under the same name passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.UID = "recreated-uid" }),
+			want: true,
+		},
+		{
+			name: "label change passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Labels["app.kubernetes.io/name"] = "other" }),
+			want: true,
+		},
+		{
+			name: "spec change passes",
+			old:  base,
+			new:  changed(func(r *gatewayapiv1.HTTPRoute) { r.Generation = 2 }),
+			want: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// Moving the watch to unstructured or metadata-only objects must not silently drop Accepted flips.
+	notRoute := &unstructured.Unstructured{}
+	if !routeAcceptedParentsChanged(event.UpdateEvent{ObjectOld: notRoute, ObjectNew: notRoute}) {
+		t.Error("non-HTTPRoute objects should pass")
+	}
+}
+
+func TestIPPExternalModelChangedForModelRef(t *testing.T) {
+	base := &unstructured.Unstructured{}
+	base.SetGroupVersionKind(inferenceExternalModelGVK)
+	base.SetName("gpt-4o")
+	base.SetNamespace("default")
+	base.SetGeneration(1)
+	changed := func(mutate func(*unstructured.Unstructured)) *unstructured.Unstructured {
+		em := base.DeepCopy()
+		mutate(em)
+		return em
+	}
+	setStatus := func(field, value string) func(*unstructured.Unstructured) {
+		return func(em *unstructured.Unstructured) {
+			if err := unstructured.SetNestedField(em.Object, value, "status", field); err != nil {
+				t.Fatalf("SetNestedField: %v", err)
+			}
+		}
+	}
+	withRouteName := changed(setStatus("httpRouteName", "gpt-4o"))
+
+	p := ippExternalModelChangedForModelRef()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name     string
+		old, new client.Object
+		want     bool
+	}{
+		{name: "unrelated status write is dropped", old: base, new: changed(setStatus("phase", "Ready")), want: false},
+		{name: "status.httpRouteName recorded passes", old: base, new: withRouteName, want: true},
+		{name: "status.httpRouteName changed passes", old: withRouteName, new: changed(setStatus("httpRouteName", "other-route")), want: true},
+		{name: "spec change passes", old: base, new: changed(func(em *unstructured.Unstructured) { em.SetGeneration(2) }), want: true},
+		{name: "non-unstructured objects pass", old: newHTTPRoute("r", "default"), new: newHTTPRoute("r", "default"), want: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := p.Update(event.UpdateEvent{ObjectOld: tt.old, ObjectNew: tt.new}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMapIPPExternalModelToMaaSModelRefs(t *testing.T) {
+	em := &unstructured.Unstructured{}
+	em.SetGroupVersionKind(inferenceExternalModelGVK)
+	em.SetName("gpt-4o")
+	em.SetNamespace("default")
+	r, _ := newTestReconciler(
+		newMaaSModelRef("external", "default", "ExternalModel", "gpt-4o"),
+		newMaaSModelRef("llmisvc-same-name", "default", "LLMInferenceService", "gpt-4o"),
+		newMaaSModelRef("external-other-ns", "other-ns", "ExternalModel", "gpt-4o"),
+		newMaaSModelRef("external-other-name", "default", "ExternalModel", "claude"),
+	)
+
+	got := r.mapIPPExternalModelToMaaSModelRefs(t.Context(), em)
+	want := []reconcile.Request{{NamespacedName: types.NamespacedName{Name: "external", Namespace: "default"}}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Errorf("mapIPPExternalModelToMaaSModelRefs() = %v, want %v", got, want)
+	}
+}
+
 // TestMaaSModelRefReconciler_NoSpec verifies that a legacy model ref created
 // without a spec field is marked Failed without adding a finalizer.
 func TestMaaSModelRefReconciler_NoSpec(t *testing.T) {
@@ -1107,6 +1472,160 @@ func TestGovernance_BothFailures(t *testing.T) {
 	}
 	assertCondition(t, got.Status.Conditions, "GovernanceAttached", metav1.ConditionFalse, "NoPairingFound")
 	assertCondition(t, got.Status.Conditions, "RuntimeReady", metav1.ConditionFalse, "RuntimeHealthFailure")
+}
+
+func TestExternalModel_Reconcile_GatewayStopsAcceptingReportsReason(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", testGatewayName, testGatewayNamespace)
+	route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+
+	r, c := newTestReconciler(model, externalModelCR, route)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+	reconcileModel := func() *maasv1alpha1.MaaSModelRef {
+		t.Helper()
+		if _, err := r.Reconcile(t.Context(), req); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		got := &maasv1alpha1.MaaSModelRef{}
+		if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+			t.Fatalf("Get MaaSModelRef: %v", err)
+		}
+		return got
+	}
+	setAccepted := func(cond metav1.Condition) {
+		t.Helper()
+		if err := c.Get(t.Context(), client.ObjectKeyFromObject(route), route); err != nil {
+			t.Fatalf("Get HTTPRoute: %v", err)
+		}
+		cond.Type = string(gatewayapiv1.RouteConditionAccepted)
+		route.Status.Parents[0].Conditions[0] = cond
+		if err := c.Status().Update(t.Context(), route); err != nil {
+			t.Fatalf("Update HTTPRoute: %v", err)
+		}
+	}
+
+	got := reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+
+	setAccepted(metav1.Condition{
+		Status:  metav1.ConditionFalse,
+		Reason:  string(gatewayapiv1.RouteReasonNotAllowedByListeners),
+		Message: "no listener allows routes from namespace default",
+	})
+	got = reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionFalse, string(maasv1alpha1.ReasonNotAccepted))
+
+	setAccepted(metav1.Condition{Status: metav1.ConditionTrue, Reason: string(gatewayapiv1.RouteReasonAccepted)})
+	got = reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+}
+
+func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
+	gatewayParent := func(conds ...metav1.Condition) gatewayapiv1.RouteParentStatus {
+		gwNS := gatewayapiv1.Namespace(testGatewayNamespace)
+		return gatewayapiv1.RouteParentStatus{
+			ParentRef:  gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(testGatewayName), Namespace: &gwNS},
+			Conditions: conds,
+		}
+	}
+	onListener := func(section gatewayapiv1.SectionName, parent gatewayapiv1.RouteParentStatus) gatewayapiv1.RouteParentStatus {
+		parent.ParentRef.SectionName = &section
+		return parent
+	}
+	accepted := func(status metav1.ConditionStatus, reason gatewayapiv1.RouteConditionReason, message string) metav1.Condition {
+		return metav1.Condition{Type: string(gatewayapiv1.RouteConditionAccepted), Status: status, Reason: string(reason), Message: message}
+	}
+	notAllowed := accepted(metav1.ConditionFalse, gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace default")
+	const rejectedPrefix = "Gateway openshift-ingress/maas-default-gateway has not accepted HTTPRoute default/maas-gpt-4o"
+
+	tests := []struct {
+		name        string
+		parents     []gatewayapiv1.RouteParentStatus
+		wantStatus  metav1.ConditionStatus
+		wantReason  maasv1alpha1.ConditionReason
+		wantMessage string
+	}{
+		{
+			name:        "rejected",
+			parents:     []gatewayapiv1.RouteParentStatus{gatewayParent(notAllowed)},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NotAllowedByListeners): no listener allows routes from namespace default",
+		},
+		{
+			name: "rejected without a message",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(accepted(metav1.ConditionFalse, gatewayapiv1.RouteReasonNoMatchingListenerHostname, "")),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NoMatchingListenerHostname)",
+		},
+		{
+			name: "policy status ahead of the rejection",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(metav1.Condition{Type: "kuadrant.io/AuthPolicyAffected", Status: metav1.ConditionTrue, Reason: "Accepted"}),
+				gatewayParent(notAllowed),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NotAllowedByListeners): no listener allows routes from namespace default",
+		},
+		{
+			name: "gateway has not decided yet",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(accepted(metav1.ConditionUnknown, gatewayapiv1.RouteReasonPending, "Waiting for controller")),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthFailure,
+			wantMessage: "Backend is not ready",
+		},
+		{
+			name:        "no status from the gateway",
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthFailure,
+			wantMessage: "Backend is not ready",
+		},
+		{
+			name: "rejected on one listener, accepted on another",
+			parents: []gatewayapiv1.RouteParentStatus{
+				onListener("http", gatewayParent(notAllowed)),
+				onListener("https", gatewayParent(accepted(metav1.ConditionTrue, gatewayapiv1.RouteReasonAccepted, ""))),
+			},
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthy,
+			wantMessage: "Backend is healthy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+			externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+			route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", testGatewayName, testGatewayNamespace)
+			route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+			route.Status.Parents = tt.parents
+
+			r, c := newTestReconciler(model, externalModelCR, route)
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			got := &maasv1alpha1.MaaSModelRef{}
+			if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+				t.Fatalf("Get MaaSModelRef: %v", err)
+			}
+
+			cond := findCondition(got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady)
+			if cond == nil {
+				t.Fatal("RuntimeReady condition not found")
+			}
+			if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
+				t.Errorf("RuntimeReady = %s/%s %q, want %s/%s %q",
+					cond.Status, cond.Reason, cond.Message, tt.wantStatus, tt.wantReason, tt.wantMessage)
+			}
+		})
+	}
 }
 
 // TestGovernance_NoAdminCRNamesInStatus verifies that no subscription or auth policy
@@ -1701,5 +2220,54 @@ func TestEnqueueSiblingsWithAlias(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestMaaSModelRef_AliasChangeConvergesSiblingConditions(t *testing.T) {
+	const namespace = "default"
+	const previousAlias = "models/previous"
+	const newAlias = "models/new"
+	model := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "changed", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: previousAlias},
+	}
+	previousSibling := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "previous-sibling", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: previousAlias},
+	}
+	newSibling := &maasv1alpha1.MaaSModelRef{
+		ObjectMeta: metav1.ObjectMeta{Name: "new-sibling", Namespace: namespace},
+		Status:     maasv1alpha1.MaaSModelStatus{ResolvedModelAlias: newAlias},
+	}
+	r, backing := newTestReconciler(model, previousSibling, newSibling)
+	if err := backing.Get(context.Background(), client.ObjectKeyFromObject(model), model); err != nil {
+		t.Fatal(err)
+	}
+	model.Status.ResolvedModelAlias = newAlias
+	if err := backing.Status().Update(context.Background(), model); err != nil {
+		t.Fatal(err)
+	}
+	queue := &fakeQueue{}
+	r.enqueueSiblingsWithAlias(context.Background(), model, queue, previousAlias)
+	if len(queue.items) != 2 {
+		t.Fatalf("enqueued %v, want both alias siblings", queue.items)
+	}
+	for _, request := range queue.items {
+		sibling := &maasv1alpha1.MaaSModelRef{}
+		if err := backing.Get(context.Background(), request.NamespacedName, sibling); err != nil {
+			t.Fatal(err)
+		}
+		r.checkModelIdentityConflict(context.Background(), logr.Discard(), sibling)
+		condition := findCondition(sibling.Status.Conditions, ConditionModelIdentityUnique)
+		if condition == nil {
+			t.Fatalf("missing collision condition for %s", sibling.Name)
+		}
+		want := metav1.ConditionTrue
+		if sibling.Name == newSibling.Name {
+			want = metav1.ConditionFalse
+		}
+		if condition.Status != want {
+			t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+		}
 	}
 }

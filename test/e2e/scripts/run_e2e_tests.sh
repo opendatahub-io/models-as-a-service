@@ -51,6 +51,20 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Per-pass -m filters are owned by this script; forwarded markers can defeat the split.
+reject_forwarded_marker_args() {
+    local arg
+    for arg in "${extra_pytest_args[@]}"; do
+        case "$arg" in
+            -m|--markers|-m*|--markers=*)
+                echo "ERROR: forwarded pytest marker ($arg) is not allowed; run_e2e_tests.sh applies per-pass -m filters" >&2
+                exit 1
+                ;;
+        esac
+    done
+}
+reject_forwarded_marker_args
+
 # ── Defaults ─────────────────────────────────────────────────────────────
 export E2E_RECONCILE_WAIT="${E2E_RECONCILE_WAIT:-4}"
 E2E_PARALLEL_WORKERS="${E2E_PARALLEL_WORKERS:-7}"
@@ -85,39 +99,8 @@ html="$ARTIFACTS_DIR/e2e-${user}.html"
 xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 xml_serial="${xml%.xml}-serial.xml"
 
-# ── Test file list ───────────────────────────────────────────────────────
-e2e_test_files=(
-    "$TEST_DIR/tests/test_api_keys.py"
-    "$TEST_DIR/tests/test_x_api_key_auth.py"
-    "$TEST_DIR/tests/test_namespace_scoping.py"
-    "$TEST_DIR/tests/test_negative_security.py"
-    "$TEST_DIR/tests/test_subscription.py"
-    "$TEST_DIR/tests/test_model_identity_conflict.py"
-    "$TEST_DIR/tests/test_subscription_list_endpoints.py"
-    "$TEST_DIR/tests/test_models_endpoint.py"
-    "$TEST_DIR/tests/test_external_models.py"
-    "$TEST_DIR/tests/test_smoke.py"
-    "$TEST_DIR/tests/test_tenant.py"
-    "$TEST_DIR/tests/test_config_tenant.py"
-    "$TEST_DIR/tests/test_tenant_discovery.py"
-    "$TEST_DIR/tests/test_aitenant_lifecycle.py"
-    "$TEST_DIR/tests/test_tenant_namespace_discovery.py"
-    "$TEST_DIR/tests/test_tenant_discovery_isolation.py"
-    "$TEST_DIR/tests/test_gateway_scoped_authpolicy.py"
-    "$TEST_DIR/tests/test_multi_tenant_integration.py"
-    "$TEST_DIR/tests/test_multi_tenant_maas_api.py"
-    "$TEST_DIR/tests/test_tenant_model_inference.py"
-    "$TEST_DIR/tests/test_tenant_auth_isolation.py"
-    "$TEST_DIR/tests/test_tenant_subscription_isolation.py"
-    "$TEST_DIR/tests/test_tenant_rate_limit_isolation.py"
-    "$TEST_DIR/tests/test_per_tenant_ipp_isolation.py"
-    "$TEST_DIR/tests/test_tenant_auto_resolve.py"
-    "$TEST_DIR/tests/test_external_oidc.py"
-    "$TEST_DIR/tests/test_embedding_inference.py"
-)
-
-# If extra args include a path (file or directory), skip the default smoke list
-# so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
+# If extra args include a path (file or directory), replace the default test
+# directory so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
 # Resolve relative paths against TEST_DIR so they work regardless of cwd.
 resolved_extra_args=()
 has_path_arg=false
@@ -143,7 +126,7 @@ else
     pytest_common_args=(
         -v --disable-warnings
         --capture=tee-sys --show-capture=all --log-level=INFO
-        "${e2e_test_files[@]}"
+        "$TEST_DIR/tests"
         "${extra_pytest_args[@]}"
     )
 fi
@@ -151,40 +134,132 @@ fi
 # ── Run ──────────────────────────────────────────────────────────────────
 parallel_rc=0
 serial_rc=0
+any_pass_collected_tests=false
 
-if [[ "$serial_only" == "true" || "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
-    echo "Running E2E tests serially (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS})"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
-        --junitxml="$xml" \
-        --html="$html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
-        parallel_rc=1
+count_pytest_collected() {
+    local summary collected=0
+    set +e
+    summary=$( "$@" --collect-only -q 2>&1 | tail -1 )
+    set -e
+    if [[ "$summary" =~ ([0-9]+)/[0-9]+\ tests\ collected ]]; then
+        collected="${BASH_REMATCH[1]}"
+    elif [[ "$summary" =~ ([0-9]+)\ tests\ collected ]]; then
+        collected="${BASH_REMATCH[1]}"
+    elif [[ "$summary" != *"no tests collected"* ]]; then
+        echo "WARNING: could not parse pytest collection summary: ${summary}" >&2
     fi
-else
-    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
-        --maxfail=5 \
-        -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
-        -m "not serial" \
-        --junitxml="$xml" \
-        --html="$html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
-        parallel_rc=1
+    echo "$collected"
+}
+
+# pytest exit 5 = no tests collected (e.g. -k matched only the other marker pass).
+run_pytest_pass() {
+    local pass_label="$1"
+    shift
+    local collected=0
+    local rc=0
+
+    collected=$(count_pytest_collected "$@")
+    if [[ "$collected" -eq 0 ]]; then
+        echo "Note: ${pass_label} collected no tests (pytest exit 5 acceptable for this pass)"
+        set +e
+        "$@"
+        rc=$?
+        set -e
+        if [[ "$rc" -eq 0 || "$rc" -eq 5 ]]; then
+            return 0
+        fi
+        return 1
     fi
 
+    any_pass_collected_tests=true
+    set +e
+    "$@"
+    rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]]; then
+        return 0
+    fi
+    if [[ "$rc" -eq 5 ]]; then
+        echo "Note: ${pass_label} collected no tests at run time (pytest exit 5), treating as success"
+        return 0
+    fi
+    return 1
+}
+
+# Serial tests scale the Kuadrant operator and maas-controller to 0, which
+# replaces the pods that ran during the parallel pass along with their restart
+# history and previous-container logs. Snapshot them first. Best-effort.
+snapshot_parallel_pass_pods() (
+    # shellcheck source=auth_utils.sh
+    source "$SCRIPT_DIR/auth_utils.sh"
+    local ns
+    for ns in "${RHCL_NAMESPACE:-kuadrant-system}" "$DEPLOYMENT_NAMESPACE"; do
+        if kubectl get namespace "$ns" &>/dev/null; then
+            collect_namespace_pod_logs "$ns" "$ARTIFACTS_DIR/pod-logs-after-parallel/$ns"
+        fi
+    done
+)
+
+run_serial_pass() {
     echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
-    if ! PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+    if ! run_pytest_pass "pass 2 (serial)" \
+        env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
-        -m serial \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
-        "${pytest_common_args[@]}"; then
+        "${pytest_common_args[@]}" \
+        -m serial; then
         serial_rc=1
     fi
+}
+
+maybe_run_serial_pass() {
+    if [[ "$parallel_rc" -ne 0 ]]; then
+        echo "Skipping E2E pass 2/2 (serial): parallel pass failed"
+        return 0
+    fi
+    run_serial_pass
+}
+
+if [[ "$serial_only" == "true" ]]; then
+    echo "Running E2E tests (serial pass only, -m serial)"
+    run_serial_pass
+elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
+    # Single worker: still split by marker so module-scoped worker fixtures never
+    # see both serial and parallel tests from the same file in one session.
+    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial')"
+    if ! run_pytest_pass "pass 1 (non-serial)" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail=5 \
+        --junitxml="$xml" \
+        --html="$html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m "not serial"; then
+        parallel_rc=1
+    fi
+    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
+    maybe_run_serial_pass
+else
+    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
+    if ! run_pytest_pass "pass 1 (non-serial)" \
+        env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail=5 \
+        -n "$E2E_PARALLEL_WORKERS" --dist=loadgroup \
+        --junitxml="$xml" \
+        --html="$html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m "not serial"; then
+        parallel_rc=1
+    fi
+    snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
+    maybe_run_serial_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────
+if [[ "$any_pass_collected_tests" != "true" ]]; then
+    echo "❌ ERROR: no tests collected in any pass"
+    exit 1
+fi
 if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 ]]; then
     echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc})"
     exit 1

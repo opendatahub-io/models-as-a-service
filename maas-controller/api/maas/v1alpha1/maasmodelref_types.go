@@ -55,6 +55,16 @@ type MaaSModelSpec struct {
 	// +kubebuilder:validation:MaxLength=253
 	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
 	TenantRef string `json:"tenantRef,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies at the model scope.
+	// References resolve in the model's own namespace or the resolved tenant
+	// target namespace; a namespace must not be specified on the reference.
+	// Selections are additive with the tenant, tenant-config, and subscription
+	// scopes and cannot remove checks contributed elsewhere.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // ModelReference references a model endpoint in the same namespace.

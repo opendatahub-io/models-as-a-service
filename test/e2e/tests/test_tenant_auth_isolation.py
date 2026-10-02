@@ -17,9 +17,8 @@ import pytest
 import requests
 
 from multitenancy_helpers import (
+    MODEL_BACKEND_READY_TIMEOUT,
     create_api_key_at,
-    delete_maas_auth_policy,
-    delete_maas_subscription,
     get_api_key_at,
     list_subscriptions_at,
     make_tenant_model_accessible,
@@ -31,7 +30,8 @@ from multitenancy_helpers import (
     tenant_internal_url,
     validate_api_key_at,
 )
-from test_helper import _get_cluster_token, _delete_cr
+from test_helper import _wait_for_subscription_trlp_status
+from test_helper import _delete_cr, _delete_governance_and_wait, _get_cluster_token
 
 pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
@@ -124,7 +124,7 @@ def tenant_env(shared_test_tenants):
         _delete_cr("llminferenceservice", case["model_name"], case["tenant_ns"])
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def tenant_auth_setup(tenant_env):
     tenant_a, tenant_b = tenant_env
     suffix = uuid.uuid4().hex[:6]
@@ -138,6 +138,7 @@ def tenant_auth_setup(tenant_env):
                 policy_name,
                 subscription_name,
                 gateway_name=tenant["gateway_name"],
+                trlp_timeout=MODEL_BACKEND_READY_TIMEOUT,
             )
         yield {
             "tenant_a": tenant_a,
@@ -146,9 +147,16 @@ def tenant_auth_setup(tenant_env):
             "subscription": subscription_name,
         }
     finally:
-        for tenant in tenant_env:
-            delete_maas_auth_policy(policy_name, tenant["namespace"])
-            delete_maas_subscription(subscription_name, tenant["namespace"])
+        _delete_governance_and_wait(
+            subscriptions=[
+                (subscription_name, tenant["namespace"])
+                for tenant in tenant_env
+            ],
+            auth_policies=[
+                (policy_name, tenant["namespace"])
+                for tenant in tenant_env
+            ],
+        )
 
 
 @pytest.fixture
@@ -283,6 +291,13 @@ class TestTenantAuthIsolation:
     def test_api_key_subscription_selection_uses_tenant_namespace(self, tenant_auth_setup, tenant_api_keys):
         """3.x/4.x: Internal subscription selection reports the tenant-local subscription namespace."""
         tenant_a = tenant_auth_setup["tenant_a"]
+        # Setup skips TRLP wait for faster auth-only cases; selection needs mirrored limits ready.
+        _wait_for_subscription_trlp_status(
+            tenant_auth_setup["subscription"],
+            expected_ready=True,
+            namespace=tenant_a["namespace"],
+            timeout=120,
+        )
         response = select_subscription_at(
             tenant_internal_url(tenant_a["name"]),
             tenant_api_keys["a"]["key"],

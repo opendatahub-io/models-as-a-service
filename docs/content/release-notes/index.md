@@ -8,6 +8,7 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 
 | RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
 |---------------|--------------|-----------------|--------|-------|
+| 3.6           | TBD          | `v3.6`          | Planned | Short subscription rate-limit IDs in TRLP; see [Upgrade Guide](../migration/upgrade-to-3.6.md) |
 | 3.5           | v0.2.1       | `v3.5`          | GA     | Multi-tenancy; body-based routing; xKS support; see [Upgrade Guide](../migration/upgrade-to-3.5.md) |
 | 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
 | 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
@@ -19,6 +20,24 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 - **Downstream (RHOAI):** `registry.redhat.io/rhoai/odh-maas-api-rhel9:<tag>`, `registry.redhat.io/rhoai/odh-maas-controller-rhel9:<tag>`
 
 For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Version Compatibility](../install/prerequisites.md#version-compatibility).
+
+---
+
+## Unreleased (RHOAI 3.6)
+
+**Release Date:** TBD
+
+### Upgrade notes
+
+See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
+
+- **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
+- **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
+- **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
+
+### Key Fixes
+
+- **Short subscription rate-limit IDs in TokenRateLimitPolicy:** TRLP `when` predicates and counters use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id`) so Kuadrant WASM / EnvoyFilter size no longer embeds long subscription strings. Limit map keys stay rate-grouped (`tokens-<limit>-per-<window>`). Human-readable `selected_subscription_key` remains for telemetry.
 
 ---
 
@@ -115,6 +134,8 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 
 ### Key Fixes
 
+- **Gateway wasm config exceeding the etcd size limit (RHOAIENG-95277):** each model's `TokenRateLimitPolicy` now has one limit per distinct rate set instead of one per subscription. A subscription at an existing rate adds a predicate clause (about 3 KB per listener) to the gateway's `kuadrant-{gateway-name}` EnvoyFilter (WasmPlugin on Kuadrant 1.4.x) instead of a whole limit (about 27 KB). Budgets stay separate per subscription and per user. See [Subscription Cardinality](../advanced-administration/subscription-cardinality.md#gateway-config-size).
+    - **Upgrade note:** limit names change from `{namespace}-{subscription}-{model}-tokens` to `tokens-{limit}-per-{window}`, so Limitador starts fresh counters once on upgrade (and again on rollback). With long windows (for example `24h`), users can spend up to twice their budget in the window that spans the change.
 - **CVE-2026-33815 / CVE-2026-33816:** pgx memory-safety and SQL injection fixes.
 - Prevent crash-loop when Kuadrant or KServe CRDs are not installed.
 - Preserve MaaS traffic during RHOAI 3.5 upgrades.

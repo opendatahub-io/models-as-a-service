@@ -20,6 +20,7 @@ import (
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cache"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/cert"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/handler"
+	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-discovery/internal/tlsprofile"
 )
 
@@ -79,7 +80,12 @@ func run() error {
 
 	gin.SetMode(gin.ReleaseMode)
 	engine := gin.New()
+	if err := engine.SetTrustedProxies(nil); err != nil {
+		return fmt.Errorf("setting trusted proxies: %w", err)
+	}
 	engine.Use(gin.Recovery())
+	engine.Use(middleware.RequestID())
+	engine.Use(middleware.AccessLogger(log))
 	h.RegisterRoutes(engine)
 
 	srv := &http.Server{

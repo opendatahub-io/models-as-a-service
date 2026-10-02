@@ -14,44 +14,49 @@ Prerequisites:
   - Gateway infrastructure (openshift-ingress)
 """
 
+import contextlib
 import json
 import logging
-import subprocess
-import time
 
 import pytest
 import requests
 
+import test_helper
 from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
+    MODEL_BACKEND_READY_TIMEOUT,
     TLS_VERIFY,
     _oc_run,
-    apply_maas_auth_policy,
-    apply_maas_subscription,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
+    create_api_key_at,
     delete_maas_auth_policy,
     delete_maas_subscription,
     get_json_or_none,
+    is_gateway_auth_denial,
+    make_tenant_model_accessible,
     new_named_tenant_case,
+    per_tenant_gateway_policy_names,
+    provision_tenant_model,
     redact_sensitive,
     require_aitenant_crd,
-    wait_for_httproute_accepted,
-    wait_for_status_phase,
+    response_summary,
+    wait_for_route_auth_enforced,
 )
 
 from test_helper import (
     _check_ipp_pods_deployed,
     _create_llmis,
-    _create_maas_model_ref,
     _delete_cr,
     _get_cluster_token,
+    _poll_status,
+    _request_with_gateway_retry,
     chat,
 )
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = pytest.mark.xdist_group("tenant_inference")
 
 
 # Multi-tenant model inference tests are enabled by default (Phase 1 implementation)
@@ -72,6 +77,42 @@ def _get_tenant_gateway_url(gateway_name: str) -> str:
     return f"https://{host}"
 
 
+@contextlib.contextmanager
+def _tenant_gateway_auth_policy(gateway_name: str):
+    """Point test_helper's gateway AuthPolicy re-checks at a tenant gateway.
+
+    _poll_status and _request_with_gateway_retry re-check GATEWAY_AUTH_POLICY_NAME
+    (the default gateway's policy) on transient replies, which says nothing about
+    a tenant gateway.
+    """
+    original = test_helper.GATEWAY_AUTH_POLICY_NAME
+    test_helper.GATEWAY_AUTH_POLICY_NAME = per_tenant_gateway_policy_names(
+        gateway_name, gateway_name
+    )["gateway_authpolicy"]
+    try:
+        yield
+    finally:
+        test_helper.GATEWAY_AUTH_POLICY_NAME = original
+
+
+def _wait_for_chat_ok(case: dict, gateway_url: str, api_key: str) -> requests.Response:
+    """Poll a known-good chat completion until the new key is served with 200."""
+    with _tenant_gateway_auth_policy(case["gateway_name"]):
+        return _poll_status(
+            api_key,
+            200,
+            path=case["model_path"],
+            model_name="facebook/opt-125m",
+            timeout=120,
+            inference_fn=lambda key, path, extra_headers, model_name: chat(
+                "Say hello in one word",
+                f"{gateway_url}{path}",
+                {"Authorization": f"Bearer {key}"},
+                model_name=model_name,
+            ),
+        )
+
+
 @pytest.fixture(scope="module")
 def tenant_inference_cases():
     """Set up two tenants with models for inference testing."""
@@ -84,57 +125,43 @@ def tenant_inference_cases():
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case)
 
-        # Create models in each tenant namespace
+        # Create both LLMInferenceServices before waiting on either. The llmisvc
+        # controller reconciles them one at a time and runs minutes behind under
+        # parallel load, so B should queue while A's wait runs, not after it.
         for case in (case_a, case_b):
-            model_name = f"test-model-{case['suffix']}"
             # Track model name early for cleanup
-            case["model_name"] = model_name
-
-            # Create LLMIS pointing to tenant gateway
+            case["model_name"] = f"test-model-{case['suffix']}"
             _create_llmis(
-                model_name,
+                case["model_name"],
                 case["tenant_ns"],
                 case["gateway_name"],
                 GATEWAY_NAMESPACE,
             )
 
-            # Wait for HTTPRoute to be accepted on the tenant gateway
-            wait_for_httproute_accepted(
-                f"{model_name}-kserve-route",
-                case["tenant_ns"],
-                case["gateway_name"],
-                timeout=180,
-            )
-
-            # Create MaaSModelRef
-            _create_maas_model_ref(model_name, case["tenant_ns"], model_name)
-
-            # Create subscription and auth policy (both needed for Ready status)
-            apply_maas_subscription(
-                f"{model_name}-sub",
-                case["tenant_ns"],
-                model_ref=model_name,
-                model_namespace=case["tenant_ns"],
-                token_limit=10000,
-            )
-            apply_maas_auth_policy(
-                f"{model_name}-auth",
-                case["tenant_ns"],
-                model_ref=model_name,
-                model_namespace=case["tenant_ns"],
-            )
-
-            # Wait for MaaSModelRef to report Ready
-            wait_for_status_phase(
-                "maasmodelref",
+        for case in (case_a, case_b):
+            model_name = case["model_name"]
+            # Re-applies the LLMIS created above unchanged, then waits for it.
+            provision_tenant_model(
                 model_name,
                 case["tenant_ns"],
-                expected_phase="Ready",
-                timeout=180,
+                case["gateway_name"],
+                ready_timeout=MODEL_BACKEND_READY_TIMEOUT,
             )
-
+            make_tenant_model_accessible(
+                model_name,
+                case["tenant_ns"],
+                f"{model_name}-auth",
+                f"{model_name}-sub",
+                token_limit=10000,
+                gateway_name=case["gateway_name"],
+            )
             # Store model path (with /v1 for OpenAI API compatibility)
             case["model_path"] = f"/{case['tenant_ns']}/{model_name}/v1"
+
+        for case in (case_a, case_b):
+            wait_for_route_auth_enforced(
+                f"{_get_tenant_gateway_url(case['gateway_name'])}{case['model_path']}"
+            )
 
         yield case_a, case_b
 
@@ -179,18 +206,11 @@ class TestTenantModelInference:
         # Create API key via tenant's maas-api
         oc_token = _get_cluster_token()
 
-        api_key_response = requests.post(
-            f"{gateway_url}/maas-api/v1/api-keys",
-            headers={
-                "Authorization": f"Bearer {oc_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "name": f"e2e-tenant-inference-{case_a['suffix']}",
-                "subscription": f"{case_a['model_name']}-sub",
-            },
-            timeout=45,
-            verify=TLS_VERIFY,
+        api_key_response = create_api_key_at(
+            f"{gateway_url}/maas-api",
+            oc_token,
+            f"e2e-tenant-inference-{case_a['suffix']}",
+            subscription=f"{case_a['model_name']}-sub",
         )
 
         assert api_key_response.status_code in (200, 201), (
@@ -201,24 +221,8 @@ class TestTenantModelInference:
         api_key = api_key_response.json().get("key")
         assert api_key, f"API key missing in response: {redact_sensitive(api_key_response.json())}"
 
-        # Allow API key to propagate before sending inference request
-        time.sleep(8)
-
         # Send inference request through tenant gateway
-        model_url = f"{gateway_url}{case_a['model_path']}"
-        headers = {"Authorization": f"Bearer {api_key}"}
-
-        response = chat(
-            "Say hello in one word",
-            model_url,
-            headers,
-            model_name="facebook/opt-125m",
-        )
-
-        assert response.status_code == 200, (
-            f"Inference failed: {response.status_code} "
-            f"{redact_sensitive(response.text[:500])}"
-        )
+        response = _wait_for_chat_ok(case_a, gateway_url, api_key)
 
         # Verify response structure
         data = response.json()
@@ -232,57 +236,55 @@ class TestTenantModelInference:
         # Get gateway URLs
         gateway_a_url = _get_tenant_gateway_url(case_a["gateway_name"])
         gateway_b_url = _get_tenant_gateway_url(case_b["gateway_name"])
+        model_b_url = f"{gateway_b_url}{case_b['model_path']}"
 
         # Create API key for tenant A through tenant A's gateway
         oc_token = _get_cluster_token()
 
-        api_key_response = requests.post(
-            f"{gateway_a_url}/maas-api/v1/api-keys",
-            headers={
-                "Authorization": f"Bearer {oc_token}",
-                "Content-Type": "application/json",
-            },
-            json={
-                "name": f"e2e-cross-tenant-{case_a['suffix']}",
-                "subscription": f"{case_a['model_name']}-sub",
-            },
-            timeout=45,
-            verify=TLS_VERIFY,
+        api_key_response = create_api_key_at(
+            f"{gateway_a_url}/maas-api",
+            oc_token,
+            f"e2e-cross-tenant-{case_a['suffix']}",
+            subscription=f"{case_a['model_name']}-sub",
+        )
+        assert api_key_response.status_code in (200, 201), (
+            f"Failed to create API key: {api_key_response.status_code} "
+            f"{redact_sensitive(api_key_response.text)}"
+        )
+        api_key_body = api_key_response.json()
+        api_key = api_key_body.get("key")
+        assert api_key, (
+            "API key creation returned success without key material: "
+            f"{redact_sensitive(api_key_body)}"
         )
 
-        # If API key creation succeeds, use it to try accessing B's model
-        if api_key_response.status_code in (200, 201):
-            api_key_body = api_key_response.json()
-            api_key = api_key_body.get("key")
-            assert api_key, (
-                "API key creation returned success without key material: "
-                f"{redact_sensitive(api_key_body)}"
+        # Positive control: the key is served on A's own gateway, so a rejection
+        # on B below is about the tenant boundary, not a key that does not work yet.
+        _wait_for_chat_ok(case_a, gateway_a_url, api_key)
+
+        # A 200 below must mean a key-validation leak, not a route that B's
+        # gateway has not programmed auth for yet.
+        wait_for_route_auth_enforced(
+            model_b_url,
+            what=f"B route not enforcing auth yet: {model_b_url} kept accepting an unknown API key",
+        )
+
+        # Try to access tenant B's model through tenant B's gateway using tenant A's API key.
+        # Empty 401/403 are retried; the last reply is checked as B's verdict.
+        with _tenant_gateway_auth_policy(case_b["gateway_name"]):
+            response = _request_with_gateway_retry(
+                requests.post,
+                f"{model_b_url}/chat/completions",
+                headers={"Authorization": f"Bearer {api_key}"},
+                json={"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "Say hello"}]},
             )
 
-            # Try to access tenant B's model through tenant B's gateway using tenant A's API key
-            model_b_url = f"{gateway_b_url}{case_b['model_path']}"
-            headers = {"Authorization": f"Bearer {api_key}"}
-
-            response = chat(
-                "Say hello",
-                model_b_url,
-                headers,
-                model_name="facebook/opt-125m",
-            )
-
-            # Should be rejected (401 Unauthorized or 403 Forbidden)
-            assert response.status_code in (401, 403), (
-                f"Expected 401/403 for cross-tenant access, got {response.status_code}. "
-                f"Tenant A should not access tenant B's model via B's gateway. "
-                f"Response: {redact_sensitive(response.text[:500])}"
-            )
-        else:
-            # If we can't even create an API key, expect proper auth/permission failure
-            # 404 would indicate infrastructure failure, not isolation
-            assert api_key_response.status_code in (401, 403), (
-                f"Unexpected API key creation failure: {api_key_response.status_code} "
-                f"{redact_sensitive(api_key_response.text)}"
-            )
+        # Should be rejected (401 Unauthorized or 403 Forbidden) by B's auth
+        assert is_gateway_auth_denial(response), (
+            f"Expected B's auth to reject tenant A's key with 401/403, got {response.status_code}. "
+            f"Tenant A should not access tenant B's model via B's gateway. "
+            f"Response: {response_summary(response, max_body=500)}"
+        )
 
 
 # ─── Body-based routing ────────────────────────────────────────────────────
@@ -297,18 +299,11 @@ requires_ipp = pytest.mark.skipif(
 def _create_tenant_api_key(gateway_url, case):
     """Create an API key for a tenant and return (api_key, gateway_url)."""
     oc_token = _get_cluster_token()
-    r = requests.post(
-        f"{gateway_url}/maas-api/v1/api-keys",
-        headers={
-            "Authorization": f"Bearer {oc_token}",
-            "Content-Type": "application/json",
-        },
-        json={
-            "name": f"e2e-body-routing-{case['suffix']}",
-            "subscription": f"{case['model_name']}-sub",
-        },
-        timeout=45,
-        verify=TLS_VERIFY,
+    r = create_api_key_at(
+        f"{gateway_url}/maas-api",
+        oc_token,
+        f"e2e-body-routing-{case['suffix']}",
+        subscription=f"{case['model_name']}-sub",
     )
     assert r.status_code in (200, 201), (
         f"Failed to create API key: {r.status_code} {redact_sensitive(r.text)}"
@@ -336,57 +331,46 @@ class TestTenantBodyRouting:
         }
         return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
-    def test_correct_model_in_body_succeeds(self, tenant_inference_cases):
-        """Correct model name in body passes through IPP and reaches backend."""
+    @pytest.mark.parametrize(
+        "body, should_succeed",
+        [
+            (
+                {"model": "facebook/opt-125m", "messages": [{"role": "user", "content": "hello"}]},
+                True,
+            ),
+            (
+                {"model": "nonexistent-model", "messages": [{"role": "user", "content": "hello"}]},
+                False,
+            ),
+            (
+                {"messages": [{"role": "user", "content": "hello"}]},
+                False,
+            ),
+        ],
+        ids=["correct-model", "wrong-model", "missing-model"],
+    )
+    def test_model_in_body_routing(self, tenant_inference_cases, body, should_succeed):
+        """Body routing preserves the success and rejection cases for model identity."""
         case_a, _ = tenant_inference_cases
         gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
         api_key = _create_tenant_api_key(gateway_url, case_a)
-        time.sleep(8)
+        # Rejections below only count once the key is known to be served.
+        _wait_for_chat_ok(case_a, gateway_url, api_key)
 
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "model": "facebook/opt-125m",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code == 200, (
-            f"Expected 200 with correct model in body, got {r.status_code}. "
-            f"Response: {redact_sensitive(r.text[:500])}"
-        )
-        data = r.json()
-        assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
-        log.info("Body routing (correct model): HTTP %d", r.status_code)
-
-    def test_wrong_model_in_body_rejected(self, tenant_inference_cases):
-        """Wrong model name in body is rejected by IPP model-provider-resolver."""
-        case_a, _ = tenant_inference_cases
-        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
-        api_key = _create_tenant_api_key(gateway_url, case_a)
-        time.sleep(8)
-
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "model": "nonexistent-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected rejection for wrong model in body, got 200. "
-            f"Body routing may not be active — request succeeded via path routing alone."
-        )
-        log.info("Body routing (wrong model): HTTP %d", r.status_code)
-
-    def test_missing_model_in_body_rejected(self, tenant_inference_cases):
-        """Missing model field in body is rejected by IPP."""
-        case_a, _ = tenant_inference_cases
-        gateway_url = _get_tenant_gateway_url(case_a["gateway_name"])
-        api_key = _create_tenant_api_key(gateway_url, case_a)
-        time.sleep(8)
-
-        r = self._post_chat(gateway_url, case_a["model_path"], api_key, {
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected rejection for missing model in body, got 200. "
-            f"Body routing may not be active — request succeeded without model field."
-        )
-        log.info("Body routing (missing model): HTTP %d", r.status_code)
+        r = self._post_chat(gateway_url, case_a["model_path"], api_key, body)
+        if should_succeed:
+            assert r.status_code == 200, (
+                f"Expected 200 with correct model in body, got {r.status_code}. "
+                f"Response: {redact_sensitive(r.text[:500])}"
+            )
+            data = r.json()
+            assert "choices" in data, f"Response missing 'choices': {redact_sensitive(data)}"
+        else:
+            assert r.status_code != 200, (
+                f"Expected rejection for model body {body!r}, got 200. "
+                "Body routing may not be active — request succeeded via path routing alone."
+            )
+        log.info("Body routing (%s): HTTP %d", "success" if should_succeed else "rejection", r.status_code)
 
     def test_each_tenant_routes_to_own_model(self, tenant_inference_cases):
         """Both tenants route correctly with their own model in body."""
@@ -395,7 +379,7 @@ class TestTenantBodyRouting:
         for case in (case_a, case_b):
             gateway_url = _get_tenant_gateway_url(case["gateway_name"])
             api_key = _create_tenant_api_key(gateway_url, case)
-            time.sleep(8)
+            _wait_for_chat_ok(case, gateway_url, api_key)
 
             r = self._post_chat(gateway_url, case["model_path"], api_key, {
                 "model": "facebook/opt-125m",

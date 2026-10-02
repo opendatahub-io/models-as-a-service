@@ -142,3 +142,155 @@ func TestListTenantsWithData(t *testing.T) {
 	assert.Equal(t, "test-tenant", resp.Tenants[0].Name)
 	assert.Equal(t, "gw-1", resp.Tenants[0].Gateway.Name)
 }
+
+// Contract tests validate the response schema matches ADR ODH-ADR-MS-0004.
+
+func TestContract_ResponseSchema(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fc := &fakeTenantCache{
+		synced: true,
+		tenants: []types.TenantInfo{
+			{
+				Name: "tenant-a",
+				Gateway: types.GatewayMetadata{
+					Name:        "maas-tenant-a-gateway",
+					Namespace:   "openshift-ingress",
+					Protocol:    "https",
+					ExternalURL: "https://tenant-a.apps.example.com",
+					Port:        443,
+				},
+			},
+		},
+	}
+	h := handler.New(fc)
+	r := gin.New()
+	h.RegisterRoutes(r)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, "application/json; charset=utf-8", w.Header().Get("Content-Type"))
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+
+	tenantsRaw, ok := raw["tenants"].([]any)
+	require.True(t, ok, "response must have 'tenants' array at top level")
+	require.Len(t, tenantsRaw, 1)
+
+	tenant, ok := tenantsRaw[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "tenant-a", tenant["name"])
+
+	gw, ok := tenant["gateway"].(map[string]any)
+	require.True(t, ok, "tenant must have 'gateway' object")
+	assert.Equal(t, "maas-tenant-a-gateway", gw["name"])
+	assert.Equal(t, "openshift-ingress", gw["namespace"])
+	assert.Equal(t, "https", gw["protocol"])
+	assert.Equal(t, "https://tenant-a.apps.example.com", gw["externalUrl"])
+	assert.InDelta(t, float64(443), gw["port"], 0)
+}
+
+func TestContract_EmptyTenants(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fc := &fakeTenantCache{synced: true}
+	h := handler.New(fc)
+	r := gin.New()
+	h.RegisterRoutes(r)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	assert.JSONEq(t, `{"tenants":[]}`, w.Body.String(),
+		"empty cluster must return empty array, not null")
+}
+
+func TestContract_PartialGateway(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fc := &fakeTenantCache{
+		synced: true,
+		tenants: []types.TenantInfo{
+			{
+				Name: "degraded-tenant",
+				Gateway: types.GatewayMetadata{
+					Name:      "missing-gw",
+					Namespace: "openshift-ingress",
+				},
+			},
+		},
+	}
+	h := handler.New(fc)
+	r := gin.New()
+	h.RegisterRoutes(r)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
+
+	tenantsRaw, ok := raw["tenants"].([]any)
+	require.True(t, ok)
+	tenant, ok := tenantsRaw[0].(map[string]any)
+	require.True(t, ok)
+	gw, ok := tenant["gateway"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "missing-gw", gw["name"])
+	assert.Equal(t, "openshift-ingress", gw["namespace"])
+	assert.Empty(t, gw["protocol"], "zero-value fields must be present, not omitted")
+	assert.Empty(t, gw["externalUrl"])
+	assert.InDelta(t, float64(0), gw["port"], 0)
+}
+
+func TestContract_MultiTenant(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	fc := &fakeTenantCache{
+		synced: true,
+		tenants: []types.TenantInfo{
+			{
+				Name: "alpha",
+				Gateway: types.GatewayMetadata{
+					Name:        "alpha-gw",
+					Namespace:   "openshift-ingress",
+					Protocol:    "https",
+					ExternalURL: "https://alpha.example.com",
+					Port:        443,
+				},
+			},
+			{
+				Name: "beta",
+				Gateway: types.GatewayMetadata{
+					Name:        "beta-gw",
+					Namespace:   "openshift-ingress",
+					Protocol:    "http",
+					ExternalURL: "http://beta.example.com",
+					Port:        80,
+				},
+			},
+		},
+	}
+	h := handler.New(fc)
+	r := gin.New()
+	h.RegisterRoutes(r)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/tenants", nil)
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	var resp types.TenantsResponse
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Tenants, 2)
+	assert.Equal(t, "alpha", resp.Tenants[0].Name)
+	assert.Equal(t, "beta", resp.Tenants[1].Name)
+	assert.Equal(t, "https", resp.Tenants[0].Gateway.Protocol)
+	assert.Equal(t, "http", resp.Tenants[1].Gateway.Protocol)
+}

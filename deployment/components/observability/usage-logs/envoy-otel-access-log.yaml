@@ -8,7 +8,7 @@
 #            payload-processing ext_proc strips the headers.
 #            user_id (X-MaaS-Username) is NOT captured by default; it is
 #            injected at runtime by the tenant reconciler when
-#            MaasTenantConfig.spec.telemetry.metrics.captureUser is true.
+#            MaasTenantConfig.spec.telemetry.logs.captureUser is true.
 # Model:     Composite filter wraps json_to_metadata, executing only on
 #            inference paths (suffix match: /v1/chat/completions,
 #            /v1/completions, /v1/embeddings).
@@ -457,7 +457,7 @@ spec:
                 # Prefer metadata captured by header_to_metadata after auth.
                 # Fall back to request headers when metadata namespace is unavailable
                 # (e.g., Limitador 429 before header_to_metadata runs).
-                # user_id is injected here by the tenant reconciler when captureUser=true.
+                # user_id is injected here by the tenant reconciler when logs.captureUser=true.
                 - key: subscription
                   value:
                     string_value: '%CEL("envoy.filters.http.header_to_metadata" in metadata.filter_metadata ? metadata.filter_metadata["envoy.filters.http.header_to_metadata"]["subscription"] : request.headers["x-maas-subscription"])%'

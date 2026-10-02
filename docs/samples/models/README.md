@@ -6,7 +6,7 @@ This directory contains `LLMInferenceService`s for deploying sample models. Plea
 
 - **simulator** - Simple simulator for testing
 - **simulator-premium** - Premium simulator for testing access policies (configured via MaaSAuthPolicy)
-- **facebook-opt-125m-cpu** - Facebook OPT 125M model (CPU-based)
+- **facebook-opt-125m-cpu** - Facebook OPT 125M on vLLM CPU, served as `facebook/opt-125m-cpu` so it can run next to the simulators
 - **qwen3** - Qwen3 model (GPU-based with autoscaling)
 - **ibm-granite-2b-gpu** - IBM Granite 2B Instruct model (GPU-based, supports instructions)
 - **granite-3-1-8b-rhelai-modelcar** - Granite 3.1 8B Instruct via Red Hat model car OCI + `vllm-cpu-rhel9` (CPU; see comments in `model.yaml`)

@@ -22,10 +22,14 @@ import (
 	"strings"
 	"testing"
 
+	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -121,6 +125,45 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
+	}
+}
+
+func TestExternalModel_ReconcileRoute_GatewayStopsAccepting(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
+	route.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse
+	route.Status.Parents[0].Conditions[0].Reason = string(gatewayapiv1.RouteReasonNotAllowedByListeners)
+	// Status left by an earlier reconcile, when the gateway still accepted the route.
+	model.Status.HTTPRouteName = route.Name
+	model.Status.HTTPRouteNamespace = route.Namespace
+	model.Status.HTTPRouteGatewayName = "maas-default-gateway"
+	model.Status.HTTPRouteGatewayNamespace = "openshift-ingress"
+	model.Status.HTTPRouteHostnames = []string{"api.example.com"}
+
+	r, _ := newTestReconciler(model, externalModelCR, route)
+	r.GatewayName = "maas-default-gateway"
+	r.GatewayNamespace = "openshift-ingress"
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	if err := handler.ReconcileRoute(t.Context(), log, model); err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+	}
+
+	if model.Status.HTTPRouteGatewayName != "" || model.Status.HTTPRouteGatewayNamespace != "" || model.Status.HTTPRouteHostnames != nil {
+		t.Errorf("gateway status kept after the gateway stopped accepting the route: gateway=%s/%s hostnames=%v",
+			model.Status.HTTPRouteGatewayNamespace, model.Status.HTTPRouteGatewayName, model.Status.HTTPRouteHostnames)
+	}
+	_, ready, err := handler.Status(t.Context(), log, model)
+	if err != nil {
+		t.Fatalf("Status: unexpected error: %v", err)
+	}
+	if ready {
+		t.Error("model reported ready although its gateway no longer accepts the route")
+	}
+	if reason, _ := handler.NotReadyReason(); reason != maasv1alpha1.ReasonNotAccepted {
+		t.Errorf("NotReadyReason = %q, want %q", reason, maasv1alpha1.ReasonNotAccepted)
 	}
 }
 
@@ -242,6 +285,67 @@ func TestExternalModel_Status_NotReady(t *testing.T) {
 	}
 }
 
+// The HTTPRoute watch filters route status down to accepted parents, so a gateway
+// accepting the route must still reach the reconcile and make the model Ready.
+func TestExternalModel_ReadyFollowsRouteAccepted(t *testing.T) {
+	ctx := t.Context()
+	const (
+		modelName = "gpt-4o"
+		ns        = "default"
+	)
+	model := newExternalModel(modelName, ns, "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName(modelName), ns, testGatewayName, testGatewayNamespace)
+	route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+	apimeta.SetStatusCondition(&route.Status.Parents[0].Conditions, metav1.Condition{
+		Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionUnknown, Reason: string(gatewayapiv1.RouteReasonPending),
+	})
+	sub := newMaaSSubscription("sub1", "admin-ns", "team-a", modelName, 100)
+	sub.Spec.ModelRefs[0].Namespace = ns
+	auth := newMaaSAuthPolicy("auth1", "admin-ns", "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: ns})
+	r, c := newTestReconciler(model, newExternalModelCR(modelName, ns, "openai", "api.openai.com"), route, sub, auth)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (route not accepted): %v", err)
+	}
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.Phase != "Unhealthy" {
+		t.Errorf("Phase before route accepted = %q, want Unhealthy", got.Status.Phase)
+	}
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionFalse, string(maasv1alpha1.ReasonRuntimeHealthFailure))
+
+	current := &gatewayapiv1.HTTPRoute{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(route), current); err != nil {
+		t.Fatalf("Get HTTPRoute: %v", err)
+	}
+	accepted := current.DeepCopy()
+	apimeta.SetStatusCondition(&accepted.Status.Parents[0].Conditions, metav1.Condition{
+		Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionTrue, Reason: string(gatewayapiv1.RouteReasonAccepted),
+	})
+	if !httpRouteChangedForModelRef().Update(event.UpdateEvent{ObjectOld: current, ObjectNew: accepted}) {
+		t.Fatal("HTTPRoute watch predicate dropped the Accepted transition")
+	}
+	if err := c.Status().Update(ctx, accepted); err != nil {
+		t.Fatalf("Update HTTPRoute status: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (route accepted): %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.Phase != "Ready" {
+		t.Errorf("Phase after route accepted = %q, want Ready", got.Status.Phase)
+	}
+	if got.Status.Endpoint != "https://maas.example.com" {
+		t.Errorf("Endpoint = %q, want %q", got.Status.Endpoint, "https://maas.example.com")
+	}
+}
+
 func TestExternalModel_GetModelEndpoint_FromHostnames(t *testing.T) {
 	model := newExternalModel("claude-sonnet", "default", "anthropic", "api.anthropic.com")
 	model.Status.HTTPRouteHostnames = []string{"maas.example.com"}
@@ -322,14 +426,21 @@ func newInferenceExternalModelCR(name, ns, providerRef string) *unstructured.Uns
 	return obj
 }
 
+// newTestReconcilerWithMapper is newTestReconciler with a REST mapper that knows the
+// inference ExternalModel, so its reads succeed instead of falling back to the legacy kind.
 func newTestReconcilerWithMapper(objects ...client.Object) (*MaaSModelRefReconciler, client.Client) {
 	// Include default AITenant for tenant auto-resolution
 	allObjects := append([]client.Object{defaultTestAITenant()}, objects...)
+	inferenceEM := &unstructured.Unstructured{}
+	inferenceEM.SetGroupVersionKind(inferenceExternalModelGVK)
 	c := fake.NewClientBuilder().
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(allObjects...).
-		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
+		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}, &gatewayapiv1.HTTPRoute{}, inferenceEM).
+		WithIndex(&maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer).
+		WithIndex(&maasv1alpha1.MaaSModelRef{}, tenantAssociationIndex, tenantAssociationIndexer).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, modelRefIndexKey, subscriptionModelRefIndexer).
 		Build()
 	return &MaaSModelRefReconciler{
 		Client:            c,
@@ -360,6 +471,70 @@ func TestExternalModel_ReconcileRoute_InferenceExternalModel(t *testing.T) {
 	}
 	if model.Status.HTTPRouteGatewayName != "maas-default-gateway" {
 		t.Errorf("HTTPRouteGatewayName = %q, want %q", model.Status.HTTPRouteGatewayName, "maas-default-gateway")
+	}
+}
+
+// The inference ExternalModel reconciler can record status.httpRouteName after the
+// gateway has accepted the route, leaving the HTTPRoute watch nothing to deliver, so the
+// ExternalModel watch has to bring the model Ready.
+func TestExternalModel_ReadyFollowsInferenceRouteName(t *testing.T) {
+	ctx := t.Context()
+	const (
+		modelName = "gpt-4o"
+		ns        = "default"
+	)
+	model := newExternalModel(modelName, ns, "", "")
+	inferenceEM := newInferenceExternalModelCR(modelName, ns, "openai-provider")
+	delete(inferenceEM.Object, "status")
+	route := newHTTPRouteWithGateway(modelName, ns, testGatewayName, testGatewayNamespace)
+	route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+	sub := newMaaSSubscription("sub1", "admin-ns", "team-a", modelName, 100)
+	sub.Spec.ModelRefs[0].Namespace = ns
+	auth := newMaaSAuthPolicy("auth1", "admin-ns", "team-a", maasv1alpha1.ModelRef{Name: modelName, Namespace: ns})
+	r, c := newTestReconcilerWithMapper(model, inferenceEM, route, sub, auth)
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: modelName, Namespace: ns}}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (route name not recorded): %v", err)
+	}
+	got := &maasv1alpha1.MaaSModelRef{}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.Phase == "Ready" || got.Status.Endpoint != "" {
+		t.Fatalf("before status.httpRouteName: Phase = %q, Endpoint = %q, want not Ready with no endpoint", got.Status.Phase, got.Status.Endpoint)
+	}
+
+	current := &unstructured.Unstructured{}
+	current.SetGroupVersionKind(inferenceExternalModelGVK)
+	if err := c.Get(ctx, client.ObjectKeyFromObject(inferenceEM), current); err != nil {
+		t.Fatalf("Get inference ExternalModel: %v", err)
+	}
+	recorded := current.DeepCopy()
+	if err := unstructured.SetNestedField(recorded.Object, modelName, "status", "httpRouteName"); err != nil {
+		t.Fatalf("SetNestedField: %v", err)
+	}
+	if !ippExternalModelChangedForModelRef().Update(event.UpdateEvent{ObjectOld: current, ObjectNew: recorded}) {
+		t.Fatal("ExternalModel watch predicate dropped the status.httpRouteName write")
+	}
+	if reqs := r.mapIPPExternalModelToMaaSModelRefs(ctx, recorded); len(reqs) != 1 || reqs[0] != req {
+		t.Fatalf("mapIPPExternalModelToMaaSModelRefs = %v, want [%v]", reqs, req)
+	}
+	if err := c.Status().Update(ctx, recorded); err != nil {
+		t.Fatalf("Update inference ExternalModel status: %v", err)
+	}
+
+	if _, err := r.Reconcile(ctx, req); err != nil {
+		t.Fatalf("Reconcile (route name recorded): %v", err)
+	}
+	if err := c.Get(ctx, req.NamespacedName, got); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Status.Phase != "Ready" {
+		t.Errorf("Phase after status.httpRouteName = %q, want Ready", got.Status.Phase)
+	}
+	if got.Status.Endpoint != "https://maas.example.com" {
+		t.Errorf("Endpoint = %q, want %q", got.Status.Endpoint, "https://maas.example.com")
 	}
 }
 

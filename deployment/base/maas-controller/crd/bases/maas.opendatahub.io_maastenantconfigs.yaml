@@ -66,6 +66,56 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              guardrails:
+                description: |-
+                  Guardrails attaches reusable AIGuardrail policies at the MaaS tenant-config
+                  scope. References resolve in this object's namespace (the tenant target
+                  namespace); a namespace must not be specified on the reference. Selections
+                  are additive with the AITenant baseline and lower scopes and cannot remove
+                  checks contributed elsewhere.
+                items:
+                  description: |-
+                    GuardrailAttachment attaches an AIGuardrail policy to a MaaS resource and
+                    selects which of the policy's checks apply.
+
+                    Attachments are additive across scopes (tenant, subscription): the effective
+                    set of checks is the union of every scope's selection, and one scope cannot
+                    remove checks contributed by another. Multiple entries referencing the same
+                    policy contribute a union of their selected checks.
+                  properties:
+                    checks:
+                      description: |-
+                        Checks selects check names from the referenced AIGuardrail's spec.checks.
+                        An omitted or empty list selects every check in the policy, including
+                        checks added to the policy later. A non-empty list selects only the named
+                        checks. Names must be unique and must exist in the referenced policy.
+                      items:
+                        maxLength: 63
+                        minLength: 1
+                        pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                        type: string
+                      maxItems: 64
+                      type: array
+                      x-kubernetes-list-type: set
+                    ref:
+                      description: Ref identifies the AIGuardrail policy to attach.
+                      properties:
+                        name:
+                          description: Name is the name of the AIGuardrail policy
+                            to attach.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$
+                          type: string
+                      required:
+                      - name
+                      type: object
+                  required:
+                  - ref
+                  type: object
+                maxItems: 64
+                type: array
+                x-kubernetes-list-type: atomic
               maasApi:
                 description: MaasAPI defines scaling and resource configuration for
                   maas-api pods.
@@ -184,6 +234,18 @@ spec:
                   enabled:
                     default: true
                     type: boolean
+                  logs:
+                    description: TenantLogsConfig defines optional usage-log identity
+                      dimensions.
+                    properties:
+                      captureUser:
+                        default: false
+                        description: |-
+                          CaptureUser includes the authenticated user ID as user_id on usage logs.
+                          Defaults to false. Enabling this may have GDPR / privacy implications —
+                          ensure compliance before use. Independent of metrics.captureUser.
+                        type: boolean
+                    type: object
                   metrics:
                     description: TenantMetricsConfig defines optional metric dimensions.
                     properties:

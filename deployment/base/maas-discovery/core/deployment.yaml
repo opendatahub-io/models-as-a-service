@@ -1,0 +1,74 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: maas-discovery
+spec:
+  replicas: 2
+  template:
+    spec:
+      serviceAccountName: maas-discovery
+      securityContext:
+        runAsNonRoot: true
+      containers:
+      - name: maas-discovery
+        image: maas-discovery
+        imagePullPolicy: Always
+        args:
+        - --tls-cert=/tls/tls.crt
+        - --tls-key=/tls/tls.key
+        - --aitenant-namespace=ai-tenants
+        - --gateway-namespace=openshift-ingress
+        ports:
+        - containerPort: 8443
+          name: https
+          protocol: TCP
+        env:
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        resources:
+          requests:
+            memory: "64Mi"
+            cpu: "50m"
+          limits:
+            memory: "128Mi"
+            cpu: "250m"
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: https
+            scheme: HTTPS
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+        securityContext:
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+          readOnlyRootFilesystem: true
+          runAsNonRoot: true
+          seccompProfile:
+            type: RuntimeDefault
+        volumeMounts:
+        - name: tls-certs
+          mountPath: /tls
+          readOnly: true
+      volumes:
+      - name: tls-certs
+        secret:
+          secretName: maas-discovery-tls
+          defaultMode: 420
+          optional: false
+      terminationGracePeriodSeconds: 30
