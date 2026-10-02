@@ -115,7 +115,7 @@ fi
 ### E2E Tests (Python)
 
 !!! note "Prerequisites"
-    OpenShift cluster with MaaS deployed, `oc` logged in as cluster-admin, Python 3.9+.
+    OpenShift cluster with MaaS deployed, `oc` logged in as cluster-admin, Python 3.11+ (3.10 minimum; pytest 9).
 
 === "Quick (local dev)"
 

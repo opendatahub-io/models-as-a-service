@@ -9,22 +9,25 @@ VENV_DIR="${DIR}/.venv"
 
 setup_python_venv() {
     echo "[smoke] Setting up Python virtual environment..."
-    
+    # shellcheck source=scripts/ensure_e2e_python.sh
+    source "${DIR}/scripts/ensure_e2e_python.sh"
+
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
+        echo "[smoke] Creating virtual environment at ${VENV_DIR} ($E2E_PYTHON)"
+        "$E2E_PYTHON" -m venv "${VENV_DIR}" --upgrade-deps
     fi
-    
+
     # Activate virtual environment
     echo "[smoke] Activating virtual environment"
+    # shellcheck disable=SC1091
     source "${VENV_DIR}/bin/activate"
-    
+
     # Upgrade pip and install requirements
     echo "[smoke] Installing Python dependencies"
     python -m pip install --upgrade pip --quiet
     python -m pip install -r "${DIR}/requirements.txt" --quiet
-    
+
     echo "[smoke] Virtual environment setup complete"
 }
 
