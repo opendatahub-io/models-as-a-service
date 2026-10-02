@@ -152,14 +152,14 @@ func TestMaaSSubscriptionReconciler_GroupByIdenticalRate(t *testing.T) {
 	pred := predicateOf(t, whenSlice)
 
 	for _, sub := range []string{"sub-a", "sub-b", "sub-c"} {
-		id := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespace, sub, namespace, modelName))
-		clause := fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id)
+		key := ModelScopedSubscriptionKey(namespace, sub, namespace, modelName)
+		clause := subscriptionSelectClause(key)
 		if !containsString(pred, clause) {
 			t.Errorf("grouped predicate is missing %s's clause: %s", sub, pred)
 		}
 	}
-	subDID := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespace, "sub-d", namespace, modelName))
-	if containsString(pred, subDID) {
+	subDKey := ModelScopedSubscriptionKey(namespace, "sub-d", namespace, modelName)
+	if containsString(pred, subscriptionSelectClause(subDKey)) {
 		t.Errorf("grouped predicate must not reference sub-d (different rate): %s", pred)
 	}
 
@@ -357,14 +357,13 @@ func TestMaaSSubscriptionReconciler_GroupingGrowsWithDistinctRates(t *testing.T)
 	}
 
 	// Only the OR-clauses for the 57 extra subscriptions should account for the
-	// size difference. One clause is `auth.identity.selected_subscription_id ==
-	// "<16-hex>" || `, roughly 70-90 bytes; give generous headroom (200 B/clause)
-	// so this catches a regression back to one full limit per subscription
-	// (which costs several hundred bytes of fixed overhead per subscription on
-	// top of the clause) without being flaky.
+	// size difference. Each clause is subscriptionSelectClause (short ID + long
+	// key fallback), roughly 120-180 bytes including separators; give headroom
+	// (300 B/clause) so this catches a regression back to one full limit per
+	// subscription without being flaky under dual-match predicates.
 	grew := len(manyJSON) - len(fewJSON)
 	extraSubs := 60 - 3
-	maxExpected := extraSubs * 200
+	maxExpected := extraSubs * 300
 	t.Logf("spec grew by %d bytes for %d extra subscriptions (%.1f B/sub)", grew, extraSubs, float64(grew)/float64(extraSubs))
 	if grew <= 0 {
 		t.Fatalf("60 subscriptions produced a spec no bigger than 3 (%d vs %d bytes) - grouping key must be wrong", len(manyJSON), len(fewJSON))
@@ -372,7 +371,7 @@ func TestMaaSSubscriptionReconciler_GroupingGrowsWithDistinctRates(t *testing.T)
 	if grew > maxExpected {
 		t.Errorf("spec grew by %d bytes for %d extra subscriptions (%.0f B/sub), expected under %d B/sub - "+
 			"looks like a full limit is being paid per subscription again, not just a predicate clause",
-			grew, extraSubs, float64(grew)/float64(extraSubs), 200)
+			grew, extraSubs, float64(grew)/float64(extraSubs), 300)
 	}
 }
 
@@ -427,12 +426,10 @@ func TestBuildGroupedLimits_UnlimitedNextToGroups(t *testing.T) {
 	if !ok {
 		t.Fatalf("rate group %q missing, got %v", "tokens-500-per-1m", getKeys(limits))
 	}
-	idA := SubscriptionRateLimitID("ns/a-rated@models/llm")
-	idB := SubscriptionRateLimitID("ns/b-rated@models/llm")
-	ratedIDs := []string{idA, idB}
-	sort.Strings(ratedIDs)
-	wantGrouped := `(auth.identity.selected_subscription_id == "` + ratedIDs[0] + `" || ` +
-		`auth.identity.selected_subscription_id == "` + ratedIDs[1] + `") && !request.path.endsWith("/v1/models")`
+	ratedKeys := []string{"ns/a-rated@models/llm", "ns/b-rated@models/llm"}
+	sort.Strings(ratedKeys)
+	wantGrouped := `(` + subscriptionSelectClause(ratedKeys[0]) + ` || ` +
+		subscriptionSelectClause(ratedKeys[1]) + `) && !request.path.endsWith("/v1/models")`
 	groupedWhen, _, _ := unstructured.NestedSlice(grouped, "when")
 	if got := predicateOf(t, groupedWhen); got != wantGrouped {
 		t.Errorf("rate group predicate = %q, want %q", got, wantGrouped)
@@ -442,12 +439,10 @@ func TestBuildGroupedLimits_UnlimitedNextToGroups(t *testing.T) {
 	if !ok {
 		t.Fatalf("unlimited limit %q missing, got %v", unlimitedLimitName, getKeys(limits))
 	}
-	idY := SubscriptionRateLimitID("ns/y-free@models/llm")
-	idZ := SubscriptionRateLimitID("ns/z-free@models/llm")
-	freeIDs := []string{idY, idZ}
-	sort.Strings(freeIDs)
-	wantFree := `(auth.identity.selected_subscription_id == "` + freeIDs[0] + `" || ` +
-		`auth.identity.selected_subscription_id == "` + freeIDs[1] + `") && !request.path.endsWith("/v1/models")`
+	freeKeys := []string{"ns/y-free@models/llm", "ns/z-free@models/llm"}
+	sort.Strings(freeKeys)
+	wantFree := `(` + subscriptionSelectClause(freeKeys[0]) + ` || ` +
+		subscriptionSelectClause(freeKeys[1]) + `) && !request.path.endsWith("/v1/models")`
 	freeWhen, _, _ := unstructured.NestedSlice(free, "when")
 	if got := predicateOf(t, freeWhen); got != wantFree {
 		t.Errorf("unlimited predicate = %q, want %q", got, wantFree)

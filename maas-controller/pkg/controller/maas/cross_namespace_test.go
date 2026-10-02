@@ -556,28 +556,30 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Fatal("predicate is not string")
 	}
 
-	idA := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceA, subscriptionName, modelNamespace, modelName))
-	idB := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceB, subscriptionName, modelNamespace, modelName))
+	keyA := ModelScopedSubscriptionKey(namespaceA, subscriptionName, modelNamespace, modelName)
+	keyB := ModelScopedSubscriptionKey(namespaceB, subscriptionName, modelNamespace, modelName)
+	idA := SubscriptionRateLimitID(keyA)
+	idB := SubscriptionRateLimitID(keyB)
 	if idA == idB {
 		t.Fatalf("SECURITY BUG: short IDs collide (%q), this would cause quota isolation bypass!", idA)
 	}
-	clauseA := `auth.identity.selected_subscription_id == "` + idA + `"`
-	clauseB := `auth.identity.selected_subscription_id == "` + idB + `"`
-	// buildGroupLimit sorts short IDs lexicographically before OR-ing.
-	ids := []string{idA, idB}
-	sort.Strings(ids)
-	expectedPred := `(auth.identity.selected_subscription_id == "` + ids[0] + `" || ` +
-		`auth.identity.selected_subscription_id == "` + ids[1] + `") && !request.path.endsWith("/v1/models")`
+	clauseA := subscriptionSelectClause(keyA)
+	clauseB := subscriptionSelectClause(keyB)
+	// buildGroupLimit sorts model-scoped keys lexicographically before OR-ing.
+	keys := []string{keyA, keyB}
+	sort.Strings(keys)
+	expectedPred := `(` + subscriptionSelectClause(keys[0]) + ` || ` +
+		subscriptionSelectClause(keys[1]) + `) && !request.path.endsWith("/v1/models")`
 	if pred != expectedPred {
 		t.Errorf("grouped predicate = %q, want %q", pred, expectedPred)
 	}
 	// CRITICAL: each clause must name its own short ID (namespace is hashed in),
 	// so a request for tenant-a's "gold" cannot be counted (or capped) as tenant-b's.
 	if !containsString(pred, clauseA) {
-		t.Errorf("SECURITY BUG: predicate is missing tenant-a's short-ID clause: %s", pred)
+		t.Errorf("SECURITY BUG: predicate is missing tenant-a's select clause: %s", pred)
 	}
 	if !containsString(pred, clauseB) {
-		t.Errorf("SECURITY BUG: predicate is missing tenant-b's short-ID clause: %s", pred)
+		t.Errorf("SECURITY BUG: predicate is missing tenant-b's select clause: %s", pred)
 	}
 
 	// CRITICAL: counters must key on selected_subscription_id as well as userid,

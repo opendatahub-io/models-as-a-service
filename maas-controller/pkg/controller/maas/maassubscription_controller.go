@@ -174,8 +174,8 @@ func modelRefTokenRates(mRef maasv1alpha1.ModelSubscriptionRef) (rates []any, un
 // with a positive numeric limit, so it cannot collide with one.
 const unlimitedLimitName = "tokens-unlimited"
 
-// unlimitedTokenLimit returns the TRLP limit matching the given
-// selected_subscription_id values of unlimited subscriptions.
+// unlimitedTokenLimit returns the TRLP limit matching the given model-scoped
+// subscription keys of unlimited subscriptions (via subscriptionSelectClause).
 //
 // Without rates, Limitador enforces nothing and keeps no counters, but the
 // wasm-shim still sends check and report calls for matching requests, and
@@ -188,11 +188,11 @@ const unlimitedLimitName = "tokens-unlimited"
 //
 // rates and counters stay unset: a nil slice is written as null, which the API
 // server drops, so the no-op update check would never match.
-func unlimitedTokenLimit(rateLimitIDs []string) map[string]any {
-	sort.Strings(rateLimitIDs)
-	matches := make([]string, 0, len(rateLimitIDs))
-	for _, id := range rateLimitIDs {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
+func unlimitedTokenLimit(modelScopedKeys []string) map[string]any {
+	sort.Strings(modelScopedKeys)
+	matches := make([]string, 0, len(modelScopedKeys))
+	for _, key := range modelScopedKeys {
+		matches = append(matches, subscriptionSelectClause(key))
 	}
 	return map[string]any{
 		"when": []any{
@@ -638,15 +638,16 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 	}
 
 	// Trust auth.identity.selected_subscription_id from AuthPolicy (16-hex SHA-256 of
-	// {subNS}/{subName}@{modelNS}/{modelName}). The long selected_subscription_key
-	// stays on the identity for telemetry; TRLP matches the short ID so the Kuadrant
-	// WASM shim stays compact.
+	// {subNS}/{subName}@{modelNS}/{modelName}). Predicates also match
+	// selected_subscription_key so limits stay enforceable if AuthPolicy has not
+	// yet populated the short ID (mixed maas-api / controller rollout). Counters
+	// stay on selected_subscription_id + userid.
 	//
 	// Subscriptions sharing identical rates share one limit instead of one each, so the TRLP
 	// (and the EnvoyFilter/WasmPlugin Kuadrant renders from it, which repeats every limit per
 	// route match) grows with the number of distinct rate sets, not with the number of
 	// subscriptions behind them (RHOAIENG-95277). The predicate lists every subscription in
-	// the group by short ID; counters key on selected_subscription_id as well as userid so
+	// the group; counters key on selected_subscription_id as well as userid so
 	// subscriptions sharing a limit still get independent budgets. Unlimited subscriptions
 	// share the rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
 	limitsMap, subNames := buildGroupedLimits(subs)

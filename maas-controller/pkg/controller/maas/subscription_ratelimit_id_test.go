@@ -21,7 +21,15 @@ func TestSubscriptionRateLimitID_KnownVector(t *testing.T) {
 	assert.Equal(t, "15d4c0904b3ebaf9", SubscriptionRateLimitID(key))
 }
 
+func TestSubscriptionSelectClause_IncludesIDAndKeyFallback(t *testing.T) {
+	key := "ns/sub@models/llm"
+	got := subscriptionSelectClause(key)
+	want := `(auth.identity.selected_subscription_id == "` + SubscriptionRateLimitID(key) +
+		`" || auth.identity.selected_subscription_key == "` + key + `")`
+	assert.Equal(t, want, got)
+}
+
 func trlpRateLimitPredicate(subNS, subName, modelNS, modelName string) string {
-	id := SubscriptionRateLimitID(ModelScopedSubscriptionKey(subNS, subName, modelNS, modelName))
-	return `auth.identity.selected_subscription_id == "` + id + `" && !request.path.endsWith("/v1/models")`
+	key := ModelScopedSubscriptionKey(subNS, subName, modelNS, modelName)
+	return subscriptionSelectClause(key) + ` && !request.path.endsWith("/v1/models")`
 }

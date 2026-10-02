@@ -39,3 +39,19 @@ func SubscriptionRateLimitID(modelScopedKey string) string {
 	sum := sha256.Sum256([]byte(modelScopedKey))
 	return hex.EncodeToString(sum[:8])
 }
+
+// subscriptionSelectClause matches either the short rate-limit ID or the long
+// selected_subscription_key. ID matching is the steady-state contract after
+// maas-api publishes rateLimitId. The key fallback keeps TokenRateLimitPolicy
+// limits enforceable during mixed rollouts where the controller has already
+// switched predicates to selected_subscription_id but AuthPolicy still leaves
+// that field empty (no rateLimitId yet) — otherwise rated requests would match
+// no limit (quota bypass).
+func subscriptionSelectClause(modelScoped string) string {
+	id := SubscriptionRateLimitID(modelScoped)
+	return fmt.Sprintf(
+		`(auth.identity.selected_subscription_id == "%s" || auth.identity.selected_subscription_key == "%s")`,
+		id,
+		modelScoped,
+	)
+}

@@ -287,11 +287,11 @@ func TestMaaSSubscriptionReconciler_AllUnlimited_ActivePhase(t *testing.T) {
 // The predicate must not depend on the order subscriptions are listed in, or
 // the TRLP would be rewritten between reconciles.
 func TestUnlimitedTokenLimit_PredicateOrderIsStable(t *testing.T) {
-	id := func(sub string) string {
-		return SubscriptionRateLimitID(ModelScopedSubscriptionKey(unlimitedTestNamespace, sub, unlimitedTestNamespace, unlimitedTestModel))
+	key := func(sub string) string {
+		return ModelScopedSubscriptionKey(unlimitedTestNamespace, sub, unlimitedTestNamespace, unlimitedTestModel)
 	}
 
-	got := firstPredicate(t, unlimitedTokenLimit([]string{id("unl-b"), id("unl-a")}))
+	got := firstPredicate(t, unlimitedTokenLimit([]string{key("unl-b"), key("unl-a")}))
 
 	if want := unlimitedTestPredicate("unl-a", "unl-b"); got != want {
 		t.Errorf("predicate = %q, want %q", got, want)
@@ -299,12 +299,15 @@ func TestUnlimitedTokenLimit_PredicateOrderIsStable(t *testing.T) {
 }
 
 func unlimitedTestPredicate(subs ...string) string {
-	matches := make([]string, 0, len(subs))
+	keys := make([]string, 0, len(subs))
 	for _, s := range subs {
-		id := SubscriptionRateLimitID(ModelScopedSubscriptionKey(unlimitedTestNamespace, s, unlimitedTestNamespace, unlimitedTestModel))
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
+		keys = append(keys, ModelScopedSubscriptionKey(unlimitedTestNamespace, s, unlimitedTestNamespace, unlimitedTestModel))
 	}
-	sort.Strings(matches)
+	sort.Strings(keys)
+	matches := make([]string, 0, len(keys))
+	for _, key := range keys {
+		matches = append(matches, subscriptionSelectClause(key))
+	}
 	return fmt.Sprintf(`(%s) && !request.path.endsWith("/v1/models")`, strings.Join(matches, " || "))
 }
 
