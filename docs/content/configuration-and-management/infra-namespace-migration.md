@@ -4,7 +4,7 @@
 
 MaaS separates infrastructure services (maas-api deployment and maas-db-config secret) from controller components into dedicated namespaces **by default**.
 
-**Note:** PostgreSQL itself can be external (e.g., AWS RDS, Azure Database) or shared in another namespace. Only the maas-api deployment and the database connection secret (`maas-db-config`) move to the infrastructure namespace. Operand egress policies may require a companion NetworkPolicy for non-bundled Postgres; see [PostgreSQL egress](../install/maas-setup.md#postgresql-egress).
+**Note:** PostgreSQL itself can be external (e.g., AWS RDS, Azure Database) or shared in another namespace. Only the maas-api deployment and the database connection secret (`maas-db-config`) move to the infrastructure namespace. Operand egress for `maas-api` includes allow-all outbound access for customer databases; see [PostgreSQL egress](../install/maas-setup.md#postgresql-egress).
 
 For details on the full namespace architecture, see [Controller Architecture](../architecture-internals/controller-architecture.md).
 
