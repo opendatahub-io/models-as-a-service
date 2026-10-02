@@ -62,6 +62,12 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
     ./scripts/deploy.sh --postgres-connection 'postgresql://username:password@hostname:5432/database?sslmode=require'
     ```
 
+!!! note "PostgreSQL and operand NetworkPolicies"
+    When operand egress policies are enabled (RHOAI 3.6+), `maas-api-egress-restrict` may limit database egress.
+    Bundled POC Postgres (`app=postgres` in the infrastructure namespace) is allowed automatically; external and
+    shared in-cluster Postgres require additional configuration. See
+    [PostgreSQL egress](#postgresql-egress) under Operand NetworkPolicies.
+
 !!! note "Restarting maas-api"
     If you add or update the Secret after the DataScienceCluster already has modelsAsAService in managed state, restart the maas-api deployment to pick up the config:
 
@@ -377,14 +383,75 @@ MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/o
 | `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
 | `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
 | `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
-| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres`) when `maas-db-config` targets in-cluster Postgres |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres` in infra/controller namespaces) when `maas-db-config` hostname is in-cluster |
 | `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; `usage-gateway-http` → `:8080` (when `usageLogging=true`) |
 | `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` (when `usageLogging=true`) |
 | `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; `usage-gateway-http` → `:8080` |
 
-### External PostgreSQL
+### PostgreSQL egress
 
-When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
+`maas-api` connects using `maas-db-config` only; there is **no** requirement that your Postgres pods use `app=postgres`.
+The operand policy `maas-api-egress-restrict` is separate: it limits **egress** from `maas-api` pods.
+
+When `maas-db-config` uses an in-cluster hostname (`postgres`, `*.svc`, or `*.svc.cluster.local`), `maas-controller`
+adds an egress rule for pods labeled `app=postgres` in the **infrastructure namespace** (where `maas-api` runs) and,
+on upgrade paths where namespaces differ, in the **controller namespace**. That matches the bundled POC Postgres from
+`scripts/setup-database.sh`. It does **not** match shared Postgres in other namespaces or with other labels.
+
+Use one of the following patterns when the default rule does not cover your database.
+
+#### Bundled POC Postgres (no extra policy)
+
+Deploy Postgres with `scripts/setup-database.sh` or `./scripts/deploy.sh` without `--postgres-connection`.
+Postgres is colocated in the infrastructure namespace with `app=postgres`; no companion NetworkPolicy is required.
+
+#### Shared in-cluster PostgreSQL
+
+Use this when Postgres runs in another namespace, uses a different `app` label, or is shared across components
+(for example a pipeline-managed instance). Keep your existing `maas-db-config` connection string; add a **companion
+egress** `NetworkPolicy` in the **infrastructure namespace** (same namespace as `maas-api` and `maas-db-config`):
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-api-egress-shared-postgres
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: <postgres-namespace>
+          podSelector:
+            matchLabels:
+              app: <postgres-app-label>
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+Replace `<postgres-namespace>` and `<postgres-app-label>` with the labels on your Postgres pods. Multiple
+`NetworkPolicy` objects that select `maas-api` are unioned: this policy adds the path the managed
+`maas-api-egress-restrict` rule does not include.
+
+Relabeling Postgres to `app=postgres` only avoids a companion policy when Postgres runs in the infrastructure or
+controller namespace. Postgres in a dedicated namespace still needs the companion policy above.
+
+#### External PostgreSQL
+
+When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), the hostname is not
+in-cluster and `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress
+policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
