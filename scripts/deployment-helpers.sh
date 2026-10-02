@@ -324,6 +324,37 @@ patch_csv_operator_container_env() {
   return 0
 }
 
+# Set resources on spec.install.spec.deployments[0].containers[0] of a ClusterServiceVersion.
+# <resources_json> replaces the container's resources as a whole.
+# Returns 0 if a patch was applied, 1 if the value was already correct, 2 if patch failed.
+patch_csv_operator_container_resources() {
+  local namespace=$1
+  local csv_name=$2
+  local resources_json=$3
+
+  local current desired
+  current=$(kubectl get csv "$csv_name" -n "$namespace" -o json 2>/dev/null \
+    | jq -cS '.spec.install.spec.deployments[0].spec.template.spec.containers[0].resources // {}' 2>/dev/null || echo "")
+  desired=$(jq -cS . <<<"$resources_json")
+
+  if [[ "$current" == "$desired" ]]; then
+    return 1
+  fi
+
+  log_debug "Setting resources on CSV ${csv_name}: ${desired} (was: ${current:-unknown})"
+  kubectl patch csv "$csv_name" -n "$namespace" --type='json' -p="[
+    {
+      \"op\": \"add\",
+      \"path\": \"/spec/install/spec/deployments/0/spec/template/spec/containers/0/resources\",
+      \"value\": ${desired}
+    }
+  ]" 2>/dev/null || {
+    log_warn "Failed to set resources on CSV ${csv_name}"
+    return 2
+  }
+  return 0
+}
+
 # Patch one or more RELATED_IMAGE_* env vars on an operator's CSV and force-restart it so
 # the new values take effect (operators read their own env vars once, at process startup).
 # Used to override sub-component images (e.g. ai-gateway-operator, maas-controller, maas-api)
@@ -379,12 +410,16 @@ patch_operator_related_images() {
 # Also sets RATELIMIT_*_SERVICE_FAILURE_MODE=deny so policy fails closed when Limitador
 # service is unavailable (see Kuadrant operator deployment env).
 #
+# Also raises the operator's resources. The upstream 200m CPU / 300Mi memory limits
+# get it OOMKilled or failing probes while it renders the wasm config for many
+# TokenRateLimitPolicies, and TRLPs are not enforced until it recovers.
+#
 # Arguments: <namespace> <csv_name_prefix>  e.g. patch_kuadrant_csv "kuadrant-system" "kuadrant-operator"
 patch_kuadrant_csv() {
   local namespace=$1
   local operator_prefix=$2
 
-  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes, auth service timeout)..."
+  log_info "Patching $operator_prefix CSV (Gateway API, rate limit failure modes, auth service timeout, resources)..."
 
   # Find the CSV
   local csv_name
@@ -408,12 +443,19 @@ patch_kuadrant_csv() {
   # --- Auth service timeout (RHOAIENG-79789) ---
   patch_csv_operator_container_env "$namespace" "$csv_name" "AUTH_SERVICE_TIMEOUT" "2s" && patched_any=true
 
+  # --- Operator resources ---
+  local operator_memory_limit="1Gi"
+  local operator_resources
+  operator_resources=$(jq -nc --arg mem "$operator_memory_limit" \
+    '{requests: {cpu: "200m", memory: "512Mi"}, limits: {cpu: "1", memory: $mem}}')
+  patch_csv_operator_container_resources "$namespace" "$csv_name" "$operator_resources" && patched_any=true
+
   if [[ "$patched_any" != "true" ]]; then
-    log_debug "CSV already has all required operator env (Gateway + rate limit failure modes + auth timeout)"
+    log_debug "CSV already has all required operator env and resources (Gateway + rate limit failure modes + auth timeout + resources)"
     return 0
   fi
 
-  log_info "CSV patched (Gateway controller and/or rate limit failure modes and/or auth timeout)"
+  log_info "CSV patched (Gateway controller and/or rate limit failure modes and/or auth timeout and/or resources)"
 
   # CRITICAL: Force delete the operator pod to pick up the new env var
   # OLM updates the deployment spec but doesn't always trigger a pod restart
@@ -446,6 +488,15 @@ patch_kuadrant_csv() {
       log_info "Operator pod has required CSV env (ISTIO gateway controller + RATELIMIT_* failure modes + AUTH_SERVICE_TIMEOUT)"
     else
       log_warn "Operator pod may not have correct env yet (ISTIO / RATELIMIT_* failure modes / AUTH_SERVICE_TIMEOUT)"
+    fi
+
+    local memory_limit
+    memory_limit=$(kubectl get deployment "$operator_deployment" -n "$namespace" \
+      -o jsonpath='{.spec.template.spec.containers[0].resources.limits.memory}' 2>/dev/null || true)
+    if [[ "$memory_limit" == "$operator_memory_limit" ]]; then
+      log_info "Operator deployment has memory limit ${memory_limit}"
+    else
+      log_warn "Operator deployment memory limit is '${memory_limit}', expected ${operator_memory_limit}"
     fi
 
     # Give the operator time to fully initialize with the new Gateway controller configuration

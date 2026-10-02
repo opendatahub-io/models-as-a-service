@@ -216,6 +216,22 @@ spec:
 EOF
 ```
 
+**Unlimited example** with no token budget:
+
+Some subscriptions should not be throttled at all - internal tooling, a batch pipeline, or the team that owns the model. Set `unlimited: true` on the model reference instead of `tokenRateLimits`:
+
+```yaml
+  modelRefs:
+    - name: ${MODEL_NAME}-ref
+      namespace: ${MODEL_NS}
+      unlimited: true
+```
+
+Each model reference sets exactly one of `unlimited: true` or `tokenRateLimits`. Token usage is still metered, so `authorized_hits` and the usage dashboards keep reporting it.
+
+!!! tip "Replace fake high limits with `unlimited`"
+    A rate like `limit: 99999` / `window: 1s` approximates "no limit" at a real cost. Kuadrant copies every token rate limit into every route match of the gateway's WasmPlugin, a single object that etcd caps at 1.5 MiB. All unlimited subscriptions on a model share one metering-only limit, so each one adds a short predicate clause instead of a full limit.
+
 ### 4. Validate the Configuration
 
 **Check CRs and generated policies:**

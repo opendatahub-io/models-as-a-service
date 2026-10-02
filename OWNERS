@@ -1,8 +1,34 @@
 approvers:
   - chaitanya1731
   - jland-redhat
+  - dmytro-zaharnytskyi
+  - SB159
   - ishitasequeira
+  - yu-teo
+  - somya-bhatnagar
+  - liangwen12year
+  - ryancham715
   - jrhyness
+  - EgorLu
   - ahadas
   - mariusdanciu
   - pierDipi
+  - bartoszmajsak
+  - israel-hdez
+reviewers:
+  - chaitanya1731
+  - jland-redhat
+  - dmytro-zaharnytskyi
+  - SB159
+  - ishitasequeira
+  - yu-teo
+  - somya-bhatnagar
+  - liangwen12year
+  - ryancham715
+  - jrhyness
+  - EgorLu
+  - ahadas
+  - mariusdanciu
+  - pierDipi
+  - bartoszmajsak
+  - israel-hdez

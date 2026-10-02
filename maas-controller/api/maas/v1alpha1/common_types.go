@@ -131,3 +131,41 @@ type ResourceRefStatus struct {
 	// +optional
 	Message string `json:"message,omitempty"`
 }
+
+// GuardrailRef references a reusable AIGuardrail policy by name.
+//
+// The policy always resolves in the accepted AITenant target namespace, so a
+// namespace is intentionally not part of this reference (see the guardrails
+// proposal, "scoped policy references"). AIGuardrail is owned by AI Gateway
+// (aigateway.opendatahub.io); MaaS only records the attachment.
+type GuardrailRef struct {
+	// Name is the name of the AIGuardrail policy to attach.
+	// +kubebuilder:validation:MinLength=1
+	// +kubebuilder:validation:MaxLength=253
+	// +kubebuilder:validation:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$`
+	Name string `json:"name"`
+}
+
+// GuardrailAttachment attaches an AIGuardrail policy to a MaaS resource and
+// selects which of the policy's checks apply.
+//
+// Attachments are additive across scopes (tenant, subscription): the effective
+// set of checks is the union of every scope's selection, and one scope cannot
+// remove checks contributed by another. Multiple entries referencing the same
+// policy contribute a union of their selected checks.
+type GuardrailAttachment struct {
+	// Ref identifies the AIGuardrail policy to attach.
+	Ref GuardrailRef `json:"ref"`
+
+	// Checks selects check names from the referenced AIGuardrail's spec.checks.
+	// An omitted or empty list selects every check in the policy, including
+	// checks added to the policy later. A non-empty list selects only the named
+	// checks. Names must be unique and must exist in the referenced policy.
+	// +optional
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MinLength=1
+	// +kubebuilder:validation:items:MaxLength=63
+	// +kubebuilder:validation:items:Pattern=`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`
+	Checks []string `json:"checks,omitempty"`
+}

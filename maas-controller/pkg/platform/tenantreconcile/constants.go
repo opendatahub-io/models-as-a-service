@@ -9,7 +9,6 @@ import (
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -129,6 +128,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
 
@@ -236,11 +236,7 @@ func IstioTelemetryName(tenantID string) string {
 }
 
 func MaaSAPIDeploymentName(tenantID string) string {
-	name := resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
-	ctrl.Log.WithName("MaaSAPIDeploymentName").Info("Generated deployment name",
-		"tenantID", tenantID,
-		"deploymentName", name)
-	return name
+	return resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
 }
 
 func MaaSAPIServiceName(tenantID string) string {
@@ -330,17 +326,9 @@ func TenantIdentifierFor(obj client.Object) (string, error) {
 	}
 
 	labels := obj.GetLabels()
-	log := ctrl.Log.WithName("TenantIdentifierFor").WithValues(
-		"tenantConfig", obj.GetNamespace()+"/"+obj.GetName(),
-		"labels", labels,
-	)
-
 	if labels != nil && labels[LabelManagedByAITenant] == "true" {
 		tenantName := labels[LabelTenantName]
 		if tenantName == "" {
-			log.Error(nil, "AITenant-managed tenant config is missing LabelTenantName",
-				"managedByLabel", LabelManagedByAITenant,
-				"tenantNameLabel", LabelTenantName)
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
 				obj.GetNamespace(), obj.GetName(), LabelManagedByAITenant, LabelTenantName)
 		}
@@ -353,15 +341,11 @@ func TenantIdentifierFor(obj client.Object) (string, error) {
 				return "", fmt.Errorf("tenant config %s/%s has %s=%q but %s must match the tenant config namespace",
 					obj.GetNamespace(), obj.GetName(), LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
 			}
-			log.Info("Using default AITenant legacy resource identifier (empty string)",
-				"tenantName", tenantName)
 			return "", nil
 		}
-		log.Info("Resolved tenant identifier from AITenant label", "tenantIdentifier", tenantName)
 		return tenantName, nil
 	}
 
-	log.Info("Using legacy/default tenant identifier (empty string)", "reason", "no AITenant label")
 	return "", nil
 }
 

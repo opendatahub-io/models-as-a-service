@@ -1007,6 +1007,7 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 		name             string
 		prereqWarnings   []string
 		replicaWarnings  []string
+		kuadrantWarning  string
 		usageLogsWarning string
 		wantReason       string
 		wantStatus       metav1.ConditionStatus
@@ -1083,6 +1084,21 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 			wantStatus:       metav1.ConditionTrue,
 			wantMessage:      "DSCI monitoring stack not available; Usage-logs EnvoyFilter not deployed: manifest or CRD not available",
 		},
+		{
+			name:            "kuadrant detection warning only",
+			kuadrantWarning: "cannot get WasmPlugin openshift-ingress/kuadrant-maas-default-gateway",
+			wantReason:      "KuadrantDetectionUnverified",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "cannot get WasmPlugin openshift-ingress/kuadrant-maas-default-gateway",
+		},
+		{
+			name:            "kuadrant detection warning with replica warning",
+			replicaWarnings: []string{"invalid replica annotation on maas-api"},
+			kuadrantWarning: "cannot get WasmPlugin openshift-ingress/kuadrant-maas-default-gateway",
+			wantReason:      "MultipleWarnings",
+			wantStatus:      metav1.ConditionTrue,
+			wantMessage:     "invalid replica annotation on maas-api; cannot get WasmPlugin openshift-ingress/kuadrant-maas-default-gateway",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1103,9 +1119,10 @@ func TestAggregateWarningsAndSetDegraded(t *testing.T) {
 			}
 
 			var runRes *tenantreconcile.RunResult
-			if tt.replicaWarnings != nil {
+			if tt.replicaWarnings != nil || tt.kuadrantWarning != "" {
 				runRes = &tenantreconcile.RunResult{
-					Warnings: tt.replicaWarnings,
+					Warnings:                 tt.replicaWarnings,
+					KuadrantDetectionWarning: tt.kuadrantWarning,
 				}
 			}
 

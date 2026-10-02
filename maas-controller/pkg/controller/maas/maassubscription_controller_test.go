@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -31,6 +32,8 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -770,13 +773,14 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 	if err != nil || !found {
 		t.Fatalf("failed to get spec.limits from TRLP: found=%v err=%v", found, err)
 	}
-	// Check that sub2's limit exists (map keys use namespace-name format)
-	sub2Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub2Name, modelName)
+	// Sub1 (100/1m) and sub2 (200/1m) have distinct rates, so each gets its own
+	// group; limit keys are derived from the rate, not the subscription.
+	sub2Key := "tokens-200-per-1m"
 	if _, exists := limits[sub2Key]; !exists {
 		t.Errorf("TRLP should contain limits for %s after sub1 deletion", sub2Key)
 	}
 	// Check that sub1's limit is removed
-	sub1Key := fmt.Sprintf("%s-%s-%s-tokens", subNS, sub1Name, modelName)
+	sub1Key := "tokens-100-per-1m"
 	if _, exists := limits[sub1Key]; exists {
 		t.Errorf("TRLP should NOT contain limits for %s after its deletion", sub1Key)
 	}
@@ -849,8 +853,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Errorf("expected 1 limit entry, got %d: %v", len(limitsMap), limitsMap)
 	}
 
-	// Check the limit entry key (now includes namespace: "namespace-name-model-tokens")
-	expectedKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+	// Limit keys are grouped by rate, not by subscription: sub-a is alone at 100/1m.
+	expectedKey := "tokens-100-per-1m"
 	limitEntry, ok := limitsMap[expectedKey]
 	if !ok {
 		t.Fatalf("expected limit entry %q not found, got keys: %v", expectedKey, getKeys(limitsMap))
@@ -879,9 +883,8 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		t.Fatalf("predicate not a string: %T", predMap["predicate"])
 	}
 
-	// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
-	// and exempts /v1/models endpoint from rate limiting
-	expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/%s@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, maasSubName, namespace, modelName)
+	// Predicate uses short selected_subscription_id and exempts /v1/models
+	expected := trlpRateLimitPredicate(namespace, maasSubName, namespace, modelName)
 	if pred != expected {
 		t.Errorf("predicate = %q, want %q", pred, expected)
 	}
@@ -946,8 +949,10 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Errorf("expected 2 limit entries, got %d: %v", len(limitsMap), getKeys(limitsMap))
 	}
 
-	// Verify sub-a limit entry (now includes namespace in key)
-	subAKey := namespace + "-sub-a-" + modelName + "-tokens"
+	// sub-a (100/1m) and sub-b (200/1m) have distinct rates, so each gets its own
+	// group; limit keys are derived from the rate, not the subscription.
+	// Predicates match short selected_subscription_id values.
+	subAKey := "tokens-100-per-1m"
 	if limitA, ok := limitsMap[subAKey]; ok {
 		limitAMap, ok := limitA.(map[string]any)
 		if !ok {
@@ -970,7 +975,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
 		// and exempts /v1/models endpoint from rate limiting
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-a@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
+		expected := trlpRateLimitPredicate(namespace, "sub-a", namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-a predicate = %q, want %q", pred, expected)
 		}
@@ -982,8 +987,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		t.Errorf("sub-a limit entry not found, got keys: %v", getKeys(limitsMap))
 	}
 
-	// Verify sub-b limit entry (now includes namespace in key)
-	subBKey := namespace + "-sub-b-" + modelName + "-tokens"
+	subBKey := "tokens-200-per-1m"
 	if limitB, ok := limitsMap[subBKey]; ok {
 		limitBMap, ok := limitB.(map[string]any)
 		if !ok {
@@ -1006,7 +1010,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		}
 		// Predicate now uses model-scoped key: namespace/name@modelNamespace/modelName
 		// and exempts /v1/models endpoint from rate limiting
-		expected := fmt.Sprintf(`auth.identity.selected_subscription_key == "%s/sub-b@%s/%s" && !request.path.endsWith("/v1/models")`, namespace, namespace, modelName)
+		expected := trlpRateLimitPredicate(namespace, "sub-b", namespace, modelName)
 		if pred != expected {
 			t.Errorf("sub-b predicate = %q, want %q", pred, expected)
 		}
@@ -1411,9 +1415,9 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 			}
 
 			// Navigate into spec.limits.<key>.rates to find the rate entry produced
-			// from the subscription's TokenRateLimit. The key format is
-			// "<namespace>-<subName>-<modelName>-tokens".
-			limitKey := namespace + "-" + maasSubName + "-" + modelName + "-tokens"
+			// from the subscription's TokenRateLimit. Limits are keyed by rate, not
+			// by subscription: "tokens-<limit>-per-<window>".
+			limitKey := fmt.Sprintf("tokens-500-per-%s", tc.window)
 			ratesRaw, found, err := unstructured.NestedSlice(trlp.Object, "spec", "limits", limitKey, "rates")
 			if err != nil || !found {
 				t.Fatalf("spec.limits.%s.rates not found: found=%v err=%v", limitKey, found, err)
@@ -1497,5 +1501,203 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	}
 	if !strings.Contains(ready.Message, "spec is required") {
 		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	}
+}
+
+// failStatusUpdates makes every status subresource write return err.
+func failStatusUpdates(err error) interceptor.Funcs {
+	return interceptor.Funcs{
+		SubResourceUpdate: func(context.Context, client.Client, string, client.Object, ...client.SubResourceUpdateOption) error {
+			return err
+		},
+	}
+}
+
+// TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues reproduces
+// scanForDuplicatePriority writing status between updateStatus reading the subscription
+// and writing it back. The For() watch drops status-only events, so the conflict has to
+// come back from Reconcile or the subscription keeps an empty phase until its generation
+// changes.
+func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *testing.T) {
+	const (
+		namespace = "default"
+		subName   = "sub-a"
+		modelName = "llm"
+		trlpName  = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute("maas-"+modelName, namespace)
+	sub := newMaaSSubscription(subName, namespace, "team-a", modelName, 100)
+	trlp := newPreexistingTRLP(trlpName, namespace, modelName, map[string]string{
+		"maas.opendatahub.io/subscriptions": subName,
+	})
+	if err := unstructured.SetNestedSlice(trlp.Object, []any{
+		map[string]any{"type": "Accepted", "status": "True"},
+	}, "status", "conditions"); err != nil {
+		t.Fatalf("SetNestedSlice status.conditions: %v", err)
+	}
+
+	raced := false
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, sub, trlp).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(interceptor.Funcs{
+			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
+				if !raced {
+					raced = true
+					scanner := &MaaSSubscriptionReconciler{Client: cl, Scheme: scheme}
+					scanner.scanForDuplicatePriority(ctx)
+				}
+				return cl.SubResource(subResource).Update(ctx, obj, opts...)
+			},
+		}).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
+
+	_, err := r.Reconcile(t.Context(), req)
+	if !apierrors.IsConflict(err) {
+		t.Fatalf("first Reconcile error = %v, want a conflict so the subscription is requeued", err)
+	}
+
+	got := &maasv1alpha1.MaaSSubscription{}
+	if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get subscription: %v", err)
+	}
+	if got.Status.Phase != "" {
+		t.Fatalf("phase after conflicting write = %q, want empty", got.Status.Phase)
+	}
+
+	// Requeued reconcile.
+	if _, err := r.Reconcile(t.Context(), req); err != nil {
+		t.Fatalf("requeued Reconcile: %v", err)
+	}
+	if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+		t.Fatalf("Get subscription: %v", err)
+	}
+	if got.Status.Phase != maasv1alpha1.PhaseActive {
+		t.Errorf("phase = %q, want %q", got.Status.Phase, maasv1alpha1.PhaseActive)
+	}
+	assertReadyCondition(t, got.Status.Conditions, metav1.ConditionTrue, string(maasv1alpha1.ReasonReconciled))
+	assertCondition(t, got.Status.Conditions, ConditionSpecPriorityDuplicate, metav1.ConditionFalse, "NoDuplicatePeers")
+}
+
+func TestMaaSSubscriptionReconciler_StatusWriteFailureReturned(t *testing.T) {
+	conflict := apierrors.NewConflict(schema.GroupResource{Group: "maas.opendatahub.io", Resource: "maassubscriptions"}, "no-spec", errors.New("stale resource version"))
+	for _, statusErr := range []error{conflict, errors.New("status unavailable")} {
+		t.Run(statusErr.Error(), func(t *testing.T) {
+			sub := &maasv1alpha1.MaaSSubscription{ObjectMeta: metav1.ObjectMeta{Name: "no-spec", Namespace: "default"}}
+			c := fake.NewClientBuilder().
+				WithScheme(scheme).
+				WithRESTMapper(testRESTMapper()).
+				WithObjects(sub).
+				WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+				WithInterceptorFuncs(failStatusUpdates(statusErr)).
+				Build()
+
+			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)})
+			if !errors.Is(err, statusErr) {
+				t.Fatalf("Reconcile error = %v, want status error %v", err, statusErr)
+			}
+		})
+	}
+}
+
+func TestMaaSSubscriptionReconciler_ReconcileErrorPreservedOnStatusFailure(t *testing.T) {
+	listErr := errors.New("list TokenRateLimitPolicies failed")
+	statusErr := errors.New("status write failed")
+
+	// No valid models routes Reconcile through cleanupStaleTRLPs.
+	sub := newMaaSSubscription("sub-missing", "default", "team-a", "missing-model", 100)
+	funcs := failStatusUpdates(statusErr)
+	funcs.List = func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+		if list.GetObjectKind().GroupVersionKind().Kind == "TokenRateLimitPolicyList" {
+			return listErr
+		}
+		return cl.List(ctx, list, opts...)
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(sub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		WithInterceptorFuncs(funcs).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)})
+	if !errors.Is(err, listErr) || errors.Is(err, statusErr) {
+		t.Fatalf("Reconcile error = %v, want original error %v", err, listErr)
+	}
+}
+
+func TestHTTPRouteChangedForSubscription(t *testing.T) {
+	base := newLLMISvcRoute("llm", "llm-ns")
+	base.UID = "route-uid"
+	base.Generation = 1
+
+	p := httpRouteChangedForSubscription()
+	if !p.Create(event.CreateEvent{Object: base}) {
+		t.Error("create event should pass")
+	}
+	if !p.Delete(event.DeleteEvent{Object: base}) {
+		t.Error("delete event should pass")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*gatewayapiv1.HTTPRoute)
+		want   bool
+	}{
+		{
+			name: "status.parents write is dropped",
+			mutate: func(r *gatewayapiv1.HTTPRoute) {
+				r.Status.Parents = []gatewayapiv1.RouteParentStatus{{
+					ParentRef:      gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(testGatewayName)},
+					ControllerName: "kuadrant.io/policy-controller",
+					Conditions: []metav1.Condition{
+						{Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionTrue},
+						{Type: "kuadrant.io/TokenRateLimitPolicyAffected", Status: metav1.ConditionTrue},
+					},
+				}}
+			},
+			want: false,
+		},
+		{
+			name:   "annotation change is dropped",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Annotations = map[string]string{"example.com/note": "x"} },
+			want:   false,
+		},
+		{
+			name:   "label change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Labels["app.kubernetes.io/name"] = "other" },
+			want:   true,
+		},
+		{
+			name:   "spec change passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.Generation = 2 },
+			want:   true,
+		},
+		{
+			name:   "route recreated under the same name passes",
+			mutate: func(r *gatewayapiv1.HTTPRoute) { r.UID = "recreated-uid" },
+			want:   true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			newRoute := base.DeepCopy()
+			tt.mutate(newRoute)
+			if got := p.Update(event.UpdateEvent{ObjectOld: base.DeepCopy(), ObjectNew: newRoute}); got != tt.want {
+				t.Errorf("Update() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }

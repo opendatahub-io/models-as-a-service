@@ -31,6 +31,8 @@ type RunResult struct {
 	// Warnings contains non-fatal issues discovered during reconciliation
 	// (e.g. invalid replica-count annotations) that should be surfaced as status conditions.
 	Warnings []string
+	// KuadrantDetectionWarning reports that Kuadrant auth on the gateway could not be verified.
+	KuadrantDetectionWarning string
 }
 
 // CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
@@ -84,10 +86,27 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 
+	bundledPostgres, postgresNS, err := resolveBundledPostgres(ctx, c, appNs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundled postgres: %w", err)
+	}
+	params.BundledPostgres = bundledPostgres
+	params.BundledPostgresNamespace = postgresNS
+	if bundledPostgres {
+		log.V(1).Info("maas-api egress NP will allow bundled in-cluster postgres",
+			"appNamespace", appNs, "postgresNamespace", postgresNS)
+	} else {
+		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
+	}
+
 	if !params.SkipIPP {
-		wasmPresent, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
 		if err != nil {
 			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
+		}
+		if warning != "" {
+			log.Info(warning, "gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+			params.KuadrantDetectionWarning = warning
 		}
 		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
 		if params.PayloadProcessingRouterExtProcFallback {
@@ -139,6 +158,8 @@ func RunPlatform(
 				DeploymentPending: true,
 				Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
 				Warnings:          params.Warnings,
+
+				KuadrantDetectionWarning: params.KuadrantDetectionWarning,
 			}, nil
 		}
 		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
@@ -163,7 +184,8 @@ func RunPlatform(
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
 	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
 	if !params.SkipIPP {
 		ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
@@ -171,10 +193,11 @@ func RunPlatform(
 			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
 		}
 		if !ready {
-			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 		}
 	}
-	return &RunResult{Warnings: params.Warnings}, nil
+	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).

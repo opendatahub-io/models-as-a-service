@@ -38,6 +38,6 @@ make push-image     # push to registry
 | `GET /healthz` | Liveness probe |
 | `GET /readyz` | Readiness probe |
 
-## Status
+## Deployment
 
-Scaffold only. The informer-based tenant cache is tracked in RHOAIENG-90729.
+The discovery service is deployed and managed by the maas-controller lifecycle reconciler (RHOAIENG-90732). The manifests under `deployment/base/maas-discovery/` are not standalone-deployable — cross-namespace RBAC and TLS secret provisioning are handled at runtime by the controller.
