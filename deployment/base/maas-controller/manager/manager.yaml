@@ -83,6 +83,36 @@ spec:
                 key: usage-logs-tenancy-proxy-image
                 name: maas-parameters
                 optional: true
+          - name: RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-image
+                name: maas-parameters
+                optional: true
+          - name: MAAS_DISCOVERY_GATEWAY_NAME
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-gateway-name
+                name: maas-parameters
+                optional: true
+          - name: MAAS_DISCOVERY_ENABLED
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-enabled
+                name: maas-parameters
+                optional: true
+          - name: MAAS_DISCOVERY_REPLICAS
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-replicas
+                name: maas-parameters
+                optional: true
+          - name: MAAS_DISCOVERY_LOG_LEVEL
+            valueFrom:
+              configMapKeyRef:
+                key: maas-discovery-log-level
+                name: maas-parameters
+                optional: true
           - name: MONITORING_NAMESPACE
             valueFrom:
               configMapKeyRef:
