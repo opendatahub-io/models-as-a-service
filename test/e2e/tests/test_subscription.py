@@ -73,6 +73,7 @@ from test_helper import (
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
+    _create_api_key_raw,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -1379,22 +1380,82 @@ class TestCascadeDeletion:
 
     @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+        """Delete and recreate a subscription without reviving its old API key.
 
         When the last subscription is deleted, AuthPolicy's subscription validation
         fails (no subscriptions found for user) and returns 403 Forbidden before
         the request reaches TokenRateLimitPolicy.
         """
-        api_key = _get_default_api_key()
+        oc_token = _get_cluster_token()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
+
+        # Mint a dedicated key and prove it works before deletion, rather than
+        # relying on the process-cached _get_default_api_key(). An earlier test
+        # in TestCascadeDeletion also deletes SIMULATOR_SUBSCRIPTION, which can
+        # invalidate that cached key before this test starts -- making the 403
+        # checks below pass even if this test's own deletion does nothing.
+        key_response = _create_api_key_raw(
+            oc_token,
+            name=f"e2e-cascade-delete-{uuid.uuid4().hex[:8]}",
+            subscription=SIMULATOR_SUBSCRIPTION,
+        )
+        assert key_response.status_code in (200, 201), (
+            f"failed to create dedicated API key: {key_response.status_code} "
+            f"{key_response.text[:300]}"
+        )
+        key_data = key_response.json()
+        key_id = key_data["id"]
+        api_key = key_data["key"]
+        r = _poll_status(api_key, 200, timeout=30)
+        assert r.status_code == 200, (
+            f"dedicated API key must work before subscription deletion, got {r.status_code}"
+        )
+
+        replacement_key_id = None
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
             # With no subscription, expect 403 from AuthPolicy subscription validation
             r = _poll_status(api_key, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
-        finally:
+
+            # The subscription name may be reused, but the key that was bound to
+            # the deleted subscription must remain invalidated.
             _apply_cr(original)
+            _wait_for_subscription_inference_ready(
+                SIMULATOR_SUBSCRIPTION,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
+            new_key_response = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-subscription-recreated-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert new_key_response.status_code in (200, 201), (
+                f"failed to create API key for recreated subscription: {new_key_response.status_code} "
+                f"{new_key_response.text[:300]}"
+            )
+            new_key_data = new_key_response.json()
+            replacement_key_id = new_key_data["id"]
+            new_api_key = new_key_data["key"]
+            _poll_status(new_api_key, 200, timeout=90)
+            r = _poll_status(api_key, 403, timeout=30)
+            assert r.status_code == 403, (
+                "API key bound to a deleted subscription became usable after the "
+                f"subscription was recreated: {r.status_code}"
+            )
+        finally:
+            _revoke_api_key(oc_token, key_id)
+            if replacement_key_id:
+                _revoke_api_key(oc_token, replacement_key_id)
+            if not _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION):
+                _apply_cr(original)
+            # _wait_for_subscription_inference_ready also re-enforces the TRLP, confirming
+            # the controller has fully reconciled the restored subscription and the maas-api
+            # subscription cache has caught up, preventing flaky failures in subsequent tests.
             _wait_for_subscription_inference_ready(
                 SIMULATOR_SUBSCRIPTION,
                 MODEL_REF,
