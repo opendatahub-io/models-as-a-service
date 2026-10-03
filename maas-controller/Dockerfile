@@ -29,6 +29,7 @@ COPY maas-api/deploy /maas-api/deploy
 COPY deployment/base/maas-api /deployment/base/maas-api
 COPY deployment/base/maas-controller/policies /deployment/base/maas-controller/policies
 COPY deployment/base/payload-processing /deployment/base/payload-processing
+COPY deployment/base/maas-discovery /deployment/base/maas-discovery
 COPY deployment/components /deployment/components
 RUN chmod -R g=u /maas-api /deployment
 
