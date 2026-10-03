@@ -25,6 +25,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -862,6 +863,27 @@ func buildMetricsServerOptions(
 	return opts
 }
 
+func parseReplicasEnv(envVar string) *int32 {
+	s := os.Getenv(envVar)
+	if s == "" {
+		return nil
+	}
+	v, err := strconv.ParseInt(s, 10, 32)
+	if err != nil || v < 0 {
+		setupLog.Info("ignoring invalid replica count", "env", envVar, "value", s)
+		return nil
+	}
+	r := int32(v)
+	return &r
+}
+
+func envOrDefault(envVar, defaultVal string) string {
+	if v := os.Getenv(envVar); v != "" {
+		return v
+	}
+	return defaultVal
+}
+
 // resolveInfraNamespace determines the infrastructure namespace for maas-api and maas-db-config.
 // Note: PostgreSQL itself can be external (e.g., AWS RDS) - only maas-api and the connection secret deploy here.
 // If infraNs is "AUTO", derives the namespace from the controller namespace.
@@ -980,6 +1002,7 @@ func main() {
 	var observabilityManifestsPath string
 	var monitoringNamespace string
 	var usageLogsManifestPath string
+	var discoveryManifestPath string
 	var logFormat oteljson.Format
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8443", "The address the metrics endpoint binds to.")
@@ -996,6 +1019,7 @@ func main() {
 			"Defaults to 'AUTO' (namespace separation enabled). Set to empty string to disable for ROSA.")
 	flag.StringVar(&observabilityManifestsPath, "observability-manifests-path", "/deployment/components/observability/observability/dashboards", "Path to observability dashboard kustomize manifests.")
 	flag.StringVar(&usageLogsManifestPath, "usage-logs-manifest-path", "/deployment/components/observability/usage-logs", "Path to usage logs kustomize manifests.")
+	flag.StringVar(&discoveryManifestPath, "discovery-manifest-path", "/deployment/base/maas-discovery", "Path to discovery service kustomize manifests.")
 	flag.StringVar(&monitoringNamespace, "monitoring-namespace", "opendatahub", "The namespace where the monitoring stack is deployed.")
 	flag.StringVar(&maasSubscriptionNamespace, "maas-subscription-namespace", "models-as-a-service", "The namespace to watch for MaaS CRs.")
 	flag.StringVar(&aitenantNamespace, "aitenant-namespace", tenantreconcile.DefaultAITenantNamespace, "The infrastructure namespace where AITenant CRs are accepted.")
@@ -1311,6 +1335,13 @@ func main() {
 		UsageLogsManifestPath:       usageLogsManifestPath,
 		MonitoringNamespace:         monitoringNamespace,
 		GatewayNamespace:            gatewayNamespace,
+		DiscoveryGatewayName:        envOrDefault("MAAS_DISCOVERY_GATEWAY_NAME", "data-science-gateway"),
+		DiscoveryEnabled:            os.Getenv("MAAS_DISCOVERY_ENABLED") == "true",
+		DiscoveryManifestPath:       discoveryManifestPath,
+		DiscoveryImage:              os.Getenv("RELATED_IMAGE_ODH_MAAS_DISCOVERY_IMAGE"),
+		DiscoveryNamespace:          controllerNamespace,
+		DiscoveryReplicas:           parseReplicasEnv("MAAS_DISCOVERY_REPLICAS"),
+		ClusterAudience:             clusterAudience,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "SelfDeployment")
 		os.Exit(1)
