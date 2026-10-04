@@ -133,3 +133,53 @@ func TestRequireGroupMembershipCacheKey(t *testing.T) {
 		t.Fatalf("cache key selector = %q, want %q (subscriptionGatewayCacheKeySelector)", selector, expectedSelector)
 	}
 }
+
+// The identity filter reads subscription-info, which is only fetched when a model
+// identity is available. Unguarded, it fails on every /maas-api request, and
+// Authorino cancels the other priority-0 response configs evaluated alongside it,
+// so API-key requests reach maas-api without some or all X-MaaS-* headers.
+func TestIdentityFilterHasModelIdentityGuard(t *testing.T) {
+	r := &MaaSAuthPolicyReconciler{
+		InfraNamespace:   "opendatahub",
+		GatewayNamespace: "openshift-ingress",
+		GatewayName:      "maas-default-gateway",
+	}
+
+	spec := r.buildGatewayAuthPolicySpec(nil, false, "", "models-as-a-service", "test-gateway-ns", "test-gateway")
+	defaults, ok := spec["defaults"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing defaults block")
+	}
+	rules, ok := defaults["rules"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing defaults.rules block")
+	}
+	response, ok := rules["response"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing defaults.rules.response block")
+	}
+	success, ok := response["success"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing defaults.rules.response.success block")
+	}
+	filters, ok := success["filters"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing defaults.rules.response.success.filters block")
+	}
+	identity, ok := filters["identity"].(map[string]any)
+	if !ok {
+		t.Fatalf("gateway spec missing identity filter")
+	}
+
+	whenList, ok := identity["when"].([]any)
+	if !ok || len(whenList) == 0 {
+		t.Fatalf("identity filter must have a when guard to skip requests without subscription-info")
+	}
+	whenEntry, ok := whenList[0].(map[string]any)
+	if !ok {
+		t.Fatalf("when guard entry is not a map")
+	}
+	if predicate, _ := whenEntry["predicate"].(string); predicate != celModelIdentityAvailable {
+		t.Fatalf("when guard predicate = %q, want celModelIdentityAvailable (%q)", predicate, celModelIdentityAvailable)
+	}
+}

@@ -1127,6 +1127,14 @@ allow {
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
+						// Same guard as subscription-info. Without it the filter fails on
+						// /maas-api requests, and Authorino cancels the other priority-0
+						// response configs, dropping X-MaaS-* headers at random.
+						"when": []any{
+							map[string]any{
+								"predicate": celModelIdentityAvailable,
+							},
+						},
 						"json": map[string]any{
 							"properties": map[string]any{
 								"groups":     map[string]any{"expression": celGroups},

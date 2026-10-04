@@ -78,6 +78,9 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 		if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
 			return nil, err
 		}
+		if err := configurePayloadPreProcessingHPA(log, &filteredResources, params); err != nil {
+			return nil, err
+		}
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
@@ -360,16 +363,50 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 	if !params.PayloadProcessingAutoscaling {
 		return nil
 	}
+	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
+		name:         PayloadProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadProcessingReplicas,
+		maxReplicas:  params.PayloadProcessingMaxReplicas,
+		targetCPU:    params.PayloadProcessingTargetCPU,
+		targetMemory: params.PayloadProcessingTargetMemory,
+		logLabel:     "payload-processing",
+	})
+}
 
-	tenantID := params.TenantIdentifier
-	gatewayNamespace := params.GatewayNamespace
-	hpaName := PayloadProcessingHPAName(tenantID)
-	deploymentName := PayloadProcessingDeploymentName(tenantID)
+// configurePayloadPreProcessingHPA appends an HPA for payload-pre-processing when autoscaling is enabled.
+func configurePayloadPreProcessingHPA(log logr.Logger, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	if !params.PayloadPreProcessingAutoscaling {
+		return nil
+	}
+	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
+		name:         PayloadPreProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadPreProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadPreProcessingReplicas,
+		maxReplicas:  params.PayloadPreProcessingMaxReplicas,
+		targetCPU:    params.PayloadPreProcessingTargetCPU,
+		targetMemory: params.PayloadPreProcessingTargetMemory,
+		logLabel:     "payload-pre-processing",
+	})
+}
 
-	// Determine minReplicas: use the replica annotation as the floor, default 1.
+type ippHPAConfig struct {
+	name         string
+	deployment   string
+	namespace    string
+	minReplicas  *int32
+	maxReplicas  int32
+	targetCPU    int32
+	targetMemory int32
+	logLabel     string
+}
+
+func appendIPPWorkloadHPA(log logr.Logger, resources *[]unstructured.Unstructured, cfg ippHPAConfig) error {
 	minReplicas := int64(1)
-	if params.PayloadProcessingReplicas != nil {
-		minReplicas = int64(*params.PayloadProcessingReplicas)
+	if cfg.minReplicas != nil {
+		minReplicas = int64(*cfg.minReplicas)
 	}
 
 	hpa := &unstructured.Unstructured{
@@ -377,17 +414,17 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 			"apiVersion": "autoscaling/v2",
 			"kind":       "HorizontalPodAutoscaler",
 			"metadata": map[string]any{
-				"name":      hpaName,
-				"namespace": gatewayNamespace,
+				"name":      cfg.name,
+				"namespace": cfg.namespace,
 			},
 			"spec": map[string]any{
 				"scaleTargetRef": map[string]any{
 					"apiVersion": "apps/v1",
 					"kind":       "Deployment",
-					"name":       deploymentName,
+					"name":       cfg.deployment,
 				},
 				"minReplicas": minReplicas,
-				"maxReplicas": int64(params.PayloadProcessingMaxReplicas),
+				"maxReplicas": int64(cfg.maxReplicas),
 				"metrics": []any{
 					map[string]any{
 						"type": "Resource",
@@ -395,7 +432,7 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 							"name": "cpu",
 							"target": map[string]any{
 								"type":               "Utilization",
-								"averageUtilization": int64(params.PayloadProcessingTargetCPU),
+								"averageUtilization": int64(cfg.targetCPU),
 							},
 						},
 					},
@@ -405,7 +442,7 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 							"name": "memory",
 							"target": map[string]any{
 								"type":               "Utilization",
-								"averageUtilization": int64(params.PayloadProcessingTargetMemory),
+								"averageUtilization": int64(cfg.targetMemory),
 							},
 						},
 					},
@@ -442,14 +479,14 @@ func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Un
 		},
 	}
 
-	log.V(2).Info("Appending payload-processing HPA",
-		"name", hpaName,
-		"namespace", gatewayNamespace,
-		"scaleTarget", deploymentName,
+	log.V(2).Info("Appending "+cfg.logLabel+" HPA",
+		"name", cfg.name,
+		"namespace", cfg.namespace,
+		"scaleTarget", cfg.deployment,
 		"minReplicas", minReplicas,
-		"maxReplicas", params.PayloadProcessingMaxReplicas,
-		"targetCPU", params.PayloadProcessingTargetCPU,
-		"targetMemory", params.PayloadProcessingTargetMemory)
+		"maxReplicas", cfg.maxReplicas,
+		"targetCPU", cfg.targetCPU,
+		"targetMemory", cfg.targetMemory)
 	*resources = append(*resources, *hpa)
 	return nil
 }

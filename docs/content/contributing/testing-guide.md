@@ -54,17 +54,17 @@ Tests are organized into **xdist groups** for parallel execution. All tests in a
 | `models` | `test_models_endpoint.py` | `/v1/models` subscription-aware filtering |
 | `models` | `test_gateway_scoped_authpolicy.py` | Gateway AuthPolicy structure, lifecycle, enforcement gaps |
 | `models` | `test_model_identity_conflict.py` | MaaSModelRef model-identity collision detection |
+| `models` | `test_multi_tenant_integration.py` | Full lifecycle, two-tenant coexistence (placed here to even out pass 1) |
 | `security` | `test_negative_security.py` | Header spoofing, expired keys, cross-model access |
 | `security` | `test_namespace_scoping.py` | Namespace isolation behavior |
 | `mt_lifecycle` | `test_aitenant_lifecycle.py` | AITenant create/migrate/delete |
-| `mt_lifecycle` | `test_multi_tenant_integration.py` | Full lifecycle, two-tenant coexistence |
 | `mt_lifecycle` | `test_multi_tenant_maas_api.py` | Per-tenant Deployment, Service, HTTPRoute |
 | `mt_lifecycle` | `test_tenant_namespace_discovery.py` | Namespace-label discovery, webhook validation |
-| `mt_lifecycle` | `test_tenant_discovery_isolation.py` | Per-tenant /v1/tenants isolation |
 | `mt_lifecycle` | `test_crd_watch_resilience.py` | Dynamic CRD watch registration (restarts controller) |
 | `tenant_isolation` | `test_tenant_auth_isolation.py` | Cross-tenant key rejection, OIDC scoping |
 | `tenant_isolation` | `test_tenant_rate_limit_isolation.py` | Per-tenant rate limit independence |
 | `tenant_isolation` | `test_tenant_subscription_isolation.py` | Per-tenant subscription scoping |
+| `tenant_isolation` | `test_tenant_discovery_isolation.py` | Per-tenant /v1/tenants isolation |
 | `tenant_inference` | `test_tenant_model_inference.py` | Cross-gateway inference isolation |
 | `tenant_ipp` | `test_per_tenant_ipp_isolation.py` | Per-tenant IPP stacks, routing isolation |
 | `tenant_auto_resolve` | `test_tenant_auto_resolve.py` | MaaSModelRef tenant auto-resolution from the gateway parentRef |
@@ -115,7 +115,7 @@ fi
 ### E2E Tests (Python)
 
 !!! note "Prerequisites"
-    OpenShift cluster with MaaS deployed, `oc` logged in as cluster-admin, Python 3.9+.
+    OpenShift cluster with MaaS deployed, `oc` logged in as cluster-admin, Python 3.10+ (3.11 recommended; pytest 9).
 
 === "Quick (local dev)"
 
@@ -175,6 +175,7 @@ The E2E framework auto-discovers most values from the cluster. These are the mos
 | `MODEL_NAME` | Override model ID (defaults to first from catalog) |
 | `EXTERNAL_OIDC` | Set `true` to enable external OIDC tests |
 | `E2E_PARALLEL_WORKERS` | pytest-xdist worker count for pass 1 (default `7`). Set to `1` for single-worker pass 1 without xdist; pass 2 stays serial. |
+| `LLMISVC_CONTROLLER_CPU_REQUEST` / `LLMISVC_CONTROLLER_CPU_LIMIT` | CPU that `deploy-platform.sh` gives `llmisvc-controller-manager` on the test cluster (defaults `1` / `2`; shipped is 100m). Set the limit empty to keep the shipped resources. |
 
 See `test/e2e/tests/conftest.py` and individual test module docstrings for the full set of supported variables.
 

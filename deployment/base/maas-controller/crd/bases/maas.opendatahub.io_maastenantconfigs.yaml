@@ -156,14 +156,14 @@ spec:
                         type: object
                     type: object
                 type: object
-              payloadProcessing:
-                description: PayloadProcessing defines scaling configuration for payload-processing
-                  (IPP) pods.
+              payloadPreProcessing:
+                description: PayloadPreProcessing defines scaling configuration for
+                  payload-pre-processing (IPP) pods.
                 properties:
                   autoscaling:
                     description: |-
                       Autoscaling enables HPA-based horizontal pod autoscaling.
-                      When enabled, an HPA is created targeting the payload-processing Deployment.
+                      When enabled, an HPA is created targeting the corresponding Deployment.
                     properties:
                       maxReplicas:
                         default: 10
@@ -192,7 +192,7 @@ spec:
                     type: object
                   replicas:
                     description: |-
-                      Replicas overrides the payload-processing Deployment replica count.
+                      Replicas overrides the Deployment replica count.
                       When Autoscaling is enabled, this value sets the HPA minReplicas floor.
                     format: int32
                     maximum: 100
@@ -200,7 +200,78 @@ spec:
                     type: integer
                   resources:
                     description: |-
-                      Resources overrides the resource requests and limits for the payload-processing container.
+                      Resources overrides the resource requests and limits for the container.
+                      When set, replaces the entire resource block (full replacement, not merge).
+                      When autoscaling is enabled, both requests.cpu and requests.memory must be specified.
+                      Resource claims are not supported.
+                    properties:
+                      limits:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Limits defines the maximum amount of compute
+                          resources allowed.
+                        type: object
+                      requests:
+                        additionalProperties:
+                          anyOf:
+                          - type: integer
+                          - type: string
+                          pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                          x-kubernetes-int-or-string: true
+                        description: Requests defines the minimum amount of compute
+                          resources required.
+                        type: object
+                    type: object
+                type: object
+              payloadProcessing:
+                description: PayloadProcessing defines scaling configuration for payload-processing
+                  (IPP) pods.
+                properties:
+                  autoscaling:
+                    description: |-
+                      Autoscaling enables HPA-based horizontal pod autoscaling.
+                      When enabled, an HPA is created targeting the corresponding Deployment.
+                    properties:
+                      maxReplicas:
+                        default: 10
+                        description: MaxReplicas is the upper limit for the HPA replica
+                          count.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      targetCPUUtilization:
+                        default: 70
+                        description: TargetCPUUtilization is the target average CPU
+                          utilization percentage.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                      targetMemoryUtilization:
+                        default: 80
+                        description: TargetMemoryUtilization is the target average
+                          memory utilization percentage.
+                        format: int32
+                        maximum: 100
+                        minimum: 1
+                        type: integer
+                    type: object
+                  replicas:
+                    description: |-
+                      Replicas overrides the Deployment replica count.
+                      When Autoscaling is enabled, this value sets the HPA minReplicas floor.
+                    format: int32
+                    maximum: 100
+                    minimum: 1
+                    type: integer
+                  resources:
+                    description: |-
+                      Resources overrides the resource requests and limits for the container.
                       When set, replaces the entire resource block (full replacement, not merge).
                       When autoscaling is enabled, both requests.cpu and requests.memory must be specified.
                       Resource claims are not supported.
