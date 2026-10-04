@@ -31,13 +31,6 @@ func WithOverlay(name string) RenderOption {
 	}
 }
 
-// WithBundledPostgres renders for the in-cluster Postgres instead of an external database.
-func WithBundledPostgres() RenderOption {
-	return func(cfg *renderConfig) {
-		cfg.params.BundledPostgres = true
-	}
-}
-
 // InNamespaces places the operands in the given app and gateway namespaces.
 func InNamespaces(app, gateway string) RenderOption {
 	return func(cfg *renderConfig) {

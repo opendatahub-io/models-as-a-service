@@ -94,14 +94,6 @@ type PlatformParams struct {
 	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
 	// and the Kuadrant anchors were kept.
 	KuadrantDetectionWarning string
-
-	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
-	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
-	BundledPostgres bool
-	// BundledPostgresNamespace is the Kubernetes namespace of in-cluster Postgres, derived
-	// from maas-db-config (e.g. postgres.postgres.svc.cluster.local → "postgres"). Empty when
-	// BundledPostgres is false; defaults to AppNamespace for short hostnames like "postgres".
-	BundledPostgresNamespace string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -545,8 +537,6 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
-	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
-		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -589,114 +579,6 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
-}
-
-// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
-// maas-db-config targets in-cluster Postgres. External databases are omitted so
-// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
-// and controller namespaces differ (upgrade path), postgres in the controller namespace
-// is also allowed.
-func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
-	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
-	if err != nil {
-		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
-	}
-	if !found {
-		return errors.New("maas-api egress NP missing egress rules")
-	}
-
-	egress = removePostgresEgressRules(egress)
-	if params.BundledPostgres {
-		egress = append(egress, bundledPostgresEgressRule(params))
-	}
-	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
-}
-
-func removePostgresEgressRules(egress []any) []any {
-	filtered := make([]any, 0, len(egress))
-	for _, ruleRaw := range egress {
-		rule, ok := ruleRaw.(map[string]any)
-		if !ok {
-			filtered = append(filtered, ruleRaw)
-			continue
-		}
-		if networkPolicyRuleHasPort(rule, 5432) {
-			continue
-		}
-		filtered = append(filtered, ruleRaw)
-	}
-	return filtered
-}
-
-func bundledPostgresEgressRule(params PlatformParams) map[string]any {
-	// Same-namespace peer covers short hostname "postgres" and co-located DBs.
-	to := []any{
-		map[string]any{
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		},
-	}
-	addNamespacedPeer := func(ns string) {
-		if ns == "" || ns == params.AppNamespace {
-			return
-		}
-		to = append(to, map[string]any{
-			"namespaceSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"kubernetes.io/metadata.name": ns,
-				},
-			},
-			"podSelector": map[string]any{
-				"matchLabels": map[string]any{
-					"app": "postgres",
-				},
-			},
-		})
-	}
-	// DSN-derived namespace (e.g. postgres.postgres.svc.cluster.local).
-	addNamespacedPeer(params.BundledPostgresNamespace)
-	// Upgrade path: also allow postgres in the controller namespace when separated.
-	addNamespacedPeer(params.ControllerNamespace)
-	return map[string]any{
-		"to": to,
-		"ports": []any{
-			map[string]any{
-				"protocol": "TCP",
-				"port":     int64(5432),
-			},
-		},
-	}
-}
-
-func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
-	ports, ok := rule["ports"].([]any)
-	if !ok {
-		return false
-	}
-	for _, portRaw := range ports {
-		portObj, ok := portRaw.(map[string]any)
-		if !ok {
-			continue
-		}
-		switch v := portObj["port"].(type) {
-		case int64:
-			if v == port {
-				return true
-			}
-		case int:
-			if int64(v) == port {
-				return true
-			}
-		case float64:
-			if int64(v) == port {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
