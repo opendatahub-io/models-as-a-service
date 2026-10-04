@@ -1811,6 +1811,53 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderDoesNotReinjectClientHeader(t *testing.T) {
+	pred := gatewayAuthSubscriptionInjectWhen(t)
+	if strings.Contains(pred, `"x-maas-subscription" in request.headers`) {
+		t.Fatalf("must not re-inject X-MaaS-Subscription when the client already sent it; when = %q", pred)
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderNotInjectedWithoutSubscription(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+	when, found, err := unstructured.NestedSlice(obj.Object,
+		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
+	if err != nil || !found {
+		t.Fatalf("X-MaaS-Subscription when missing: found=%v err=%v", found, err)
+	}
+	if len(when) != 1 {
+		t.Fatalf("X-MaaS-Subscription when: want 1 clause, got %d: %#v", len(when), when)
+	}
+
+	pred := gatewayAuthSubscriptionInjectWhen(t)
+	// User token has no apiKeyValidation. Empty key subscription is "".
+	// Authorino skips the header so we do not inject "".
+	want := `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`
+	if pred != want {
+		t.Fatalf("X-MaaS-Subscription inject when = %q, want %q", pred, want)
+	}
+}
+
+func gatewayAuthSubscriptionInjectWhen(t *testing.T) string {
+	t.Helper()
+	return nestedWhenPredicateRequired(t, gatewayAuthPolicySpecTestObject(t, nil),
+		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
+}
+
+func TestBuildGatewayAuthPolicySpec_SubscriptionInfoReadsSingleClientHeader(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+	body, found, err := unstructured.NestedString(obj.Object,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression")
+	if err != nil || !found {
+		t.Fatalf("subscription-info body expression missing: found=%v err=%v", found, err)
+	}
+	// One name, not a list: same CEL as inject (API key sub or the client header).
+	wantField := `"requestedSubscription": ` + celSubscription
+	if !strings.Contains(body, wantField) {
+		t.Fatalf("subscription-info must pass a single requestedSubscription from celSubscription\nwant substring:\n%s\ngot:\n%s", wantField, body)
+	}
+}
+
 func TestBuildGatewayAuthPolicySpec_DenyAPIKeyManagement(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 

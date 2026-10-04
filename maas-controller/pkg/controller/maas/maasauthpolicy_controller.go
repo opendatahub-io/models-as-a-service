@@ -1080,15 +1080,17 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					// Only inject X-MaaS-Subscription when there is a real value to inject.
-					// An empty string injected for K8s tokens without a subscription header
-					// causes maas-api to filter by an empty subscription name and return 0 models.
-					// The old maas-api-auth-policy never injected this header for K8s tokens —
-					// only for API keys with a non-empty subscription field.
+					// Inject X-MaaS-Subscription only for API keys (value from key
+					// validation). User tokens already send the checked client header;
+					// injecting the same name again makes Kuadrant Wasm concatenate
+					// "name,name" on the request (usage logs, Limitador, upstream).
+					// Do not add x-maas-subscription to deny-client-identity-headers:
+					// multi-sub user tokens must send it. Verification still reads it
+					// as requestedSubscription in the subscription-info body.
 					"X-MaaS-Subscription": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
 							},
 						},
 						"plain": map[string]any{
