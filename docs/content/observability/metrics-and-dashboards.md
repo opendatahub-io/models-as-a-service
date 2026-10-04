@@ -27,7 +27,7 @@
 
 #### Per-Subscription Latency Tracking
 
-Istio Telemetry adds `subscription` dimension to gateway latency via `X-MaaS-Subscription` header injected by AuthPolicy:
+Istio Telemetry adds a `subscription` dimension to gateway latency from the `X-MaaS-Subscription` header. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for when AuthPolicy injects or preserves this header.
 
 ```yaml
 apiVersion: telemetry.istio.io/v1
