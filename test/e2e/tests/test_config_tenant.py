@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from test_helper import _ns
+from test_helper import CONTROLLER_DEPLOYMENT_NAME, _ns
 
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
@@ -67,7 +67,7 @@ TENANT_NAME = "default-tenant"
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 AITENANT_NAMESPACE = os.environ.get("AITENANT_NAMESPACE", "ai-tenants")
 CONTROLLER_DEPLOY_NS = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
-CONTROLLER_DEPLOYMENT = "maas-controller"
+CONTROLLER_DEPLOYMENT = CONTROLLER_DEPLOYMENT_NAME
 
 
 def _config_doc():
