@@ -23,6 +23,8 @@ import (
 	"maps"
 	"reflect"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
@@ -521,6 +523,116 @@ func registerWatchWhenCRDAppears(
 			},
 		),
 	))
+}
+
+// registerWatchWhenCRDEstablished is registerWatchWhenCRDAppears for a watch with a
+// follow-up hook. Once the named CRD reports Established=True, it registers the watch and
+// then runs onEstablished, enqueuing the requests it returns on c. Unlike
+// registerWatchWhenCRDAppears, both steps are retried with backoff until they succeed.
+func registerWatchWhenCRDEstablished(
+	c controller.Controller,
+	mgr ctrl.Manager,
+	crdName string,
+	makeSource func() source.Source,
+	onEstablished func(context.Context) ([]reconcile.Request, error),
+) error {
+	b := newCRDBootstrap(crdName, func() error { return c.Watch(makeSource()) }, onEstablished)
+	b.log.Info("CRD not yet registered at startup; will register watch when it is established")
+	return c.Watch(source.Kind(
+		mgr.GetCache(),
+		&apiextensionsv1.CustomResourceDefinition{},
+		handler.TypedFuncs[*apiextensionsv1.CustomResourceDefinition, reconcile.Request]{
+			CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handle(ctx, e.Object, q)
+			},
+			UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*apiextensionsv1.CustomResourceDefinition], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+				b.handle(ctx, e.ObjectNew, q)
+			},
+		},
+	))
+}
+
+// crdBootstrap runs the one-time setup for registerWatchWhenCRDEstablished.
+type crdBootstrap struct {
+	log           logr.Logger
+	crdName       string
+	register      func() error
+	onEstablished func(context.Context) ([]reconcile.Request, error)
+	initialDelay  time.Duration
+	maxDelay      time.Duration
+
+	started atomic.Bool
+	// done is closed when the watch is registered and the hook's requests are enqueued.
+	done chan struct{}
+}
+
+func newCRDBootstrap(crdName string, register func() error, onEstablished func(context.Context) ([]reconcile.Request, error)) *crdBootstrap {
+	return &crdBootstrap{
+		log:           ctrl.Log.WithName("crd-watcher").WithValues("crdName", crdName),
+		crdName:       crdName,
+		register:      register,
+		onEstablished: onEstablished,
+		initialDelay:  time.Second,
+		maxDelay:      time.Minute,
+		done:          make(chan struct{}),
+	}
+}
+
+// handle starts the bootstrap on the first event for the established CRD.
+func (b *crdBootstrap) handle(ctx context.Context, crd *apiextensionsv1.CustomResourceDefinition, q workqueue.TypedInterface[reconcile.Request]) {
+	if crd.Name != b.crdName || !crdEstablished(crd) || !b.started.CompareAndSwap(false, true) {
+		return
+	}
+	// The event handler's context is cancelled when the handler returns, so the retries
+	// run on a context that keeps its values but not its cancellation.
+	go b.run(context.WithoutCancel(ctx), q)
+}
+
+func (b *crdBootstrap) run(ctx context.Context, q workqueue.TypedInterface[reconcile.Request]) {
+	defer close(b.done)
+	if !b.retry(ctx, "register watch", b.register) {
+		return
+	}
+	b.log.Info("CRD established; watch registered dynamically")
+	b.retry(ctx, "run CRD established hook", func() error {
+		requests, err := b.onEstablished(ctx)
+		if err != nil {
+			return err
+		}
+		for _, req := range requests {
+			q.Add(req)
+		}
+		return nil
+	})
+}
+
+// retry calls fn until it succeeds, doubling the delay between attempts up to maxDelay.
+// It reports false if ctx ends first.
+func (b *crdBootstrap) retry(ctx context.Context, what string, fn func() error) bool {
+	delay := b.initialDelay
+	for {
+		err := fn()
+		if err == nil {
+			return true
+		}
+		b.log.Error(err, "failed to "+what+" after CRD was established; retrying", "after", delay)
+		select {
+		case <-ctx.Done():
+			return false
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, b.maxDelay)
+	}
+}
+
+// crdEstablished reports whether the CRD has the Established=True condition.
+func crdEstablished(crd *apiextensionsv1.CustomResourceDefinition) bool {
+	for _, cond := range crd.Status.Conditions {
+		if cond.Type == apiextensionsv1.Established {
+			return cond.Status == apiextensionsv1.ConditionTrue
+		}
+	}
+	return false
 }
 
 // unstructuredLLMIsvcReadyStatus extracts the Ready condition status from an
