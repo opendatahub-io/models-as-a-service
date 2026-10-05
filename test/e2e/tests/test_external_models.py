@@ -40,6 +40,7 @@ from test_helper import (
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
+    _wait_for_model_ready,
 )
 
 log = logging.getLogger(__name__)
@@ -252,6 +253,9 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         # TestExternalModelAuth's requests can race the data plane and get a
         # plain 404 ("no route") instead of a proper 401/403.
         _wait_for_httproute_accepted(EXTERNAL_MODEL_HTTPROUTE_NAME, namespace=MODEL_NAMESPACE)
+        # The MaaSModelRef goes Ready only once the controller has seen both the route
+        # name IPP records on the ExternalModel and the gateway accepting that route.
+        _wait_for_model_ready(EXTERNAL_MODEL_NAME, namespace=MODEL_NAMESPACE, timeout=120)
 
         # Create API key for tests
         log.info("Creating API key for external model tests...")

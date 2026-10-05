@@ -6,7 +6,7 @@ This guide explains the cardinality dimensions in MaaS, when they become a probl
 
 ## How Cardinality Arises
 
-The controller generates one Kuadrant **TokenRateLimitPolicy** (TRLP) per model, shared by every MaaSSubscription that references it. The TRLP has one limit per distinct set of `tokenRateLimits` on that model, so subscriptions with identical rates share a limit. Each limit counts per subscription and per user (counters `selected_subscription_key` and `userid`), so sharing a limit never means sharing a budget. Limitador maintains a separate counter for each unique combination of those values. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
+The controller generates one Kuadrant **TokenRateLimitPolicy** (TRLP) per model, shared by every MaaSSubscription that references it. The TRLP has one limit per distinct set of `tokenRateLimits` on that model, so subscriptions with identical rates share a limit. Each limit counts per subscription and per user (counters `selected_subscription_id` and `userid`), so sharing a limit never means sharing a budget. Limitador maintains a separate counter for each unique combination of those values. The TelemetryPolicy adds further labels (`user`, `subscription`, `model`, `organization_id`, and optionally `group`) to usage metrics.
 
 Limits and counters scale differently:
 

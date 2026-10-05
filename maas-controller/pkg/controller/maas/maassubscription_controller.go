@@ -25,8 +25,10 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync/atomic"
 
 	"github.com/go-logr/logr"
+	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -36,6 +38,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -72,8 +75,15 @@ type MaaSSubscriptionReconciler struct {
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
+	// Recorder emits Kubernetes events for InferenceObjective conflicts and failures.
+	Recorder record.EventRecorder
+
+	// inferenceObjectivesUnavailable is set while the InferenceObjective CRD is not
+	// installed, so reconciles skip the InferenceObjective pass.
+	inferenceObjectivesUnavailable atomic.Bool
 }
 
+//+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/finalizers,verbs=update
@@ -83,6 +93,8 @@ type MaaSSubscriptionReconciler struct {
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 //+kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes/finalizers,verbs=update
 //+kubebuilder:rbac:groups=llm-d.ai,resources=inferenceobjectives,verbs=get;list;watch;create;update;patch;delete
+//+kubebuilder:rbac:groups=serving.kserve.io,resources=llminferenceservices,verbs=get;list;watch
+//+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs;tenants,verbs=get;list;watch
 
 const (
 	maasSubscriptionFinalizer = "maas.opendatahub.io/subscription-cleanup"
@@ -175,7 +187,7 @@ func modelRefTokenRates(mRef maasv1alpha1.ModelSubscriptionRef) (rates []any, un
 const unlimitedLimitName = "tokens-unlimited"
 
 // unlimitedTokenLimit returns the TRLP limit matching the given
-// selected_subscription_key values of unlimited subscriptions.
+// selected_subscription_id values of unlimited subscriptions.
 //
 // Without rates, Limitador enforces nothing and keeps no counters, but the
 // wasm-shim still sends check and report calls for matching requests, and
@@ -188,11 +200,11 @@ const unlimitedLimitName = "tokens-unlimited"
 //
 // rates and counters stay unset: a nil slice is written as null, which the API
 // server drops, so the no-op update check would never match.
-func unlimitedTokenLimit(keys []string) map[string]any {
-	sort.Strings(keys)
-	matches := make([]string, 0, len(keys))
-	for _, k := range keys {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, k))
+func unlimitedTokenLimit(rateLimitIDs []string) map[string]any {
+	sort.Strings(rateLimitIDs)
+	matches := make([]string, 0, len(rateLimitIDs))
+	for _, id := range rateLimitIDs {
+		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
 	}
 	return map[string]any{
 		"when": []any{
@@ -437,8 +449,7 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// No finalizer needed — there are no TRLPs to clean up.
 	if reflect.DeepEqual(subscription.Spec, maasv1alpha1.MaaSSubscriptionSpec{}) {
 		statusSnapshot := subscription.Status.DeepCopy()
-		r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
 	// Add finalizer if not present
@@ -454,6 +465,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	// Validate model references and populate per-model status
 	modelStatuses := r.validateModelRefs(ctx, subscription)
 	subscription.Status.ModelRefStatuses = modelStatuses
+
+	// Reconcile InferenceObjectives for spec.inferencePriority before TokenRateLimitPolicies,
+	// so a TokenRateLimitPolicy failure does not block request priority. Request priority is
+	// optional: its errors are retried but never change the subscription phase.
+	ioConflict, ioErr := r.reconcileInferenceObjectives(ctx, log, subscription)
+	if ioErr != nil {
+		log.Error(ioErr, "failed to reconcile InferenceObjectives, will retry")
+	}
 
 	// Check if we have any valid models to proceed with TRLP reconciliation
 	hasValidModels := false
@@ -471,15 +490,19 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		if err := r.reconcileTokenRateLimitPolicies(ctx, log, subscription); err != nil {
 			log.Error(err, "failed to reconcile TokenRateLimitPolicies")
 			subscription.Status.Phase = maasv1alpha1.PhaseFailed
-			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to reconcile TokenRateLimitPolicies: %v", err), statusSnapshot)
-			return ctrl.Result{}, err
+			if statusErr := r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to reconcile TokenRateLimitPolicies: %v", err), statusSnapshot); statusErr != nil {
+				log.Error(statusErr, "failed to persist reconcile failure")
+			}
+			return ctrl.Result{}, errors.Join(err, ioErr)
 		}
 	} else {
 		// No valid models - clean up any stale TRLPs from previous reconciliations
 		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
 			log.Error(err, "failed to clean up stale TokenRateLimitPolicies")
-			r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to clean up stale TokenRateLimitPolicies: %v", err), statusSnapshot)
-			return ctrl.Result{}, err
+			if statusErr := r.updateStatus(ctx, subscription, maasv1alpha1.PhaseFailed, fmt.Sprintf("failed to clean up stale TokenRateLimitPolicies: %v", err), statusSnapshot); statusErr != nil {
+				log.Error(statusErr, "failed to persist reconcile failure")
+			}
+			return ctrl.Result{}, errors.Join(err, ioErr)
 		}
 	}
 
@@ -512,8 +535,14 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Derive final phase based on model and TRLP health
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
-	r.updateStatus(ctx, subscription, phase, message, statusSnapshot)
-
+	if err := errors.Join(r.updateStatus(ctx, subscription, phase, message, statusSnapshot), ioErr); err != nil {
+		// controller-runtime ignores the result when an error is returned.
+		return ctrl.Result{}, err
+	}
+	if ioConflict {
+		// A foreign object holds an InferenceObjective name; the watch does not see it.
+		return ctrl.Result{RequeueAfter: inferenceObjectiveConflictRequeue}, nil
+	}
 	return ctrl.Result{}, nil
 }
 
@@ -636,24 +665,18 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return r.deleteModelTRLP(ctx, log, modelNamespace, modelName)
 	}
 
-	// Trust auth.identity.selected_subscription_key from AuthPolicy.
-	// AuthPolicy has already validated subscription selection via /v1/subscriptions/select,
-	// which handles:
-	//  - Validating subscription exists and user has access (groups/users match)
-	//  - Auto-selecting if user has exactly one subscription
-	//  - Returning 403 Forbidden for invalid scenarios (wrong header, no access, multiple without header)
-	// TokenRateLimitPolicy simply applies the rate limit for the validated subscription.
-	//
-	// The selected_subscription_key format is: {subNamespace}/{subName}@{modelNamespace}/{modelName}
-	// This ensures proper isolation between subscriptions in different namespaces and across models.
+	// Trust auth.identity.selected_subscription_id from AuthPolicy (16-hex SHA-256 of
+	// {subNS}/{subName}@{modelNS}/{modelName}). The long selected_subscription_key
+	// stays on the identity for telemetry; TRLP matches the short ID so the Kuadrant
+	// WASM shim stays compact.
 	//
 	// Subscriptions sharing identical rates share one limit instead of one each, so the TRLP
 	// (and the EnvoyFilter/WasmPlugin Kuadrant renders from it, which repeats every limit per
 	// route match) grows with the number of distinct rate sets, not with the number of
 	// subscriptions behind them (RHOAIENG-95277). The predicate lists every subscription in
-	// the group; counters key on selected_subscription_key as well as userid so subscriptions
-	// sharing a limit still get independent budgets. Unlimited subscriptions share the
-	// rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
+	// the group by short ID; counters key on selected_subscription_id as well as userid so
+	// subscriptions sharing a limit still get independent budgets. Unlimited subscriptions
+	// share the rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
 	limitsMap, subNames := buildGroupedLimits(subs)
 
 	// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)
@@ -903,6 +926,14 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 		if err := r.cleanupStaleTRLPs(ctx, log, subscription); err != nil {
 			return ctrl.Result{}, err
 		}
+		// Delete every InferenceObjective this subscription owns. Label-based only, so a
+		// broken tenant or gateway config cannot block deletion.
+		if !r.inferenceObjectivesUnavailable.Load() {
+			if err := r.deleteOwnedInferenceObjectives(ctx, log, subscription, nil); err != nil {
+				log.Error(err, "failed to delete InferenceObjectives during deletion, will retry")
+				return ctrl.Result{}, err
+			}
+		}
 		controllerutil.RemoveFinalizer(subscription, maasSubscriptionFinalizer)
 		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err
@@ -912,8 +943,10 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 	return ctrl.Result{}, nil
 }
 
-func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) {
-	// Status-only updates do not bump metadata.generation, so this reconcile may not re-queue.
+// updateStatus returns the status write error so Reconcile can hand it to controller-runtime.
+// The For() watch drops status-only events, so a failed write (typically a conflict with
+// scanForDuplicatePriority) is only retried through that error-driven requeue.
+func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscription *maasv1alpha1.MaaSSubscription, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSSubscriptionStatus) error {
 	// Merge SpecPriorityDuplicate from the API server so we do not clobber the async duplicate-priority scan.
 	statusTarget := subscription
 	currentStatus := *statusSnapshot
@@ -957,14 +990,14 @@ func (r *MaaSSubscriptionReconciler) updateStatus(ctx context.Context, subscript
 	})
 
 	if equality.Semantic.DeepEqual(currentStatus, subscription.Status) {
-		return
+		return nil
 	}
 
 	statusTarget.Status = subscription.Status
 	if err := r.Status().Update(ctx, statusTarget); err != nil {
-		log := oteljson.FromContext(ctx)
-		log.Error(err, "failed to update MaaSSubscription status", "name", subscription.Name)
+		return fmt.Errorf("failed to update MaaSSubscription status: %w", err)
 	}
+	return nil
 }
 
 // scanForDuplicatePriority lists live MaaSSubscriptions and sets SpecPriorityDuplicate
@@ -1099,6 +1132,10 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return fmt.Errorf("failed to setup field indexer for MaaSSubscription: %w", err)
 	}
 
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorderFor("maas-subscription-controller")
+	}
+
 	b := ctrl.NewControllerManagedBy(mgr).
 		WithOptions(controller.Options{MaxConcurrentReconciles: max(1, r.MaxConcurrentReconciles)}).
 		For(&maasv1alpha1.MaaSSubscription{}, builder.WithPredicates(predicate.Or(
@@ -1116,7 +1153,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// (fixes race condition where MaaSSubscription is created before HTTPRoute exists).
 		Watches(&gatewayapiv1.HTTPRoute{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapHTTPRouteToMaaSSubscriptions,
-		)).
+		), builder.WithPredicates(httpRouteChangedForSubscription())).
 		// Watch MaaSModelRefs so we re-reconcile when a model is created or deleted.
 		Watches(&maasv1alpha1.MaaSModelRef{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapMaaSModelRefToMaaSSubscriptions,
@@ -1125,7 +1162,40 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		// gateway validation for the affected tenant namespace.
 		Watches(&maasv1alpha1.AITenant{}, handler.EnqueueRequestsFromMapFunc(
 			r.mapAITenantToMaaSSubscriptions,
-		))
+		)).
+		// Watch tenant configs: the tenant name is part of each InferenceObjective name, and
+		// the tenant gateway decides which models get one.
+		Watches(&maasv1alpha1.MaasTenantConfig{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapTenantConfigToMaaSSubscriptions,
+		), builder.WithPredicates(predicate.Or(predicate.LabelChangedPredicate{}, predicate.GenerationChangedPredicate{}))).
+		Watches(&maasv1alpha1.Tenant{}, handler.EnqueueRequestsFromMapFunc(
+			r.mapTenantConfigToMaaSSubscriptions,
+		), builder.WithPredicates(predicate.Or(predicate.LabelChangedPredicate{}, predicate.GenerationChangedPredicate{})))
+
+	// Watch LLMInferenceServices so InferencePool changes refresh InferenceObjectives.
+	// If the KServe CRD is not registered at startup, the watch is added when it appears.
+	const llmisvcCRD = "llminferenceservices.serving.kserve.io"
+	llmisvcExists := crdExists(context.Background(), mgr.GetAPIReader(), llmisvcCRD)
+	if llmisvcExists {
+		b = b.Watches(&kservev1alpha2.LLMInferenceService{},
+			handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSSubscriptions),
+			builder.WithPredicates(llmisvcRouterStatusChangedPredicate{}),
+		)
+	}
+
+	// Watch generated InferenceObjectives (metadata only) so edits and deletions are
+	// reverted. If the CRD is not registered at startup, the InferenceObjective pass is
+	// skipped until it appears.
+	ioExists := crdExists(context.Background(), mgr.GetAPIReader(), inferenceObjectiveCRD)
+	r.inferenceObjectivesUnavailable.Store(!ioExists)
+	if ioExists {
+		b = b.WatchesMetadata(inferenceObjectiveMetadata(),
+			handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
+			builder.WithPredicates(ownedInferenceObjectivePredicate()),
+		)
+	} else {
+		ctrl.Log.Info("InferenceObjective CRD not yet registered; request priority is skipped until it appears")
+	}
 
 	// Watch generated TokenRateLimitPolicies — Kuadrant CRD must be present for this watch to succeed.
 	// If not yet registered at startup, the watch is added dynamically when the CRD appears.
@@ -1189,6 +1259,32 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for TokenRateLimitPolicy: %w", err)
+		}
+	}
+	if !llmisvcExists {
+		if err := registerWatchWhenCRDAppears(c, mgr, llmisvcCRD, func() source.Source {
+			llmisvc := &unstructured.Unstructured{}
+			llmisvc.SetGroupVersionKind(kservev1alpha2.SchemeGroupVersion.WithKind("LLMInferenceService"))
+			return source.Kind(mgr.GetCache(), client.Object(llmisvc),
+				handler.EnqueueRequestsFromMapFunc(r.mapLLMISvcToMaaSSubscriptions),
+				llmisvcRouterStatusChangedPredicate{},
+			)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for LLMInferenceService: %w", err)
+		}
+	}
+	if !ioExists {
+		if err := registerWatchWhenCRDEstablished(c, mgr, inferenceObjectiveCRD, func() source.Source {
+			return source.Kind(mgr.GetCache(), client.Object(inferenceObjectiveMetadata()),
+				handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
+				ownedInferenceObjectivePredicate(),
+			)
+		}, func(ctx context.Context) ([]reconcile.Request, error) {
+			// Runs only after the watch is registered, so no objective edit goes unseen.
+			r.inferenceObjectivesUnavailable.Store(false)
+			return r.subscriptionsWithInferencePriority(ctx)
+		}); err != nil {
+			return fmt.Errorf("failed to register CRD watcher for InferenceObjective: %w", err)
 		}
 	}
 	return nil
@@ -1331,6 +1427,19 @@ func (r *MaaSSubscriptionReconciler) mapMaaSModelRefToMaaSSubscriptions(ctx cont
 		requests = append(requests, reconcile.Request{NamespacedName: key})
 	}
 	return requests
+}
+
+// httpRouteChangedForSubscription drops HTTPRoute status writes, which gateway and
+// Kuadrant controllers make as policies attach. MaaSSubscription reconcile resolves a
+// model's route by existence, name and labels, checks spec.parentRefs against the tenant
+// Gateway and owns the TokenRateLimitPolicy by the route; it never reads route status.
+// TokenRateLimitPolicy status reaches it through the TokenRateLimitPolicy watch.
+func httpRouteChangedForSubscription() predicate.Predicate {
+	return predicate.Or(
+		predicate.GenerationChangedPredicate{},
+		predicate.LabelChangedPredicate{},
+		predicate.Funcs{UpdateFunc: uidChanged},
+	)
 }
 
 // mapHTTPRouteToMaaSSubscriptions returns reconcile requests for all MaaSSubscriptions

@@ -24,7 +24,7 @@ const (
 	// AITenantKind is the API kind for tenant bootstrap.
 	AITenantKind = "AITenant"
 
-	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
+	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.1
 	AITenantConditionReady = "Ready"
 )
 
@@ -76,6 +76,15 @@ type AITenantSpec struct {
 	// controller-created tenant-admin Roles instead.
 	// +kubebuilder:validation:Optional
 	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies as the platform-admin
+	// baseline for this tenant. The referenced policies resolve in the accepted
+	// tenant target namespace (status.tenantNamespace) and apply to every
+	// authorized request; lower scopes add to this baseline and cannot remove it.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.

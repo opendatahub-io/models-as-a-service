@@ -25,6 +25,41 @@ export POLICY_ENGINE="${POLICY_ENGINE:-rhcl}"
 export INGRESS_MODE="${INGRESS_MODE:-ocproute}"
 AUTHORINO_NAMESPACE="${AUTHORINO_NAMESPACE:-$(resolve_authorino_namespace "${POLICY_ENGINE}")}"
 export AUTHORINO_NAMESPACE
+LLMISVC_CONTROLLER_CPU_REQUEST="${LLMISVC_CONTROLLER_CPU_REQUEST-1}"
+LLMISVC_CONTROLLER_CPU_LIMIT="${LLMISVC_CONTROLLER_CPU_LIMIT-2}"
+
+# The llmisvc controller ships with one worker and a 100m CPU limit, and generates
+# RSA-4096 keys for every new LLMInferenceService. Under the parallel e2e pass its
+# queue, not pod startup, sets how long each model takes to become ready. The
+# operator leaves resource edits on component Deployments alone, so the e2e cluster
+# gets more CPU here while product defaults stay as shipped.
+# Set LLMISVC_CONTROLLER_CPU_LIMIT= (empty) to keep the shipped resources.
+raise_llmisvc_controller_cpu() {
+    if [[ -z "${LLMISVC_CONTROLLER_CPU_LIMIT}" ]]; then
+        echo "Keeping shipped llmisvc-controller-manager resources (LLMISVC_CONTROLLER_CPU_LIMIT is empty)"
+        return 0
+    fi
+
+    local ns
+    ns=$(kubectl get deployment -A -l app.kubernetes.io/name=llmisvc-controller-manager \
+        -o jsonpath='{.items[0].metadata.namespace}' 2>/dev/null || true)
+    if [[ -z "$ns" ]]; then
+        echo "WARNING: llmisvc-controller-manager Deployment not found, keeping its resources"
+        return 0
+    fi
+
+    echo "Raising llmisvc-controller-manager CPU in ${ns} (request ${LLMISVC_CONTROLLER_CPU_REQUEST}, limit ${LLMISVC_CONTROLLER_CPU_LIMIT})..."
+    if ! kubectl set resources deployment/llmisvc-controller-manager -n "$ns" -c manager \
+        --requests="cpu=${LLMISVC_CONTROLLER_CPU_REQUEST}" --limits="cpu=${LLMISVC_CONTROLLER_CPU_LIMIT}"; then
+        echo "WARNING: could not patch llmisvc-controller-manager resources, continuing with shipped values"
+        return 0
+    fi
+    if ! kubectl rollout status deployment/llmisvc-controller-manager -n "$ns" --timeout=180s; then
+        echo "WARNING: llmisvc-controller-manager rollout did not finish within 180s, continuing anyway"
+    fi
+    kubectl get deployment llmisvc-controller-manager -n "$ns" \
+        -o jsonpath='llmisvc-controller-manager resources: {.spec.template.spec.containers[?(@.name=="manager")].resources}{"\n"}' || true
+}
 
 deploy_maas_platform() {
     echo "Deploying MaaS platform via ODH operator..."
@@ -124,6 +159,8 @@ deploy_maas_platform() {
             || kubectl describe datasciencecluster default-dsc || true
         exit 1
     fi
+
+    raise_llmisvc_controller_cpu
 
     if [[ "${SKIP_AUTH_CHECK:-true}" == "true" ]]; then
         echo "⚠️  WARNING: Skipping Authorino readiness check (SKIP_AUTH_CHECK=true)"

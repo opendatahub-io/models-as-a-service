@@ -65,6 +65,8 @@ func testRESTMapper() apimeta.RESTMapper {
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
 	m.Add(inferenceExternalModelGVK, ns)
+	m.Add(inferenceObjectiveGVK, ns)
+	m.Add(inferenceObjectiveListGVK, ns)
 	return m
 }
 

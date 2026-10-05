@@ -86,13 +86,15 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 
-	bundledPostgres, err := resolveBundledPostgres(ctx, c, appNs)
+	bundledPostgres, postgresNS, err := resolveBundledPostgres(ctx, c, appNs)
 	if err != nil {
 		return nil, fmt.Errorf("resolve bundled postgres: %w", err)
 	}
 	params.BundledPostgres = bundledPostgres
+	params.BundledPostgresNamespace = postgresNS
 	if bundledPostgres {
-		log.V(1).Info("maas-api egress NP will allow bundled in-cluster postgres", "namespace", appNs)
+		log.V(1).Info("maas-api egress NP will allow bundled in-cluster postgres",
+			"appNamespace", appNs, "postgresNamespace", postgresNS)
 	} else {
 		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
 	}
@@ -162,6 +164,9 @@ func RunPlatform(
 		}
 		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
 			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+		}
+		if err := cleanupPayloadPreProcessingHPA(ctx, c, params, log); err != nil {
+			return nil, fmt.Errorf("cleanup payload-pre-processing HPA: %w", err)
 		}
 	}
 
@@ -554,6 +559,7 @@ func ippResourcesForTenant(params PlatformParams) []ippResourceRef {
 	gatewayNamespace := params.GatewayNamespace
 	return []ippResourceRef{
 		{gvk: GVKHPA, namespace: gatewayNamespace, name: PayloadProcessingHPAName(tenantID)},
+		{gvk: GVKHPA, namespace: gatewayNamespace, name: PayloadPreProcessingHPAName(tenantID)},
 		{gvk: GVKDeployment, namespace: gatewayNamespace, name: PayloadProcessingDeploymentName(tenantID)},
 		{gvk: GVKDeployment, namespace: gatewayNamespace, name: PayloadPreProcessingDeploymentName(tenantID)},
 		{gvk: GVKService, namespace: gatewayNamespace, name: PayloadProcessingServiceName(tenantID)},
@@ -754,24 +760,33 @@ func cleanupPayloadProcessingHPA(ctx context.Context, c client.Client, params Pl
 		// Autoscaling is enabled; the HPA is (being) created, nothing to clean up.
 		return nil
 	}
+	return deleteOrphanedHPA(ctx, c, params.GatewayNamespace, PayloadProcessingHPAName(params.TenantIdentifier), "payload-processing", log)
+}
 
-	tenantID := params.TenantIdentifier
-	hpaName := PayloadProcessingHPAName(tenantID)
+// cleanupPayloadPreProcessingHPA deletes the payload-pre-processing HPA when autoscaling is disabled.
+func cleanupPayloadPreProcessingHPA(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.PayloadPreProcessingAutoscaling {
+		return nil
+	}
+	return deleteOrphanedHPA(ctx, c, params.GatewayNamespace, PayloadPreProcessingHPAName(params.TenantIdentifier), "payload-pre-processing", log)
+}
+
+func deleteOrphanedHPA(ctx context.Context, c client.Client, namespace, hpaName, logLabel string, log logr.Logger) error {
 	hpa := &unstructured.Unstructured{}
 	hpa.SetGroupVersionKind(GVKHPA)
-	key := types.NamespacedName{Namespace: params.GatewayNamespace, Name: hpaName}
+	key := types.NamespacedName{Namespace: namespace, Name: hpaName}
 
 	if err := c.Get(ctx, key, hpa); err != nil {
 		if apierrors.IsNotFound(err) {
 			return nil // No HPA exists, nothing to clean up.
 		}
-		return fmt.Errorf("get HPA %s/%s: %w", params.GatewayNamespace, hpaName, err)
+		return fmt.Errorf("get HPA %s/%s: %w", namespace, hpaName, err)
 	}
 
-	log.Info("Deleting orphaned payload-processing HPA (autoscaling disabled)",
-		"hpa", hpaName, "namespace", params.GatewayNamespace)
+	log.Info("Deleting orphaned "+logLabel+" HPA (autoscaling disabled)",
+		"hpa", hpaName, "namespace", namespace)
 	if err := c.Delete(ctx, hpa); err != nil && !apierrors.IsNotFound(err) {
-		return fmt.Errorf("delete HPA %s/%s: %w", params.GatewayNamespace, hpaName, err)
+		return fmt.Errorf("delete HPA %s/%s: %w", namespace, hpaName, err)
 	}
 	return nil
 }

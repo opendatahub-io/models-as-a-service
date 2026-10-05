@@ -7,6 +7,8 @@ on:
       # Trees the controller image embeds manifests from and its tests render (maas-controller/Dockerfile).
       - 'maas-api/deploy/**'
       - 'deployment/**'
+      # Admission-checked by pkg/docsamples.
+      - 'docs/samples/**'
       - '.github/workflows/maas-controller-ci.yml'
 
 permissions:

@@ -38,7 +38,9 @@ spec:
     - to:
         - podSelector:
             matchLabels:
-              app.kubernetes.io/name: usage-gateway-http
+              app.kubernetes.io/component: lokistack-gateway
+              app.kubernetes.io/instance: usage
+              app.kubernetes.io/name: lokistack
       ports:
         - protocol: TCP
           port: 8080
