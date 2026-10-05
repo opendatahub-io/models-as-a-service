@@ -470,6 +470,9 @@ or bespoke database peers), set `spec.maasApiEgressNetworkPolicy: Disabled` on `
 reconciling `maas-api-egress-restrict` and deletes any Config-owned instance on the next reconcile. You must not set
 `networkPolicyEgressRules` or `networkPolicyAdditionalEgressRules` when opting out.
 
+If no other egress `NetworkPolicy` selects the `maas-api` pods, Kubernetes allows all outbound
+traffic from them.
+
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: Config
