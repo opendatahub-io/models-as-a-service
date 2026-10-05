@@ -404,7 +404,7 @@ class TestModelsEndpoint:
         providing x-maas-subscription header (auto-selection).
 
         Expected: HTTP 200 with models from that subscription.
-        
+
         Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
         """
         context = single_subscription_tenant

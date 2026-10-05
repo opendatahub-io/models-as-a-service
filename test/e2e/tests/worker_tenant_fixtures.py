@@ -38,6 +38,7 @@ from test_helper import (
     _apply_cr,
     _create_llmis,
     _create_maas_model_ref,
+    _is_transient_gateway_response,
     _maas_api_url,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
@@ -380,6 +381,9 @@ def wait_for_only_accessible_subscription(token: str, name: str, timeout: int = 
             timeout=TIMEOUT,
             verify=TLS_VERIFY,
         )
+        if _is_transient_gateway_response(response):
+            time.sleep(2)
+            continue
         response.raise_for_status()
         subscriptions = [sub["subscription_id_header"] for sub in response.json()]
         if subscriptions == [name]:
