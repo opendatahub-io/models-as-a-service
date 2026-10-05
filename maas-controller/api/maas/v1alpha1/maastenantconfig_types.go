@@ -63,6 +63,10 @@ type MaasTenantConfigSpec struct {
 	// +kubebuilder:validation:Optional
 	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
 
+	// PayloadPreProcessing defines scaling configuration for payload-pre-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadPreProcessing *TenantPayloadProcessingConfig `json:"payloadPreProcessing,omitempty"`
+
 	// Guardrails attaches reusable AIGuardrail policies at the MaaS tenant-config
 	// scope. References resolve in this object's namespace (the tenant target
 	// namespace); a namespace must not be specified on the reference. Selections

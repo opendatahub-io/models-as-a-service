@@ -9,7 +9,7 @@ markers = [
     "models: /v1/models endpoint and gateway-scoped AuthPolicy",
     "security: negative security paths and namespace scoping",
     "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
-    "tenant_isolation: cross-tenant auth, rate-limit, and subscription isolation on shared tenants",
+    "tenant_isolation: cross-tenant auth, rate-limit, subscription, and discovery isolation on shared tenants",
     "tenant_inference: cross-gateway inference isolation on its own tenants",
     "tenant_ipp: per-tenant IPP stacks and routing isolation on its own tenants",
     "tenant_auto_resolve: MaaSModelRef tenant auto-resolution",
@@ -18,6 +18,5 @@ markers = [
 addopts = "--strict-markers"
 
 [tool.ruff]
-# The e2e suite runs on the group-test runner's python3, which is 3.9. Without this, ruff
-# assumes 3.10 and suggests annotations that 3.9 cannot evaluate.
-target-version = "py39"
+# Floor matches pytest 9 (Requires-Python >=3.10) and group-test / e2e-collect (3.11).
+target-version = "py311"

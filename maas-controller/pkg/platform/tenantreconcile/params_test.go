@@ -540,6 +540,131 @@ func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	assert.Equal(t, int64(2), payloadReplicasVal)
 }
 
+// TestPostRender_ProcessingAndPreProcessingCustomization verifies that distinct
+// payloadProcessing and payloadPreProcessing specs both resolve and apply without
+// cross-contaminating replica counts, resources, or HPA targets.
+func TestPostRender_ProcessingAndPreProcessingCustomization(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "quay.io/example/maas-api:test")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "quay.io/example/payload:test")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "quay.io/example/cleanup:test")
+
+	ppReplicas := int32(3)
+	ppMaxReplicas := int32(12)
+	ppCPU := int32(55)
+	preReplicas := int32(2)
+	preMaxReplicas := int32(8)
+	preCPU := int32(65)
+
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "models-as-a-service",
+		},
+		Spec: maasv1alpha1.MaasTenantConfigSpec{
+			PayloadProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+				Replicas: &ppReplicas,
+				Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+					MaxReplicas:          &ppMaxReplicas,
+					TargetCPUUtilization: &ppCPU,
+				},
+				Resources: &maasv1alpha1.TenantResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("300m"),
+						corev1.ResourceMemory: resource.MustParse("512Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("2Gi"),
+					},
+				},
+			},
+			PayloadPreProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+				Replicas: &preReplicas,
+				Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+					MaxReplicas:          &preMaxReplicas,
+					TargetCPUUtilization: &preCPU,
+				},
+				Resources: &maasv1alpha1.TenantResourceRequirements{
+					Requests: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("150m"),
+						corev1.ResourceMemory: resource.MustParse("256Mi"),
+					},
+					Limits: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("500m"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					},
+				},
+			},
+		},
+	}
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "gateway-ns",
+		Name:      "custom-gateway",
+	}}
+	params, err := BuildPlatformParams(tenant, platformContext, "tenant-ns", "controller-ns", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+	require.NoError(t, err)
+	require.Empty(t, params.Warnings)
+
+	// Distinct resolved params for each workload.
+	require.NotNil(t, params.PayloadProcessingReplicas)
+	assert.Equal(t, int32(3), *params.PayloadProcessingReplicas)
+	assert.True(t, params.PayloadProcessingAutoscaling)
+	assert.Equal(t, int32(12), params.PayloadProcessingMaxReplicas)
+	assert.Equal(t, int32(55), params.PayloadProcessingTargetCPU)
+	require.NotNil(t, params.PayloadProcessingResources)
+	assert.Equal(t, resource.MustParse("300m"), params.PayloadProcessingResources.Requests[corev1.ResourceCPU])
+
+	require.NotNil(t, params.PayloadPreProcessingReplicas)
+	assert.Equal(t, int32(2), *params.PayloadPreProcessingReplicas)
+	assert.True(t, params.PayloadPreProcessingAutoscaling)
+	assert.Equal(t, int32(8), params.PayloadPreProcessingMaxReplicas)
+	assert.Equal(t, int32(65), params.PayloadPreProcessingTargetCPU)
+	require.NotNil(t, params.PayloadPreProcessingResources)
+	assert.Equal(t, resource.MustParse("150m"), params.PayloadPreProcessingResources.Requests[corev1.ResourceCPU])
+
+	rendered := renderOverlayResources(t, "tenant-ns")
+	resources, err := PostRender(context.Background(), logr.Discard(), tenant, rendered, params)
+	require.NoError(t, err)
+
+	// Replicas are owned by HPA when autoscaling is enabled.
+	ppDep := requireResource(t, resources, GVKDeployment, PayloadProcessingName)
+	_, found, err := unstructured.NestedInt64(ppDep.Object, "spec", "replicas")
+	require.NoError(t, err)
+	assert.False(t, found, "payload-processing replicas should be HPA-owned")
+	ppRequests, ppLimits := requireContainerResources(t, ppDep)
+	assert.Equal(t, "300m", ppRequests["cpu"])
+	assert.Equal(t, "512Mi", ppRequests["memory"])
+	assert.Equal(t, "1", ppLimits["cpu"])
+	assert.Equal(t, "2Gi", ppLimits["memory"])
+
+	preDep := requireResource(t, resources, GVKDeployment, PayloadPreProcessingName)
+	_, found, err = unstructured.NestedInt64(preDep.Object, "spec", "replicas")
+	require.NoError(t, err)
+	assert.False(t, found, "payload-pre-processing replicas should be HPA-owned")
+	preRequests, preLimits := requireContainerResources(t, preDep)
+	assert.Equal(t, "150m", preRequests["cpu"])
+	assert.Equal(t, "256Mi", preRequests["memory"])
+	assert.Equal(t, "500m", preLimits["cpu"])
+	assert.Equal(t, "1Gi", preLimits["memory"])
+
+	ppHPA := requireResource(t, resources, GVKHPA, PayloadProcessingHPAName(""))
+	ppTarget, _, _ := unstructured.NestedString(ppHPA.Object, "spec", "scaleTargetRef", "name")
+	assert.Equal(t, PayloadProcessingName, ppTarget)
+	ppMin, _, _ := unstructured.NestedInt64(ppHPA.Object, "spec", "minReplicas")
+	ppMax, _, _ := unstructured.NestedInt64(ppHPA.Object, "spec", "maxReplicas")
+	assert.Equal(t, int64(3), ppMin)
+	assert.Equal(t, int64(12), ppMax)
+
+	preHPA := requireResource(t, resources, GVKHPA, PayloadPreProcessingHPAName(""))
+	preTarget, _, _ := unstructured.NestedString(preHPA.Object, "spec", "scaleTargetRef", "name")
+	assert.Equal(t, PayloadPreProcessingName, preTarget)
+	preMin, _, _ := unstructured.NestedInt64(preHPA.Object, "spec", "minReplicas")
+	preMax, _, _ := unstructured.NestedInt64(preHPA.Object, "spec", "maxReplicas")
+	assert.Equal(t, int64(2), preMin)
+	assert.Equal(t, int64(8), preMax)
+}
+
 func TestApplyPlatformParamsWithRenderedOverlay_AITenant(t *testing.T) {
 	resources := renderOverlayResources(t, "ai-tenant-redteam")
 	params := PlatformParams{ //nolint:gosec // APIKeyMaxExpirationDays is a duration setting, not a secret
@@ -1110,6 +1235,186 @@ func TestBuildPlatformParams_PayloadProcessingSpec(t *testing.T) {
 		require.NoError(t, err)
 		require.NotNil(t, got.PayloadProcessingReplicas)
 		assert.Equal(t, int32(5), *got.PayloadProcessingReplicas, "spec replicas should override annotation replicas")
+	})
+}
+
+func TestBuildPlatformParams_PayloadPreProcessingSpec(t *testing.T) {
+	t.Setenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE", "")
+	t.Setenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE", "")
+
+	platformContext := PlatformContext{GatewayRef: maasv1alpha1.TenantGatewayRef{
+		Namespace: "openshift-ingress",
+		Name:      "maas-default-gateway",
+	}}
+
+	t.Run("no payloadPreProcessing spec leaves defaults", func(t *testing.T) {
+		tenant := &maasv1alpha1.MaasTenantConfig{}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadPreProcessingAutoscaling)
+		assert.Equal(t, int32(10), got.PayloadPreProcessingMaxReplicas)
+		assert.Equal(t, int32(70), got.PayloadPreProcessingTargetCPU)
+		assert.Equal(t, int32(80), got.PayloadPreProcessingTargetMemory)
+		assert.Nil(t, got.PayloadPreProcessingReplicas)
+		assert.Nil(t, got.PayloadPreProcessingResources)
+	})
+
+	t.Run("replicas and resources without autoscaling", func(t *testing.T) {
+		replicas := int32(2)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadPreProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas: &replicas,
+					Resources: &maasv1alpha1.TenantResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("200m"),
+							corev1.ResourceMemory: resource.MustParse("256Mi"),
+						},
+					},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.False(t, got.PayloadPreProcessingAutoscaling)
+		require.NotNil(t, got.PayloadPreProcessingReplicas)
+		assert.Equal(t, int32(2), *got.PayloadPreProcessingReplicas)
+		require.NotNil(t, got.PayloadPreProcessingResources)
+		assert.Equal(t, resource.MustParse("200m"), got.PayloadPreProcessingResources.Requests[corev1.ResourceCPU])
+		assert.Empty(t, got.Warnings)
+	})
+
+	t.Run("autoscaling with custom values and clamp", func(t *testing.T) {
+		replicas := int32(20)
+		maxReplicas := int32(15)
+		targetCPU := int32(55)
+		targetMemory := int32(85)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadPreProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas: &replicas,
+					Autoscaling: &maasv1alpha1.TenantAutoscalingConfig{
+						MaxReplicas:             &maxReplicas,
+						TargetCPUUtilization:    &targetCPU,
+						TargetMemoryUtilization: &targetMemory,
+					},
+					Resources: &maasv1alpha1.TenantResourceRequirements{
+						Requests: corev1.ResourceList{
+							corev1.ResourceCPU:    resource.MustParse("100m"),
+							corev1.ResourceMemory: resource.MustParse("128Mi"),
+						},
+					},
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		assert.True(t, got.PayloadPreProcessingAutoscaling)
+		require.NotNil(t, got.PayloadPreProcessingReplicas)
+		assert.Equal(t, int32(20), *got.PayloadPreProcessingReplicas)
+		assert.Equal(t, int32(20), got.PayloadPreProcessingMaxReplicas)
+		assert.Equal(t, int32(55), got.PayloadPreProcessingTargetCPU)
+		assert.Equal(t, int32(85), got.PayloadPreProcessingTargetMemory)
+		require.Len(t, got.Warnings, 1)
+		assert.Contains(t, got.Warnings[0], "exceeds spec.payloadPreProcessing.autoscaling.maxReplicas")
+	})
+
+	t.Run("spec replicas override annotation replicas", func(t *testing.T) {
+		specReplicas := int32(4)
+		tenant := &maasv1alpha1.MaasTenantConfig{
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				PayloadPreProcessing: &maasv1alpha1.TenantPayloadProcessingConfig{
+					Replicas: &specReplicas,
+				},
+			},
+		}
+		tenant.SetNamespace("models-as-a-service")
+		tenant.SetName("default-tenant")
+		tenant.SetAnnotations(map[string]string{
+			AnnotationPayloadPreProcessingReplicas: "2",
+		})
+
+		got, err := BuildPlatformParams(tenant, platformContext, "opendatahub", "opendatahub", "https://kubernetes.default.svc", "opendatahub", logr.Discard())
+		require.NoError(t, err)
+		require.NotNil(t, got.PayloadPreProcessingReplicas)
+		assert.Equal(t, int32(4), *got.PayloadPreProcessingReplicas)
+	})
+}
+
+func TestPatchPreProcessingDeployment_AutoscalingSkipsReplicas(t *testing.T) {
+	replicas := int32(5)
+	deployment := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "payload-pre-processing",
+			"namespace": "openshift-ingress",
+		},
+		"spec": map[string]any{
+			"replicas": int64(1),
+			"selector": map[string]any{
+				"matchLabels": map[string]any{"app": "payload-pre-processing"},
+			},
+			"template": map[string]any{
+				"metadata": map[string]any{
+					"labels": map[string]any{"app": "payload-pre-processing"},
+				},
+				"spec": map[string]any{
+					"serviceAccountName": "payload-processing",
+					"containers": []any{
+						map[string]any{
+							"name":  "payload-pre-processing",
+							"image": "test-image",
+						},
+					},
+					"volumes": []any{
+						map[string]any{
+							"name": "plugins-config-volume",
+							"configMap": map[string]any{
+								"name": "payload-processing-plugins",
+							},
+						},
+					},
+				},
+			},
+		},
+	}}
+
+	t.Run("without autoscaling replicas are set on deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:             "openshift-ingress",
+			PayloadPreProcessingReplicas: &replicas,
+			PayloadProcessingImage:       "test-image",
+		}
+		err := patchPreProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		r, _, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.Equal(t, int64(5), r)
+	})
+
+	t.Run("with autoscaling replicas are removed from deployment", func(t *testing.T) {
+		dep := deployment.DeepCopy()
+		params := PlatformParams{
+			GatewayNamespace:                "openshift-ingress",
+			PayloadPreProcessingReplicas:    &replicas,
+			PayloadPreProcessingAutoscaling: true,
+			PayloadProcessingImage:          "test-image",
+		}
+		err := patchPreProcessingDeployment(logr.Discard(), dep, params)
+		require.NoError(t, err)
+		_, found, _ := unstructured.NestedInt64(dep.Object, "spec", "replicas")
+		assert.False(t, found, "spec.replicas should be removed when autoscaling is enabled")
 	})
 }
 

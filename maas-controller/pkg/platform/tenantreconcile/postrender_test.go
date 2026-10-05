@@ -213,6 +213,78 @@ func TestCleanupPayloadProcessingHPA(t *testing.T) {
 	})
 }
 
+func TestConfigurePayloadPreProcessingHPA(t *testing.T) {
+	t.Run("no HPA appended when autoscaling disabled", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                "openshift-ingress",
+			PayloadPreProcessingAutoscaling: false,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		assert.Empty(t, resources)
+	})
+
+	t.Run("HPA appended with correct defaults", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                 "openshift-ingress",
+			PayloadPreProcessingAutoscaling:  true,
+			PayloadPreProcessingMaxReplicas:  10,
+			PayloadPreProcessingTargetCPU:    70,
+			PayloadPreProcessingTargetMemory: 80,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "HorizontalPodAutoscaler", hpa.GetKind())
+		assert.Equal(t, "payload-pre-processing", hpa.GetName())
+		assert.Equal(t, "openshift-ingress", hpa.GetNamespace())
+
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-pre-processing", targetName)
+
+		minReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "minReplicas")
+		assert.Equal(t, int64(1), minReplicas)
+
+		maxReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "maxReplicas")
+		assert.Equal(t, int64(10), maxReplicas)
+	})
+
+	t.Run("HPA uses tenant-specific names for non-default tenant", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                 "openshift-ingress",
+			TenantIdentifier:                 "redteam",
+			PayloadPreProcessingAutoscaling:  true,
+			PayloadPreProcessingMaxReplicas:  10,
+			PayloadPreProcessingTargetCPU:    70,
+			PayloadPreProcessingTargetMemory: 80,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "payload-pre-processing-redteam", hpa.GetName())
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-pre-processing-redteam", targetName)
+	})
+}
+
+func TestCleanupPayloadPreProcessingHPA(t *testing.T) {
+	t.Run("no-op when autoscaling is enabled", func(t *testing.T) {
+		params := PlatformParams{
+			GatewayNamespace:                "openshift-ingress",
+			PayloadPreProcessingAutoscaling: true,
+		}
+		err := cleanupPayloadPreProcessingHPA(context.Background(), nil, params, logr.Discard())
+		require.NoError(t, err)
+	})
+}
+
 func TestIsIPPResource(t *testing.T) {
 	tests := []struct {
 		name     string
