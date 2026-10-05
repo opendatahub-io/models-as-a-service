@@ -1052,3 +1052,115 @@ class TestExternalModelTokenRateLimit:
             "External token limit subscription=%s statuses=%s usage=%s",
             resources["subscription"], result.status_codes, result.successful_usages,
         )
+# ─── Tests: Shared Provider (multi-model) ────────────────────────────────────
+
+SECOND_EXTERNAL_MODEL_NAME = "e2e-external-model-shared"
+
+
+class TestSharedProviderMultiModel:
+    """Verify two ExternalModels sharing one ExternalProvider both route correctly.
+
+    Regression test for RHOAIENG-98005: ai-gateway-controller produced
+    duplicate stable_id values in the routing overlay when two models
+    referenced the same provider, causing Praxis to reject the overlay
+    and the second model to return 404/503.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _setup_second_model(self, external_models_setup):
+        """Create a second ExternalModel pointing at the shared provider."""
+        self._setup = external_models_setup
+
+        _apply_cr({
+            "apiVersion": "inference.opendatahub.io/v1alpha1",
+            "kind": "ExternalModel",
+            "metadata": {"name": SECOND_EXTERNAL_MODEL_NAME, "namespace": MODEL_NAMESPACE},
+            "spec": {
+                "externalProviderRefs": [
+                    {
+                        "ref": {"name": EXTERNAL_PROVIDER_NAME},
+                        "targetModel": TARGET_MODEL,
+                        "apiFormat": "openai-chat",
+                        "path": "/v1/chat/completions",
+                    },
+                ],
+            },
+        })
+
+        _apply_cr({
+            "apiVersion": "maas.opendatahub.io/v1alpha1",
+            "kind": "MaaSModelRef",
+            "metadata": {
+                "name": SECOND_EXTERNAL_MODEL_NAME,
+                "namespace": MODEL_NAMESPACE,
+                "annotations": {
+                    "maas.opendatahub.io/endpoint": EXTERNAL_ENDPOINT,
+                    "maas.opendatahub.io/provider": "openai",
+                },
+            },
+            "spec": {
+                "modelRef": {"kind": "ExternalModel", "name": SECOND_EXTERNAL_MODEL_NAME},
+            },
+        })
+
+        try:
+            _wait_for_model_ready(SECOND_EXTERNAL_MODEL_NAME, namespace=MODEL_NAMESPACE, timeout=120)
+        except Exception:
+            log.warning("Second model did not reach Ready (may indicate the shared-provider bug)")
+
+        yield
+
+        _patch_cr("maasmodelref", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE,
+                  {"metadata": {"finalizers": []}})
+        _delete_cr("maasmodelref", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        _delete_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+
+    def test_second_model_reaches_ready(self):
+        """A second ExternalModel referencing the same provider reaches Ready."""
+        cr = _get_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert cr is not None, f"ExternalModel {SECOND_EXTERNAL_MODEL_NAME} not found"
+        phase = cr.get("status", {}).get("phase", "")
+        assert phase == "Ready", (
+            f"Second ExternalModel phase = {phase!r}, want Ready. "
+            "If Failed, the shared-provider stable_id bug may still be present."
+        )
+
+    def test_first_model_still_routes(self):
+        """The original model continues routing after the second is added."""
+        setup = self._setup
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code not in (401, 403, 503), (
+            f"First model returned {r.status_code} after adding second model"
+        )
+        log.info("Shared provider (first model): HTTP %d", r.status_code)
+
+    def test_both_models_have_distinct_httproutes(self):
+        """Both models have their own HTTPRoute resources."""
+        route1 = _get_cr("httproute", EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        route2 = _get_cr("httproute", SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        assert route1 is not None, f"HTTPRoute for {EXTERNAL_MODEL_NAME} not found"
+        assert route2 is not None, f"HTTPRoute for {SECOND_EXTERNAL_MODEL_NAME} not found"
+
+    def test_delete_second_model_preserves_first(self):
+        """Deleting the second model does not break the first model's routing."""
+        _delete_cr(EXTERNAL_MODEL_KIND, SECOND_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
+        time.sleep(RECONCILE_WAIT)
+
+        setup = self._setup
+        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {setup['api_key']}",
+        }
+        body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
+        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        assert r.status_code not in (401, 403, 503), (
+            f"First model returned {r.status_code} after deleting second model"
+        )
+        log.info("Shared provider (after delete): HTTP %d", r.status_code)
