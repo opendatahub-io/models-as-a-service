@@ -36,7 +36,7 @@ kubectl annotate service authorino-authorino-authorization \
   service.beta.openshift.io/serving-cert-secret-name=authorino-server-cert \
   --overwrite
 
-echo "🔧 Patching Authorino CR for TLS listener and CA bundle volume..."
+echo "🔧 Patching Authorino CR for TLS listener..."
 kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
 {
   "spec": {
@@ -51,11 +51,15 @@ kubectl patch authorino authorino -n "$NAMESPACE" --type=merge --patch '
   }
 }'
 
-# Note: The Authorino CR doesn't support envVars, so we patch the deployment directly
+# Note: The Authorino CR doesn't support envVars, so we patch the deployment directly.
+# Read the service CA from the service account volume OpenShift projects into every pod;
+# the Authorino pod mounts nothing else containing it. Keep this path accurate: Go ignores
+# an unreadable SSL_CERT_FILE and falls back to the system trust store, so a wrong value
+# fails silently -- Authorino logs no error while never trusting the service CA.
 echo "🌍 Adding environment variables to Authorino deployment..."
 kubectl -n "$NAMESPACE" set env deployment/authorino \
-  SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
-  REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
+  SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
+  REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 
 echo "✅ Authorino TLS configuration complete"
 echo ""

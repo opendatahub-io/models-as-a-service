@@ -198,6 +198,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(ns, tenant, model, route, policy, gateway).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
 	const gwNamespace = "team-a-gateway-ns"

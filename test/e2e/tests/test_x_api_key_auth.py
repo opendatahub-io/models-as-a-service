@@ -36,7 +36,7 @@ from test_helper import (
     _gateway_url,
     _inference,
     _poll_status,
-    _wait_reconcile,
+    _wait_for_gateway_auth_enforced,
 )
 
 log = logging.getLogger(__name__)
@@ -58,6 +58,7 @@ IPP_EXTERNAL_MODEL_CR = {
             "ref": {"name": "dummy-anthropic"},
             "targetModel": "claude-sonnet-4-20250514",
             "apiFormat": "messages",
+            "path": "/v1/messages",
         }],
     },
 }
@@ -109,31 +110,36 @@ def _wait_for_identity_source(identity_name, present=True, timeout=120):
 
 
 def _trigger_reconcile():
-    """Annotate all MaaSAuthPolicies to trigger controller reconciliation."""
-    ns = os.environ.get("MAAS_SUBSCRIPTION_NAMESPACE", "models-as-a-service")
+    """Trigger controller reconciliation by touching the IPP ExternalModel CR.
+
+    Annotating the ExternalModel causes the controller's ExternalModel watch to
+    fire, which enqueues all MaaSAuthPolicies for reconciliation.  Annotating
+    MaaSAuthPolicies directly is ineffective because their watch uses
+    GenerationChangedPredicate, which ignores metadata-only updates.
+    """
     result = subprocess.run(
-        ["oc", "get", "maasauthpolicy", "-n", ns, "-o", "name"],
+        ["oc", "annotate",
+         f"externalmodel.inference.opendatahub.io/{IPP_EXTERNAL_MODEL_NAME}",
+         "-n", MODEL_NAMESPACE,
+         f"e2e.maas/reconcile-trigger={int(time.time())}", "--overwrite"],
         capture_output=True, text=True, timeout=30,
     )
     if result.returncode != 0:
-        log.warning("Failed to list MaaSAuthPolicies: %s", result.stderr.strip())
-        return
-
-    for resource in result.stdout.strip().splitlines():
-        if not resource:
-            continue
-        subprocess.run(
-            ["oc", "annotate", resource, "-n", ns,
-             f"e2e.maas/reconcile-trigger={int(time.time())}", "--overwrite"],
-            capture_output=True, text=True, timeout=30,
-        )
+        log.warning("Failed to annotate ExternalModel to trigger reconcile: %s",
+                    result.stderr.strip())
 
 
-def _inference_x_api_key(api_key, path=None, model_name=None):
-    """Send inference with x-api-key header instead of Authorization."""
+def _inference_x_api_key(api_key, path=None, extra_headers=None, model_name=None):
+    """Send inference with x-api-key header instead of Authorization.
+
+    Accepts the same kwargs as ``_inference`` so it can be passed to
+    ``_poll_status(..., inference_fn=_inference_x_api_key)``.
+    """
     path = path or MODEL_PATH
     url = f"{_gateway_url()}{path}/v1/completions"
     headers = {"x-api-key": api_key, "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
     return requests.post(
         url, headers=headers,
         json={"model": model_name or MODEL_NAME, "prompt": "Hello", "max_tokens": 3},
@@ -147,6 +153,7 @@ pytestmark = [
         reason=f"IPP ExternalModel CRD ({IPP_EXTERNAL_MODEL_CRD}) not installed",
     ),
     pytest.mark.xdist_group("api_keys"),
+    pytest.mark.serial,
 ]
 
 
@@ -167,7 +174,6 @@ def x_api_key_setup(api_key):
     log.info("Setting up x-api-key auth test fixture...")
 
     _apply_cr(IPP_EXTERNAL_MODEL_CR)
-    _wait_reconcile()
     _trigger_reconcile()
 
     try:
@@ -176,14 +182,18 @@ def x_api_key_setup(api_key):
         _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
         raise
 
+    # AuthPolicy YAML can list api-keys-x-api-key before Kuadrant/Authorino has
+    # enforced it. Bearer still works via the existing api-keys identity, so a
+    # Bearer-only readiness check misses empty-body 401s on x-api-key.
+    _wait_for_gateway_auth_enforced(timeout=120)
     _poll_status(api_key, 200, timeout=60)
+    _poll_status(api_key, 200, timeout=120, inference_fn=_inference_x_api_key)
 
     log.info("x-api-key identity source is active, running tests...")
     yield api_key
 
     log.info("Cleaning up x-api-key auth test fixture...")
     _delete_cr("externalmodel.inference.opendatahub.io", IPP_EXTERNAL_MODEL_NAME, MODEL_NAMESPACE)
-    _wait_reconcile()
     _trigger_reconcile()
 
     try:

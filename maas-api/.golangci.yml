@@ -30,6 +30,8 @@ linters:
     - funcorder
     - godoclint
     - noinlineerr
+    - goconst
+    - noctx
   settings:
     errcheck:
       check-type-assertions: true
@@ -90,6 +92,12 @@ linters:
       - legacy
       - std-error-handling
     rules:
+      - linters:
+          - modernize
+        text: "(omitzero|mapsloop|rangeint|newexpr|slicesbackward):"
+      - linters:
+          - gosec
+        text: "G118:"
       - linters:
           - dupl
         path: test/*/(.+)_test\.go

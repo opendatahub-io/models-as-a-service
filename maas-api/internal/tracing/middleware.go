@@ -8,6 +8,7 @@ import (
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/trace"
 
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -24,6 +25,7 @@ func NewMiddleware(defaultTenant, tenantNamespace, gatewayName, gatewayNamespace
 
 	return func(c *gin.Context) {
 		ctx := c.Request.Context()
+		ctx = otel.GetTextMapPropagator().Extract(ctx, propagation.HeaderCarrier(c.Request.Header))
 
 		route := c.FullPath()
 		if route == "" {

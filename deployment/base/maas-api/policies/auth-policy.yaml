@@ -48,6 +48,15 @@ spec:
             expression: '{"key": request.headers.authorization.replace("Bearer ", "")}'
         priority: 0
     authorization:
+      # API keys are inference credentials and must not be used to mint more API keys.
+      # AuthPolicy evaluates the external path before the HTTPRoute URLRewrite.
+      deny-api-key-management:
+        when:
+          - predicate: 'request.headers.authorization.startsWith("Bearer sk-oai-") && (request.path == "/maas-api/v1/api-keys" || request.path.startsWith("/maas-api/v1/api-keys/"))'
+        patternMatching:
+          patterns:
+            - predicate: "false"
+        priority: 0
       # Reject client-supplied identity headers; Authorino injects these after auth.
       deny-client-identity-headers:
         metrics: false

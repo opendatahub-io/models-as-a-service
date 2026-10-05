@@ -65,9 +65,11 @@ jobs:
             exit 1
           fi
 
-          echo "current=${CURRENT}" >> "$GITHUB_OUTPUT"
-          echo "latest=${LATEST}" >> "$GITHUB_OUTPUT"
-          echo "upstream_branch=${UPSTREAM_BRANCH}" >> "$GITHUB_OUTPUT"
+          {
+            echo "current=${CURRENT}"
+            echo "latest=${LATEST}"
+            echo "upstream_branch=${UPSTREAM_BRANCH}"
+          } >> "$GITHUB_OUTPUT"
 
           if [ "$CURRENT" = "$LATEST" ]; then
             echo "skip=true" >> "$GITHUB_OUTPUT"

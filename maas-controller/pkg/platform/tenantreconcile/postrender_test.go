@@ -1,10 +1,14 @@
 package tenantreconcile
 
 import (
+	"context"
 	"testing"
 
 	"github.com/go-logr/logr"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 )
@@ -109,6 +113,196 @@ func TestBuildTelemetryLabels(t *testing.T) {
 			for _, k := range tt.absentKeys {
 				assert.NotContains(t, labels, k, "label %q should be absent", k)
 			}
+		})
+	}
+}
+
+func TestConfigurePayloadProcessingHPA(t *testing.T) {
+	t.Run("no HPA appended when autoscaling disabled", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:             "openshift-ingress",
+			PayloadProcessingAutoscaling: false,
+		}
+		err := configurePayloadProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		assert.Empty(t, resources)
+	})
+
+	t.Run("HPA appended with correct defaults", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:              "openshift-ingress",
+			PayloadProcessingAutoscaling:  true,
+			PayloadProcessingMaxReplicas:  10,
+			PayloadProcessingTargetCPU:    70,
+			PayloadProcessingTargetMemory: 80,
+		}
+		err := configurePayloadProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "HorizontalPodAutoscaler", hpa.GetKind())
+		assert.Equal(t, "payload-processing", hpa.GetName())
+		assert.Equal(t, "openshift-ingress", hpa.GetNamespace())
+
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-processing", targetName)
+
+		minReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "minReplicas")
+		assert.Equal(t, int64(1), minReplicas)
+
+		maxReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "maxReplicas")
+		assert.Equal(t, int64(10), maxReplicas)
+	})
+
+	t.Run("HPA uses replicas as minReplicas", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		replicas := int32(3)
+		params := PlatformParams{
+			GatewayNamespace:              "openshift-ingress",
+			PayloadProcessingAutoscaling:  true,
+			PayloadProcessingReplicas:     &replicas,
+			PayloadProcessingMaxReplicas:  15,
+			PayloadProcessingTargetCPU:    60,
+			PayloadProcessingTargetMemory: 75,
+		}
+		err := configurePayloadProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		minR, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "minReplicas")
+		assert.Equal(t, int64(3), minR)
+
+		maxR, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "maxReplicas")
+		assert.Equal(t, int64(15), maxR)
+	})
+
+	t.Run("HPA uses tenant-specific names for non-default tenant", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:              "openshift-ingress",
+			TenantIdentifier:              "redteam",
+			PayloadProcessingAutoscaling:  true,
+			PayloadProcessingMaxReplicas:  10,
+			PayloadProcessingTargetCPU:    70,
+			PayloadProcessingTargetMemory: 80,
+		}
+		err := configurePayloadProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "payload-processing-redteam", hpa.GetName())
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-processing-redteam", targetName)
+	})
+}
+
+func TestCleanupPayloadProcessingHPA(t *testing.T) {
+	t.Run("no-op when autoscaling is enabled", func(t *testing.T) {
+		params := PlatformParams{
+			GatewayNamespace:             "openshift-ingress",
+			PayloadProcessingAutoscaling: true,
+		}
+		// Should return nil without attempting any API calls
+		err := cleanupPayloadProcessingHPA(context.Background(), nil, params, logr.Discard())
+		require.NoError(t, err)
+	})
+}
+
+func TestConfigurePayloadPreProcessingHPA(t *testing.T) {
+	t.Run("no HPA appended when autoscaling disabled", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                "openshift-ingress",
+			PayloadPreProcessingAutoscaling: false,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		assert.Empty(t, resources)
+	})
+
+	t.Run("HPA appended with correct defaults", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                 "openshift-ingress",
+			PayloadPreProcessingAutoscaling:  true,
+			PayloadPreProcessingMaxReplicas:  10,
+			PayloadPreProcessingTargetCPU:    70,
+			PayloadPreProcessingTargetMemory: 80,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "HorizontalPodAutoscaler", hpa.GetKind())
+		assert.Equal(t, "payload-pre-processing", hpa.GetName())
+		assert.Equal(t, "openshift-ingress", hpa.GetNamespace())
+
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-pre-processing", targetName)
+
+		minReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "minReplicas")
+		assert.Equal(t, int64(1), minReplicas)
+
+		maxReplicas, _, _ := unstructured.NestedInt64(hpa.Object, "spec", "maxReplicas")
+		assert.Equal(t, int64(10), maxReplicas)
+	})
+
+	t.Run("HPA uses tenant-specific names for non-default tenant", func(t *testing.T) {
+		var resources []unstructured.Unstructured
+		params := PlatformParams{
+			GatewayNamespace:                 "openshift-ingress",
+			TenantIdentifier:                 "redteam",
+			PayloadPreProcessingAutoscaling:  true,
+			PayloadPreProcessingMaxReplicas:  10,
+			PayloadPreProcessingTargetCPU:    70,
+			PayloadPreProcessingTargetMemory: 80,
+		}
+		err := configurePayloadPreProcessingHPA(logr.Discard(), &resources, params)
+		require.NoError(t, err)
+		require.Len(t, resources, 1)
+
+		hpa := resources[0]
+		assert.Equal(t, "payload-pre-processing-redteam", hpa.GetName())
+		targetName, _, _ := unstructured.NestedString(hpa.Object, "spec", "scaleTargetRef", "name")
+		assert.Equal(t, "payload-pre-processing-redteam", targetName)
+	})
+}
+
+func TestCleanupPayloadPreProcessingHPA(t *testing.T) {
+	t.Run("no-op when autoscaling is enabled", func(t *testing.T) {
+		params := PlatformParams{
+			GatewayNamespace:                "openshift-ingress",
+			PayloadPreProcessingAutoscaling: true,
+		}
+		err := cleanupPayloadPreProcessingHPA(context.Background(), nil, params, logr.Discard())
+		require.NoError(t, err)
+	})
+}
+
+func TestIsIPPResource(t *testing.T) {
+	tests := []struct {
+		name     string
+		gvk      schema.GroupVersionKind
+		resName  string
+		expected bool
+	}{
+		{name: "payload-processing deployment", gvk: GVKDeployment, resName: PayloadProcessingName, expected: true},
+		{name: "payload-pre-processing deployment", gvk: GVKDeployment, resName: PayloadPreProcessingName, expected: true},
+		{name: "payload-processing envoy filter", gvk: GVKEnvoyFilter, resName: PayloadProcessingName, expected: true},
+		{name: "payload-processing plugins configmap", gvk: GVKConfigMap, resName: PayloadProcessingPluginsConfigMapName, expected: true},
+		{name: "maas-api deployment", gvk: GVKDeployment, resName: baseMaaSAPIDeploymentName, expected: false},
+		{name: "gateway default deny policy", gvk: GVKTokenRateLimitPolicy, resName: baseGatewayTokenRateLimitDefaultDenyPolicyName, expected: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.expected, isIPPResource(tt.gvk, tt.resName))
 		})
 	}
 }

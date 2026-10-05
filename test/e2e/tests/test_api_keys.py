@@ -34,6 +34,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 from datetime import datetime
 
 import pytest
@@ -53,8 +54,10 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
+    _delete_governance_and_wait,
     _delete_sa,
     _get_cr,
+    _gateway_url,
     _maas_api_url,
     _ns,
     _request_with_gateway_retry,
@@ -63,23 +66,154 @@ from test_helper import (
     _scale_controller_up,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_subscription_phase,
-    _wait_reconcile,
+    _wait_for_subscription_discovery_ready,
+    _wait_for_cr_absent,
 )
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("api_keys")
+pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
 
 
-@pytest.fixture(scope="session", autouse=True)
-def _warm_gateway(api_keys_base_url: str, headers: dict):
+@pytest.fixture(scope="module", autouse=True)
+def _worker_api_keys_context(request):
+    """Bind parallel API-key tests to worker state; leave the serial pass alone."""
+    from worker_tenant_fixtures import activate_worker_tenant, serial_only_selection
+
+    if serial_only_selection(request):
+        yield None
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    original_values = {
+        name: globals()[name]
+        for name in (
+            "MODEL_NAME",
+            "MODEL_NAMESPACE",
+            "MODEL_REF",
+            "SIMULATOR_SUBSCRIPTION",
+        )
+    }
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+    original_gateway_wait = globals()["_wait_for_gateway_auth_enforced"]
+    globals().update(
+        {
+            "MODEL_NAME": f"e2e/{context.model_ref}",
+            "MODEL_NAMESPACE": context.model_namespace,
+            "MODEL_REF": context.model_ref,
+            "SIMULATOR_SUBSCRIPTION": context.subscription_name,
+        }
+    )
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    def wait_for_gateway_auth(*args, **kwargs):
+        kwargs.setdefault("name", context.gateway_authpolicy_name)
+        return original_gateway_wait(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+    globals()["_wait_for_gateway_auth_enforced"] = wait_for_gateway_auth
+    try:
+        with activate_worker_tenant(context):
+            yield context
+    finally:
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
+        globals()["_wait_for_gateway_auth_enforced"] = original_gateway_wait
+
+
+@pytest.fixture(scope="module")
+def api_keys_base_url(_worker_api_keys_context) -> str:
+    return f"{_maas_api_url()}/v1/api-keys"
+
+
+@pytest.fixture(scope="module")
+def admin_headers(_worker_api_keys_context):
+    """Use an admin identity in the same tenant as parallel API-key tests."""
+    context = _worker_api_keys_context
+    if context is None:
+        token = os.environ.get("ADMIN_OC_TOKEN", "")
+        return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"} if token else None
+
+    from worker_tenant_fixtures import xdist_worker_suffix
+
+    suffix = xdist_worker_suffix()
+    service_account = f"e2e-worker-admin-{suffix}"
+    role_binding = f"{service_account}-binding"
+    _apply_cr(
+        {
+            "apiVersion": "v1",
+            "kind": "ServiceAccount",
+            "metadata": {
+                "name": service_account,
+                "namespace": context.tenant_namespace,
+            },
+        }
+    )
+    _apply_cr(
+        {
+            "apiVersion": "rbac.authorization.k8s.io/v1",
+            "kind": "RoleBinding",
+            "metadata": {
+                "name": role_binding,
+                "namespace": context.tenant_namespace,
+            },
+            "roleRef": {
+                "apiGroup": "rbac.authorization.k8s.io",
+                "kind": "Role",
+                "name": f"aitenant-{context.tenant_name}-tenant-admin",
+            },
+            "subjects": [
+                {
+                    "kind": "ServiceAccount",
+                    "name": service_account,
+                    "namespace": context.tenant_namespace,
+                }
+            ],
+        }
+    )
+    token = _create_sa_token(service_account, namespace=context.tenant_namespace, duration="1h")
+    try:
+        yield {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    finally:
+        _delete_cr("rolebinding", role_binding, namespace=context.tenant_namespace)
+        _delete_sa(service_account, namespace=context.tenant_namespace)
+
+
+@pytest.fixture(scope="module")
+def model_v1(_worker_api_keys_context) -> str:
+    if _worker_api_keys_context is None:
+        path = os.environ.get("E2E_MODEL_PATH", f"/{MODEL_NAMESPACE}/{MODEL_REF}")
+    else:
+        path = f"/{MODEL_NAMESPACE}/{MODEL_REF}"
+    return f"{_gateway_url()}{path}/v1"
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _warm_gateway(_worker_api_keys_context, api_keys_base_url: str, headers: dict):
     """Wait for gateway AuthPolicy enforcement before running API key tests.
 
     MaaSAuthPolicy churn in earlier modules (or this session) can leave
     maas-gateway-auth reconciling; empty 403s follow until Enforced=True and
     Envoy loads the config.
     """
-    _wait_for_gateway_auth_enforced()
+    auth_policy_name = (
+        _worker_api_keys_context.gateway_authpolicy_name
+        if _worker_api_keys_context is not None
+        else None
+    )
+    _wait_for_gateway_auth_enforced(name=auth_policy_name)
     r = _request_with_gateway_retry(
         requests.post,
         api_keys_base_url,
@@ -366,7 +500,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(3):
                 r = _request_with_gateway_retry(
@@ -475,7 +609,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(2):
                 r = _request_with_gateway_retry(
@@ -539,7 +673,7 @@ class TestAPIKeyBulkOperations:
 
             _create_test_auth_policy(f"{sub_name}-auth", MODEL_REF, users=[sa_user, sa_user2])
             _create_test_subscription(sub_name, MODEL_REF, users=[sa_user, sa_user2])
-            _wait_for_maas_subscription_phase(sub_name, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_name, namespace=ns)
 
             for i in range(2):
                 r = _request_with_gateway_retry(
@@ -634,119 +768,73 @@ class TestAPIKeyExpiration:
                 "skipping expiration policy tests"
             )
 
-    def test_create_key_within_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration within the limit should succeed."""
+    @pytest.mark.parametrize(
+        "label, expiration_case, should_succeed",
+        [
+            ("within-limit", "within", True),
+            ("at-limit", "at", True),
+            ("exceeds-limit", "exceeds", False),
+            ("without-expiration", None, True),
+            ("short-expiration", "short", True),
+        ],
+        ids=[
+            "within-limit",
+            "at-limit",
+            "exceeds-limit",
+            "without-expiration",
+            "short-expiration",
+        ],
+    )
+    def test_expiration_policy_boundaries(
+        self,
+        api_keys_base_url: str,
+        headers: dict,
+        max_expiration_days: int,
+        label: str,
+        expiration_case,
+        should_succeed: bool,
+    ):
+        """Validate successful, boundary, rejected, and non-expiring key requests."""
+        expiration_hours = {
+            "within": (max_expiration_days // 2) * 24 or 24,
+            "at": max_expiration_days * 24,
+            "exceeds": max_expiration_days * 2 * 24,
+            "short": 1,
+            None: None,
+        }
+        expires_in_hours = expiration_hours[expiration_case]
+        payload = {
+            "name": f"test-{label}-{uuid.uuid4().hex[:8]}",
+            "description": f"Expiration boundary case: {label}",
+        }
+        if expires_in_hours is not None:
+            payload["expiresIn"] = f"{expires_in_hours}h"
 
-        # Request expiration at half the limit (e.g., 15 days if limit is 30)
-        expires_in_hours = (max_expiration_days // 2) * 24
-        if expires_in_hours <= 0:
-            expires_in_hours = 24  # At least 1 day
-
-        r = requests.post(
+        response = requests.post(
             api_keys_base_url,
             headers=headers,
-            json={
-                "name": "test-within-limit",
-                "description": f"Test key with {expires_in_hours}h expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
+            json=payload,
             timeout=30,
             verify=TLS_VERIFY,
         )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key within limit: expires_in={expires_in_hours}h, expiresAt={data.get('expiresAt')}")
 
-    def test_create_key_at_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exactly at the limit should succeed."""
+        if not should_succeed:
+            assert response.status_code == 400, (
+                f"Expected 400 for {label}, got {response.status_code}: {response.text}"
+            )
+            error_text = response.text.lower()
+            assert "exceed" in error_text or "maximum" in error_text, (
+                f"Error for {label} should mention the maximum: {response.text}"
+            )
+            return
 
-        # Request expiration exactly at the limit
-        expires_in_hours = max_expiration_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-at-limit",
-                "description": f"Test key with exactly {max_expiration_days} days expiration",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
+        assert response.status_code in (200, 201), (
+            f"Expected 200/201 for {label}, got {response.status_code}: {response.text}"
         )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key at limit: expires_in={expires_in_hours}h ({max_expiration_days} days)")
-
-    def test_create_key_exceeds_expiration_limit(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key with expiration exceeding the limit should fail."""
-
-        # Request expiration exceeding the limit (e.g., 2x the limit)
-        exceeds_days = max_expiration_days * 2
-        expires_in_hours = exceeds_days * 24
-
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-exceeds-limit",
-                "description": f"Test key with {exceeds_days} days expiration (exceeds {max_expiration_days} day limit)",
-                "expiresIn": f"{expires_in_hours}h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code == 400, f"Expected 400 for exceeding limit, got {r.status_code}: {r.text}"
-        
-        # Verify error message mentions the limit
-        error_text = r.text.lower()
-        assert "exceed" in error_text or "maximum" in error_text, \
-            f"Error message should mention exceeding maximum: {r.text}"
-        print(f"[expiration] Correctly rejected key exceeding limit: {exceeds_days} days > {max_expiration_days} days")
-
-    def test_create_key_without_expiration(self, api_keys_base_url: str, headers: dict, max_expiration_days: int):
-        """Test: Creating API key without expiration should succeed (expiration is optional by default)."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-no-expiration",
-                "description": "Test key without expiration"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "key" in data, "Response should contain key"
-        # expiresAt should be absent or null for non-expiring keys
-        expires_at = data.get("expiresAt")
-        if expires_at:
-            print(f"[expiration] Key created with default expiration: {expires_at}")
-        else:
-            print("[expiration] Key created without expiration (never expires)")
-
-    def test_create_key_with_short_expiration(self, api_keys_base_url: str, headers: dict):
-        """Test: Creating API key with very short expiration (1 hour) should succeed."""
-        r = requests.post(
-            api_keys_base_url,
-            headers=headers,
-            json={
-                "name": "test-short-expiration",
-                "description": "Test key with 1 hour expiration",
-                "expiresIn": "1h"
-            },
-            timeout=30,
-            verify=TLS_VERIFY,
-        )
-        assert r.status_code in (200, 201), f"Expected 200/201, got {r.status_code}: {r.text}"
-        data = r.json()
-        assert "expiresAt" in data, "Response should contain expiresAt"
-        print(f"[expiration] Created key with 1h expiration: expiresAt={data.get('expiresAt')}")
+        data = response.json()
+        assert "key" in data, f"Response for {label} should contain key"
+        if expires_in_hours is not None:
+            assert "expiresAt" in data, f"Response for {label} should contain expiresAt"
 
 
 class TestAPIKeyModelInference:
@@ -1146,18 +1234,23 @@ class TestEphemeralKeyCleanup:
         from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE
         return MAAS_API_DEPLOYMENT_NAMESPACE
 
-    def test_cronjob_exists_and_configured(self, deployment_namespace: str):
+    def test_cronjob_exists_and_configured(
+        self, deployment_namespace: str, _worker_api_keys_context,
+    ):
         """Verify the maas-api-key-cleanup CronJob exists with expected configuration."""
         import subprocess as sp
 
+        cronjob_name = "maas-api-key-cleanup"
+        if _worker_api_keys_context is not None:
+            cronjob_name = f"{cronjob_name}-{_worker_api_keys_context.tenant_name}"
         result = sp.run(
-            ["oc", "get", "cronjob", "maas-api-key-cleanup",
+            ["oc", "get", "cronjob", cronjob_name,
              "-n", deployment_namespace, "-o", "json"],
             capture_output=True, text=True,
         )
         if result.returncode != 0:
             pytest.skip(
-                f"CronJob maas-api-key-cleanup not found in {deployment_namespace}: "
+                f"CronJob {cronjob_name} not found in {deployment_namespace}: "
                 f"{result.stderr.strip()}"
             )
 
@@ -1283,10 +1376,14 @@ class TestEphemeralKeyCleanup:
         assert key_id not in default_ids, \
             "Ephemeral key should be excluded from default search (includeEphemeral defaults to false)"
 
-        print(f"[cleanup] Ephemeral key visibility verified: visible with filter, hidden by default")
+        print("[cleanup] Ephemeral key visibility verified: visible with filter, hidden by default")
 
     def test_trigger_cleanup_preserves_active_keys(
-        self, api_keys_base_url: str, headers: dict, deployment_namespace: str,
+        self,
+        api_keys_base_url: str,
+        headers: dict,
+        deployment_namespace: str,
+        _worker_api_keys_context,
     ):
         """Trigger cleanup and verify active ephemeral keys are NOT deleted.
 
@@ -1315,9 +1412,14 @@ class TestEphemeralKeyCleanup:
 
         # Trigger cleanup via oc exec into maas-api pod
         # This calls the internal endpoint directly, same as the CronJob does
+        pod_selector = "app.kubernetes.io/name=maas-api"
+        if _worker_api_keys_context is not None:
+            pod_selector += (
+                f",maas.opendatahub.io/tenant-name={_worker_api_keys_context.tenant_name}"
+            )
         get_pod = sp.run(
             ["oc", "get", "pods", "-n", deployment_namespace,
-             "-l", "app.kubernetes.io/name=maas-api",
+             "-l", pod_selector,
              "-o", "jsonpath={.items[0].metadata.name}"],
             capture_output=True, text=True,
         )
@@ -1417,7 +1519,8 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     def test_create_key_for_degraded_subscription(self):
         """API key creation succeeds for Degraded subscription."""
@@ -1438,7 +1541,7 @@ class TestAPIKeySubscriptionPhases:
                 [MODEL_REF, missing_model],
                 users=[sa_user]
             )
-            _wait_reconcile(seconds=10)
+            _wait_for_maas_subscription_phase(subscription_name, expected_phase="Degraded", namespace=ns)
 
             cr = _get_cr("maassubscription", subscription_name, namespace=ns)
             phase = cr.get("status", {}).get("phase")
@@ -1458,7 +1561,8 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     def test_create_key_for_failed_subscription(self):
         """API key creation is rejected for Failed subscription to prevent key spam."""
@@ -1498,7 +1602,8 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     @pytest.mark.serial
     def test_create_key_for_pending_subscription(self):
@@ -1565,7 +1670,8 @@ class TestAPIKeySubscriptionPhases:
                 _scale_controller_up()
             except Exception:
                 log.exception("Best-effort controller scale-up failed")
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
     @pytest.mark.serial
     def test_reject_key_for_unreconciled_subscription(self):
@@ -1687,7 +1793,8 @@ class TestAPIKeySubscriptionPhases:
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_name, namespace=ns)
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
-            _wait_reconcile()
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
+            _wait_for_cr_absent("maasauthpolicy", auth_name, namespace=ns)
 
             # Only raise webhook restore error after cleanup is complete
             if webhook_restore_error:
@@ -1720,11 +1827,11 @@ class TestAPIKeySubscriptionFilter:
 
             _create_test_auth_policy(f"{sub_a}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_a, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_a, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_a, namespace=ns)
 
             _create_test_auth_policy(f"{sub_b}-auth", MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_b, MODEL_REF, users=[sa_user])
-            _wait_for_maas_subscription_phase(sub_b, namespace=ns)
+            _wait_for_subscription_discovery_ready(sub_b, namespace=ns)
 
             # Create 2 keys bound to sub_a
             for i in range(2):
@@ -1784,10 +1891,10 @@ class TestAPIKeySubscriptionFilter:
         finally:
             for kid in key_ids_a + key_ids_b:
                 requests.delete(f"{api_keys_base_url}/{kid}", headers=sa_headers, timeout=TIMEOUT, verify=TLS_VERIFY)
-            _delete_cr("maassubscription", sub_b, namespace=ns)
-            _delete_cr("maasauthpolicy", f"{sub_b}-auth", namespace=ns)
-            _delete_cr("maassubscription", sub_a, namespace=ns)
-            _delete_cr("maasauthpolicy", f"{sub_a}-auth", namespace=ns)
+            _delete_governance_and_wait(
+                subscriptions=[(sub_a, ns), (sub_b, ns)],
+                auth_policies=[(f"{sub_a}-auth", ns), (f"{sub_b}-auth", ns)],
+            )
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             # Deleting MaaSAuthPolicies rewrites maas-gateway-auth; wait until
             # Kuadrant reports Enforced again before the next test hits maas-api.

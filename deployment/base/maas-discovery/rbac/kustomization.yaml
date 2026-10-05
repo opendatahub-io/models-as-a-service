@@ -1,0 +1,14 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+metadata:
+  name: maas-discovery-rbac
+
+resources:
+- serviceaccount.yaml
+- clusterrole.yaml
+- clusterrolebinding.yaml
+# role-ai-tenants.yaml and role-openshift-ingress.yaml are not included here
+# because kustomize's namespace transformer would override their target
+# namespaces. The lifecycle reconciler (RHOAIENG-90732) applies them directly
+# via SSA to ai-tenants and openshift-ingress respectively.

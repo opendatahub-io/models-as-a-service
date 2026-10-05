@@ -60,22 +60,21 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	route := &routeList.Items[0]
 	routeName := route.Name
 
-	expectedGatewayName := h.r.gatewayName()
-	expectedGatewayNamespace := h.r.gatewayNamespace()
-	gatewayRef, err := h.resolveGatewayRef(ctx, log, model)
+	gatewayRef, err := h.r.resolveGatewayRef(ctx, log, model, route)
 	if err != nil {
 		return fmt.Errorf("resolve tenant gateway for model %s/%s: %w", model.Namespace, model.Name, err)
 	}
-	if gatewayRef.Name != "" {
-		expectedGatewayName = gatewayRef.Name
-		expectedGatewayNamespace = gatewayRef.Namespace
-		log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantRef", model.Spec.TenantRef)
-	}
+	expectedGatewayName := gatewayRef.Name
+	expectedGatewayNamespace := gatewayRef.Namespace
+	log.V(4).Info("Using tenant gateway", "gateway", fmt.Sprintf("%s/%s", expectedGatewayNamespace, expectedGatewayName), "tenantRef", model.Spec.TenantRef)
 
 	gatewayFound := false
 	var gatewayName string
 	var gatewayNamespace string
 	for _, parentRef := range route.Spec.ParentRefs {
+		if !parentRefTargetsGateway(parentRef) {
+			continue
+		}
 		refName := string(parentRef.Name)
 		refNS := routeNS
 		if parentRef.Namespace != nil {
@@ -115,47 +114,6 @@ func (h *llmisvcHandler) validateLLMISvcHTTPRoute(ctx context.Context, log logr.
 	return nil
 }
 
-// resolveGatewayRef resolves the gateway reference for a MaaSModelRef.
-// When spec.tenantRef is set, it looks up the named AITenant in the AITenant
-// infrastructure namespace and uses its Status.GatewayRef directly.
-// When spec.tenantRef is empty, it falls back to the existing namespace-based
-// resolution via tenantGatewayRefForNamespace.
-func (h *llmisvcHandler) resolveGatewayRef(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (maasv1alpha1.TenantGatewayRef, error) {
-	if model.Spec.TenantRef != "" {
-		aitenant := &maasv1alpha1.AITenant{}
-		key := client.ObjectKey{
-			Name:      model.Spec.TenantRef,
-			Namespace: h.r.AITenantNamespace,
-		}
-		if err := h.r.Get(ctx, key, aitenant); err != nil {
-			if apierrors.IsNotFound(err) {
-				return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q not found in namespace %s", model.Spec.TenantRef, h.r.AITenantNamespace)
-			}
-			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("failed to get AITenant %q: %w", model.Spec.TenantRef, err)
-		}
-		model.Status.ResolvedTenantRef = model.Spec.TenantRef
-		ref := aitenant.Status.GatewayRef
-		if ref.Name == "" || ref.Namespace == "" {
-			return maasv1alpha1.TenantGatewayRef{}, fmt.Errorf("AITenant %q has no gateway reference in status", model.Spec.TenantRef)
-		}
-		log.V(4).Info("Resolved gateway from AITenant", "aiTenant", model.Spec.TenantRef, "gateway", fmt.Sprintf("%s/%s", ref.Namespace, ref.Name))
-		return ref, nil
-	}
-
-	// Fall back to namespace-based resolution using the default tenant namespace.
-	// Clear any previously resolved tenant (e.g. after spec.tenantRef is removed).
-	model.Status.ResolvedTenantRef = ""
-	return tenantGatewayRefForNamespace(
-		ctx,
-		h.r.Client,
-		model.Namespace,
-		h.r.DefaultTenantNamespace,
-		h.r.gatewayName(),
-		h.r.gatewayNamespace(),
-		h.r.TenantNamespaceDiscoveryEnabled,
-	)
-}
-
 func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error) {
 	llmisvcNS := model.Namespace
 	llmisvc := &kservev1alpha2.LLMInferenceService{}
@@ -183,6 +141,11 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 		}
 	}
 	return endpoint, true, nil
+}
+
+// NotReadyReason keeps the generic RuntimeReady reason and message.
+func (h *llmisvcHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return "", ""
 }
 
 // GetModelEndpoint returns the model endpoint URL using gateway/HTTPRoute hostname and path.
@@ -320,14 +283,15 @@ func (h *llmisvcHandler) selectAddress(llmisvc *kservev1alpha2.LLMInferenceServi
 
 // ResolveModelAlias returns the canonical BBR model ID for the referenced LLMInferenceService.
 //
-// It reads from LLMInferenceService.status.addresses[*].models[0].name, which KServe populates
+// It first checks LLMInferenceService.status.addresses[*].models[0].name, which KServe populates
 // as the authoritative canonical ID in the format publishers/{namespace}/models/{model-name}.
-// KServe is the source of truth for this value; MaaS reads and mirrors it.
+// When that field is not yet populated, it falls back to constructing the alias from
+// spec.model.name (or metadata.name when spec.model.name is unset).
 //
 // Return semantics:
 //   - (alias, nil)  — alias resolved; caller should update status.resolvedModelAlias.
-//   - ("", nil)     — LLMISVC found but addresses not yet populated; caller must preserve
-//     the existing alias rather than clearing it.
+//   - ("", nil)     — LLMISVC found but model name could not be determined; caller must
+//     preserve the existing alias rather than clearing it.
 //   - ("", err)     — transient API failure (e.g. API server unreachable); caller must
 //     preserve the existing alias rather than clearing it.
 func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error) {
@@ -341,7 +305,13 @@ func (h *llmisvcHandler) ResolveModelAlias(ctx context.Context, log logr.Logger,
 			return addr.Models[0].Name, nil
 		}
 	}
-	return "", nil
+
+	// Fallback: construct the alias from spec.model.name (or metadata.name).
+	modelName := llmisvc.Name
+	if llmisvc.Spec.Model.Name != nil && *llmisvc.Spec.Model.Name != "" {
+		modelName = *llmisvc.Spec.Model.Name
+	}
+	return fmt.Sprintf("publishers/%s/models/%s", model.Namespace, modelName), nil
 }
 
 func (h *llmisvcHandler) CleanupOnDelete(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error {

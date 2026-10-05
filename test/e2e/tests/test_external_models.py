@@ -24,6 +24,7 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 
 import pytest
 import requests
@@ -39,6 +40,7 @@ from test_helper import (
     _wait_for_httproute_accepted,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
+    _wait_for_model_ready,
 )
 
 log = logging.getLogger(__name__)
@@ -80,6 +82,27 @@ def _patch_cr(kind: str, name: str, namespace: str, patch: dict):
         capture_output=True, text=True,
     )
 
+
+def _poll_auth_denied(
+    url: str,
+    headers: dict,
+    body: dict,
+    *,
+    timeout: int = 60,
+) -> requests.Response:
+    """POST until auth rejects the request; retry transient 404 (route propagation)."""
+    deadline = time.time() + timeout
+    last = None
+    while time.time() < deadline:
+        last = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+        if last.status_code in (401, 403):
+            return last
+        if last.status_code != 404:
+            break
+        log.info("Auth check got transient 404 (route propagation), retrying...")
+        time.sleep(2)
+    status = last.status_code if last is not None else "no response"
+    raise AssertionError(f"Expected 401/403, got {status}")
 
 
 # ─── Connectivity check ──────────────────────────────────────────────────────
@@ -230,6 +253,9 @@ def external_models_setup(gateway_url, headers, api_keys_base_url):
         # TestExternalModelAuth's requests can race the data plane and get a
         # plain 404 ("no route") instead of a proper 401/403.
         _wait_for_httproute_accepted(EXTERNAL_MODEL_HTTPROUTE_NAME, namespace=MODEL_NAMESPACE)
+        # The MaaSModelRef goes Ready only once the controller has seen both the route
+        # name IPP records on the ExternalModel and the gateway accepting that route.
+        _wait_for_model_ready(EXTERNAL_MODEL_NAME, namespace=MODEL_NAMESPACE, timeout=120)
 
         # Create API key for tests
         log.info("Creating API key for external model tests...")
@@ -291,28 +317,21 @@ class TestExternalModelDiscovery:
 class TestExternalModelAuth:
     """Verify auth enforcement for external model routes."""
 
-    def test_invalid_key_returns_401(self, external_models_setup):
-        """Invalid API key returns 401/403."""
-        setup = external_models_setup
-        url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": "Bearer INVALID-KEY-12345",
-        }
-        body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
-
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}"
-
-    def test_no_key_returns_401(self, external_models_setup):
-        """No API key returns 401/403."""
+    @pytest.mark.parametrize(
+        "authorization",
+        ["Bearer sk-oai-invalid-key-12345", None],
+        ids=["invalid-key", "missing-key"],
+    )
+    def test_missing_or_invalid_key_returns_401(self, external_models_setup, authorization):
+        """Missing and invalid API keys are rejected with 401/403."""
         setup = external_models_setup
         url = f"{setup['gateway_url']}/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1/chat/completions"
         headers = {"Content-Type": "application/json"}
+        if authorization:
+            headers["Authorization"] = authorization
         body = {"model": EXTERNAL_MODEL_NAME, "messages": [{"role": "user", "content": "hello"}]}
 
-        r = requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
-        assert r.status_code in (401, 403), f"Expected 401/403, got {r.status_code}"
+        _poll_auth_denied(url, headers, body)
 
 
 # ─── Tests: Egress ───────────────────────────────────────────────────────────
@@ -429,6 +448,88 @@ requires_ipp = pytest.mark.skipif(
 
 
 @requires_ipp
+class TestLegacyExternalModelMigration:
+    """Verify IPP migration is reflected on the retained legacy CR."""
+
+    def test_migration_sets_legacy_status_and_removes_networking(self):
+        name = f"e2e-legacy-migration-{uuid.uuid4().hex[:8]}"
+        secret_name = f"{name}-api-key"
+        legacy_kind = "externalmodels.maas.opendatahub.io"
+        legacy_resource_name = f"maas-{name}"
+        expected_message = f"Model migrated to inference.opendatahub.io ExternalModel: {name}"
+        deadline = time.monotonic() + 180
+
+        try:
+            _apply_cr({
+                "apiVersion": "v1",
+                "kind": "Secret",
+                "metadata": {"name": secret_name, "namespace": MODEL_NAMESPACE},
+                "type": "Opaque",
+                "stringData": {"api-key": "e2e-test-key"},
+            })
+            # Seed one legacy networking child so this test proves teardown ran,
+            # even if IPP migrates the model before the legacy reconciler has
+            # time to create the full networking set.
+            _apply_cr({
+                "apiVersion": "v1",
+                "kind": "Service",
+                "metadata": {"name": legacy_resource_name, "namespace": MODEL_NAMESPACE},
+                "spec": {
+                    "type": "ExternalName",
+                    "externalName": EXTERNAL_ENDPOINT,
+                    "ports": [{"name": "https", "port": 443}],
+                },
+            })
+            _apply_cr({
+                "apiVersion": "maas.opendatahub.io/v1alpha1",
+                "kind": "ExternalModel",
+                "metadata": {"name": name, "namespace": MODEL_NAMESPACE},
+                "spec": {
+                    "provider": "openai",
+                    "targetModel": TARGET_MODEL,
+                    "endpoint": EXTERNAL_ENDPOINT,
+                    "credentialRef": {"name": secret_name},
+                },
+            })
+
+            legacy = None
+            inference = None
+            while time.monotonic() < deadline:
+                legacy = _get_cr(legacy_kind, name, MODEL_NAMESPACE)
+                inference = _get_cr(EXTERNAL_MODEL_KIND, name, MODEL_NAMESPACE)
+                if (
+                    legacy
+                    and legacy.get("status", {}).get("phase") == "Migrated"
+                    and inference
+                    and inference.get("status", {}).get("httpRouteName")
+                ):
+                    break
+                time.sleep(2)
+
+            assert inference is not None, "IPP did not create the inference ExternalModel"
+            assert inference.get("status", {}).get("httpRouteName"), (
+                "Migrated inference ExternalModel did not publish status.httpRouteName"
+            )
+            assert legacy is not None, "Legacy ExternalModel was unexpectedly removed"
+            assert legacy.get("status", {}).get("phase") == "Migrated"
+            assert legacy.get("status", {}).get("message") == expected_message
+
+            assert _get_cr("httproute", legacy_resource_name, MODEL_NAMESPACE) is None, (
+                f"Legacy HTTPRoute {legacy_resource_name} was not removed"
+            )
+            assert _get_cr("service", legacy_resource_name, MODEL_NAMESPACE) is None, (
+                f"Legacy Service {legacy_resource_name} was not removed"
+            )
+        finally:
+            # The legacy CR owns the inference resources created by the migration
+            # controller, so deleting it should garbage-collect those children.
+            _delete_cr(legacy_kind, name, MODEL_NAMESPACE)
+            _delete_cr(EXTERNAL_MODEL_KIND, name, MODEL_NAMESPACE)
+            _delete_cr("service", legacy_resource_name, MODEL_NAMESPACE)
+            _delete_cr("secret", secret_name, MODEL_NAMESPACE)
+
+
+@requires_ipp
 class TestExternalModelBodyRouting:
     """Verify body-based routing for external models.
 
@@ -438,12 +539,10 @@ class TestExternalModelBodyRouting:
     IMPORTANT CAVEAT: every request here hits ``/{ns}/{model}/v1/...``, a
     path that already encodes a valid model name, so Kuadrant's AuthPolicy
     authorizes from the path alone and the plugin silently no-ops (rather
-    than rejecting) on an unresolvable body model. Only
-    test_correct_model_in_body_succeeds is a meaningful assertion today
-    (proves a legitimately provisioned model's body isn't blocked); the
-    "wrong"/"missing" model tests are smoke checks only — see their
-    docstrings. Genuine path-agnostic body-only enforcement is future work
-    (RHAISTRAT-1540).
+    than rejecting) on an unresolvable body model. The valid-body forwarding
+    contract is covered by TestExternalModelEgress; the "wrong"/"missing"
+    cases below are smoke checks only. Genuine path-agnostic body-only
+    enforcement is future work (RHAISTRAT-1540).
     """
 
     def _post_chat(self, gateway_url, model_path, api_key, body):
@@ -454,35 +553,23 @@ class TestExternalModelBodyRouting:
         }
         return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
 
-    def test_correct_model_in_body_succeeds(self, external_models_setup):
+    @pytest.mark.parametrize(
+        "body, case_name",
+        [
+            (
+                {"model": "nonexistent-model", "messages": [{"role": "user", "content": "hello"}]},
+                "wrong-model",
+            ),
+            (
+                {"messages": [{"role": "user", "content": "hello"}]},
+                "missing-model",
+            ),
+        ],
+        ids=["wrong-model", "missing-model"],
+    )
+    def test_unresolvable_model_body_does_not_error(self, external_models_setup, body, case_name):
         """
-        Correct model name in body passes through IPP and reaches the
-        external endpoint.
-
-        Unlike the tenant/LLMInferenceService path, the backend here is an
-        uncontrolled external endpoint (httpbin.org by default), which does
-        not implement /v1/chat/completions and may not return 200. As with
-        TestExternalModelEgress.test_request_forwarded_returns_200, any
-        non-auth response confirms the body model field was accepted and the
-        request was forwarded rather than rejected by the
-        model-provider-resolver plugin.
-        """
-        setup = external_models_setup
-        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "model": EXTERNAL_MODEL_NAME,
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code not in (401, 403), (
-            f"Expected correct model in body to be forwarded, got {r.status_code}. "
-            f"Body routing may be rejecting a legitimately provisioned model."
-        )
-        log.info("Body routing (correct model): HTTP %d", r.status_code)
-
-    def test_wrong_model_in_body_does_not_error(self, external_models_setup):
-        """
-        Wrong model name in body does not crash the request pipeline.
+        An unresolvable or missing model field does not crash the request pipeline.
 
         NOTE: This is a smoke check, not an enforcement check. The URL path
         already contains a valid model name, so Kuadrant's AuthPolicy
@@ -499,33 +586,10 @@ class TestExternalModelBodyRouting:
         """
         setup = external_models_setup
         model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "model": "nonexistent-model",
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected non-200 for wrong model in body, got 200. "
-            f"Body routing may not be active — request succeeded via path routing alone."
+        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], body)
+        assert 400 <= r.status_code < 500 and r.status_code not in (401, 403), (
+            f"Expected a non-auth 4xx from the external upstream for {case_name} body, "
+            f"got {r.status_code}. A 5xx means the request pipeline errored; "
+            "a 200 means body routing may not be active."
         )
-        log.info("Body routing (wrong model): HTTP %d", r.status_code)
-
-    def test_missing_model_in_body_does_not_error(self, external_models_setup):
-        """
-        Missing model field in body does not crash the request pipeline.
-
-        NOTE: Same caveat as test_wrong_model_in_body_does_not_error — this
-        is a smoke check, not proof that a missing model is rejected. See
-        that test's docstring for why no enforcement path currently exists.
-        """
-        setup = external_models_setup
-        model_path = f"/{MODEL_NAMESPACE}/{EXTERNAL_MODEL_NAME}/v1"
-
-        r = self._post_chat(setup["gateway_url"], model_path, setup["api_key"], {
-            "messages": [{"role": "user", "content": "hello"}],
-        })
-        assert r.status_code != 200, (
-            f"Expected non-200 for missing model in body, got 200. "
-            f"Body routing may not be active — request succeeded without model field."
-        )
-        log.info("Body routing (missing model): HTTP %d", r.status_code)
+        log.info("Body routing (%s): HTTP %d", case_name, r.status_code)

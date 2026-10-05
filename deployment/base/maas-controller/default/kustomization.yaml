@@ -48,3 +48,30 @@ replacements:
           name: maas-controller
         fieldPaths:
           - spec.template.spec.containers.[name=manager].env.[name=INFRA_NAMESPACE].value
+# Derive ServiceMonitor tlsConfig.serverName as <service-name>.<namespace>.svc
+  - source:
+      kind: Service
+      name: maas-controller-metrics
+      fieldPath: metadata.name
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-controller-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 0
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-controller-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 1

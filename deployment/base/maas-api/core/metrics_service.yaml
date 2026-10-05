@@ -1,0 +1,22 @@
+# Dedicated metrics Service for SecureServing.
+# OpenShift service-ca provisions maas-api-metrics-tls from the annotation.
+# Separate from the main maas-api Service (which already has API serving certs).
+apiVersion: v1
+kind: Service
+metadata:
+  name: maas-api-metrics
+  labels:
+    app.kubernetes.io/name: maas-api
+    app.kubernetes.io/component: metrics
+    maas.opendatahub.io/metrics: "true"
+  annotations:
+    service.beta.openshift.io/serving-cert-secret-name: maas-api-metrics-tls
+spec:
+  ports:
+    - name: https
+      port: 9090
+      protocol: TCP
+      targetPort: https-metrics
+  selector:
+    app.kubernetes.io/name: maas-api
+  type: ClusterIP

@@ -11,4 +11,3 @@ spec:
     kind: LLMInferenceService
     # kustomize build docs/samples/models/granite-3-1-8b-rhelai-modelcar → granite-3-1-8b-rhelai-modelcar-single-node-cpu
     name: granite-3-1-8b-rhelai-modelcar-single-node-cpu
-    namespace: llm

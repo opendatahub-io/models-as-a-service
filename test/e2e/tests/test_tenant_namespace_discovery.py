@@ -21,6 +21,7 @@ Environment variables:
 """
 
 import os
+import time
 import uuid
 
 import pytest
@@ -62,7 +63,7 @@ from multitenancy_helpers import (
     _create_expect_failure,
     _oc_run,
 )
-from test_helper import MODEL_NAMESPACE, MODEL_REF, _wait_for_maas_auth_policy_phase, _wait_reconcile
+from test_helper import MODEL_NAMESPACE, MODEL_REF, _wait_for_maas_auth_policy_phase
 
 pytestmark = pytest.mark.xdist_group("mt_lifecycle")
 
@@ -115,11 +116,11 @@ class TestTenantNamespaceDiscovery:
             wait_for_finalizer("maasauthpolicy", case["policy_name"], case["tenant_ns"], FINALIZER_AUTHPOLICY)
 
             remove_discovery_labels(case["tenant_ns"])
-            _wait_reconcile(10)
+            time.sleep(10)
 
             new_policy = f"e2e-post-label-{case['suffix']}"
             apply_maas_auth_policy(new_policy, case["tenant_ns"])
-            _wait_reconcile(15)
+            time.sleep(15)
 
             obj = get_json_or_none("maasauthpolicy", new_policy, case["tenant_ns"])
             assert obj is not None
@@ -145,7 +146,7 @@ class TestTenantNamespaceDiscovery:
             apply_tenant_cr(unlabeled_ns, DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(policy_name, unlabeled_ns)
             apply_maas_subscription(sub_name, unlabeled_ns)
-            _wait_reconcile(15)
+            time.sleep(15)
 
             auth = get_json_or_none("maasauthpolicy", policy_name, unlabeled_ns)
             sub = get_json_or_none("maassubscription", sub_name, unlabeled_ns)
@@ -166,7 +167,7 @@ class TestTenantNamespaceDiscovery:
             ensure_namespace(case["tenant_ns"])
             apply_tenant_cr(case["tenant_ns"], DEFAULT_GATEWAY_NAME)
             apply_maas_auth_policy(case["policy_name"], case["tenant_ns"])
-            _wait_reconcile(10)
+            time.sleep(10)
             before = get_json_or_none("maasauthpolicy", case["policy_name"], case["tenant_ns"])
             assert before is not None
             assert FINALIZER_AUTHPOLICY not in ((before.get("metadata") or {}).get("finalizers") or [])
@@ -284,10 +285,10 @@ class TestTenantNamespaceDiscovery:
             apply_tenant_cr(other_ns, DEFAULT_GATEWAY_NAME)
 
             assert auth_can_create_maassubscription(sa_user, case["tenant_ns"]), (
-                f"tenant-admin SA should manage subscriptions in its tenant namespace"
+                "tenant-admin SA should manage subscriptions in its tenant namespace"
             )
             assert not auth_can_create_maassubscription(sa_user, other_ns), (
-                f"tenant-admin SA should not manage subscriptions in another tenant namespace"
+                "tenant-admin SA should not manage subscriptions in another tenant namespace"
             )
         finally:
             delete_namespace_best_effort(other_ns)
@@ -349,6 +350,7 @@ class TestTenantWebhookValidation:
 class TestTenantDiscoveryDormantMode:
     """Verify dormant mode when discovery flag is disabled (regression guard)."""
 
+    @pytest.mark.serial
     def test_dormant_mode_ignores_labeled_namespace(self):
         if os.environ.get("ENABLE_TENANT_DISCOVERY_DORMANT_E2E", "").lower() != "true":
             pytest.skip("Dormant-mode test mutates controller flags; set ENABLE_TENANT_DISCOVERY_DORMANT_E2E=true")
@@ -364,7 +366,7 @@ class TestTenantDiscoveryDormantMode:
 
             patch_controller_tenant_namespace_discovery(enabled=False)
             apply_maas_auth_policy(policy_name, case["tenant_ns"])
-            _wait_reconcile(15)
+            time.sleep(15)
 
             obj = get_json_or_none("maasauthpolicy", policy_name, case["tenant_ns"])
             assert obj is not None

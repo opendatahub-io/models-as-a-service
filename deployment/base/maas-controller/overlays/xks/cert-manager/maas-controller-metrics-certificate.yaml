@@ -1,0 +1,15 @@
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: maas-controller-metrics
+spec:
+  secretName: maas-controller-metrics-tls
+  issuerRef:
+    name: $(ISSUER_REF_NAME)
+    kind: $(ISSUER_REF_KIND)
+    group: $(ISSUER_REF_GROUP)
+  duration: 2160h
+  renewBefore: 360h
+  dnsNames:
+    - maas-controller-metrics.$(NAMESPACE).svc
+    - maas-controller-metrics.$(NAMESPACE).svc.cluster.local

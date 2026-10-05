@@ -176,9 +176,9 @@ TRLP=$(kubectl get tokenratelimitpolicy -n ${MODEL_NS} -l maas.opendatahub.io/mo
     **Tracking:** [opendatahub-io/models-as-a-service#585](https://github.com/opendatahub-io/models-as-a-service/pull/585) proposes the controller change for coexisting token rate limit policies on a shared route.
     
 !!! warning "Token rate limiting and API format"
-    **TokenRateLimitPolicy** enforcement applies only to the **`/v1/chat/completions`** endpoint (OpenAI Chat format). Requests using **`/v1/messages`** (Anthropic Messages API) or **`/v1/responses`** (OpenAI Responses API) are **not** subject to token rate limits.
+    **TokenRateLimitPolicy** enforcement applies to **`/v1/chat/completions`** and **`/v1/embeddings`** endpoints (OpenAI format). Requests using **`/v1/messages`** (Anthropic Messages API) or **`/v1/responses`** (OpenAI Responses API) are **not** subject to token rate limits.
     
-    Limitador counts tokens using the `usage.total_tokens` field in the response body, which is only present in OpenAI Chat Completions responses. Anthropic Messages and OpenAI Responses report usage differently (`input_tokens`/`output_tokens` without `total_tokens`), so the rate limiting integration cannot extract the token count.
+    Limitador counts tokens using the `usage.total_tokens` field in the response body. OpenAI Chat Completions and Embeddings responses both include this field. Embedding requests consume **prompt tokens only** (no completion tokens); these count toward the same subscription token budget as chat completions. Anthropic Messages and OpenAI Responses report usage differently (`input_tokens`/`output_tokens` without `total_tokens`), so the rate limiting integration cannot extract the token count.
     
     Authentication, subscription validation, and model access controls still apply to all endpoints — only token-based rate limiting enforcement is affected.
 
@@ -215,6 +215,22 @@ spec:
     costCenter: "ai-team"
 EOF
 ```
+
+**Unlimited example** with no token budget:
+
+Some subscriptions should not be throttled at all - internal tooling, a batch pipeline, or the team that owns the model. Set `unlimited: true` on the model reference instead of `tokenRateLimits`:
+
+```yaml
+  modelRefs:
+    - name: ${MODEL_NAME}-ref
+      namespace: ${MODEL_NS}
+      unlimited: true
+```
+
+Each model reference sets exactly one of `unlimited: true` or `tokenRateLimits`. Token usage is still metered, so `authorized_hits` and the usage dashboards keep reporting it.
+
+!!! tip "Replace fake high limits with `unlimited`"
+    A rate like `limit: 99999` / `window: 1s` approximates "no limit" at a real cost. Kuadrant copies every token rate limit into every route match of the gateway's WasmPlugin, a single object that etcd caps at 1.5 MiB. All unlimited subscriptions on a model share one metering-only limit, so each one adds a short predicate clause instead of a full limit.
 
 ### 4. Validate the Configuration
 

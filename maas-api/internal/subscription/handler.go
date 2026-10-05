@@ -6,24 +6,43 @@ import (
 
 	"github.com/gin-gonic/gin"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordRejection(reason string)
+}
+
+func (h *Handler) withContext(c *gin.Context) *Handler {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.logger = requestLogger
+	} else {
+		requestHandler.logger = h.logger.WithContext(c.Request.Context())
+	}
+	return &requestHandler
+}
 
 // Handler handles subscription selection requests.
 type Handler struct {
 	selector *Selector
 	logger   *logger.Logger
+	metrics  MetricsRecorder
 }
 
 // NewHandler creates a new subscription handler.
-func NewHandler(log *logger.Logger, selector *Selector) *Handler {
+func NewHandler(log *logger.Logger, selector *Selector, metrics MetricsRecorder) *Handler {
 	if log == nil {
 		log = logger.Production()
 	}
 	return &Handler{
 		selector: selector,
 		logger:   log,
+		metrics:  metrics,
 	}
 }
 
@@ -43,6 +62,8 @@ func NewHandler(log *logger.Logger, selector *Selector) *Handler {
 // Authorino pods. No additional authentication is needed as the groups/username
 // come from an already-authenticated auth.identity object.
 func (h *Handler) SelectSubscription(c *gin.Context) {
+	h = h.withContext(c)
+
 	h.logger.Debug("Subscription selection request received",
 		"path", c.Request.URL.Path,
 		"method", c.Request.Method,
@@ -80,6 +101,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		var modelUnhealthyErr *ModelUnhealthyError
 
 		if errors.As(err, &noSubErr) {
+			h.recordRejection(constant.RejectionNoCapacity)
 			h.logger.Debug("No subscription found for user",
 				"username", logger.RedactValue(req.Username),
 				"groups", req.Groups,
@@ -92,6 +114,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &notFoundErr) {
+			h.recordRejection(constant.RejectionNoCapacity)
 			h.logger.Debug("Requested subscription not found",
 				"subscription", req.RequestedSubscription,
 			)
@@ -103,6 +126,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &accessDeniedErr) {
+			h.recordRejection(constant.RejectionUnauthorized)
 			h.logger.Debug("Access denied to subscription",
 				"username", logger.RedactValue(req.Username),
 				"subscription", req.RequestedSubscription,
@@ -127,6 +151,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &modelNotInSubErr) {
+			h.recordRejection(constant.RejectionNoCapacity)
 			h.logger.Debug("Model not included in subscription",
 				"subscription", modelNotInSubErr.Subscription,
 				"model", modelNotInSubErr.Model,
@@ -139,6 +164,7 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 		}
 
 		if errors.As(err, &modelUnhealthyErr) {
+			h.recordUnhealthyRejection(modelUnhealthyErr)
 			h.logger.Debug("Requested model is unhealthy",
 				"subscription", modelUnhealthyErr.Subscription,
 				"phase", modelUnhealthyErr.Phase,
@@ -178,6 +204,8 @@ func (h *Handler) SelectSubscription(c *gin.Context) {
 // When no user context is present (ExtractUserInfoOptional did not set one),
 // an empty list is returned gracefully.
 func (h *Handler) ListSubscriptions(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
@@ -223,6 +251,8 @@ func (h *Handler) ListSubscriptions(c *gin.Context) {
 // When no user context is present (ExtractUserInfoOptional did not set one),
 // an empty list is returned gracefully.
 func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
+	h = h.withContext(c)
+
 	c.Header("Cache-Control", "no-store")
 	userContextVal, exists := c.Get("user")
 	if !exists {
@@ -264,4 +294,21 @@ func (h *Handler) ListSubscriptionsForModel(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, subs)
+}
+
+func (h *Handler) recordRejection(reason string) {
+	if h.metrics != nil {
+		h.metrics.RecordRejection(reason)
+	}
+}
+
+func (h *Handler) recordUnhealthyRejection(err *ModelUnhealthyError) {
+	switch {
+	case err.Reason == "RateLimitNotEnforced":
+		h.recordRejection(constant.RejectionRateLimited)
+	case err.Phase == PhaseFailed:
+		h.recordRejection(constant.RejectionQuotaExceeded)
+	default:
+		h.recordRejection(constant.RejectionNoCapacity)
+	}
 }

@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
 - manager.yaml
+- metrics_service.yaml
 
 images:
 - name: maas-controller

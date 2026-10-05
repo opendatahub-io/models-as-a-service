@@ -4,16 +4,19 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	ctrl "sigs.k8s.io/controller-runtime"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/platform/tenantreconcile"
 )
 
@@ -24,6 +27,57 @@ import (
 func deletionTimestampSet(e event.UpdateEvent) bool {
 	return e.ObjectOld.GetDeletionTimestamp().IsZero() &&
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
+}
+
+// uidChanged returns true when an Update event carries a different UID. An informer
+// relist reports an object deleted and recreated under the same name while the watch
+// was down as an Update, and the recreated object can match the old one on generation
+// and labels.
+func uidChanged(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetUID() != e.ObjectNew.GetUID()
+}
+
+// unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
+// and Update events only when the object's generation changed or its status.conditions
+// actually transitioned (type+status pairs differ). This filters out noise from
+// external controllers bumping observedGeneration or annotations without meaningful
+// state change, while preserving the ability to react to spec changes and real
+// readiness transitions.
+type unstructuredConditionsChangedPredicate struct {
+	predicate.Funcs
+}
+
+func (unstructuredConditionsChangedPredicate) Update(e event.UpdateEvent) bool {
+	if e.ObjectOld.GetGeneration() != e.ObjectNew.GetGeneration() {
+		return true
+	}
+	return unstructuredConditionSignature(e.ObjectOld) != unstructuredConditionSignature(e.ObjectNew)
+}
+
+// unstructuredConditionSignature extracts a compact string representing the
+// type=status pairs from status.conditions on an unstructured object. Two objects
+// with the same signature have identical condition states.
+func unstructuredConditionSignature(obj client.Object) string {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		return ""
+	}
+	conditions, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	if len(conditions) == 0 {
+		return ""
+	}
+	entries := make([]string, 0, len(conditions))
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ, _ := cond["type"].(string)
+		status, _ := cond["status"].(string)
+		entries = append(entries, typ+"="+status)
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ";")
 }
 
 // validateCELValue checks that a string is safe to interpolate into a CEL expression.
@@ -105,7 +159,7 @@ func findAnyAuthPolicyForModel(ctx context.Context, c client.Reader, modelNamesp
 func isTenantNamespace(ctx context.Context, c client.Reader, ns, defaultTenantNamespace string, discoveryEnabled bool) bool {
 	ok, err := tenantNamespaceAllowed(ctx, c, ns, defaultTenantNamespace, discoveryEnabled)
 	if err != nil {
-		ctrl.LoggerFrom(ctx).Error(err, "failed to check tenant namespace; treating namespace as non-tenant", "namespace", ns)
+		oteljson.FromContext(ctx).Error(err, "failed to check tenant namespace; treating namespace as non-tenant", "namespace", ns)
 		return false
 	}
 	return ok
@@ -121,7 +175,7 @@ func tenantNamespaceAllowed(ctx context.Context, c client.Reader, ns, defaultTen
 	var namespace corev1.Namespace
 	if err := c.Get(ctx, client.ObjectKey{Name: ns}, &namespace); err != nil {
 		if apierrors.IsNotFound(err) {
-			ctrl.LoggerFrom(ctx).V(1).Info("namespace not found while checking tenant discovery label", "namespace", ns)
+			oteljson.FromContext(ctx).V(1).Info("namespace not found while checking tenant discovery label", "namespace", ns)
 			return false, nil
 		}
 		return false, fmt.Errorf("failed to read namespace %s for tenant discovery: %w", ns, err)
@@ -140,6 +194,17 @@ func (t *tenantForNamespaceResult) identifier() (string, error) {
 		return tenantreconcile.TenantIdentifierFor(t.config)
 	case t.legacy != nil:
 		return tenantreconcile.TenantIdentifierFor(t.legacy)
+	default:
+		return "", errors.New("tenant config lookup result is empty")
+	}
+}
+
+func (t *tenantForNamespaceResult) name() (string, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.TenantNameFor(t.config)
+	case t.legacy != nil:
+		return tenantreconcile.TenantNameFor(t.legacy)
 	default:
 		return "", errors.New("tenant config lookup result is empty")
 	}
@@ -311,8 +376,12 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 			return nil
 		}
 	}
-	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
+	return fmt.Errorf("HTTPRoute %s/%s %w %s/%s", routeNamespace, routeName, ErrHTTPRouteNotOnTenantGateway, gatewayRef.Namespace, gatewayRef.Name)
 }
+
+// ErrHTTPRouteNotOnTenantGateway is wrapped by validateHTTPRouteReferencesGateway when the
+// route has no parentRef to the tenant Gateway. Other validation failures do not wrap it.
+var ErrHTTPRouteNotOnTenantGateway = errors.New("does not reference tenant Gateway")
 
 const (
 	maxHTTPRouteParentRefs         = 32

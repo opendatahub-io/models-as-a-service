@@ -21,7 +21,9 @@ metadata:
 spec:
   params:
   - name: group-components
-    value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller" }'
+    value: '{ "odh-maas-api-ci": "opendatahub/maas-api", "odh-maas-controller-ci": "opendatahub/maas-controller", "odh-maas-discovery-ci": "opendatahub/odh-maas-discovery" }'
+  - name: gather-on-success
+    value: 'false'
   pipelineRef:
     resolver: git
     params:

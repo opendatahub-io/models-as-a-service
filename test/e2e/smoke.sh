@@ -9,22 +9,31 @@ VENV_DIR="${DIR}/.venv"
 
 setup_python_venv() {
     echo "[smoke] Setting up Python virtual environment..."
-    
+    # shellcheck source=scripts/ensure_e2e_python.sh
+    source "${DIR}/scripts/ensure_e2e_python.sh"
+
+    # Recreate if an existing venv is older than Python 3.10 (pytest 9 floor).
+    if [[ -d "${VENV_DIR}" ]] && ! "${VENV_DIR}/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+        echo "[smoke] Recreating venv (existing interpreter is older than Python 3.10)..."
+        rm -rf "${VENV_DIR}"
+    fi
+
     # Create virtual environment if it doesn't exist
     if [[ ! -d "${VENV_DIR}" ]]; then
-        echo "[smoke] Creating virtual environment at ${VENV_DIR}"
-        python3 -m venv "${VENV_DIR}" --upgrade-deps
+        echo "[smoke] Creating virtual environment at ${VENV_DIR} ($E2E_PYTHON)"
+        "$E2E_PYTHON" -m venv "${VENV_DIR}" --upgrade-deps
     fi
-    
+
     # Activate virtual environment
     echo "[smoke] Activating virtual environment"
+    # shellcheck disable=SC1091
     source "${VENV_DIR}/bin/activate"
-    
+
     # Upgrade pip and install requirements
     echo "[smoke] Installing Python dependencies"
     python -m pip install --upgrade pip --quiet
     python -m pip install -r "${DIR}/requirements.txt" --quiet
-    
+
     echo "[smoke] Virtual environment setup complete"
 }
 

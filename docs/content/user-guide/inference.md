@@ -10,22 +10,23 @@ This guide explains how to make inference requests to models through the MaaS pl
 
 ## Endpoint Overview
 
-MaaS provides an **OpenAI-compatible** inference endpoint. Send all requests to a single gateway URL and specify the model in the request body:
+MaaS provides **OpenAI-compatible** inference endpoints. Send all requests to a single gateway URL and specify the model in the request body:
 
 ```text
-POST https://maas.<cluster-domain>/v1/chat/completions
+POST https://maas.<cluster-domain>/v1/chat/completions   # Chat / text generation
+POST https://maas.<cluster-domain>/v1/embeddings          # Embeddings
 ```
 
-The gateway reads the `model` field from the JSON body and routes the request to the correct backend automatically. This is fully compatible with OpenAI SDKs and any client that speaks the OpenAI Chat Completions API.
+The gateway reads the `model` field from the JSON body and routes the request to the correct backend automatically. This is fully compatible with OpenAI SDKs and any client that speaks the OpenAI Chat Completions or Embeddings API.
 
 !!! note "Administrator prerequisite"
     Body-based routing requires the Inference Payload Processing (IPP) component to be deployed. IPP reads the `model` field from the request body and sets the routing header for the gateway. Contact your administrator to confirm IPP is available on your cluster.
 
 !!! info "Legacy path-based endpoints"
-    MaaS also supports **path-based endpoints** where the model is encoded in the URL path (e.g. `https://maas.<cluster-domain>/llm/my-model/v1/chat/completions`). These endpoints continue to work, but the body-based endpoint above is recommended for new integrations because it matches the standard OpenAI API contract and works with a single `base_url` for all models. See [Path-Based Routing (Legacy)](#path-based-routing-legacy) for details.
+    MaaS also supports **path-based endpoints** where the model is encoded in the URL path (e.g. `https://maas.<cluster-domain>/llm/my-model/v1/chat/completions` or `.../v1/embeddings`). These endpoints continue to work, but the body-based endpoint above is recommended for new integrations because it matches the standard OpenAI API contract and works with a single `base_url` for all models. See [Path-Based Routing (Legacy)](#path-based-routing-legacy) for details.
 
 !!! info "Multi-tenant deployments"
-    In a multi-tenant setup, non-default tenants use their own gateway URL (e.g. `https://<tenant-gateway>/v1/chat/completions`) with a tenant-scoped API key. See [Multi-Tenant Validation](../install/multi-tenant-validation.md) for details.
+    In a multi-tenant setup, non-default tenants use their own gateway URL (e.g. `https://<tenant-gateway>/v1/chat/completions` or `.../v1/embeddings`) with a tenant-scoped API key. See [Multi-Tenant Validation](../install/multi-tenant-validation.md) for details.
 
 ---
 
@@ -153,6 +154,94 @@ Common parameters for chat completions:
 
 ---
 
+## Embeddings
+
+Generate vector embeddings for text input. Embedding models convert text into numerical vectors for use in search, retrieval, clustering, and classification.
+
+### Basic Request
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{
+        \"model\": \"${MODEL_NAME}\",
+        \"input\": \"The quick brown fox jumps over the lazy dog\"
+      }" \
+  "${MAAS_API_URL}/v1/embeddings"
+```
+
+**Example response:**
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "object": "embedding",
+      "index": 0,
+      "embedding": [0.0123, -0.0456, 0.0789, ...]
+    }
+  ],
+  "model": "publishers/llm/models/baai/bge-m3",
+  "usage": {
+    "prompt_tokens": 10,
+    "total_tokens": 10
+  }
+}
+```
+
+### Batch Input
+
+Pass an array to embed multiple texts in one call:
+
+```bash
+curl -sS \
+  -H "Authorization: Bearer ${API_KEY}" \
+  -H "Content-Type: application/json" \
+  -d "{
+        \"model\": \"${MODEL_NAME}\",
+        \"input\": [
+          \"First sentence to embed\",
+          \"Second sentence to embed\"
+        ]
+      }" \
+  "${MAAS_API_URL}/v1/embeddings"
+```
+
+### Python Example
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="https://maas.<cluster-domain>/v1",
+    api_key="sk-oai-...",
+)
+
+response = client.embeddings.create(
+    model="publishers/llm/models/baai/bge-m3",
+    input="The quick brown fox jumps over the lazy dog",
+)
+
+vector = response.data[0].embedding
+print(f"Dimension: {len(vector)}")
+```
+
+### Embedding Request Parameters
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | Yes | Model identifier (`id`) from `/maas-api/v1/models` |
+| `input` | string or array | Yes | Text to embed. A string for a single input, or an array of strings for batch embedding. |
+| `encoding_format` | string | No | Output format: `"float"` (default) or `"base64"` |
+
+### Token Usage
+
+Embedding requests consume **prompt tokens only** — there are no completion tokens. The `usage` object reports `prompt_tokens` and `total_tokens` (which are equal). These tokens count toward your subscription's token rate limit budget, shared with chat completion requests on the same subscription.
+
+---
+
 ## Multi-Turn Conversations
 
 Include previous messages for context:
@@ -220,7 +309,7 @@ curl -sS \
 
 | | Body-based (recommended) | Path-based (legacy) |
 |---|---|---|
-| **URL** | Single: `${MAAS_API_URL}/v1/chat/completions` | Per-model: `${MODEL_URL}/v1/chat/completions` |
+| **URL** | Single: `${MAAS_API_URL}/v1/chat/completions` or `/v1/embeddings` | Per-model: `${MODEL_URL}/v1/chat/completions` or `/v1/embeddings` |
 | **Model selection** | `model` field in request body | URL path determines the model |
 | **OpenAI SDK compatible** | Yes, single `base_url` for all models | Requires setting `base_url` per model |
 | **Requires IPP** | Yes | No |

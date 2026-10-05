@@ -16,7 +16,7 @@ Existing cluster (skip deploy):
 SKIP_DEPLOYMENT=true ./test/e2e/scripts/prow_run_smoke_test.sh
 ```
 
-Parallel pytest on an existing cluster (default 4 workers):
+Parallel pytest on an existing cluster (default 7 workers):
 
 ```bash
 SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
@@ -44,6 +44,7 @@ pytest tests/<file>.py -v
 | File | Focus |
 |------|--------|
 | `test_subscription.py` | Subscription / inference flows |
+| `test_trlp_rate_grouping.py` | TRLP limits grouped by rate: shared limits, per-subscription and per-user budgets, rate edits, gateway wasm config size guard |
 | `test_api_keys.py` | `/v1/api-keys` |
 | `test_models_endpoint.py` | `/v1/models` |
 | `test_negative_security.py` | Security / negative paths |
@@ -60,13 +61,28 @@ pytest tests/<file>.py -v
 | `test_tenant_rate_limit_isolation.py` | Tenant-scoped rate-limit isolation (S4); gated by `ENABLE_S4_E2E=true` and tenant API URLs |
 | `test_config_tenant.py` | Cluster `Config/default`: anchor present, owner refs on Tenant and `maas-controller` Deployment (skips if Config CRD missing) |
 
-Modules outside the explicit smoke list (for example `test_subscription_list_endpoints.py`) can be run directly or via `smoke.sh`, which executes all tests under `tests/`.
+The shared CI runner and `smoke.sh` execute all tests under `tests/`. Individual modules can still be run directly, for example `pytest tests/test_subscription_list_endpoints.py -v`.
 
 **Skips:** `test_tenant.py` and `test_config_tenant.py` skip the whole module when the needed CRD or object is absent (partial cluster or older bundle). Neither module deletes Config or exercises DSC disable; that stays in operator or manual teardown.
 
 ## CI
 
-CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`: deploys MaaS with **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**, then pytest on the default smoke modules listed above (including `test_aitenant_lifecycle.py`, `test_tenant_namespace_discovery.py`, `test_gateway_scoped_authpolicy.py`, `test_multi_tenant_integration.py`, and the gated S24/S4 modules), then deployment validation; reports under `ARTIFACT_DIR` when set.
+CI runs `./test/e2e/scripts/prow_run_smoke_test.sh`, a thin orchestrator that sequences standalone scripts:
+
+| Phase | Script | Responsibility |
+|-------|--------|----------------|
+| 1. Deploy platform | `scripts/deploy-platform.sh` | cert-manager, ODH, deploy.sh, OIDC/Keycloak |
+| 2. Deploy models | `scripts/deploy-models.sh` | e2e fixtures (LLMIS, MaaSModelRef, AuthPolicy, Subscription) |
+| 3. Setup tokens | `scripts/setup-test-tokens.sh` | admin + regular user tokens (htpasswd / SA fallback) |
+| 4. Validate | `scripts/validate-deployment.sh` | pods, CRDs, deployment readiness |
+| 5. Pre-test waits | `prow_run_smoke_test.sh` | gateway reachability, auth chain, OIDC readiness |
+| 6. Test | `scripts/run_e2e_tests.sh` | pytest: two-pass xdist (parallel + serial) |
+
+`prow_run_smoke_test.sh` contains only orchestration (prereqs, env defaults, phase sequencing, artifact collection). `deploy-platform.sh` and `deploy-models.sh` are runnable standalone (they bootstrap `PROJECT_ROOT` and source helpers if not already loaded). `setup-test-tokens.sh` must be sourced (exports `TOKEN`/`ADMIN_OC_TOKEN` into the parent shell).
+
+`run_e2e_tests.sh` can also be called directly on an existing cluster (env vars must be exported) or via `run-tests-quick.sh` which sets up the env and delegates to the same runner.
+
+Deployment uses **Red Hat Connectivity Link (RHCL)** from the cluster `redhat-operators` catalog (`POLICY_ENGINE=rhcl` by default, channel head unless `RHCL_STARTING_CSV` is set) into **`kuadrant-system`**. Reports are written to `ARTIFACT_DIR` when set.
 
 Multi-tenancy discovery tests run by default in `prow_run_smoke_test.sh`, which sets `ENABLE_TENANT_NAMESPACE_DISCOVERY=true` unless explicitly overridden and patches maas-controller before pytest. If set to `false`, `test_tenant_namespace_discovery.py` and `test_multi_tenant_integration.py` skip. When discovery is enabled, `test_namespace_scoping.py` skips (dormant-mode assumptions).
 
@@ -78,12 +94,14 @@ External OIDC runs require `EXTERNAL_OIDC=true` and `OIDC_ISSUER_URL`, `OIDC_TOK
 
 ## Parallel execution (pytest-xdist)
 
-By default, CI and `prow_run_smoke_test.sh` run tests in **two passes** when `E2E_PARALLEL_WORKERS=2`:
+By default, `run_e2e_tests.sh` runs tests in **two marker-filtered passes** (default: 7 xdist workers on pass 1). `--serial-only` runs pass 2 (`-m serial`) only and skips non-serial tests:
 
-1. **Pass 1:** `-m "not serial"` — parallel across files (`--dist=loadfile`)
-2. **Pass 2:** `-m serial` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests
+1. **Pass 1:** `-m "not serial"` — parallel across files when `E2E_PARALLEL_WORKERS > 1` (`--dist=loadgroup`), or single-worker serial execution when `E2E_PARALLEL_WORKERS=1`
+2. **Pass 2:** `-m serial` — cluster-wide mutators (single worker): simulator-subscription lifecycle, UNCONFIGURED model auth, TRLP rebuilds, operator scale tests. Skipped when pass 1 fails (saves CI time on red runs).
 
-For fully serial debugging:
+Pass 1 and pass 2 must stay separate: several modules mix `@serial` tests with worker-tenant tests, and module-scoped fixtures reject a single session that selects both.
+
+For single-worker debugging (still two passes, no xdist):
 
 ```bash
 E2E_PARALLEL_WORKERS=1 ./run-tests-quick.sh
@@ -97,13 +115,16 @@ SKIP_DEPLOYMENT=true ./test/e2e/run-tests-quick.sh
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `E2E_PARALLEL_WORKERS` | `2` | Parallel workers for pass 1. Pass 2 (`@serial`) always runs on one worker. Set to `1` to run everything serially in one pass. |
+| `E2E_PARALLEL_WORKERS` | `7` | Parallel workers for pass 1 (`-m "not serial"`). Pass 2 (`@serial`) always runs on one worker. Set to `1` for single-worker pass 1 (no xdist); marker split is unchanged. |
 | `E2E_AUTHPOLICY_PHASE_TIMEOUT` | `120` (parallel) / `60` (serial) | MaaSAuthPolicy phase wait |
 | `E2E_GATEWAY_ENFORCED_TIMEOUT` | `240` (parallel) / `180` (serial) | Kuadrant gateway auth enforced wait |
 | `E2E_MULTITENANCY_PHASE_TIMEOUT` | `180` (parallel) / `120` (serial) | Tenant discovery phase wait |
+| `E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT` | `300` | Subscription discovery + direct/mirrored TRLP enforcement |
+| `E2E_SUBSCRIPTION_TRLP_TIMEOUT` | `180` | Mirrored TRLP ready wait on tenant subscriptions |
+| `E2E_MODEL_BACKEND_READY_TIMEOUT` | `300` | LLMInferenceService backend ready (tenant model provisioning) |
 | `E2E_USE_WORKER_TENANT` | `true` | When `true`, xdist workers bootstrap a dedicated AITenant for Bucket C pilots (`test_subscription.py` first). Set `false` to keep using `models-as-a-service`. |
 
-**19 `@serial` tests** (pass 2): verify with `pytest -m serial tests/ --collect-only -q`.
+`@serial` tests run in pass 2; verify the current set with `pytest -m serial tests/ --collect-only -q`.
 
 **Worker tenant (Phase 3 pilot):** each xdist worker (`gw0`, `gw1`, …) bootstraps its own AITenant namespace with baseline `simulator-subscription` / `simulator-access` CRs. Non-serial tests in opted-in modules route `MAAS_SUBSCRIPTION_NAMESPACE`, `GATEWAY_HOST`, and `MAAS_API_BASE_URL` to that tenant for the duration of the test.
 

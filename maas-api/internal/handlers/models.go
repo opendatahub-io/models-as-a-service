@@ -10,11 +10,28 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/openai/openai-go/v2/packages/pagination"
 
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/middleware"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/models"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
 )
+
+// MetricsRecorder is the subset of metrics.MetricsRecorder used by this handler.
+type MetricsRecorder interface {
+	RecordRejection(reason string)
+}
+
+func (h *ModelsHandler) withContext(c *gin.Context) *ModelsHandler {
+	requestHandler := *h
+	if requestLogger := middleware.GetLogger(c); requestLogger != nil {
+		requestHandler.logger = requestLogger
+	} else {
+		requestHandler.logger = h.logger.WithContext(c.Request.Context())
+	}
+	return &requestHandler
+}
 
 // ModelsHandler handles model-related endpoints.
 type ModelsHandler struct {
@@ -22,6 +39,7 @@ type ModelsHandler struct {
 	subscriptionSelector *subscription.Selector
 	logger               *logger.Logger
 	maasModelRefLister   models.MaaSModelRefLister
+	metrics              MetricsRecorder
 }
 
 // NewModelsHandler creates a new models handler.
@@ -31,6 +49,7 @@ func NewModelsHandler(
 	modelMgr *models.Manager,
 	subscriptionSelector *subscription.Selector,
 	maasModelRefLister models.MaaSModelRefLister,
+	metrics MetricsRecorder,
 ) *ModelsHandler {
 	if log == nil {
 		log = logger.Production()
@@ -40,6 +59,7 @@ func NewModelsHandler(
 		subscriptionSelector: subscriptionSelector,
 		logger:               log,
 		maasModelRefLister:   maasModelRefLister,
+		metrics:              metrics,
 	}
 }
 
@@ -169,6 +189,9 @@ func (h *ModelsHandler) extractAndValidateAuth(c *gin.Context) (string, string, 
 	authHeader := strings.TrimSpace(c.GetHeader("Authorization"))
 	if authHeader == "" {
 		h.logger.Debug("Authorization header missing") // SAFE: Logging that header is missing, not the value itself
+		if h.metrics != nil {
+			h.metrics.RecordRejection(constant.RejectionUnauthorized)
+		}
 		c.JSON(http.StatusUnauthorized, gin.H{
 			"error": gin.H{
 				"message": "Authorization required",
@@ -273,17 +296,15 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 				return
 			}
 
-			// Pre-filter by modelRefs if available (optimization to reduce HTTP calls)
-			modelsToCheck := list
-			if len(sub.ModelRefs) > 0 {
-				h.logger.Debug("Pre-filtering models by subscription modelRefs",
-					"subscription", sub.Name,
-					"totalModels", len(list),
-					"modelRefsCount", len(sub.ModelRefs),
-				)
-				modelsToCheck = filterModelsBySubscription(list, sub.ModelRefs)
-				h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
-			}
+			// modelRefs are the access boundary: FilterModelsByAccess only checks readiness,
+			// so skipping this for a subscription without modelRefs would list every Ready model.
+			h.logger.Debug("Pre-filtering models by subscription modelRefs",
+				"subscription", sub.Name,
+				"totalModels", len(list),
+				"modelRefsCount", len(sub.ModelRefs),
+			)
+			modelsToCheck := filterModelsBySubscription(list, sub.ModelRefs)
+			h.logger.Debug("After modelRef filtering", "modelsToCheck", len(modelsToCheck))
 
 			probeSubscriptionHeader := sub.Name
 			h.logger.Debug("Filtering models by subscription", "subscription", sub.Name, "modelCount", len(modelsToCheck), "probeWithSubscriptionHeader", probeSubscriptionHeader != "")
@@ -349,6 +370,8 @@ func (h *ModelsHandler) aggregateModelsFromSubscriptions(
 
 // ListLLMs handles GET /v1/models.
 func (h *ModelsHandler) ListLLMs(c *gin.Context) {
+	h = h.withContext(c)
+
 	// When no user identity was extracted by the ExtractUserInfoOptional
 	// middleware, return an empty model list.  This covers the case where no
 	// LLMInferenceService is deployed (Authorino has no auth policy and does
@@ -449,11 +472,8 @@ func (h *ModelsHandler) ListLLMs(c *gin.Context) {
 }
 
 // filterModelsBySubscription filters models to only those matching the subscription's modelRefs.
+// A subscription without modelRefs grants no models.
 func filterModelsBySubscription(modelList []models.Model, modelRefs []subscription.ModelRefInfo) []models.Model {
-	if len(modelRefs) == 0 {
-		return modelList
-	}
-
 	// Build map of allowed models for fast lookup
 	allowed := make(map[string]bool)
 	for _, ref := range modelRefs {

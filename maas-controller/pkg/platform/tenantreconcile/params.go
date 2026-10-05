@@ -1,6 +1,7 @@
 package tenantreconcile
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -22,7 +24,9 @@ type PlatformParams struct {
 	GatewayName           string
 	ClusterAudience       string
 	SubscriptionNamespace string
-	ExternalOIDC          *maasv1alpha1.TenantExternalOIDCConfig
+	// ModelNamespace is the tenant namespace containing ExternalModels and their HTTPRoutes.
+	ModelNamespace string
+	ExternalOIDC   *maasv1alpha1.TenantExternalOIDCConfig
 
 	// TenantIdentifier is the tenant name used for per-tenant resource naming.
 	// Empty string ("") for default/legacy tenant, non-empty (e.g., "redteam") for AITenant-managed tenants.
@@ -36,16 +40,73 @@ type PlatformParams struct {
 
 	// MaaSAPIReplicas overrides the maas-api Deployment replica count when non-nil.
 	MaaSAPIReplicas *int32
+	// MaaSAPIResources overrides resource requests/limits for the maas-api container.
+	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
+	MaaSAPIResources *corev1.ResourceRequirements
 	// PayloadProcessingReplicas overrides the payload-processing Deployment replica count when non-nil.
+	// When PayloadProcessingAutoscaling is true, this value becomes the HPA minReplicas instead.
 	PayloadProcessingReplicas *int32
+
+	// PayloadProcessingAutoscaling enables HPA for payload-processing pods when true.
+	PayloadProcessingAutoscaling bool
+	// PayloadProcessingMaxReplicas is the HPA maxReplicas (default 10, only used when autoscaling is true).
+	PayloadProcessingMaxReplicas int32
+	// PayloadProcessingTargetCPU is the HPA target CPU utilization percentage (default 70).
+	PayloadProcessingTargetCPU int32
+	// PayloadProcessingTargetMemory is the HPA target memory utilization percentage (default 80).
+	PayloadProcessingTargetMemory int32
+
+	// PayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count when non-nil.
+	// When PayloadPreProcessingAutoscaling is true, this value becomes the HPA minReplicas instead.
+	PayloadPreProcessingReplicas *int32
+
+	// PayloadPreProcessingAutoscaling enables HPA for payload-pre-processing pods when true.
+	PayloadPreProcessingAutoscaling bool
+	// PayloadPreProcessingMaxReplicas is the HPA maxReplicas (default 10, only used when autoscaling is true).
+	PayloadPreProcessingMaxReplicas int32
+	// PayloadPreProcessingTargetCPU is the HPA target CPU utilization percentage (default 70).
+	PayloadPreProcessingTargetCPU int32
+	// PayloadPreProcessingTargetMemory is the HPA target memory utilization percentage (default 80).
+	PayloadPreProcessingTargetMemory int32
+
+	// MonitoringNamespace is the namespace where the platform monitoring stack (OTLP collector) runs.
+	MonitoringNamespace string
+
+	// PayloadProcessingRouterExtProcFallback enables router-anchored ext_proc patches when
+	// Kuadrant WASM auth is absent on the gateway (avoids duplicate ext_proc when WASM exists).
+	PayloadProcessingRouterExtProcFallback bool
+
+	// SkipIPP is true when the tenant uses the praxis payload-processing dataplane
+	// and maas-controller should not render or apply IPP resources.
+	SkipIPP bool
+
+	// PayloadProcessingResources overrides resource requests/limits for the payload-processing container.
+	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
+	PayloadProcessingResources *corev1.ResourceRequirements
+
+	// PayloadPreProcessingResources overrides resource requests/limits for the payload-pre-processing container.
+	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
+	PayloadPreProcessingResources *corev1.ResourceRequirements
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
+
+	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
+	// and the Kuadrant anchors were kept.
+	KuadrantDetectionWarning string
+
+	// BundledPostgres is true when maas-db-config points at in-cluster Postgres. When false
+	// (external database), maas-api-egress-restrict omits the app=postgres egress peer.
+	BundledPostgres bool
+	// BundledPostgresNamespace is the Kubernetes namespace of in-cluster Postgres, derived
+	// from maas-db-config (e.g. postgres.postgres.svc.cluster.local → "postgres"). Empty when
+	// BundledPostgres is false; defaults to AppNamespace for short hostnames like "postgres".
+	BundledPostgresNamespace string
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
 // platform context, cluster state, and RELATED_IMAGE_* env vars. No disk I/O.
-func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, controllerNamespace, clusterAudience string, log logr.Logger) (PlatformParams, error) {
+func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, appNamespace, controllerNamespace, clusterAudience, monitoringNamespace string, log logr.Logger) (PlatformParams, error) {
 	tenantID, err := TenantIdentifierFor(tenant)
 	if err != nil {
 		return PlatformParams{}, fmt.Errorf("resolve tenant identifier: %w", err)
@@ -57,18 +118,85 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		GatewayNamespace:        platformContext.GatewayRef.Namespace,
 		GatewayName:             platformContext.GatewayRef.Name,
 		ClusterAudience:         clusterAudience,
+		MonitoringNamespace:     monitoringNamespace,
 		SubscriptionNamespace:   tenant.GetNamespace(),
+		ModelNamespace:          tenant.GetNamespace(),
 		ExternalOIDC:            platformContext.ExternalOIDC.DeepCopy(),
 		TenantIdentifier:        tenantID,
 		MaaSAPIImage:            firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_MAAS_API_IMAGE"), DefaultMaaSAPIImage),
 		PayloadProcessingImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_ODH_AI_GATEWAY_PAYLOAD_PROCESSING_IMAGE"), DefaultPayloadProcessingImage),
 		MaaSAPIKeyCleanupImage:  firstNonEmpty(os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"), DefaultMaaSAPIKeyCleanupImage),
 		APIKeyMaxExpirationDays: resolveAPIKeyMaxExpirationDays(tenant),
+		SkipIPP:                 platformContext.SkipIPP,
 	}
 
-	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
+	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.PayloadPreProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
 
-	log.Info("Built platform params",
+	maasAPIReplicas, maasAPIResources := resolveMaasAPIConfig(tenant, log)
+	params.MaaSAPIResources = maasAPIResources
+	if maasAPIReplicas != nil {
+		params.MaaSAPIReplicas = maasAPIReplicas
+	}
+
+	var ppReplicas *int32
+	var resourceWarnings []string
+	params.PayloadProcessingAutoscaling,
+		ppReplicas,
+		params.PayloadProcessingMaxReplicas,
+		params.PayloadProcessingTargetCPU,
+		params.PayloadProcessingTargetMemory,
+		params.PayloadProcessingResources,
+		resourceWarnings = resolvePayloadProcessingConfig(tenant, log)
+	params.Warnings = append(params.Warnings, resourceWarnings...)
+
+	// Spec-based replicas take precedence over annotation-based replicas for payload-processing.
+	if ppReplicas != nil {
+		params.PayloadProcessingReplicas = ppReplicas
+	}
+
+	// Validate minReplicas <= maxReplicas when autoscaling is enabled.
+	// An invalid combination (e.g. replicas=20, max-replicas=10) would produce an HPA
+	// that the Kubernetes API rejects, blocking tenant reconciliation.
+	if params.PayloadProcessingAutoscaling && params.PayloadProcessingReplicas != nil {
+		if *params.PayloadProcessingReplicas > params.PayloadProcessingMaxReplicas {
+			params.Warnings = append(params.Warnings, fmt.Sprintf(
+				"spec.payloadProcessing.replicas (%d) exceeds spec.payloadProcessing.autoscaling.maxReplicas (%d); clamping maxReplicas to match",
+				*params.PayloadProcessingReplicas, params.PayloadProcessingMaxReplicas))
+			params.PayloadProcessingMaxReplicas = *params.PayloadProcessingReplicas
+			log.Info("Clamped spec.payloadProcessing.autoscaling.maxReplicas to match replicas",
+				"minReplicas", *params.PayloadProcessingReplicas,
+				"maxReplicas", params.PayloadProcessingMaxReplicas)
+		}
+	}
+
+	var preReplicas *int32
+	var preResourceWarnings []string
+	params.PayloadPreProcessingAutoscaling,
+		preReplicas,
+		params.PayloadPreProcessingMaxReplicas,
+		params.PayloadPreProcessingTargetCPU,
+		params.PayloadPreProcessingTargetMemory,
+		params.PayloadPreProcessingResources,
+		preResourceWarnings = resolvePayloadPreProcessingConfig(tenant, log)
+	params.Warnings = append(params.Warnings, preResourceWarnings...)
+
+	if preReplicas != nil {
+		params.PayloadPreProcessingReplicas = preReplicas
+	}
+
+	if params.PayloadPreProcessingAutoscaling && params.PayloadPreProcessingReplicas != nil {
+		if *params.PayloadPreProcessingReplicas > params.PayloadPreProcessingMaxReplicas {
+			params.Warnings = append(params.Warnings, fmt.Sprintf(
+				"spec.payloadPreProcessing.replicas (%d) exceeds spec.payloadPreProcessing.autoscaling.maxReplicas (%d); clamping maxReplicas to match",
+				*params.PayloadPreProcessingReplicas, params.PayloadPreProcessingMaxReplicas))
+			params.PayloadPreProcessingMaxReplicas = *params.PayloadPreProcessingReplicas
+			log.Info("Clamped spec.payloadPreProcessing.autoscaling.maxReplicas to match replicas",
+				"minReplicas", *params.PayloadPreProcessingReplicas,
+				"maxReplicas", params.PayloadPreProcessingMaxReplicas)
+		}
+	}
+
+	log.V(1).Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
 		"subscriptionNamespace", params.SubscriptionNamespace,
@@ -88,10 +216,10 @@ func firstNonEmpty(values ...string) string {
 
 // resolveReplicaAnnotations reads replica-count annotations from the tenant object
 // and returns parsed values (nil if not set) plus any validation warnings.
-func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIReplicas, payloadProcessingReplicas *int32, warnings []string) {
+func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIReplicas, payloadProcessingReplicas, payloadPreProcessingReplicas *int32, warnings []string) {
 	annotations := tenant.GetAnnotations()
 	if annotations == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	var w []string
@@ -115,10 +243,26 @@ func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIRe
 			log.Info("Resolved payload-processing replicas from annotation", "replicas", *r)
 		}
 	}
-	return maasAPIReplicas, payloadProcessingReplicas, w
+	if v, ok := annotations[AnnotationPayloadPreProcessingReplicas]; ok {
+		r, warn := parseReplicaAnnotation(AnnotationPayloadPreProcessingReplicas, v)
+		if warn != "" {
+			w = append(w, warn)
+			log.Info("Invalid replica annotation", "annotation", AnnotationPayloadPreProcessingReplicas, "value", v, "warning", warn)
+		} else {
+			payloadPreProcessingReplicas = r
+			log.Info("Resolved payload-pre-processing replicas from annotation", "replicas", *r)
+		}
+	}
+	return maasAPIReplicas, payloadProcessingReplicas, payloadPreProcessingReplicas, w
 }
 
 const maxReplicaCount = 100
+
+const (
+	defaultMaxReplicas  int32 = 10
+	defaultTargetCPU    int32 = 70
+	defaultTargetMemory int32 = 80
+)
 
 func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	n, err := strconv.ParseInt(value, 10, 32)
@@ -133,6 +277,174 @@ func parseReplicaAnnotation(annotationKey, value string) (*int32, string) {
 	}
 	r := int32(n)
 	return &r, ""
+}
+
+// resolvePayloadProcessingConfig reads autoscaling and resource configuration from the
+// tenant spec and returns resolved values with defaults applied.
+func resolvePayloadProcessingConfig(tenant client.Object, log logr.Logger) (
+	enabled bool,
+	replicas *int32,
+	maxReplicas, targetCPU, targetMemory int32,
+	resources *corev1.ResourceRequirements,
+	warnings []string,
+) {
+	return resolveIPPWorkloadConfig(payloadProcessingConfigFor(tenant), "spec.payloadProcessing", "Payload-processing", log)
+}
+
+// resolvePayloadPreProcessingConfig reads autoscaling and resource configuration for
+// payload-pre-processing from the tenant spec.
+func resolvePayloadPreProcessingConfig(tenant client.Object, log logr.Logger) (
+	enabled bool,
+	replicas *int32,
+	maxReplicas, targetCPU, targetMemory int32,
+	resources *corev1.ResourceRequirements,
+	warnings []string,
+) {
+	return resolveIPPWorkloadConfig(payloadPreProcessingConfigFor(tenant), "spec.payloadPreProcessing", "Payload-pre-processing", log)
+}
+
+func resolveIPPWorkloadConfig(
+	cfg *maasv1alpha1.TenantPayloadProcessingConfig,
+	fieldPath, logLabel string,
+	log logr.Logger,
+) (
+	enabled bool,
+	replicas *int32,
+	maxReplicas, targetCPU, targetMemory int32,
+	resources *corev1.ResourceRequirements,
+	warnings []string,
+) {
+	maxReplicas = defaultMaxReplicas
+	targetCPU = defaultTargetCPU
+	targetMemory = defaultTargetMemory
+
+	if cfg == nil {
+		return false, nil, maxReplicas, targetCPU, targetMemory, nil, nil
+	}
+
+	replicas = cfg.Replicas
+	resourceWarnings, resources := validatePayloadProcessingResources(cfg, fieldPath)
+	if len(resourceWarnings) > 0 {
+		warnings = append(warnings, resourceWarnings...)
+	}
+
+	if resources != nil {
+		log.Info(logLabel + " resource overrides configured")
+	}
+
+	if cfg.Autoscaling == nil {
+		return false, replicas, maxReplicas, targetCPU, targetMemory, resources, warnings
+	}
+
+	enabled = true
+	log.Info(logLabel + " autoscaling enabled")
+
+	if cfg.Autoscaling.MaxReplicas != nil {
+		maxReplicas = *cfg.Autoscaling.MaxReplicas
+	}
+	if cfg.Autoscaling.TargetCPUUtilization != nil {
+		targetCPU = *cfg.Autoscaling.TargetCPUUtilization
+	}
+	if cfg.Autoscaling.TargetMemoryUtilization != nil {
+		targetMemory = *cfg.Autoscaling.TargetMemoryUtilization
+	}
+
+	return enabled, replicas, maxReplicas, targetCPU, targetMemory, resources, warnings
+}
+
+func validatePayloadProcessingResources(cfg *maasv1alpha1.TenantPayloadProcessingConfig, fieldPath string) (warnings []string, resources *corev1.ResourceRequirements) {
+	if cfg.Resources == nil {
+		return nil, nil
+	}
+
+	resources = tenantResourcesToCorev1(cfg.Resources)
+	if resources == nil {
+		return nil, nil
+	}
+
+	if cfg.Autoscaling != nil {
+		if resources.Requests == nil {
+			return []string{
+				fieldPath + ".resources.requests is required when autoscaling is enabled; " +
+					"specify both cpu and memory requests or remove " + fieldPath + ".resources to use manifest defaults",
+			}, nil
+		}
+		if _, ok := resources.Requests[corev1.ResourceCPU]; !ok {
+			return []string{
+				fieldPath + ".resources.requests.cpu is required when autoscaling is enabled",
+			}, nil
+		}
+		if _, ok := resources.Requests[corev1.ResourceMemory]; !ok {
+			return []string{
+				fieldPath + ".resources.requests.memory is required when autoscaling is enabled",
+			}, nil
+		}
+	}
+
+	return nil, resources
+}
+
+func resolveMaasAPIConfig(tenant client.Object, log logr.Logger) (replicas *int32, resources *corev1.ResourceRequirements) {
+	cfg := maasAPIConfigFor(tenant)
+	if cfg == nil {
+		return nil, nil
+	}
+
+	if cfg.Replicas != nil {
+		replicas = cfg.Replicas
+		log.Info("Resolved maas-api replicas from spec", "replicas", *replicas)
+	}
+	if cfg.Resources != nil {
+		resources = tenantResourcesToCorev1(cfg.Resources)
+		if resources != nil {
+			log.Info("maas-api resource overrides configured")
+		}
+	}
+
+	return replicas, resources
+}
+
+func maasAPIConfigFor(tenant client.Object) *maasv1alpha1.TenantMaasAPIConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.MaasAPI
+	case *maasv1alpha1.Tenant:
+		return t.Spec.MaasAPI
+	default:
+		return nil
+	}
+}
+
+func tenantResourcesToCorev1(in *maasv1alpha1.TenantResourceRequirements) *corev1.ResourceRequirements {
+	if in == nil {
+		return nil
+	}
+	return &corev1.ResourceRequirements{
+		Requests: in.Requests,
+		Limits:   in.Limits,
+	}
+}
+
+func payloadProcessingConfigFor(tenant client.Object) *maasv1alpha1.TenantPayloadProcessingConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.PayloadProcessing
+	case *maasv1alpha1.Tenant:
+		return t.Spec.PayloadProcessing
+	default:
+		return nil
+	}
+}
+
+func payloadPreProcessingConfigFor(tenant client.Object) *maasv1alpha1.TenantPayloadProcessingConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.PayloadPreProcessing
+	case *maasv1alpha1.Tenant:
+		return t.Spec.PayloadPreProcessing
+	default:
+		return nil
+	}
 }
 
 func resolveAPIKeyMaxExpirationDays(tenant client.Object) string {
@@ -233,6 +545,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
+	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
+		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -275,6 +589,114 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchMaaSAPIEgressRestrictNetworkPolicy adds bundled-postgres egress peers when
+// maas-db-config targets in-cluster Postgres. External databases are omitted so
+// administrators can apply a companion egress policy with ipBlock CIDRs. When infra
+// and controller namespaces differ (upgrade path), postgres in the controller namespace
+// is also allowed.
+func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api egress NP missing egress rules")
+	}
+
+	egress = removePostgresEgressRules(egress)
+	if params.BundledPostgres {
+		egress = append(egress, bundledPostgresEgressRule(params))
+	}
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func removePostgresEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			filtered = append(filtered, ruleRaw)
+			continue
+		}
+		if networkPolicyRuleHasPort(rule, 5432) {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+func bundledPostgresEgressRule(params PlatformParams) map[string]any {
+	// Same-namespace peer covers short hostname "postgres" and co-located DBs.
+	to := []any{
+		map[string]any{
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		},
+	}
+	addNamespacedPeer := func(ns string) {
+		if ns == "" || ns == params.AppNamespace {
+			return
+		}
+		to = append(to, map[string]any{
+			"namespaceSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"kubernetes.io/metadata.name": ns,
+				},
+			},
+			"podSelector": map[string]any{
+				"matchLabels": map[string]any{
+					"app": "postgres",
+				},
+			},
+		})
+	}
+	// DSN-derived namespace (e.g. postgres.postgres.svc.cluster.local).
+	addNamespacedPeer(params.BundledPostgresNamespace)
+	// Upgrade path: also allow postgres in the controller namespace when separated.
+	addNamespacedPeer(params.ControllerNamespace)
+	return map[string]any{
+		"to": to,
+		"ports": []any{
+			map[string]any{
+				"protocol": "TCP",
+				"port":     int64(5432),
+			},
+		},
+	}
+}
+
+func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
+	ports, ok := rule["ports"].([]any)
+	if !ok {
+		return false
+	}
+	for _, portRaw := range ports {
+		portObj, ok := portRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := portObj["port"].(type) {
+		case int64:
+			if v == port {
+				return true
+			}
+		case int:
+			if int64(v) == port {
+				return true
+			}
+		case float64:
+			if int64(v) == port {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use
@@ -330,6 +752,12 @@ func patchMaaSAPIDeployment(log logr.Logger, r *unstructured.Unstructured, param
 	if err := setOrAddEnvVar(r, "maas-api", "API_KEY_MAX_EXPIRATION_DAYS", params.APIKeyMaxExpirationDays); err != nil {
 		return fmt.Errorf("patch API_KEY_MAX_EXPIRATION_DAYS: %w", err)
 	}
+	if params.MaaSAPIResources != nil {
+		if err := setContainerResources(r, "maas-api", params.MaaSAPIResources); err != nil {
+			return fmt.Errorf("patch maas-api resources: %w", err)
+		}
+		log.V(4).Info("Patching maas-api resources")
+	}
 
 	// Set TENANT_NAME environment variable for per-tenant maas-api instances.
 	// This value is used by maas-api for database queries (WHERE tenant = $TENANT_NAME)
@@ -372,7 +800,13 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	r.SetNamespace(params.GatewayNamespace)
 	deploymentName := PayloadProcessingDeploymentName(params.TenantIdentifier)
 
-	if params.PayloadProcessingReplicas != nil {
+	// When autoscaling is enabled, remove spec.replicas so the HPA has sole ownership.
+	// SSA would otherwise reset the HPA-selected count on every reconciliation.
+	// When autoscaling is disabled, apply the annotation override normally.
+	if params.PayloadProcessingAutoscaling {
+		unstructured.RemoveNestedField(r.Object, "spec", "replicas")
+		log.V(4).Info("Removed spec.replicas from payload-processing (HPA manages replicas)", "deployment", deploymentName)
+	} else if params.PayloadProcessingReplicas != nil {
 		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadProcessingReplicas), "spec", "replicas"); err != nil {
 			return fmt.Errorf("patch payload-processing replicas: %w", err)
 		}
@@ -409,12 +843,34 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 	if err := patchConfigMapVolumeRef(r, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(params.TenantIdentifier)); err != nil {
 		return fmt.Errorf("patch plugins ConfigMap volume: %w", err)
 	}
+	if err := patchPayloadProcessingTracing(log, r, params); err != nil {
+		return fmt.Errorf("patch payload-processing tracing: %w", err)
+	}
+	if params.PayloadProcessingResources != nil {
+		if err := setContainerResources(r, "payload-processing", params.PayloadProcessingResources); err != nil {
+			return fmt.Errorf("patch payload-processing resources: %w", err)
+		}
+		log.V(4).Info("Patched payload-processing resources", "deployment", deploymentName)
+	}
 	return nil
 }
 
 func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 	deploymentName := PayloadPreProcessingDeploymentName(params.TenantIdentifier)
+
+	// When autoscaling is enabled, remove spec.replicas so the HPA has sole ownership.
+	// SSA would otherwise reset the HPA-selected count on every reconciliation.
+	if params.PayloadPreProcessingAutoscaling {
+		unstructured.RemoveNestedField(r.Object, "spec", "replicas")
+		log.V(4).Info("Removed spec.replicas from payload-pre-processing (HPA manages replicas)", "deployment", deploymentName)
+	} else if params.PayloadPreProcessingReplicas != nil {
+		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadPreProcessingReplicas), "spec", "replicas"); err != nil {
+			return fmt.Errorf("patch payload-pre-processing replicas: %w", err)
+		}
+		log.V(4).Info("Patching payload-pre-processing replicas", "deployment", deploymentName, "replicas", *params.PayloadPreProcessingReplicas)
+	}
+
 	if params.PayloadProcessingImage != "" {
 		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
@@ -431,6 +887,12 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 	}
 	if err := patchConfigMapVolumeRef(r, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(params.TenantIdentifier)); err != nil {
 		return fmt.Errorf("patch plugins ConfigMap volume: %w", err)
+	}
+	if params.PayloadPreProcessingResources != nil {
+		if err := setContainerResources(r, PayloadPreProcessingName, params.PayloadPreProcessingResources); err != nil {
+			return fmt.Errorf("patch payload-pre-processing resources: %w", err)
+		}
+		log.V(4).Info("Patched payload-pre-processing resources", "deployment", deploymentName)
 	}
 	return nil
 }
@@ -634,6 +1096,132 @@ func patchPayloadDestinationRule(log logr.Logger, r *unstructured.Unstructured, 
 }
 
 const rhclWasmFilterName = "envoy.filters.http.wasm"
+const routerFilterName = "envoy.filters.http.router"
+
+func payloadProcessingOTLPEndpoint(monitoringNamespace string) string {
+	if monitoringNamespace == "" {
+		return ""
+	}
+	return fmt.Sprintf("http://%s.%s.svc:%d", DefaultOTLPCollectorService, monitoringNamespace, DefaultOTLPCollectorPort)
+}
+
+func patchPayloadProcessingTracing(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
+	if params.MonitoringNamespace == "" {
+		log.V(4).Info("Monitoring disabled; leaving payload-processing tracing off")
+		return setContainerArg(r, "payload-processing", "--tracing=false")
+	}
+
+	if err := setContainerArg(r, "payload-processing", "--tracing=true"); err != nil {
+		return fmt.Errorf("set --tracing=true: %w", err)
+	}
+
+	endpoint := payloadProcessingOTLPEndpoint(params.MonitoringNamespace)
+	log.V(4).Info("Patching payload-processing OTLP endpoint", "endpoint", endpoint)
+	for _, envName := range []string{
+		"OTEL_EXPORTER_OTLP_TRACES_ENDPOINT",
+		"OTEL_EXPORTER_OTLP_ENDPOINT",
+		"OTEL_TRACES_SAMPLER",
+		"OTEL_TRACES_SAMPLER_ARG",
+	} {
+		value := endpoint
+		switch envName {
+		case "OTEL_TRACES_SAMPLER":
+			value = DefaultOTELTracesSampler
+		case "OTEL_TRACES_SAMPLER_ARG":
+			value = DefaultOTELTracesSamplerArg
+		}
+		if err := setOrAddEnvVar(r, "payload-processing", envName, value); err != nil {
+			return fmt.Errorf("patch %s: %w", envName, err)
+		}
+	}
+	return nil
+}
+
+func nestedPortNumber(v any) (int64, bool) {
+	switch p := v.(type) {
+	case int64:
+		return p, true
+	case int:
+		return int64(p), true
+	case int32:
+		return int64(p), true
+	case float64:
+		if p != float64(int64(p)) {
+			return 0, false
+		}
+		return int64(p), true
+	case json.Number:
+		n, err := p.Int64()
+		return n, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func otlpCollectorPeerMatchLabels() map[string]any {
+	return map[string]any{
+		DefaultOTLPCollectorPodLabelKey:       DefaultOTLPCollectorService,
+		DefaultOTLPCollectorComponentLabelKey: DefaultOTLPCollectorComponentLabelValue,
+	}
+}
+
+func patchNetworkPolicyOTLPEgress(r *unstructured.Unstructured, monitoringNamespace string) error {
+	if monitoringNamespace == "" {
+		return nil
+	}
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read NetworkPolicy egress: %w", err)
+	}
+	if !found {
+		return errors.New("NetworkPolicy egress rules not found")
+	}
+	for i, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		ports, _ := rule["ports"].([]any)
+		hasOTLPPort := false
+		for _, portRaw := range ports {
+			port, ok := portRaw.(map[string]any)
+			if !ok {
+				continue
+			}
+			if p, ok := nestedPortNumber(port["port"]); ok && p == int64(DefaultOTLPCollectorPort) {
+				hasOTLPPort = true
+				break
+			}
+		}
+		if !hasOTLPPort {
+			continue
+		}
+		to, ok := rule["to"].([]any)
+		if !ok || len(to) == 0 {
+			continue
+		}
+		peer, ok := to[0].(map[string]any)
+		if !ok {
+			continue
+		}
+		nsSelector, ok := peer["namespaceSelector"].(map[string]any)
+		if !ok {
+			nsSelector = map[string]any{}
+			peer["namespaceSelector"] = nsSelector
+		}
+		nsSelector["matchLabels"] = map[string]any{
+			"kubernetes.io/metadata.name": monitoringNamespace,
+		}
+		peer["podSelector"] = map[string]any{
+			"matchLabels": otlpCollectorPeerMatchLabels(),
+		}
+		to[0] = peer
+		rule["to"] = to
+		egress[i] = rule
+		return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+	}
+	return fmt.Errorf("NetworkPolicy missing OTLP egress rule for port %d", DefaultOTLPCollectorPort)
+}
 
 func wasmpluginAnchorName(gatewayNamespace, gatewayName string) string {
 	return fmt.Sprintf("extensions.istio.io/wasmplugin/%s.kuadrant-%s", gatewayNamespace, gatewayName)
@@ -673,40 +1261,95 @@ func patchPayloadProcessingEnvoyFilter(log logr.Logger, r *unstructured.Unstruct
 		return fmt.Errorf("read EnvoyFilter configPatches: %w", err)
 	}
 	const (
-		filterPatchCount      = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
-		routeDisablePatchBase = filterPatchCount
-		totalConfigPatches    = routeDisablePatchBase + 4
+		wasmFilterPatchCount     = 4 // WasmPlugin pair + RHCL 1.4 wasm pair
+		routerFallbackPatchCount = 2 // router anchor when Kuadrant WASM is absent
+		routeDisablePatchCount   = 5
+		// Trailing REMOVE + INSERT_BEFORE that move Istio's InferencePool filter in front of
+		// the router. Their anchors (Istio's fixed filter name and the router) are the same on
+		// every gateway, so no mode rewrites them.
+		eppReorderPatchCount = 2
 	)
-	if !found || len(configPatches) < totalConfigPatches {
-		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d", totalConfigPatches, len(configPatches))
+	if !found {
+		return errors.New("EnvoyFilter configPatches not found")
 	}
 
-	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster}
-	subFilterByIndex := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
-
-	for i := 0; i < filterPatchCount; i++ {
-		patch, ok := configPatches[i].(map[string]any)
-		if !ok {
-			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
-		}
-
-		subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
-		if err := unstructured.SetNestedField(patch, subFilterByIndex[i], subFilterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
-		}
-
-		clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
-		if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
-			return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
-		}
-
-		configPatches[i] = patch
+	routerStart := wasmFilterPatchCount
+	routerEnd := wasmFilterPatchCount + routerFallbackPatchCount
+	minPatchCount := routerEnd + routeDisablePatchCount + eppReorderPatchCount
+	if len(configPatches) < minPatchCount {
+		return fmt.Errorf("EnvoyFilter configPatches: expected at least %d entries, got %d",
+			minPatchCount, len(configPatches))
 	}
 
-	// Patches 4–7 disable ext_proc on all non-inference maas-api routes.
+	if params.PayloadProcessingRouterExtProcFallback {
+		// Router-only anchoring when kuadrant CRs are absent.
+		// Drop wasm-anchored patches to avoid duplicate ext_proc on RHCL gateways that
+		// inject envoy.filters.http.wasm without kuadrant-{gateway} CRs.
+		configPatches = append(append([]any{}, configPatches[routerStart:routerEnd]...), configPatches[routerEnd:]...)
+	} else {
+		configPatches = append(append([]any{}, configPatches[:routerStart]...), configPatches[routerEnd:]...)
+	}
+
+	filterPatchCount := len(configPatches) - routeDisablePatchCount - eppReorderPatchCount
+	routeDisablePatchBase := filterPatchCount
+	routeDisablePatchEnd := routeDisablePatchBase + routeDisablePatchCount
+
+	clusterByIndex := []string{beforeCluster, afterCluster, beforeCluster, afterCluster, beforeCluster, afterCluster}
+	wasmSubFilters := []string{anchorName, anchorName, rhclWasmFilterName, rhclWasmFilterName}
+
+	switch {
+	case params.PayloadProcessingRouterExtProcFallback:
+		if filterPatchCount != routerFallbackPatchCount {
+			return fmt.Errorf("EnvoyFilter configPatches: expected %d router filter patches, got %d",
+				routerFallbackPatchCount, filterPatchCount)
+		}
+		for i := 0; i < filterPatchCount; i++ {
+			patch, ok := configPatches[i].(map[string]any)
+			if !ok {
+				return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+			}
+
+			subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+			if err := unstructured.SetNestedField(patch, routerFilterName, subFilterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+			}
+
+			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+			if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			}
+
+			configPatches[i] = patch
+		}
+	case filterPatchCount == wasmFilterPatchCount:
+		for i, subFilter := range wasmSubFilters {
+			patch, ok := configPatches[i].(map[string]any)
+			if !ok {
+				return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
+			}
+
+			subFilterPath := []string{"match", "listener", "filterChain", "filter", "subFilter", "name"}
+			if err := unstructured.SetNestedField(patch, subFilter, subFilterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] subFilter.name: %w", i, err)
+			}
+
+			clusterPath := []string{"patch", "value", "typed_config", "grpc_service", "envoy_grpc", "cluster_name"}
+			if err := unstructured.SetNestedField(patch, clusterByIndex[i], clusterPath...); err != nil {
+				return fmt.Errorf("write configPatches[%d] grpc cluster_name: %w", i, err)
+			}
+
+			configPatches[i] = patch
+		}
+	default:
+		return fmt.Errorf("EnvoyFilter configPatches: expected %d wasm or %d router filter patches, got %d",
+			wasmFilterPatchCount, routerFallbackPatchCount, filterPatchCount)
+	}
+
+	// Route patches disable ext_proc on all non-inference maas-api routes; the EPP reorder
+	// patches after them need no rewrite.
 	// Route name uses Istio's Gateway API convention: <namespace>.<httproute-name>.<rule-index>.
-	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/*
-	for i := routeDisablePatchBase; i < totalConfigPatches; i++ {
+	// Rule indices: 0=/v1/models, 1=/v1/subscriptions, 2=/v1/api-keys, 3=/maas-api/v1/*, 4=/maas-api/health
+	for i := routeDisablePatchBase; i < routeDisablePatchEnd; i++ {
 		patch, ok := configPatches[i].(map[string]any)
 		if !ok {
 			return fmt.Errorf("EnvoyFilter configPatches[%d] is not an object", i)
@@ -767,20 +1410,47 @@ func patchPayloadProcessingNetworkPolicy(log logr.Logger, r *unstructured.Unstru
 	// Keep the ingress peer selector from the base manifest / ODH overlay
 	// (gateway.istio.io/managed). OpenShift managed ingress rejects NetworkPolicies
 	// in openshift-ingress that match on gateway.networking.k8s.io/gateway-name.
+	if err := patchNetworkPolicyOTLPEgress(r, params.MonitoringNamespace); err != nil {
+		return fmt.Errorf("patch OTLP egress namespace: %w", err)
+	}
 	log.V(4).Info("Configured payload-processing NetworkPolicy podSelector",
 		"tenantInstances", tenantInstances)
 	return nil
 }
 
-// replaceHostNamespace replaces the second segment of a dot-separated FQDN.
-// e.g. "maas-api.maas-api.svc.cluster.local" → "maas-api.opendatahub.svc.cluster.local"
-func replaceHostNamespace(host, ns string) string {
-	parts := strings.SplitN(host, ".", 3)
-	if len(parts) >= 2 {
-		parts[1] = ns
-		return strings.Join(parts, ".")
+func setContainerResources(r *unstructured.Unstructured, containerName string, res *corev1.ResourceRequirements) error {
+	if len(res.Claims) > 0 {
+		return errors.New("resource claims are not supported")
 	}
-	return host
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		resMap := make(map[string]any)
+		if res.Requests != nil {
+			req := make(map[string]any)
+			for k, v := range res.Requests {
+				req[string(k)] = v.String()
+			}
+			resMap["requests"] = req
+		}
+		if res.Limits != nil {
+			lim := make(map[string]any)
+			for k, v := range res.Limits {
+				lim[string(k)] = v.String()
+			}
+			resMap["limits"] = lim
+		}
+		cm["resources"] = resMap
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+	}
+	return fmt.Errorf("container %q not found", containerName)
 }
 
 func setContainerImage(r *unstructured.Unstructured, containerName, image string) error {
@@ -794,6 +1464,41 @@ func setContainerImage(r *unstructured.Unstructured, containerName, image string
 			containers[i] = cm
 			return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 		}
+	}
+	return fmt.Errorf("container %q not found", containerName)
+}
+
+func setContainerArg(r *unstructured.Unstructured, containerName, arg string) error {
+	prefix := arg
+	if before, _, ok := strings.Cut(arg, "="); ok {
+		prefix = before
+	}
+	containers, found, err := unstructured.NestedSlice(r.Object, "spec", "template", "spec", "containers")
+	if err != nil || !found {
+		return errors.New("containers not found")
+	}
+	for i, c := range containers {
+		cm, ok := c.(map[string]any)
+		if !ok || cm["name"] != containerName {
+			continue
+		}
+		argsSlice, _ := cm["args"].([]any)
+		for j, a := range argsSlice {
+			s, ok := a.(string)
+			if !ok {
+				continue
+			}
+			if s == prefix || strings.HasPrefix(s, prefix+"=") {
+				argsSlice[j] = arg
+				cm["args"] = argsSlice
+				containers[i] = cm
+				return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
+			}
+		}
+		argsSlice = append(argsSlice, arg)
+		cm["args"] = argsSlice
+		containers[i] = cm
+		return unstructured.SetNestedSlice(r.Object, containers, "spec", "template", "spec", "containers")
 	}
 	return fmt.Errorf("container %q not found", containerName)
 }

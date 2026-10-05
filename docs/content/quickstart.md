@@ -115,3 +115,9 @@ For detailed validation and troubleshooting, see the [Validation Guide](install/
 ## Next Steps
 
 After deployment, proceed to [Model Setup](install/model-setup.md) to deploy sample models, then [Validation](install/validation.md) to test and verify your deployment.
+
+### Observability
+
+Observability is optional but recommended. You can enable it after the initial install without redeploying MaaS. Inference still works if you skip it.
+
+Start with [Observability Prerequisites](install/prerequisites.md#observability-prerequisites-recommended), then [Observability Setup](observability/setup.md). The Observability tab is on by default (`observabilityDashboard: true`).

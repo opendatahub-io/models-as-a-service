@@ -14,9 +14,10 @@
 # Routes WITH a per-route TokenRateLimitPolicy (created by the MaaSSubscription controller)
 # override these defaults and get their subscription's token limits.
 #
-# IMPORTANT: Per-route TRLPs completely replace these defaults (atomic strategy).
-# The MaaSSubscription controller embeds a deny-unsubscribed catch-all rule in each
-# per-route TRLP to ensure users outside the subscription group still get 429.
+# IMPORTANT: Per-route TRLPs completely replace these defaults (atomic strategy),
+# but only while they carry at least one limit. The MaaSSubscription controller
+# keeps one in every per-route TRLP, including a rate-less limit when every
+# subscription on the model is unlimited.
 apiVersion: kuadrant.io/v1alpha1
 kind: TokenRateLimitPolicy
 metadata:

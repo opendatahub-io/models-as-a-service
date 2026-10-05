@@ -1267,7 +1267,6 @@ func (m *mockHealthSelector) Select(_ []string, _ string, _ string, _ string) (*
 }
 
 func (m *mockHealthSelector) SelectHighestPriority(_ []string, _ string) (*subscription.SelectResponse, error) {
-	//nolint:unqueryvet // False positive - not a SQL query
 	return m.Select(nil, "", "", "")
 }
 
@@ -1280,6 +1279,7 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 	validGroups := [][]string{
 		{"system:authenticated"},
 		{"my-group"},
+		{"group with spaces"},
 		{"group.with.dots"},
 		{"group_with_underscores"},
 		{"GROUP123"},
@@ -1300,7 +1300,6 @@ func TestCreateAPIKey_GroupNameValidation(t *testing.T) {
 	}{
 		{`group"with"quotes`, "double quotes"},
 		{`group\with\backslash`, "backslashes"},
-		{`group with spaces`, "spaces"},
 		{"group\nwith\nnewline", "newlines"},
 		{"group\twith\ttab", "tabs"},
 		{"group;with;semicolon", "semicolons"},

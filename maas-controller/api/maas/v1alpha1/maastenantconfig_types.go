@@ -54,6 +54,28 @@ type MaasTenantConfigSpec struct {
 	// Telemetry contains configuration for telemetry and metrics collection.
 	// +kubebuilder:validation:Optional
 	Telemetry *TenantTelemetryConfig `json:"telemetry,omitempty"`
+
+	// MaasAPI defines scaling and resource configuration for maas-api pods.
+	// +kubebuilder:validation:Optional
+	MaasAPI *TenantMaasAPIConfig `json:"maasApi,omitempty"`
+
+	// PayloadProcessing defines scaling configuration for payload-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadProcessing *TenantPayloadProcessingConfig `json:"payloadProcessing,omitempty"`
+
+	// PayloadPreProcessing defines scaling configuration for payload-pre-processing (IPP) pods.
+	// +kubebuilder:validation:Optional
+	PayloadPreProcessing *TenantPayloadProcessingConfig `json:"payloadPreProcessing,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies at the MaaS tenant-config
+	// scope. References resolve in this object's namespace (the tenant target
+	// namespace); a namespace must not be specified on the reference. Selections
+	// are additive with the AITenant baseline and lower scopes and cannot remove
+	// checks contributed elsewhere.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // MaasTenantConfigStatus defines the observed state of MaasTenantConfig.

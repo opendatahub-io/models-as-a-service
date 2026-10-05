@@ -25,12 +25,18 @@ const (
 	ConfigKind = "Config"
 	// ConfigInstanceName is the singleton resource name enforced by the API.
 	ConfigInstanceName = "default"
+
+	// ConfigConditionTenantsHealthy is the condition type set on Config.Status
+	// to report the aggregate health of all AITenant CRs across the cluster.
+	// It follows the ADR ODH-ADR-MS-0003 three-state model (Healthy/Degraded/Blocked).
+	ConfigConditionTenantsHealthy = "TenantsHealthy"
 )
 
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:resource:scope=Cluster,shortName=maasconfig
 // +kubebuilder:validation:XValidation:rule="self.metadata.name == 'default'",message="Config name must be default"
+// +kubebuilder:printcolumn:name="Ready",type=string,JSONPath=`.status.conditions[?(@.type=="Ready")].status`,description="Ready"
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 
 // Config is a cluster-scoped anchor for MaaS platform resources. Namespaced and
@@ -59,16 +65,24 @@ type ConfigSpec struct {
 	// for usage tracking (token counts, identity, model). When enabled, the
 	// controller deploys an EnvoyFilter on the shared gateway that emits
 	// structured usage logs via OTel Access Log Service.
-	// Enabling this logs identity attributes (user_id, key_id, key_name,
-	// organization_id, groups, subscription) per request — ensure
-	// GDPR/privacy compliance before enabling.
+	// Enabling this logs identity attributes (user_id, key_name, groups,
+	// subscription) per request — ensure GDPR/privacy compliance before enabling.
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
 }
 
 // ConfigStatus defines the observed state of Config.
-type ConfigStatus struct{}
+type ConfigStatus struct {
+	// Conditions represent the latest available observations of the MaaS platform state.
+	// The Ready condition aggregates status from the default AITenant and MaasTenantConfig
+	// so that the platform operator (DSC) can report configuration issues without watching
+	// MaaS operands directly.
+	// The TenantsHealthy condition aggregates the Ready state of all AITenant CRs into a
+	// three-state model (Healthy/Degraded/Blocked) per ADR ODH-ADR-MS-0003.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+}
 
 // +kubebuilder:object:root=true
 

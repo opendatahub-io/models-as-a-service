@@ -2,33 +2,35 @@
 #
 # Create maas-default-gateway for Models-as-a-Service.
 #
-# Two deployment modes cover the full environment matrix:
+# Two gateway networking modes:
 #
-# INGRESS_MODE     Service type            TLS source                         Best for
-# -------------    ---------------------   --------------------------------   ------------------
-# route (default)  Gateway-controller      Cluster router cert                ROSA, OSD, cloud
-#                  default (LoadBalancer)  (auto-detected, four-level
-#                                          fallback: IngressController →
-#                                          router deployment → known
-#                                          secrets → self-signed)
+# INGRESS_MODE        Service type            TLS source                    Use when
+# ─────────────────   ─────────────────────   ─────────────────────────    ──────────────────────────
+# loadbalancer        External LoadBalancer   Cluster router cert           You want an external LB
+# (default)           (Gateway-controlled)    (auto-detected, four-level    service to expose the
+#                                             fallback chain)               Gateway
 #
-# clusterip        ClusterIP + OCP Route   service-ca-operator                On-prem,
-#                  (reencrypt)             (auto-provisioned)                 disconnected,
-#                                                                             bare-metal
+# ocproute            ClusterIP +             service-ca-operator           You want OpenShift Route
+#                     OpenShift Route         (auto-provisioned)            with reencrypt TLS for
+#                     (reencrypt termination)                               backend verification
 #
-# The clusterip mode applies all required resources in order:
+# NOTES:
+# - Both modes work on ROSA, OSD, on-prem, disconnected, and bare-metal clusters.
+# - INGRESS_MODE choice is about networking strategy, not deployment context.
+#
+# The ocproute mode applies all required resources in order:
 #   ConfigMap/gw-options → Gateway → wait for Programmed → Route/maas-gateway-route
 #
 # The DISCONNECTED=true flag removes the GitHub fallback and fails fast if local
 # manifests are missing.
 #
 # Environment variables:
-#   INGRESS_MODE                "route" (default) or "clusterip"
+#   INGRESS_MODE                "loadbalancer" (default) or "ocproute"
 #   DISCONNECTED                "true" to disable GitHub manifest fallback (default: false)
 #   CLUSTER_DOMAIN              Override cluster domain auto-detection
-#   CERT_NAME                   Override TLS certificate secret name (route mode only)
+#   CERT_NAME                   Override TLS certificate secret name (loadbalancer mode only)
 #   DRY_RUN                     "true" to preview without applying (default: false)
-#   MAAS_MANIFEST_REF           Git tag or commit SHA for remote kustomize fallback (route mode)
+#   MAAS_MANIFEST_REF           Git tag or commit SHA for remote kustomize fallback (loadbalancer mode)
 #   ALLOWED_ROUTE_NAMESPACES    Comma-separated list of namespaces allowed to attach HTTPRoutes,
 #                               e.g. "opendatahub,llm". When set, uses 'from: Selector' with
 #                               matchExpressions on kubernetes.io/metadata.name.
@@ -38,14 +40,14 @@
 #                               When neither is set, defaults to 'from: Same' (secure default).
 #
 # Usage:
-#   # Route mode (ROSA, OSD, cloud)
+#   # LoadBalancer mode (external LB service)
 #   ./scripts/setup-gateway.sh
 #
-#   # ClusterIP mode (on-prem, disconnected)
-#   INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+#   # OCRoute mode (ClusterIP + OpenShift Route with reencrypt)
+#   INGRESS_MODE=ocproute ./scripts/setup-gateway.sh
 #
 #   # Disconnected environment (no GitHub fetch)
-#   DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh
+#   DISCONNECTED=true INGRESS_MODE=ocproute ./scripts/setup-gateway.sh
 #
 #   # Restrict HTTPRoute attachment to app + model namespaces (typical MaaS)
 #   ALLOWED_ROUTE_NAMESPACES="opendatahub,llm" ./scripts/setup-gateway.sh
@@ -65,7 +67,7 @@ source "${SCRIPT_DIR}/deployment-helpers.sh"
 # CONFIGURATION
 #──────────────────────────────────────────────────────────────
 
-INGRESS_MODE="${INGRESS_MODE:-route}"
+INGRESS_MODE="${INGRESS_MODE:-loadbalancer}"
 DISCONNECTED="${DISCONNECTED:-false}"
 CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}"
 CERT_NAME="${CERT_NAME:-}"
@@ -95,17 +97,17 @@ GATEWAY_TIMEOUT="${CUSTOM_CHECK_TIMEOUT:-120}"
 validate_configuration() {
   log_info "Validating gateway configuration..."
 
-  # Validate ingress mode
-  if [[ ! "$INGRESS_MODE" =~ ^(route|clusterip)$ ]]; then
+  # Validate ingress mode (no backward compatibility - only new names supported)
+  if [[ ! "$INGRESS_MODE" =~ ^(loadbalancer|ocproute)$ ]]; then
     log_error "Invalid INGRESS_MODE: $INGRESS_MODE"
-    log_error "Must be 'route' or 'clusterip'"
+    log_error "Valid modes are: 'loadbalancer' (default) or 'ocproute'"
     exit 1
   fi
 
   # Validate required tools
   local missing=()
   command -v kubectl &>/dev/null || missing+=("kubectl")
-  if [[ "$INGRESS_MODE" == "route" ]]; then
+  if [[ "$INGRESS_MODE" == "loadbalancer" ]]; then
     command -v kustomize &>/dev/null || missing+=("kustomize")
     command -v envsubst &>/dev/null || missing+=("envsubst")
   fi
@@ -268,11 +270,11 @@ EOF
 }
 
 #──────────────────────────────────────────────────────────────
-# ROUTE MODE SETUP
+# LOADBALANCER MODE SETUP
 #──────────────────────────────────────────────────────────────
 
-setup_route_mode() {
-  log_info "Setting up Gateway in route mode..."
+setup_loadbalancer_mode() {
+  log_info "Setting up Gateway in loadbalancer mode (external LoadBalancer service)..."
 
   detect_tls_certificate
 
@@ -287,17 +289,17 @@ setup_route_mode() {
         -o jsonpath='{.metadata.annotations.opendatahub\.io/managed}' 2>/dev/null || echo "")
       authorino_anno=$(kubectl get gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" \
         -o jsonpath='{.metadata.annotations.security\.opendatahub\.io/authorino-tls-bootstrap}' 2>/dev/null || echo "")
-      # Route mode should NOT have infrastructure.parametersRef (clusterip mode does)
+      # Loadbalancer mode should NOT have infrastructure.parametersRef (ocproute mode does)
       params_ref=$(kubectl get gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" \
         -o jsonpath='{.spec.infrastructure.parametersRef.name}' 2>/dev/null || echo "")
 
       if [[ "$managed_anno" == "false" ]] && [[ "$authorino_anno" == "true" ]] && [[ -z "$params_ref" ]]; then
-        log_info "  Gateway is Programmed with required annotations and route mode spec"
+        log_info "  Gateway is Programmed with required annotations and loadbalancer mode spec"
         patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
         return 0
       else
         if [[ -n "$params_ref" ]]; then
-          log_info "  Gateway has parametersRef ($params_ref) - recreating for route mode..."
+          log_info "  Gateway has parametersRef ($params_ref) - recreating for loadbalancer mode..."
         else
           log_info "  Gateway is missing required annotations, updating..."
         fi
@@ -350,10 +352,10 @@ setup_route_mode() {
   patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
 
   # Wait for Gateway to be Programmed
-  # Note: In route mode, we warn but don't exit if the Gateway is not Programmed.
+  # Note: In loadbalancer mode, we warn but don't exit if the Gateway is not Programmed.
   # The Gateway resource is created successfully, and it may take longer on some
   # clusters (e.g., Service Mesh not fully ready). This is a soft check.
-  # In clusterip mode, we exit 1 because the Gateway MUST be Programmed before
+  # In ocproute mode, we exit 1 because the Gateway MUST be Programmed before
   # the Route can be created in the next step (see wait_gateway_programmed).
   log_info "  Waiting for Gateway to be Programmed (timeout: ${GATEWAY_TIMEOUT}s)..."
   if ! kubectl wait --for=condition=Programmed gateway/"$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" --timeout="${GATEWAY_TIMEOUT}s" 2>/dev/null; then
@@ -364,11 +366,11 @@ setup_route_mode() {
 }
 
 #──────────────────────────────────────────────────────────────
-# CLUSTERIP MODE SETUP
+# OCPROUTE MODE SETUP
 #──────────────────────────────────────────────────────────────
 
-setup_clusterip_mode() {
-  log_info "Setting up Gateway in clusterip mode (with OpenShift Route)..."
+setup_ocproute_mode() {
+  log_info "Setting up Gateway in ocproute mode (ClusterIP with OpenShift Route)..."
 
   # Step 1: Create ConfigMap/gw-options
   create_gw_options_configmap
@@ -432,17 +434,17 @@ create_clusterip_gateway() {
         -o jsonpath='{.metadata.annotations.opendatahub\.io/managed}' 2>/dev/null || echo "")
       authorino_anno=$(kubectl get gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" \
         -o jsonpath='{.metadata.annotations.security\.opendatahub\.io/authorino-tls-bootstrap}' 2>/dev/null || echo "")
-      # ClusterIP mode MUST have infrastructure.parametersRef pointing to gw-options ConfigMap
+      # OCRoute mode MUST have infrastructure.parametersRef pointing to gw-options ConfigMap
       params_ref=$(kubectl get gateway "$GATEWAY_NAME" -n "$GATEWAY_NAMESPACE" \
         -o jsonpath='{.spec.infrastructure.parametersRef.name}' 2>/dev/null || echo "")
 
       if [[ "$managed_anno" == "false" ]] && [[ "$authorino_anno" == "true" ]] && [[ "$params_ref" == "$GW_OPTIONS_CONFIGMAP" ]]; then
-        log_info "  Gateway is Programmed with required annotations and clusterip mode spec"
+        log_info "  Gateway is Programmed with required annotations and ocproute mode spec"
         patch_gateway_allowed_routes "$GATEWAY_NAME" "$GATEWAY_NAMESPACE"
         return 0
       else
         if [[ "$params_ref" != "$GW_OPTIONS_CONFIGMAP" ]]; then
-          log_info "  Gateway spec doesn't match clusterip mode (parametersRef: '$params_ref' != '$GW_OPTIONS_CONFIGMAP') - recreating..."
+          log_info "  Gateway spec doesn't match ocproute mode (parametersRef: '$params_ref' != '$GW_OPTIONS_CONFIGMAP') - recreating..."
         else
           log_info "  Gateway is missing required annotations, updating..."
         fi
@@ -453,11 +455,11 @@ create_clusterip_gateway() {
   fi
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    log_info "  [DRY RUN] Would create/update Gateway $GATEWAY_NAME (clusterip mode)"
+    log_info "  [DRY RUN] Would create/update Gateway $GATEWAY_NAME (ocproute mode)"
     return 0
   fi
 
-  log_info "  Creating/updating Gateway $GATEWAY_NAME (clusterip mode)..."
+  log_info "  Creating/updating Gateway $GATEWAY_NAME (ocproute mode)..."
 
   local allowed_routes_yaml
   allowed_routes_yaml="$(build_allowed_routes_yaml 6)"
@@ -625,11 +627,15 @@ main() {
 
   # Mode-specific setup
   case "$INGRESS_MODE" in
-    route)
-      setup_route_mode
+    loadbalancer)
+      setup_loadbalancer_mode
       ;;
-    clusterip)
-      setup_clusterip_mode
+    ocproute)
+      setup_ocproute_mode
+      ;;
+    *)
+      log_error "Internal error: unexpected INGRESS_MODE at runtime: $INGRESS_MODE"
+      exit 1
       ;;
   esac
 
@@ -646,7 +652,7 @@ main() {
   log_info "  Gateway: $GATEWAY_NAME"
   log_info "  Namespace: $GATEWAY_NAMESPACE"
 
-  if [[ "$INGRESS_MODE" == "clusterip" ]]; then
+  if [[ "$INGRESS_MODE" == "ocproute" ]]; then
     log_info "  Route: $GATEWAY_ROUTE_NAME"
     log_info "  Hostname: maas.$CLUSTER_DOMAIN"
   fi
@@ -655,7 +661,7 @@ main() {
   log_info "Verify with:"
   log_info "  kubectl get gateway $GATEWAY_NAME -n $GATEWAY_NAMESPACE"
 
-  if [[ "$INGRESS_MODE" == "clusterip" ]]; then
+  if [[ "$INGRESS_MODE" == "ocproute" ]]; then
     log_info "  kubectl get route $GATEWAY_ROUTE_NAME -n $GATEWAY_NAMESPACE"
   fi
 }

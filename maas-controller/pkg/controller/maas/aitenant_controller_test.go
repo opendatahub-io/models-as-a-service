@@ -45,6 +45,160 @@ func aitenantTestScheme(t *testing.T) *runtime.Scheme {
 	return s
 }
 
+// TestApplyAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation asserts that
+// maas.opendatahub.io/payload-processing-type is no longer mirrored from AITenant onto
+// MaasTenantConfig: it lives only on MaasTenantConfig, set directly by operators, and
+// applyAITenantMetadata must leave a pre-existing value on the tenant config alone
+// regardless of what (if anything) the owning AITenant carries.
+func TestApplyAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation(t *testing.T) {
+	g := NewWithT(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "praxis-team",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	config := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis-team",
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
+			},
+		},
+	}
+
+	applyAITenantMetadata(config, aitenant, config.Namespace)
+
+	g.Expect(config.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingType,
+		tenantreconcile.PayloadProcessingTypePraxis,
+	), "operator-set payload-processing-type on MaasTenantConfig must survive AITenant metadata reconciliation")
+}
+
+// TestRemoveAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation asserts that
+// releasing AITenant ownership of a namespace/object (e.g. on AITenant deletion) does
+// not also clear the operator-set payload-processing-type selection.
+func TestRemoveAITenantMetadata_DoesNotTouchPayloadProcessingTypeAnnotation(t *testing.T) {
+	g := NewWithT(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "praxis-team",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	config := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: "ai-tenant-praxis-team",
+			Annotations: map[string]string{
+				tenantreconcile.AnnotationPayloadProcessingType: tenantreconcile.PayloadProcessingTypePraxis,
+			},
+		},
+	}
+	applyAITenantMetadata(config, aitenant, config.Namespace)
+
+	removeAITenantMetadata(config, aitenant, config.Namespace)
+
+	g.Expect(config.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingType,
+		tenantreconcile.PayloadProcessingTypePraxis,
+	))
+}
+
+// TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate asserts that a
+// brand-new MaasTenantConfig is seeded with cleanup-complete at creation
+// time, so its first-ever deploy is never blocked by the payload-processing
+// backend swap handshake (see tenantreconcile.AnnotationPayloadProcessingStatus).
+func TestEnsureTenantConfig_SeedsIPPMigrationMarkerOnCreate(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	gateway := existingAITenantGateway("team-a")
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantToActive(t, r, key)
+
+	var tenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-a"}, &tenant)).To(Succeed())
+	g.Expect(tenant.Annotations).To(HaveKeyWithValue(
+		tenantreconcile.AnnotationPayloadProcessingStatus,
+		tenantreconcile.PayloadProcessingStatusCleanupComplete,
+	))
+}
+
+// TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim asserts
+// that once a transitioning-in party has claimed the status (legacy deletes
+// it to absent; see tenantreconcile.claimLegacySteady), a later, unrelated
+// AITenant reconcile must NOT resurrect cleanup-complete: seeding only ever
+// happens on the literal Create path.
+func TestEnsureTenantConfig_DoesNotReSeedIPPMigrationMarkerAfterClaim(t *testing.T) {
+	g := NewWithT(t)
+	s := aitenantTestScheme(t)
+
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-a",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	gateway := existingAITenantGateway("team-a")
+	cl := fake.NewClientBuilder().
+		WithScheme(s).
+		WithStatusSubresource(&maasv1alpha1.AITenant{}).
+		WithObjects(aitenant, gateway).
+		Build()
+	r := &AITenantReconciler{
+		Client:           cl,
+		Scheme:           s,
+		APIReader:        cl,
+		AppNamespace:     "opendatahub",
+		TenantNamespace:  "models-as-a-service",
+		GatewayNamespace: "openshift-ingress",
+	}
+
+	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
+	reconcileAITenantToActive(t, r, key)
+
+	tenantKey := client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-a"}
+	var tenant maasv1alpha1.MaasTenantConfig
+	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
+
+	// Simulate a transitioning-in legacy party claiming (deleting to absent).
+	delete(tenant.Annotations, tenantreconcile.AnnotationPayloadProcessingStatus)
+	g.Expect(cl.Update(context.Background(), &tenant)).To(Succeed())
+
+	// A later, unrelated reconcile (e.g. triggered by a gateway status
+	// change) must not resurrect cleanup-complete.
+	g.Expect(cl.Get(context.Background(), key, aitenant)).To(Succeed())
+	_, _, err := r.ensureTenantConfig(context.Background(), aitenant)
+	g.Expect(err).NotTo(HaveOccurred())
+
+	g.Expect(cl.Get(context.Background(), tenantKey, &tenant)).To(Succeed())
+	g.Expect(tenant.Annotations).NotTo(HaveKey(tenantreconcile.AnnotationPayloadProcessingStatus))
+}
+
 func existingAITenantGateway(name string) *gatewayapiv1.Gateway {
 	return &gatewayapiv1.Gateway{
 		TypeMeta: metav1.TypeMeta{
@@ -489,7 +643,7 @@ func TestAITenantReconcile_ExplicitGatewayNameResolvesExistingGateway(t *testing
 	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-explicit"}, &tenant)).To(Succeed())
 }
 
-func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
+func TestAITenantReconcile_MigratesAndDeletesPreExistingTenant(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
@@ -578,18 +732,11 @@ func TestAITenantReconcile_UpdatesPreExistingTenant(t *testing.T) {
 	g.Expect(*config.Spec.APIKeys.MaxExpirationDays).To(Equal(maxExpirationDays))
 
 	var tenant maasv1alpha1.Tenant
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-adoptcfg"}, &tenant)).To(Succeed())
-	g.Expect(tenant.Annotations).To(HaveKeyWithValue("maas.opendatahub.io/deprecated-by", maasv1alpha1.MaasTenantConfigKind))
-	g.Expect(tenant.Annotations).To(HaveKeyWithValue("maas.opendatahub.io/migrated-to", maasv1alpha1.MaasTenantConfigInstanceName))
-	g.Expect(tenant.Spec.GatewayRef).To(Equal(maasv1alpha1.TenantGatewayRef{
-		Namespace: "openshift-ingress",
-		Name:      "old-gateway",
-	}))
-	g.Expect(tenant.Spec.ExternalOIDC).To(BeNil())
-	g.Expect(tenant.Finalizers).NotTo(ContainElement(tenantFinalizer))
+	err = cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.TenantInstanceName, Namespace: "ai-tenant-team-adoptcfg"}, &tenant)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 }
 
-func TestAITenantReconcile_StripsStaleFinalizerFromLegacyTenantOnMigration(t *testing.T) {
+func TestAITenantReconcile_RemovesLegacyTenantWithStaleFinalizerAfterMigration(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 
@@ -637,21 +784,183 @@ func TestAITenantReconcile_StripsStaleFinalizerFromLegacyTenantOnMigration(t *te
 	}
 
 	var tenant maasv1alpha1.Tenant
-	g.Expect(cl.Get(context.Background(), client.ObjectKey{
+	err := cl.Get(context.Background(), client.ObjectKey{
 		Name:      maasv1alpha1.TenantInstanceName,
 		Namespace: "ai-tenant-team-stalefinalizer",
-	}, &tenant)).To(Succeed())
-	g.Expect(tenant.Finalizers).NotTo(ContainElement(tenantFinalizer),
-		"stale finalizer must be stripped so the legacy Tenant can actually terminate when deleted")
-	g.Expect(tenant.Annotations).To(HaveKeyWithValue("maas.opendatahub.io/deprecated-by", maasv1alpha1.MaasTenantConfigKind))
+	}, &tenant)
+	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+}
 
-	// With the finalizer gone, deleting the legacy Tenant (e.g. via tenant namespace
-	// teardown) must actually remove it instead of hanging forever.
-	g.Expect(cl.Delete(context.Background(), &tenant)).To(Succeed())
-	g.Expect(apierrors.IsNotFound(cl.Get(context.Background(), client.ObjectKey{
-		Name:      maasv1alpha1.TenantInstanceName,
-		Namespace: "ai-tenant-team-stalefinalizer",
-	}, &maasv1alpha1.Tenant{}))).To(BeTrue())
+func TestCleanupMigratedLegacyTenant(t *testing.T) {
+	tenantNamespace := "ai-tenant-team-cleanup"
+	aitenant := &maasv1alpha1.AITenant{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "team-cleanup",
+			Namespace: tenantreconcile.DefaultAITenantNamespace,
+		},
+	}
+	maxExpirationDays := int32(30)
+	telemetryEnabled := true
+
+	newConfig := func() *maasv1alpha1.MaasTenantConfig {
+		config := &maasv1alpha1.MaasTenantConfig{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+				Namespace: tenantNamespace,
+			},
+			Spec: maasv1alpha1.MaasTenantConfigSpec{
+				APIKeys:   &maasv1alpha1.TenantAPIKeysConfig{MaxExpirationDays: &maxExpirationDays},
+				Telemetry: &maasv1alpha1.TenantTelemetryConfig{Enabled: &telemetryEnabled},
+			},
+		}
+		applyAITenantMetadata(config, aitenant, tenantNamespace)
+		return config
+	}
+	newLegacy := func() *maasv1alpha1.Tenant {
+		return &maasv1alpha1.Tenant{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      maasv1alpha1.TenantInstanceName,
+				Namespace: tenantNamespace,
+				Annotations: map[string]string{
+					legacyDeprecatedByAnnotation: maasv1alpha1.MaasTenantConfigKind,
+					legacyMigratedToAnnotation:   maasv1alpha1.MaasTenantConfigInstanceName,
+				},
+			},
+			Spec: maasv1alpha1.TenantSpec{
+				APIKeys:   &maasv1alpha1.TenantAPIKeysConfig{MaxExpirationDays: &maxExpirationDays},
+				Telemetry: &maasv1alpha1.TenantTelemetryConfig{Enabled: &telemetryEnabled},
+			},
+		}
+	}
+
+	tests := []struct {
+		name          string
+		includeConfig bool
+		mutateConfig  func(*maasv1alpha1.MaasTenantConfig)
+		mutateLegacy  func(*maasv1alpha1.Tenant)
+		wantDeleted   bool
+	}{
+		{
+			name:          "deletes marked legacy Tenant after verified migration",
+			includeConfig: true,
+			wantDeleted:   true,
+		},
+		{
+			name:          "keeps legacy Tenant when MaasTenantConfig is absent",
+			includeConfig: false,
+		},
+		{
+			name:          "keeps legacy Tenant without controller migration marker",
+			includeConfig: true,
+			mutateLegacy: func(legacy *maasv1alpha1.Tenant) {
+				delete(legacy.Annotations, legacyMigratedToAnnotation)
+			},
+		},
+		{
+			name:          "keeps legacy Tenant with unexpected migration target",
+			includeConfig: true,
+			mutateLegacy: func(legacy *maasv1alpha1.Tenant) {
+				legacy.Annotations[legacyMigratedToAnnotation] = "other-config"
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when config belongs to another AITenant",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				config.Annotations[aitenantNameAnnotation] = "another-tenant"
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when config tenant namespace marker does not match",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				config.Labels[tenantreconcile.LabelTenantNamespace] = "ai-tenant-other"
+			},
+		},
+		{
+			name:          "keeps legacy Tenant while config is terminating",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				now := metav1.Now()
+				config.DeletionTimestamp = &now
+				config.Finalizers = []string{"test.example.com/hold"}
+			},
+		},
+		{
+			name:          "keeps legacy Tenant claimed by another AITenant",
+			includeConfig: true,
+			mutateLegacy: func(legacy *maasv1alpha1.Tenant) {
+				legacy.Annotations[aitenantNameAnnotation] = "another-tenant"
+				legacy.Annotations[aitenantNamespaceAnnotation] = tenantreconcile.DefaultAITenantNamespace
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when API key config was not copied",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				config.Spec.APIKeys = nil
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when telemetry config was not copied",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				config.Spec.Telemetry = nil
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when config has different API key settings",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				differentDays := int32(90)
+				config.Spec.APIKeys = &maasv1alpha1.TenantAPIKeysConfig{MaxExpirationDays: &differentDays}
+			},
+		},
+		{
+			name:          "keeps legacy Tenant when config has different telemetry settings",
+			includeConfig: true,
+			mutateConfig: func(config *maasv1alpha1.MaasTenantConfig) {
+				differentEnabled := false
+				config.Spec.Telemetry = &maasv1alpha1.TenantTelemetryConfig{Enabled: &differentEnabled}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := NewWithT(t)
+			s := aitenantTestScheme(t)
+			legacy := newLegacy()
+			if tt.mutateLegacy != nil {
+				tt.mutateLegacy(legacy)
+			}
+			objects := []client.Object{legacy}
+			if tt.includeConfig {
+				config := newConfig()
+				if tt.mutateConfig != nil {
+					tt.mutateConfig(config)
+				}
+				objects = append(objects, config)
+			}
+			unexpected := &maasv1alpha1.Tenant{
+				ObjectMeta: metav1.ObjectMeta{Name: "unexpected-tenant", Namespace: tenantNamespace},
+			}
+			objects = append(objects, unexpected)
+
+			cl := fake.NewClientBuilder().WithScheme(s).WithObjects(objects...).Build()
+			r := &AITenantReconciler{Client: cl, APIReader: cl}
+			g.Expect(r.cleanupMigratedLegacyTenant(context.Background(), aitenant, tenantNamespace)).To(Succeed())
+
+			err := cl.Get(context.Background(), client.ObjectKeyFromObject(legacy), &maasv1alpha1.Tenant{})
+			if tt.wantDeleted {
+				g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+				g.Expect(r.cleanupMigratedLegacyTenant(context.Background(), aitenant, tenantNamespace)).To(Succeed())
+			} else {
+				g.Expect(err).NotTo(HaveOccurred())
+			}
+			g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(unexpected), &maasv1alpha1.Tenant{})).To(Succeed())
+		})
+	}
 }
 
 func TestAITenantReconcile_IgnoresLegacyDefaultGatewayForNonDefaultTenant(t *testing.T) {
@@ -791,6 +1100,10 @@ func TestAITenantReconcile_LegacyGatewayNamespaceMismatchFailsMigration(t *testi
 	var config maasv1alpha1.MaasTenantConfig
 	err = cl.Get(context.Background(), client.ObjectKey{Name: maasv1alpha1.MaasTenantConfigInstanceName, Namespace: "ai-tenant-team-mismatch"}, &config)
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
+
+	var preserved maasv1alpha1.Tenant
+	g.Expect(cl.Get(context.Background(), client.ObjectKeyFromObject(legacyTenant), &preserved)).To(Succeed())
+	g.Expect(preserved.Annotations).NotTo(HaveKey(legacyMigratedToAnnotation))
 }
 
 func TestAITenantReconcile_LabelsPreExistingDerivedNamespace(t *testing.T) {

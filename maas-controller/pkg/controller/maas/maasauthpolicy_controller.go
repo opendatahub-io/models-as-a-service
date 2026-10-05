@@ -37,11 +37,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/util/retry"
+	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -90,6 +93,10 @@ type MaaSAuthPolicyReconciler struct {
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
+
+	// ippGatewaySyncQueue retries default-gateway x-api-key sync when an IPP ExternalModel
+	// event cannot be applied inline (transient API errors or empty MaaSAuthPolicy list).
+	ippGatewaySyncQueue workqueue.TypedRateLimitingInterface[struct{}]
 }
 
 // oidcConfig holds resolved OIDC configuration from AITenant or a legacy Tenant CR.
@@ -384,7 +391,7 @@ const (
 		`? auth.metadata.apiKeyValidation.groups ` +
 		`: (has(auth.identity.groups) ? auth.identity.groups : auth.identity.user.groups)`
 
-	safeGroupNamePattern = `^[A-Za-z0-9:._/-]+$`
+	safeGroupNamePattern = `^[A-Za-z0-9:._/ -]+$`
 	celOIDCGroupsSafe    = `auth.identity.groups.all(g, g.matches('` + safeGroupNamePattern + `'))`
 
 	// celTokenGroupsHeaderJSON renders the X-MaaS-Group header for non-API-key
@@ -462,7 +469,7 @@ func subscriptionGatewayCacheKeySelector() string {
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maastenantconfigs,verbs=get;list;watch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=tenants,verbs=get;list;watch
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
-//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list
+//+kubebuilder:rbac:groups=inference.opendatahub.io,resources=externalmodels,verbs=list;watch
 
 // Reconcile is part of the main kubernetes reconciliation loop
 const maasAuthPolicyFinalizer = "maas.opendatahub.io/authpolicy-cleanup"
@@ -499,8 +506,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	// No finalizer needed — there are no AuthPolicies to clean up.
 	if reflect.DeepEqual(policy.Spec, maasv1alpha1.MaaSAuthPolicySpec{}) {
 		statusSnapshot := policy.Status.DeepCopy()
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, policy, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
 	// Add finalizer if not present
@@ -519,16 +525,14 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 	oidc := r.fetchOIDCConfig(ctx, log, req.Namespace)
 	tenantID, err := r.fetchTenantIdentifier(ctx, log, req.Namespace)
 	if err != nil {
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to resolve tenant identifier: %v", err), statusSnapshot, err)
 	}
 	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
 
 	gatewayNs, gatewayName, err := r.fetchGatewayInfo(ctx, log, req.Namespace)
 	if err != nil {
 		log.Error(err, "failed to fetch gateway info")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to fetch gateway info: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to fetch gateway info: %v", err), statusSnapshot, err)
 	}
 
 	// Reconcile the gateway-level AuthPolicy for this tenant's gateway.
@@ -548,22 +552,19 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 			"gatewayName", gatewayName)
 		// Still mark the policy as Active since the model-level auth rules are aggregated correctly,
 		// even though we're not updating the gateway policy
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.updateStatus(ctx, policy, maasv1alpha1.PhaseActive, "", statusSnapshot)
 	}
 
 	legacyPolicyExists, err := r.hasLegacyModelAuthPolicy(ctx, policy.Namespace)
 	if err != nil {
 		log.Error(err, "failed to check for legacy model AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check upgrade cutover safety: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check upgrade cutover safety: %v", err), statusSnapshot, err)
 	}
 	if legacyPolicyExists {
 		targetReady, readyErr := r.targetMaaSAPIReady(ctx, tenantID)
 		if readyErr != nil {
 			log.Error(readyErr, "failed to check target maas-api readiness")
-			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check target maas-api readiness: %v", readyErr), statusSnapshot)
-			return ctrl.Result{}, readyErr
+			return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check target maas-api readiness: %v", readyErr), statusSnapshot, readyErr)
 		}
 		if !targetReady {
 			message := fmt.Sprintf(
@@ -572,23 +573,20 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				tenantreconcile.MaaSAPIServiceName(tenantID),
 			)
 			log.Info(message)
-			r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return r.reconcilePending(ctx, policy, message, statusSnapshot)
 		}
 	}
 
 	gwChanged, reconcileErr := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, tenantID, gatewayNs, gatewayName)
 	if reconcileErr != nil {
 		log.Error(reconcileErr, "failed to reconcile gateway AuthPolicy")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot)
-		return ctrl.Result{}, reconcileErr
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile gateway AuthPolicy: %v", reconcileErr), statusSnapshot, reconcileErr)
 	}
 	if gwChanged || legacyPolicyExists || policy.Status.Phase != maasv1alpha1.PhaseActive {
 		gatewayPolicyReady, readinessMessage, readinessErr := r.gatewayAuthPolicyReady(ctx, gatewayNs, gatewayName)
 		if readinessErr != nil {
 			log.Error(readinessErr, "failed to check gateway AuthPolicy readiness")
-			r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to check gateway AuthPolicy readiness: %v", readinessErr), statusSnapshot)
-			return ctrl.Result{}, readinessErr
+			return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to check gateway AuthPolicy readiness: %v", readinessErr), statusSnapshot, readinessErr)
 		}
 		if !gatewayPolicyReady {
 			message := fmt.Sprintf(
@@ -598,8 +596,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 				readinessMessage,
 			)
 			log.Info(message)
-			r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot)
-			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+			return r.reconcilePending(ctx, policy, message, statusSnapshot)
 		}
 	}
 
@@ -607,8 +604,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	if err != nil {
 		log.Error(err, "failed to reconcile model group AuthPolicies")
-		r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot)
-		return ctrl.Result{}, err
+		return r.reconcileFailed(ctx, log, policy, fmt.Sprintf("Failed to reconcile: %v", err), statusSnapshot, err)
 	}
 
 	// Update per-AuthPolicy status
@@ -654,8 +650,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 
 	// Derive final phase based on model and AuthPolicy health
 	phase, message := r.deriveAuthPolicyPhase(policy, missingModels)
-	r.updateStatus(ctx, policy, phase, message, statusSnapshot)
-	return ctrl.Result{}, nil
+	return ctrl.Result{}, r.updateStatus(ctx, policy, phase, message, statusSnapshot)
 }
 
 // findMissingModelRefs returns a list of model refs that don't exist or couldn't be fetched.
@@ -759,14 +754,17 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 			"metrics":  false,
 			"priority": int64(0),
 		},
+		// openshift-identities has no `when` guard — it always applies when
+		// higher-priority methods fail.  For Bearer sk-oai- requests, api-keys
+		// (priority 0) succeeds first (OR semantics) so openshift-identities is
+		// never reached.  For x-api-key requests, api-keys-x-api-key (priority 1)
+		// succeeds first.  For OC/OIDC tokens, this is the only matching method.
+		// Avoiding a CEL predicate here is intentional: in Authorino's proto-map
+		// CEL context, accessing request.headers.authorization when the header is
+		// absent throws an error that silently skips the method.
 		"openshift-identities": map[string]any{
 			"kubernetesTokenReview": map[string]any{
 				"audiences": []any{r.ClusterAudience},
-			},
-			"when": []any{
-				map[string]any{
-					"predicate": celIsNotAPIKey,
-				},
 			},
 			"metrics":  false,
 			"priority": int64(2),
@@ -776,11 +774,20 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 	if xAPIKeyEnabled {
 		authenticationRules["api-keys-x-api-key"] = map[string]any{
 			"plain": map[string]any{
-				"selector": "request.headers.x-api-key",
+				// Use CEL expression (not deprecated selector): Authorino's plain selector
+				// engine cannot retrieve hyphenated headers via bracket notation and
+				// returns null even when x-api-key is present. Expression works; the
+				// structured when clause below ensures this method only runs for sk-oai keys.
+				"expression": `request.headers["x-api-key"]`,
 			},
+			// Structured `when` (not a CEL predicate) — Authorino's selector engine
+			// returns null for absent headers (→ no match → false) rather than
+			// throwing an error as CEL bracket access does.
 			"when": []any{
 				map[string]any{
-					"predicate": `"x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*") && !request.headers.authorization.matches("^Bearer sk-oai-.*")`,
+					"selector": "request.headers.x-api-key",
+					"operator": "matches",
+					"value":    "^sk-oai-.*",
 				},
 			},
 			"metrics":  false,
@@ -806,26 +813,29 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 
 	authValidCacheKey := `"api-key|" + (` + celExtractKey + `) + "|" + ` + celModelIdentity
 
-	// tenantGatewayIsolationRule is a stub that always allows. It will be replaced with a real
-	// maas-api call to verify the API key's tenant matches the gateway hostname when multi-tenant
-	// hostname routing is productised (prevents a Coke key from working on a Pepsi gateway).
-	tenantGatewayIsolationRule := map[string]any{
-		"priority": int64(0),
-		"metrics":  false,
-		"opa": map[string]any{
-			"rego": `# Tenant hostname isolation stub.
-# Replace with a real maas-api call to validate that the API key's tenant
-# matches the gateway hostname (prevents Coke key on Pepsi gateway).
-allow { true }`,
-		},
-	}
-
 	requireGroupMembershipRego := `allow {
   object.get(input.auth.metadata["subscription-info"], "accessAllowed", false) == true
 }`
 
 	authorizationRules := map[string]any{
-		"tenant-gateway-isolation": tenantGatewayIsolationRule,
+		// API keys are inference credentials, not management credentials. Block the
+		// MaaS API key-management surface at the gateway before proxying the request.
+		"deny-api-key-management": map[string]any{
+			"when": []any{
+				map[string]any{
+					// Parenthesize celIsAPIKey: it contains || when x-api-key is enabled; without
+					// parens CEL binds && tighter than || and Bearer API keys match every path.
+					"predicate": `(` + celIsAPIKey + `) && (request.path == "/maas-api/v1/api-keys" || request.path.startsWith("/maas-api/v1/api-keys/"))`,
+				},
+			},
+			"metrics":  false,
+			"priority": int64(0),
+			"patternMatching": map[string]any{
+				"patterns": []any{
+					map[string]any{"predicate": "false"},
+				},
+			},
+		},
 		// Reject client-supplied identity headers; Authorino injects these after auth.
 		"deny-client-identity-headers": map[string]any{
 			"metrics":  false,
@@ -838,6 +848,12 @@ allow { true }`,
 					},
 					map[string]any{
 						"predicate": `!("x-maas-group" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-keyname" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
 					},
 				},
 			},
@@ -953,9 +969,16 @@ allow {
 	defaultsRules := map[string]any{
 		"metadata": map[string]any{
 			"apiKeyValidation": map[string]any{
+				// Use auth.identity (set by the winning auth method) rather than a
+				// header-based CEL expression.  In Authorino's proto-map CEL context,
+				// accessing an absent header via bracket notation throws an error that
+				// silently suppresses the metadata call; auth.identity is always a
+				// safe string after authentication succeeds.
+				// api-keys sets identity = "Bearer sk-oai-…", api-keys-x-api-key sets
+				// identity = "sk-oai-…" — both start with "sk-oai-" after stripping.
 				"when": []any{
 					map[string]any{
-						"predicate": celIsAPIKey,
+						"predicate": `auth.identity.matches("^(Bearer )?sk-oai-.*")`,
 					},
 				},
 				"http": map[string]any{
@@ -963,12 +986,12 @@ allow {
 					"contentType": "application/json",
 					"method":      "POST",
 					"body": map[string]any{
-						"expression": `{"key": ` + celExtractKey + `}`,
+						"expression": `{"key": auth.identity.replace("Bearer ", "")}`,
 					},
 				},
 				"cache": map[string]any{
 					"key": map[string]any{
-						"selector": celExtractKey,
+						"selector": `auth.identity.replace("Bearer ", "")`,
 					},
 					"ttl": r.MetadataCacheTTL,
 				},
@@ -1074,9 +1097,44 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// Short rate-limit identity for TokenRateLimitPolicy (does not replace
+					// X-MaaS-Subscription). Populated from maas-api subscription select.
+					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `has(auth.metadata["subscription-info"].rateLimitId) && auth.metadata["subscription-info"].rateLimitId != ""`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `auth.metadata["subscription-info"].rateLimitId`,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					"X-MaaS-KeyName": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": celIsAPIKey,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `auth.metadata.apiKeyValidation.keyName`,
+						},
+						"key":      "x-maas-keyname",
+						"metrics":  false,
+						"priority": int64(0),
+					},
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
+						// Same guard as subscription-info. Without it the filter fails on
+						// /maas-api requests, and Authorino cancels the other priority-0
+						// response configs, dropping X-MaaS-* headers at random.
+						"when": []any{
+							map[string]any{
+								"predicate": celModelIdentityAvailable,
+							},
+						},
 						"json": map[string]any{
 							"properties": map[string]any{
 								"groups":     map[string]any{"expression": celGroups},
@@ -1095,8 +1153,8 @@ allow {
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
-								// namespace/name after BBR alias resolution) so TRLP when
-								// predicates match for both path and body-based routing.
+								// namespace/name after BBR alias resolution). Kept for telemetry
+								// and debugging; TRLP when-predicates match selected_subscription_id.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
@@ -1105,6 +1163,12 @@ allow {
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
 										celResolvedModelIdentity,
 									),
+								},
+								// Short hash of selected_subscription_key from maas-api
+								// (subscription-info.rateLimitId). TokenRateLimitPolicy when
+								// predicates match this field to keep the WASM shim compact.
+								"selected_subscription_id": map[string]any{
+									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
 								},
 								"subscription_info": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
@@ -1221,7 +1285,9 @@ func (r *MaaSAuthPolicyReconciler) gatewayAuthPolicyReady(ctx context.Context, g
 // added by the API server or its controllers (e.g. Kuadrant defaults like
 // "allValues", "strategy") are ignored — only the fields we explicitly set
 // are compared. Both sides are JSON-round-tripped first so Go type
-// differences (int64 vs float64) are normalised.
+// differences (int64 vs float64) are normalised. Empty collections in
+// desired that are absent from current are treated as equivalent (the API
+// server and Kuadrant may strip empty maps/slices).
 func specMatchesDesired(desired, current map[string]any) bool {
 	desiredJSON, err := json.Marshal(desired)
 	if err != nil {
@@ -1239,6 +1305,7 @@ func specMatchesDesired(desired, current map[string]any) bool {
 		return false
 	}
 	stripExtraFields(currentNorm, desiredNorm)
+	stripEmptyDesiredFields(desiredNorm, currentNorm)
 	return reflect.DeepEqual(desiredNorm, currentNorm)
 }
 
@@ -1276,6 +1343,33 @@ func stripExtraFieldsSlice(current, desired []any) {
 				stripExtraFieldsSlice(cSlice, dSlice)
 			}
 		}
+	}
+}
+
+// stripEmptyDesiredFields removes keys from desired whose value is an empty
+// map or empty slice when the same key does not exist in current. The API
+// server and Kuadrant may omit empty collections entirely; treating them as
+// equivalent to absent prevents unnecessary Update() calls.
+func stripEmptyDesiredFields(desired, current map[string]any) {
+	for k, dv := range desired {
+		if dMap, ok := dv.(map[string]any); ok {
+			cMap, _ := current[k].(map[string]any)
+			stripEmptyDesiredFields(dMap, cMap)
+		}
+		if _, exists := current[k]; !exists && isEmptyCollection(dv) {
+			delete(desired, k)
+		}
+	}
+}
+
+func isEmptyCollection(v any) bool {
+	switch val := v.(type) {
+	case map[string]any:
+		return len(val) == 0
+	case []any:
+		return len(val) == 0
+	default:
+		return false
 	}
 }
 
@@ -1321,34 +1415,40 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	}
 	existingFound := err == nil
 
-	// For tenant-specific gateways, fetch the Gateway so we can set an
-	// OwnerReference. This ensures Kubernetes garbage collection automatically
-	// deletes the AuthPolicy when the Gateway is deleted (e.g., via AITenant
-	// cascade deletion), preventing orphaned gateway-scoped AuthPolicies.
+	// Fetch the Gateway so we can set an OwnerReference and delete stale managed
+	// AuthPolicies when the Gateway no longer exists. Tenant gateways must exist
+	// before creating an AuthPolicy; the default gateway may be reconciled before
+	// the Gateway CR is created (OwnerReference is added once it appears).
 	var gateway *gatewayapiv1.Gateway
-	if isTenantGateway {
-		gateway = &gatewayapiv1.Gateway{}
-		gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
-		if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
-			if apierrors.IsNotFound(gwErr) {
-				// Gateway is gone. If a managed tenant AuthPolicy still exists,
-				// delete it to prevent orphaned resources.
-				if existingFound && isManaged(existing) {
+	gateway = &gatewayapiv1.Gateway{}
+	gwKey := client.ObjectKey{Namespace: gatewayNamespace, Name: gatewayName}
+	if gwErr := r.Get(ctx, gwKey, gateway); gwErr != nil {
+		if apierrors.IsNotFound(gwErr) {
+			if existingFound && isManaged(existing) {
+				// Tenant gateways: always clean up orphaned AuthPolicies when the Gateway is gone.
+				// Default gateway: only clean up if the AuthPolicy was previously linked to a
+				// Gateway via OwnerReference (orphan from a deleted Gateway). During initial
+				// install the Gateway CR may not exist yet; in that case we must not delete the
+				// AuthPolicy we are about to create or update.
+				if isTenantGateway || hasGatewayOwnerReference(existing) {
 					if delErr := r.Delete(ctx, existing); delErr != nil {
-						return false, fmt.Errorf("failed to delete stale tenant gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
+						return false, fmt.Errorf("failed to delete stale gateway AuthPolicy %s/%s: %w", gatewayNamespace, authPolicyName, delErr)
 					}
-					log.Info("deleted stale tenant gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
+					log.Info("deleted stale gateway AuthPolicy (Gateway no longer exists)", "name", authPolicyName, "namespace", gatewayNamespace)
+					existingFound = false
 				}
-				// Nothing to create or update without a Gateway.
+			}
+			if isTenantGateway {
 				return false, nil
 			}
+			gateway = nil
+		} else {
 			return false, fmt.Errorf("failed to get Gateway %s/%s for OwnerReference: %w", gatewayNamespace, gatewayName, gwErr)
 		}
 	}
 
 	if !existingFound {
-		// Set OwnerReference on the new AuthPolicy for tenant gateways.
-		if isTenantGateway {
+		if gateway != nil {
 			setGatewayOwnerReference(gateway, gwPolicy)
 		}
 		if err := unstructured.SetNestedMap(gwPolicy.Object, spec, "spec"); err != nil {
@@ -1370,9 +1470,9 @@ func (r *MaaSAuthPolicyReconciler) reconcileGatewayAuthPolicy(
 	if err := unstructured.SetNestedMap(existing.Object, spec, "spec"); err != nil {
 		return false, fmt.Errorf("failed to set gateway AuthPolicy spec for update: %w", err)
 	}
-	// Ensure OwnerReferences are set on existing tenant gateway AuthPolicies
-	// (handles upgrade from pre-ownerref versions).
-	if isTenantGateway {
+	// Ensure OwnerReferences are set on existing gateway AuthPolicies when the
+	// Gateway exists (handles upgrade from pre-ownerref versions).
+	if gateway != nil {
 		setGatewayOwnerReference(gateway, existing)
 	}
 	if specMatchesDesired(spec, currentSpec) {
@@ -1719,12 +1819,14 @@ func apiKeyCELPredicates(xAPIKeyEnabled bool) (isAPIKey, isNotAPIKey, extractRaw
 			`!request.headers.authorization.startsWith("Bearer sk-oai-")`,
 			`request.headers.authorization.replace("Bearer ", "")`
 	}
-	isAPIKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") || ` +
-		`("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	authorizationAPIKey := `("authorization" in request.headers && request.headers["authorization"].matches("^Bearer sk-oai-.*"))`
+	//nolint:gosec // sk-oai- is a CEL pattern for API key format validation, not a credential
+	xAPIKey := `("x-api-key" in request.headers && request.headers["x-api-key"].matches("^sk-oai-.*"))`
+	isAPIKey = authorizationAPIKey + ` || ` + xAPIKey
 	isNotAPIKey = `!(` + isAPIKey + `)`
-	extractRawKey = `request.headers.authorization.matches("^Bearer sk-oai-.*") ` +
-		`? request.headers.authorization.replace("Bearer ", "") ` +
-		`: request.headers["x-api-key"]`
+	extractRawKey = `(` +
+		authorizationAPIKey + ` ? request.headers["authorization"].replace("Bearer ", "") : ` +
+		xAPIKey + ` ? request.headers["x-api-key"] : "")`
 	return isAPIKey, isNotAPIKey, extractRawKey
 }
 
@@ -1810,7 +1912,35 @@ func getAuthPolicyReadyState(ap *unstructured.Unstructured) (ready bool, reason 
 	return false, maasv1alpha1.ReasonNotEnforced, enforcedMsg
 }
 
-func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) {
+// reconcileFailed records PhaseFailed and returns cause. A status write error is only logged:
+// cause already requeues the policy and is the more useful error to surface.
+func (r *MaaSAuthPolicyReconciler) reconcileFailed(
+	ctx context.Context,
+	log logr.Logger,
+	policy *maasv1alpha1.MaaSAuthPolicy,
+	message string,
+	statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus,
+	cause error,
+) (ctrl.Result, error) {
+	if statusErr := r.updateStatus(ctx, policy, maasv1alpha1.PhaseFailed, message, statusSnapshot); statusErr != nil {
+		log.Error(statusErr, "failed to persist reconcile failure")
+	}
+	return ctrl.Result{}, cause
+}
+
+// reconcilePending records PhasePending and polls again after 10s. A status write error
+// replaces the poll so the write is retried through the error-driven requeue.
+func (r *MaaSAuthPolicyReconciler) reconcilePending(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) (ctrl.Result, error) {
+	if err := r.updateStatus(ctx, policy, maasv1alpha1.PhasePending, message, statusSnapshot); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+}
+
+// updateStatus returns the status write error so Reconcile can hand it to controller-runtime.
+// The For() watch drops status-only events, so a failed write is only retried through that
+// error-driven requeue.
+func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maasv1alpha1.MaaSAuthPolicy, phase maasv1alpha1.Phase, message string, statusSnapshot *maasv1alpha1.MaaSAuthPolicyStatus) error {
 	policy.Status.Phase = phase
 
 	var status metav1.ConditionStatus
@@ -1842,13 +1972,13 @@ func (r *MaaSAuthPolicyReconciler) updateStatus(ctx context.Context, policy *maa
 	})
 
 	if equality.Semantic.DeepEqual(*statusSnapshot, policy.Status) {
-		return
+		return nil
 	}
 
 	if err := r.Status().Update(ctx, policy); err != nil {
-		log := logr.FromContextOrDiscard(ctx)
-		log.Error(err, "failed to update MaaSAuthPolicy status", "name", policy.Name)
+		return fmt.Errorf("failed to update MaaSAuthPolicy status: %w", err)
 	}
+	return nil
 }
 
 // ValidateCacheTTLs validates that cache TTL configuration is valid.
@@ -1927,7 +2057,10 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		generatedAuthPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 		b = b.Watches(generatedAuthPolicy, handler.EnqueueRequestsFromMapFunc(
 			r.mapGeneratedAuthPolicyToParent,
-		))
+		), builder.WithPredicates(predicate.Or(
+			predicate.GenerationChangedPredicate{},
+			unstructuredConditionsChangedPredicate{},
+		)))
 	} else {
 		ctrl.Log.Info("AuthPolicy CRD not yet registered; watch will be added dynamically when Kuadrant is ready")
 	}
@@ -1940,10 +2073,35 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		), builder.WithPredicates(predicate.LabelChangedPredicate{}))
 	}
 
+	// Watch IPP ExternalModel (inference.opendatahub.io) so that creating or
+	// deleting a CR with apiFormat=messages re-runs discoverXAPIKeyNeeded and
+	// adds/removes the x-api-key identity source from the gateway AuthPolicy.
+	// The CRD may not be installed, so the watch is conditional.
+	r.ippGatewaySyncQueue = workqueue.NewTypedRateLimitingQueueWithConfig(
+		workqueue.DefaultTypedControllerRateLimiter[struct{}](),
+		workqueue.TypedRateLimitingQueueConfig[struct{}]{Name: "ipp-gateway-x-api-key-sync"},
+	)
+	if err := mgr.Add(manager.RunnableFunc(r.runIPPGatewaySyncWorker)); err != nil {
+		return fmt.Errorf("failed to register IPP gateway sync worker: %w", err)
+	}
+
+	const ippExternalModelCRD = "externalmodels.inference.opendatahub.io"
+	if crdExists(context.Background(), mgr.GetAPIReader(), ippExternalModelCRD) {
+		ippExternalModel := &unstructured.Unstructured{}
+		ippExternalModel.SetGroupVersionKind(schema.GroupVersionKind{
+			Group:   "inference.opendatahub.io",
+			Version: "v1alpha1",
+			Kind:    "ExternalModel",
+		})
+		b = b.Watches(ippExternalModel, handler.EnqueueRequestsFromMapFunc(
+			r.mapIPPExternalModelToMaaSAuthPolicies,
+		))
+	}
+
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		startLog := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("phase", "startup")
-		if err := r.ensureBaseGatewayAuthPolicy(ctx, startLog, nil, false, "", r.GatewayNamespace, r.GatewayName); err != nil {
-			startLog.Error(err, "failed to ensure base maas-gateway-auth on startup (non-fatal)")
+		if err := r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, startLog); err != nil {
+			startLog.Error(err, "failed to sync default gateway AuthPolicy on startup (non-fatal)")
 		}
 		return nil
 	})); err != nil {
@@ -1960,11 +2118,30 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			authPolicy := &unstructured.Unstructured{}
 			authPolicy.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1", Kind: "AuthPolicy"})
 			return source.Kind(mgr.GetCache(), authPolicy,
-				handler.TypedEnqueueRequestsFromMapFunc[*unstructured.Unstructured](
-					func(ctx context.Context, obj *unstructured.Unstructured) []reconcile.Request {
-						return r.mapGeneratedAuthPolicyToParent(ctx, obj)
+				handler.TypedFuncs[*unstructured.Unstructured, reconcile.Request]{
+					CreateFunc: func(ctx context.Context, e event.TypedCreateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+							q.Add(req)
+						}
 					},
-				),
+					UpdateFunc: func(ctx context.Context, e event.TypedUpdateEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						if e.ObjectOld == nil || e.ObjectNew == nil {
+							return
+						}
+						if e.ObjectOld.GetGeneration() == e.ObjectNew.GetGeneration() &&
+							unstructuredConditionSignature(e.ObjectOld) == unstructuredConditionSignature(e.ObjectNew) {
+							return
+						}
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.ObjectNew) {
+							q.Add(req)
+						}
+					},
+					DeleteFunc: func(ctx context.Context, e event.TypedDeleteEvent[*unstructured.Unstructured], q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+						for _, req := range r.mapGeneratedAuthPolicyToParent(ctx, e.Object) {
+							q.Add(req)
+						}
+					},
+				},
 			)
 		}); err != nil {
 			return fmt.Errorf("failed to register CRD watcher for AuthPolicy: %w", err)
@@ -2029,6 +2206,107 @@ func (r *MaaSAuthPolicyReconciler) mapNamespaceToMaaSAuthPolicies(ctx context.Co
 	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
 	if err := r.List(ctx, policyList, client.InNamespace(ns)); err != nil {
 		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy for namespace label change", "namespace", ns)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, p := range policyList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return requests
+}
+
+func isRetryableAPIError(err error) bool {
+	return apierrors.IsTooManyRequests(err) ||
+		apierrors.IsTimeout(err) ||
+		apierrors.IsServerTimeout(err) ||
+		apierrors.IsServiceUnavailable(err) ||
+		apierrors.IsConflict(err)
+}
+
+func (r *MaaSAuthPolicyReconciler) scheduleDefaultGatewayXAPIKeySync() {
+	if r.ippGatewaySyncQueue != nil {
+		r.ippGatewaySyncQueue.AddRateLimited(struct{}{})
+	}
+}
+
+func (r *MaaSAuthPolicyReconciler) runIPPGatewaySyncWorker(ctx context.Context) error {
+	log := ctrl.Log.WithName("maas-authpolicy-controller").WithValues("worker", "ipp-gateway-sync")
+	go func() {
+		<-ctx.Done()
+		r.ippGatewaySyncQueue.ShutDown()
+	}()
+	for {
+		item, shutdown := r.ippGatewaySyncQueue.Get()
+		if shutdown {
+			return nil
+		}
+		func() {
+			defer r.ippGatewaySyncQueue.Done(item)
+			if err := r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, log); err != nil {
+				log.Error(err, "failed to sync default gateway AuthPolicy for IPP ExternalModel change")
+				r.ippGatewaySyncQueue.AddRateLimited(item)
+				return
+			}
+			r.ippGatewaySyncQueue.Forget(item)
+		}()
+	}
+}
+
+func (r *MaaSAuthPolicyReconciler) enqueueMaaSAuthPoliciesInNamespace(ctx context.Context, namespace string) []reconcile.Request {
+	if namespace == "" {
+		return nil
+	}
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	if err := r.List(ctx, policyList, client.InNamespace(namespace)); err != nil {
+		ctrl.LoggerFrom(ctx).Error(err, "failed to list MaaSAuthPolicy resources for IPP ExternalModel fallback enqueue", "namespace", namespace)
+		return nil
+	}
+	requests := make([]reconcile.Request, len(policyList.Items))
+	for i, p := range policyList.Items {
+		requests[i] = reconcile.Request{NamespacedName: types.NamespacedName{Name: p.Name, Namespace: p.Namespace}}
+	}
+	return requests
+}
+
+// syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery updates the default gateway AuthPolicy
+// so authentication rules reflect current IPP ExternalModel-driven x-api-key discovery.
+func (r *MaaSAuthPolicyReconciler) syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx context.Context, log logr.Logger) error {
+	oidcNS := r.TenantNamespace
+	if oidcNS == "" {
+		oidcNS = "opendatahub"
+	}
+	oidc := r.fetchOIDCConfig(ctx, log, oidcNS)
+	xAPIKeyEnabled := r.discoverXAPIKeyNeeded(ctx, log)
+	_, err := r.reconcileGatewayAuthPolicy(ctx, log, oidc, xAPIKeyEnabled, "", r.GatewayNamespace, r.GatewayName)
+	return err
+}
+
+// mapIPPExternalModelToMaaSAuthPolicies enqueues all MaaSAuthPolicies when an
+// IPP ExternalModel (inference.opendatahub.io) is created, updated, or deleted.
+// discoverXAPIKeyNeeded scans cluster-wide, so any ExternalModel change may
+// affect whether the x-api-key identity source should be present.
+// When no MaaSAuthPolicies exist yet, enqueuing would be a no-op; sync the default
+// gateway AuthPolicy directly instead.
+func (r *MaaSAuthPolicyReconciler) mapIPPExternalModelToMaaSAuthPolicies(ctx context.Context, _ client.Object) []reconcile.Request {
+	log := ctrl.LoggerFrom(ctx)
+	policyList := &maasv1alpha1.MaaSAuthPolicyList{}
+	listErr := retry.OnError(retry.DefaultBackoff, isRetryableAPIError, func() error {
+		policyList.Items = nil
+		return r.List(ctx, policyList)
+	})
+	if listErr != nil {
+		log.Error(listErr, "failed to list MaaSAuthPolicy resources for IPP ExternalModel change")
+		r.scheduleDefaultGatewayXAPIKeySync()
+		return r.enqueueMaaSAuthPoliciesInNamespace(ctx, r.TenantNamespace)
+	}
+	if len(policyList.Items) == 0 {
+		syncErr := retry.OnError(retry.DefaultBackoff, func(err error) bool { return err != nil }, func() error {
+			return r.syncDefaultGatewayAuthPolicyForXAPIKeyDiscovery(ctx, log)
+		})
+		if syncErr != nil {
+			log.Error(syncErr, "failed to sync default gateway AuthPolicy for IPP ExternalModel change")
+			r.scheduleDefaultGatewayXAPIKeySync()
+		}
 		return nil
 	}
 	requests := make([]reconcile.Request, len(policyList.Items))
@@ -2139,6 +2417,15 @@ func (r *MaaSAuthPolicyReconciler) mapHTTPRouteToMaaSAuthPolicies(ctx context.Co
 		}
 	}
 	return requests
+}
+
+func hasGatewayOwnerReference(obj metav1.Object) bool {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind == "Gateway" && ref.APIVersion == gatewayapiv1.GroupVersion.String() {
+			return true
+		}
+	}
+	return false
 }
 
 // setGatewayOwnerReference sets an OwnerReference on the dependent object pointing to

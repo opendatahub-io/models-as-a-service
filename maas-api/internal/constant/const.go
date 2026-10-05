@@ -12,6 +12,9 @@ const (
 
 	DefaultMetricsPort = 9090
 
+	// DefaultMetricsCertDir is where OpenShift service-ca mounts metrics TLS material.
+	DefaultMetricsCertDir = "/tmp/k8s-metrics-server/metrics-certs"
+
 	// Header configuration constants.
 	HeaderUsername = "X-MaaS-Username"
 	HeaderGroup    = "X-MaaS-Group"
@@ -37,4 +40,10 @@ const (
 	MaxLabelsEntries    = 50
 	MaxLabelKeyLength   = 128
 	MaxLabelValueLength = 1024
+
+	// Rejection reason constants for metrics.
+	RejectionRateLimited   = "rate-limited"
+	RejectionUnauthorized  = "unauthorized"
+	RejectionNoCapacity    = "no-capacity"
+	RejectionQuotaExceeded = "quota-exceeded"
 )

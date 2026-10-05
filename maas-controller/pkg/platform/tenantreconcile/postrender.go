@@ -24,6 +24,12 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	for i := range resources {
 		resource := &resources[i]
 
+		if params.SkipIPP && isIPPResource(resource.GroupVersionKind(), resource.GetName()) {
+			log.V(1).Info("Skipping IPP resource for praxis tenant",
+				"kind", resource.GetKind(), "name", resource.GetName(), "namespace", resource.GetNamespace())
+			continue
+		}
+
 		annotations := resource.GetAnnotations()
 		if annotations != nil && annotations[AnnotationManaged] == "false" {
 			log.V(2).Info("Skipping resource due to opendatahub.io/managed=false annotation",
@@ -67,6 +73,14 @@ func PostRender(ctx context.Context, log logr.Logger, tenant client.Object, reso
 	}
 	if err := configureIstioTelemetryResources(log, tenant, &filteredResources, params); err != nil {
 		return nil, err
+	}
+	if !params.SkipIPP {
+		if err := configurePayloadProcessingHPA(log, &filteredResources, params); err != nil {
+			return nil, err
+		}
+		if err := configurePayloadPreProcessingHPA(log, &filteredResources, params); err != nil {
+			return nil, err
+		}
 	}
 	if err := applyPlatformParams(log, filteredResources, params); err != nil {
 		return nil, err
@@ -223,7 +237,7 @@ func patchAuthPolicyWithOIDC(log logr.Logger, resource *unstructured.Unstructure
 		return fmt.Errorf("failed to set X-MaaS-Username-OC: %w", err)
 	}
 	groupsExpr := `has(auth.identity.groups) ? ` +
-		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/-]+$')) ? ` +
+		`(size(auth.identity.groups) > 0 && auth.identity.groups.all(g, g.matches('^[A-Za-z0-9:._/ -]+$')) ? ` +
 		`'["system:authenticated","' + auth.identity.groups.join('","') + '"]' : ` +
 		`'["system:authenticated"]') : ` +
 		`(has(auth.identity.user.groups) && size(auth.identity.user.groups) > 0 ? ` +
@@ -339,6 +353,141 @@ func configureIstioTelemetryResources(log logr.Logger, tenant client.Object, res
 	istioTelemetryName := IstioTelemetryName(tenantID)
 	log.V(2).Info("Appending Istio Telemetry", "name", istioTelemetryName, "namespace", gatewayNamespace)
 	*resources = append(*resources, *istioTelemetry)
+	return nil
+}
+
+// configurePayloadProcessingHPA appends an HPA for payload-processing when autoscaling is enabled.
+// The HPA is generated in PostRender (not from kustomize) to avoid name-reference conflicts
+// with the pre-processing Deployment that shares the same base name.
+func configurePayloadProcessingHPA(log logr.Logger, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	if !params.PayloadProcessingAutoscaling {
+		return nil
+	}
+	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
+		name:         PayloadProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadProcessingReplicas,
+		maxReplicas:  params.PayloadProcessingMaxReplicas,
+		targetCPU:    params.PayloadProcessingTargetCPU,
+		targetMemory: params.PayloadProcessingTargetMemory,
+		logLabel:     "payload-processing",
+	})
+}
+
+// configurePayloadPreProcessingHPA appends an HPA for payload-pre-processing when autoscaling is enabled.
+func configurePayloadPreProcessingHPA(log logr.Logger, resources *[]unstructured.Unstructured, params PlatformParams) error {
+	if !params.PayloadPreProcessingAutoscaling {
+		return nil
+	}
+	return appendIPPWorkloadHPA(log, resources, ippHPAConfig{
+		name:         PayloadPreProcessingHPAName(params.TenantIdentifier),
+		deployment:   PayloadPreProcessingDeploymentName(params.TenantIdentifier),
+		namespace:    params.GatewayNamespace,
+		minReplicas:  params.PayloadPreProcessingReplicas,
+		maxReplicas:  params.PayloadPreProcessingMaxReplicas,
+		targetCPU:    params.PayloadPreProcessingTargetCPU,
+		targetMemory: params.PayloadPreProcessingTargetMemory,
+		logLabel:     "payload-pre-processing",
+	})
+}
+
+type ippHPAConfig struct {
+	name         string
+	deployment   string
+	namespace    string
+	minReplicas  *int32
+	maxReplicas  int32
+	targetCPU    int32
+	targetMemory int32
+	logLabel     string
+}
+
+func appendIPPWorkloadHPA(log logr.Logger, resources *[]unstructured.Unstructured, cfg ippHPAConfig) error {
+	minReplicas := int64(1)
+	if cfg.minReplicas != nil {
+		minReplicas = int64(*cfg.minReplicas)
+	}
+
+	hpa := &unstructured.Unstructured{
+		Object: map[string]any{
+			"apiVersion": "autoscaling/v2",
+			"kind":       "HorizontalPodAutoscaler",
+			"metadata": map[string]any{
+				"name":      cfg.name,
+				"namespace": cfg.namespace,
+			},
+			"spec": map[string]any{
+				"scaleTargetRef": map[string]any{
+					"apiVersion": "apps/v1",
+					"kind":       "Deployment",
+					"name":       cfg.deployment,
+				},
+				"minReplicas": minReplicas,
+				"maxReplicas": int64(cfg.maxReplicas),
+				"metrics": []any{
+					map[string]any{
+						"type": "Resource",
+						"resource": map[string]any{
+							"name": "cpu",
+							"target": map[string]any{
+								"type":               "Utilization",
+								"averageUtilization": int64(cfg.targetCPU),
+							},
+						},
+					},
+					map[string]any{
+						"type": "Resource",
+						"resource": map[string]any{
+							"name": "memory",
+							"target": map[string]any{
+								"type":               "Utilization",
+								"averageUtilization": int64(cfg.targetMemory),
+							},
+						},
+					},
+				},
+				"behavior": map[string]any{
+					"scaleDown": map[string]any{
+						"stabilizationWindowSeconds": int64(300),
+						"policies": []any{
+							map[string]any{
+								"type":          "Percent",
+								"value":         int64(25),
+								"periodSeconds": int64(60),
+							},
+						},
+					},
+					"scaleUp": map[string]any{
+						"stabilizationWindowSeconds": int64(0),
+						"policies": []any{
+							map[string]any{
+								"type":          "Percent",
+								"value":         int64(100),
+								"periodSeconds": int64(15),
+							},
+							map[string]any{
+								"type":          "Pods",
+								"value":         int64(4),
+								"periodSeconds": int64(15),
+							},
+						},
+						"selectPolicy": "Max",
+					},
+				},
+			},
+		},
+	}
+
+	log.V(2).Info("Appending "+cfg.logLabel+" HPA",
+		"name", cfg.name,
+		"namespace", cfg.namespace,
+		"scaleTarget", cfg.deployment,
+		"minReplicas", minReplicas,
+		"maxReplicas", cfg.maxReplicas,
+		"targetCPU", cfg.targetCPU,
+		"targetMemory", cfg.targetMemory)
+	*resources = append(*resources, *hpa)
 	return nil
 }
 

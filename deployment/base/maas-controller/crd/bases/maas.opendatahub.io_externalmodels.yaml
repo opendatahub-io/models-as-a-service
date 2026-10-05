@@ -161,12 +161,19 @@ spec:
                   - type
                   type: object
                 type: array
+              message:
+                description: Message provides details about the current phase.
+                type: string
               phase:
-                description: Phase represents the current phase of the external model
+                description: |-
+                  Phase represents the current phase of the external model
+                  Migrated means networking is managed by the corresponding
+                  inference.opendatahub.io ExternalModel.
                 enum:
                 - Pending
                 - Ready
                 - Failed
+                - Migrated
                 type: string
             type: object
         required:

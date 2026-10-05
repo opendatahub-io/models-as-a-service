@@ -58,6 +58,7 @@ nav:
       - Tier to Subscription: migration/tier-to-subscription.md
       - Upgrade to 3.4: migration/upgrade-to-3.4.md
       - Upgrade to 3.5: migration/upgrade-to-3.5.md
+      - Upgrade to 3.6: migration/upgrade-to-3.6.md
   - Concepts:
     - Architecture: concepts/architecture.md
     - Multi-Tenancy: concepts/multi-tenancy.md
@@ -103,6 +104,7 @@ nav:
   - Observability:
     - Overview: observability/index.md
     - Setup: observability/setup.md
+    - OTel JSON stdout: observability/otel-json-stdout.md
     - Metrics & Dashboards: observability/metrics-and-dashboards.md
     - Operations: observability/operations.md
   - User Guide:

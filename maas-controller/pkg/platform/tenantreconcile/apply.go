@@ -9,11 +9,11 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 )
 
 const ssaFieldOwner = "maas-controller"
@@ -42,7 +42,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// subsequent reconciles leave user plugin edits alone unless they set
 		// opendatahub.io/managed=true to opt back into continuous management.
 		if isLiveResourceUnmanaged(ctx, c, u) {
-			ctrl.LoggerFrom(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
+			oteljson.FromContext(ctx).V(1).Info("Skipping SSA for resource with opendatahub.io/managed=false on cluster",
 				"kind", u.GetKind(), "name", u.GetName(), "namespace", u.GetNamespace())
 			continue
 		}
@@ -52,7 +52,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 		// over them would fail on immutable fields like spec.selector and produce
 		// conflicting controller:true ownerReferences.
 		if isOwnedByExternalController(ctx, c, u, mcfg.UID) {
-			ctrl.LoggerFrom(ctx).Info("Skipping SSA: resource owned by external controller",
+			oteljson.FromContext(ctx).Info("Skipping SSA: resource owned by external controller",
 				"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName())
 			continue
 		}
@@ -63,7 +63,7 @@ func ApplyRendered(ctx context.Context, c client.Client, scheme *runtime.Scheme,
 			if err := controllerutil.SetControllerReference(mcfg, u, scheme); err != nil {
 				var already *controllerutil.AlreadyOwnedError
 				if errors.As(err, &already) {
-					ctrl.LoggerFrom(ctx).Info("skipping Config controller reference: object already owned by another controller",
+					oteljson.FromContext(ctx).Info("skipping Config controller reference: object already owned by another controller",
 						"kind", u.GetKind(), "namespace", u.GetNamespace(), "name", u.GetName(),
 						"existingOwner", already)
 				} else {

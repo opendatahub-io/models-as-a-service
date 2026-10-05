@@ -7,6 +7,7 @@ import (
 
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -18,6 +19,10 @@ import (
 // Returns a shutdown function that flushes pending spans.
 // If endpoint is empty, tracing is disabled (noop provider, zero overhead).
 func InitTracer(ctx context.Context, endpoint string, insecureConn bool, sampleRate float64, serviceName, serviceNamespace string) (func(context.Context), error) {
+	otel.SetTextMapPropagator(propagation.NewCompositeTextMapPropagator(
+		propagation.TraceContext{},
+		propagation.Baggage{},
+	))
 	if endpoint == "" {
 		return func(context.Context) {}, nil
 	}

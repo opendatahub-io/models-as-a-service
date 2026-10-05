@@ -1,0 +1,28 @@
+name: Actionlint
+
+on:
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  actionlint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: reviewdog/action-actionlint@a0eab306d932827107b47f4c55b1dcceec210352 # v1.77.0
+        with:
+          fail_level: any
+          # Whole tree, not just changed files, so an actionlint bump surfaces
+          # new findings on its own PR instead of on the next unrelated one.
+          filter_mode: nofilter
+          reporter: github-pr-check

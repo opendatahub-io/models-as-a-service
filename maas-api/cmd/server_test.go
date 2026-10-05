@@ -124,3 +124,136 @@ func TestFetchTLSProfileWithRetry_APIUnavailableFallsBackAndSkipsWatcher(t *test
 	assert.False(t, watchSettings, "non-OpenShift clusters should skip the config.openshift.io watcher")
 	assert.Equal(t, tlsprofile.ProfileIntermediate, settings.Profile.Type)
 }
+
+type stubTLSProfileWatcher struct {
+	startErr error
+}
+
+func (s stubTLSProfileWatcher) Start(<-chan struct{}) error {
+	return s.startErr
+}
+
+func TestSetupTLSProfile_SkipsWhenNeitherAPINorMetricsSecure(t *testing.T) {
+	minVersion, ciphers, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: false, MetricsSecure: false}, &rest.Config{}, func() {})
+	require.NoError(t, err)
+	assert.Zero(t, minVersion)
+	assert.Nil(t, ciphers)
+}
+
+func TestSetupTLSProfile_FailsWhenRESTConfigNilWithHTTPSEnabled(t *testing.T) {
+	minVersion, ciphers, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, nil, func() {})
+	require.Error(t, err)
+	assert.Zero(t, minVersion)
+	assert.Nil(t, ciphers)
+	assert.Contains(t, err.Error(), "REST configuration is unavailable")
+}
+
+func TestSetupTLSProfile_AppliesWhenMetricsSecureOnly(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalNew := newTLSProfileWatcher
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		newTLSProfileWatcher = originalNew
+	}()
+
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return tlsprofile.DefaultSettings(), nil
+	}
+	created := false
+	newTLSProfileWatcher = func(*rest.Config, tlsprofile.Settings, func(tlsprofile.Settings, tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		created = true
+		return stubTLSProfileWatcher{}, nil
+	}
+
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: false, MetricsSecure: true}, &rest.Config{}, func() {})
+	require.NoError(t, err)
+	assert.True(t, created, "metrics HTTPS still requires a cluster TLS profile watcher")
+}
+
+func TestSetupTLSProfile_SkipsWatcherWhenAPIUnavailable(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalNew := newTLSProfileWatcher
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		newTLSProfileWatcher = originalNew
+	}()
+
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return tlsprofile.DefaultSettings(), apierrors.NewNotFound(
+			schema.GroupResource{Group: "config.openshift.io", Resource: "apiservers"},
+			"cluster",
+		)
+	}
+	newTLSProfileWatcher = func(*rest.Config, tlsprofile.Settings, func(tlsprofile.Settings, tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		t.Fatal("watcher should not be created on non-OpenShift clusters")
+		return nil, nil
+	}
+
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, &rest.Config{}, func() {})
+	require.NoError(t, err)
+}
+
+func TestSetupTLSProfile_WatcherCreateFailsClosed(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalNew := newTLSProfileWatcher
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		newTLSProfileWatcher = originalNew
+	}()
+
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return tlsprofile.DefaultSettings(), nil
+	}
+	newTLSProfileWatcher = func(*rest.Config, tlsprofile.Settings, func(tlsprofile.Settings, tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		return nil, errors.New("restConfig rejected")
+	}
+
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, &rest.Config{}, func() {})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unable to create TLS profile watcher")
+}
+
+func TestSetupTLSProfile_WatcherSyncFailsClosed(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalNew := newTLSProfileWatcher
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		newTLSProfileWatcher = originalNew
+	}()
+
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return tlsprofile.DefaultSettings(), nil
+	}
+	newTLSProfileWatcher = func(*rest.Config, tlsprofile.Settings, func(tlsprofile.Settings, tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		return stubTLSProfileWatcher{startErr: errors.New("informer cache sync failed")}, nil
+	}
+
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, &rest.Config{}, func() {
+		t.Fatal("cancel should not be called; Start errors must fail setupTLSProfile")
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS profile watcher failed to sync")
+}
+
+func TestSetupTLSProfile_WatcherStartSucceeds(t *testing.T) {
+	originalFetch := fetchClusterTLSSettings
+	originalNew := newTLSProfileWatcher
+	defer func() {
+		fetchClusterTLSSettings = originalFetch
+		newTLSProfileWatcher = originalNew
+	}()
+
+	fetchClusterTLSSettings = func(context.Context, *rest.Config) (tlsprofile.Settings, error) {
+		return tlsprofile.DefaultSettings(), nil
+	}
+	newTLSProfileWatcher = func(*rest.Config, tlsprofile.Settings, func(tlsprofile.Settings, tlsprofile.Settings)) (tlsProfileWatcher, error) {
+		return stubTLSProfileWatcher{}, nil
+	}
+
+	cancelled := false
+	_, _, err := setupTLSProfile(t.Context(), logger.New(false), &config.Config{Secure: true}, &rest.Config{}, func() {
+		cancelled = true
+	})
+	require.NoError(t, err)
+	assert.False(t, cancelled)
+}

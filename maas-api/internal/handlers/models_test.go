@@ -70,9 +70,22 @@ func (f fakeMaaSModelRefLister) List() ([]*unstructured.Unstructured, error) {
 	return out, nil
 }
 
+// modelRefsFor returns spec.modelRefs entries granting every MaaSModelRef in the lister.
+func modelRefsFor(lister fakeMaaSModelRefLister) []any {
+	var refs []any
+	for _, items := range lister {
+		for _, u := range items {
+			refs = append(refs, map[string]any{"name": u.GetName(), "namespace": u.GetNamespace()})
+		}
+	}
+	return refs
+}
+
 // fakeSubscriptionLister implements subscription.Lister for tests.
-// Returns a single default subscription so that tests auto-select it.
-type fakeSubscriptionLister struct{}
+// Returns a single default subscription granting modelRefs so that tests auto-select it.
+type fakeSubscriptionLister struct {
+	modelRefs []any
+}
 
 func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 	// Return a single subscription that matches all users
@@ -90,6 +103,9 @@ func (f *fakeSubscriptionLister) List() ([]*unstructured.Unstructured, error) {
 		map[string]any{"name": "free-users"},
 		map[string]any{"name": "premium-users"},
 	}, "spec", "owner", "groups")
+	if len(f.modelRefs) > 0 {
+		_ = unstructured.SetNestedSlice(sub.Object, f.modelRefs, "spec", "modelRefs")
+	}
 
 	// Set status.phase to Active (required for subscription filtering)
 	_ = unstructured.SetNestedField(sub.Object, "Active", "status", "phase")
@@ -365,7 +381,7 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	// Set up test fixtures
@@ -373,9 +389,9 @@ func TestListingModels(t *testing.T) { //nolint:maintidx // table-driven test wi
 	defer cleanup()
 
 	// Create a mock subscription selector that auto-selects for single subscription users
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{modelRefs: modelRefsFor(maasModelRefLister)}, nil, nil)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, nil)
 
 	// Create token handler to extract user info middleware
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
@@ -486,7 +502,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	router, _ := fixtures.SetupTestServer(t, config)
 
-	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false)
+	modelMgr, errMgr := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, errMgr)
 
 	_, cleanup := fixtures.StubTokenProviderAPIs(t)
@@ -507,7 +523,7 @@ func TestListingModelsWithSubscriptionHeader(t *testing.T) {
 	}
 	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
 
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, maasModelRefLister, nil)
 	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
 
 	v1 := router.Group("/v1")
@@ -675,7 +691,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	}
 
 	// Setup subscription lister with display metadata
-	createSubscriptionWithMeta := func(name string, groups []string, displayName, description string) *unstructured.Unstructured {
+	createSubscriptionWithMeta := func(name string, groups []string, displayName, description string, modelRefs []any) *unstructured.Unstructured {
 		sub := &unstructured.Unstructured{}
 		sub.SetGroupVersionKind(schema.GroupVersionKind{
 			Group:   "maas.opendatahub.io",
@@ -694,6 +710,7 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 			"owner": map[string]any{
 				"groups": groupSlice,
 			},
+			"modelRefs": modelRefs,
 		}
 
 		_ = unstructured.SetNestedMap(sub.Object, spec, "spec")
@@ -720,16 +737,21 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 
 	subscriptionLister := &fakeSubscriptionListerWithMeta{
 		subscriptions: []*unstructured.Unstructured{
-			createSubscriptionWithMeta("sub-a", []string{"group-a"}, "Subscription A", "Description for A"),
-			createSubscriptionWithMeta("sub-b", []string{"group-b"}, "Subscription B", "Description for B"),
+			createSubscriptionWithMeta("sub-a", []string{"group-a"}, "Subscription A", "Description for A", []any{
+				map[string]any{"name": "model-1", "namespace": "test-ns"},
+				map[string]any{"name": "model-3", "namespace": "test-ns"},
+			}),
+			createSubscriptionWithMeta("sub-b", []string{"group-b"}, "Subscription B", "Description for B", []any{
+				map[string]any{"name": "model-2", "namespace": "test-ns"},
+			}),
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -777,12 +799,12 @@ func TestListModels_ReturnAllModels(t *testing.T) {
 	t.Run("user token - returns empty list when user has no subscriptions", func(t *testing.T) {
 		emptySubscriptionLister := &fakeSubscriptionListerWithMeta{
 			subscriptions: []*unstructured.Unstructured{
-				createSubscriptionWithMeta("sub-a", []string{"other-group"}, "", ""),
+				createSubscriptionWithMeta("sub-a", []string{"other-group"}, "", "", modelRefsFor(lister)),
 			},
 		}
 
 		subscriptionSelector := subscription.NewSelector(testLogger, emptySubscriptionLister, nil, nil)
-		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+		emptyHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 		config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 		router2, _ := fixtures.SetupTestServer(t, config)
@@ -896,6 +918,7 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 			"owner": map[string]any{
 				"groups": groupSlice,
 			},
+			"modelRefs": modelRefsFor(lister),
 		}, "spec")
 
 		// Set status.phase to Active (required for subscription filtering)
@@ -914,11 +937,11 @@ func TestListModels_DeduplicationBySubscription(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1015,6 +1038,7 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 			"owner": map[string]any{
 				"groups": groupSlice,
 			},
+			"modelRefs": modelRefsFor(lister),
 		}, "spec")
 
 		// Set status.phase to Active (required for subscription filtering)
@@ -1032,11 +1056,11 @@ func TestListModels_DifferentModelRefsWithSameModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1123,6 +1147,7 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 			"owner": map[string]any{
 				"groups": groupSlice,
 			},
+			"modelRefs": modelRefsFor(lister),
 		}, "spec")
 
 		// Set status.phase to Active (required for subscription filtering)
@@ -1140,11 +1165,11 @@ func TestListModels_DifferentModelRefsWithSameURLAndModelID(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1247,11 +1272,11 @@ func TestListModels_DifferentModelRefsWithSameModelIDAndDifferentSubscriptions(t
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
 	subscriptionSelector := subscription.NewSelector(testLogger, subscriptionLister, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1341,11 +1366,11 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, lister, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{modelRefs: modelRefsFor(lister)}, lister, nil)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
 
 	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, config)
@@ -1380,6 +1405,84 @@ func TestListModels_ExternalModelUsesModelRefName(t *testing.T) {
 		"OwnedBy should still reference the MaaSModelRef for dashboard display")
 }
 
+// TestListModels_SubscriptionWithoutModelRefs covers a subscription with empty modelRefs,
+// which the selector can return once it drops refs no MaaSAuthPolicy authorizes.
+// FilterModelsByAccess only checks readiness, so such a subscription must list no models
+// rather than every Ready model in the catalogue.
+func TestListModels_SubscriptionWithoutModelRefs(t *testing.T) {
+	testLogger := logger.Development()
+
+	lister := fakeMaaSModelRefLister{
+		fixtures.TestNamespace: []*unstructured.Unstructured{
+			maasModelRefUnstructured("free-model", fixtures.TestNamespace, "https://gateway.example.com/llm/free-model", true, nil),
+			maasModelRefUnstructured("premium-model", fixtures.TestNamespace, "https://gateway.example.com/llm/premium-model", true, nil),
+		},
+	}
+
+	multiSubLister := fakeMultiSubscriptionLister{
+		"no-models": {groups: []string{"free-users"}},
+		"free": {
+			groups:    []string{"free-users"},
+			modelRefs: []struct{ name, namespace string }{{"free-model", fixtures.TestNamespace}},
+		},
+	}
+
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
+	require.NoError(t, err)
+
+	subscriptionSelector := subscription.NewSelector(testLogger, multiSubLister, nil, nil)
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, nil)
+
+	config := fixtures.TestServerConfig{Objects: []runtime.Object{}}
+	router, _ := fixtures.SetupTestServer(t, config)
+
+	_, cleanup := fixtures.StubTokenProviderAPIs(t)
+	defer cleanup()
+
+	tokenHandler := token.NewHandler(testLogger, fixtures.TestTenant)
+	v1 := router.Group("/v1")
+	v1.GET("/models", tokenHandler.ExtractUserInfo(), modelsHandler.ListLLMs)
+
+	t.Run("API key bound to subscription without modelRefs lists no models", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set("X-Maas-Subscription", "no-models")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var body map[string]json.RawMessage
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body))
+		assert.Equal(t, "[]", string(body["data"]), "Expected an empty list, not null")
+	})
+
+	t.Run("user token - subscription without modelRefs contributes no models", func(t *testing.T) {
+		w := httptest.NewRecorder()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, "/v1/models", nil)
+		require.NoError(t, err)
+
+		req.Header.Set("Authorization", "Bearer valid-token")
+		req.Header.Set(constant.HeaderUsername, "test-user@example.com")
+		req.Header.Set(constant.HeaderGroup, `["free-users"]`)
+		router.ServeHTTP(w, req)
+
+		require.Equal(t, http.StatusOK, w.Code)
+
+		var response pagination.Page[models.Model]
+		require.NoError(t, json.Unmarshal(w.Body.Bytes(), &response))
+
+		require.Len(t, response.Data, 1, "Only the model referenced by the free subscription should be listed")
+		assert.Equal(t, "free-model", response.Data[0].ID)
+		require.Len(t, response.Data[0].Subscriptions, 1)
+		assert.Equal(t, "free", response.Data[0].Subscriptions[0].Name)
+	})
+}
+
 // TestListModels_NoAuthContext verifies that /v1/models returns an empty list
 // when no auth context is present (no Authorization header and no identity
 // headers). This reproduces the scenario where no LLMInferenceService is
@@ -1396,11 +1499,12 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		},
 	}
 
-	modelMgr, err := models.NewManager(testLogger, 15, "", false)
+	modelMgr, err := models.NewManager(testLogger, 15, "", false, 0, nil)
 	require.NoError(t, err)
 
-	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{}, nil, nil)
-	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister)
+	subscriptionSelector := subscription.NewSelector(testLogger, &fakeSubscriptionLister{modelRefs: modelRefsFor(lister)}, nil, nil)
+	spy := &spyModelsMetrics{}
+	modelsHandler := handlers.NewModelsHandler(testLogger, modelMgr, subscriptionSelector, lister, spy)
 
 	cfg := fixtures.TestServerConfig{Objects: []runtime.Object{}}
 	router, _ := fixtures.SetupTestServer(t, cfg)
@@ -1463,6 +1567,7 @@ func TestListModels_NoAuthContext(t *testing.T) {
 		router.ServeHTTP(w, req)
 
 		require.Equal(t, http.StatusUnauthorized, w.Code, "Should return 401 when Authorization missing but identity present")
+		require.Equal(t, []string{constant.RejectionUnauthorized}, spy.rejections)
 	})
 
 	t.Run("returns normal response when all auth headers present", func(t *testing.T) {
@@ -1519,4 +1624,12 @@ func TestListModels_StrictAuthOnOtherEndpoints(t *testing.T) {
 		assert.Equal(t, "AUTH_FAILURE", body["exceptionCode"],
 			"Should return AUTH_FAILURE for missing headers on strict endpoints")
 	})
+}
+
+type spyModelsMetrics struct {
+	rejections []string
+}
+
+func (s *spyModelsMetrics) RecordRejection(reason string) {
+	s.rejections = append(s.rejections, reason)
 }

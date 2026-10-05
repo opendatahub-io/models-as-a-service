@@ -42,7 +42,14 @@ type Manager struct {
 // gatewayInternalHost, when non-empty, routes all probe TCP connections to this
 // cluster-internal address while preserving the original URL hostname for TLS SNI
 // and the Host header, so gateway routing and Authorino auth work identically.
-func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayInternalHost string, enableHTTP2 bool) (*Manager, error) {
+func NewManager(
+	log *logger.Logger,
+	accessCheckTimeoutSeconds int,
+	gatewayInternalHost string,
+	enableHTTP2 bool,
+	profileMinVersion uint16,
+	profileCipherSuites []uint16,
+) (*Manager, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -51,7 +58,7 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 		timeout = time.Duration(accessCheckTimeoutSeconds) * time.Second
 	}
 
-	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, enableHTTP2)
+	tlsConfig, err := BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, enableHTTP2, profileMinVersion, profileCipherSuites)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build TLS config: %w", err)
 	}
@@ -91,17 +98,18 @@ func NewManager(log *logger.Logger, accessCheckTimeoutSeconds int, gatewayIntern
 // the default Kubernetes service account CA path. It is a convenience wrapper around
 // BuildClusterTLSConfigFromPath.
 func BuildClusterTLSConfig(log *logger.Logger) (*tls.Config, error) {
-	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, false)
+	return BuildClusterTLSConfigFromPath(log, kubeServiceAccountCAPath, false, 0, nil)
 }
 
 // BuildClusterTLSConfigFromPath creates a TLS config for cluster-internal communication.
 // It starts with the system root CAs and appends the CA certificate at caPath when present.
+// profileMinVersion and profileCipherSuites come from the cluster TLS security profile when set.
 // This ensures both public CAs and cluster CAs are trusted, supporting endpoints with
 // publicly-trusted certificates as well as cluster-internal services.
 //
 // If caPath does not exist, system root CAs are used alone (development/out-of-cluster mode).
 // If caPath exists but cannot be read or parsed, an error is returned to prevent insecure fallback.
-func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP2 bool) (*tls.Config, error) {
+func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP2 bool, profileMinVersion uint16, profileCipherSuites []uint16) (*tls.Config, error) {
 	if log == nil {
 		return nil, errors.New("log is required")
 	}
@@ -131,6 +139,12 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP
 		RootCAs:    caCertPool,
 		MinVersion: tls.VersionTLS12,
 	}
+	if profileMinVersion > 0 {
+		tlsCfg.MinVersion = profileMinVersion
+	}
+	if len(profileCipherSuites) > 0 {
+		tlsCfg.CipherSuites = profileCipherSuites
+	}
 	if enableHTTP2 {
 		tlsCfg.NextProtos = []string{"h2", "http/1.1"}
 	}
@@ -148,12 +162,13 @@ func BuildClusterTLSConfigFromPath(log *logger.Logger, caPath string, enableHTTP
 //     provider API key is injected by IPP, not carried in the user token.
 //   - "llmisvc" / "LLMInferenceService" / "" (default): included directly if Ready;
 //     BBR clusters share a single gateway base URL so per-model probing is not meaningful.
-func (m *Manager) FilterModelsByAccess(_ context.Context, models []Model, _ string, _ string) []Model {
+func (m *Manager) FilterModelsByAccess(ctx context.Context, models []Model, _ string, _ string) []Model {
 	if len(models) == 0 {
 		return models
 	}
 
-	m.logger.Debug("FilterModelsByAccess: filtering models by readiness", "count", len(models))
+	log := m.logger.WithContext(ctx)
+	log.Debug("FilterModelsByAccess: filtering models by readiness", "count", len(models))
 	// Initialize to empty slice (not nil) so JSON marshals as [] instead of null.
 	out := make([]Model, 0, len(models))
 	for _, model := range models {
@@ -162,24 +177,24 @@ func (m *Manager) FilterModelsByAccess(_ context.Context, models []Model, _ stri
 			// ExternalModel endpoints require the provider API key injected by IPP;
 			// probing is not possible with the user's MaaS token.
 			if model.Ready {
-				m.logger.Debug("FilterModelsByAccess: including ExternalModel (no probe)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: including ExternalModel (no probe)", "id", model.ID)
 				out = append(out, model)
 			} else {
-				m.logger.Debug("FilterModelsByAccess: skipping ExternalModel (not ready)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: skipping ExternalModel (not ready)", "id", model.ID)
 			}
 		case kindLLMISvc, kindLLMISvcAlternate, "":
 			// Both kindLLMISvc ("llmisvc") and kindLLMISvcAlternate ("LLMInferenceService") are
 			// valid values for MaaSModelRef spec.modelRef.kind; empty defaults to kindLLMISvc.
 			if model.Ready {
-				m.logger.Debug("FilterModelsByAccess: including LLMInferenceService (no probe)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: including LLMInferenceService (no probe)", "id", model.ID)
 				out = append(out, model)
 			} else {
-				m.logger.Debug("FilterModelsByAccess: skipping LLMInferenceService (not ready)", "id", model.ID)
+				log.Debug("FilterModelsByAccess: skipping LLMInferenceService (not ready)", "id", model.ID)
 			}
 		default:
-			m.logger.Debug("FilterModelsByAccess: skipping model with unknown kind", "id", model.ID, "kind", model.Kind)
+			log.Debug("FilterModelsByAccess: skipping model with unknown kind", "id", model.ID, "kind", model.Kind)
 		}
 	}
-	m.logger.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
+	log.Debug("FilterModelsByAccess: complete", "input", len(models), "accessible", len(out))
 	return out
 }

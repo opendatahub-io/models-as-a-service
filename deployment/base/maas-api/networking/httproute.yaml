@@ -40,19 +40,36 @@ spec:
         - name: maas-api
           port: 8443
           weight: 100
-    # Rule 3: IMPORTANT: /v1/tenants is NOT routed through Gateway (internal-only)
-    # It must be called via maas-api Service directly for tenant-scoped auth
-    # All other maas-api endpoints remain under /maas-api prefix
+    # Rule 3: Public maas-api endpoints under /maas-api/v1 prefix.
+    # Scoped to /v1 to prevent gateway exposure of /internal/* endpoints (FIND-004).
+    # /v1/tenants is reachable via this prefix; accepted because the handler
+    # enforces its own auth (TokenReview + SAR) and returns only non-sensitive
+    # discovery metadata. Will move to a dedicated discovery service.
     - matches:
         - path:
             type: PathPrefix
-            value: /maas-api
+            value: /maas-api/v1
       filters:
         - type: URLRewrite
           urlRewrite:
             path:
               type: ReplacePrefixMatch
-              replacePrefixMatch: /
+              replacePrefixMatch: /v1
+      backendRefs:
+        - name: maas-api
+          port: 8443
+          weight: 100
+    # Rule 4: Health endpoint for external readiness probes
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /maas-api/health
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path:
+              type: ReplacePrefixMatch
+              replacePrefixMatch: /health
       backendRefs:
         - name: maas-api
           port: 8443

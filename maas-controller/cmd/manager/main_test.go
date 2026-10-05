@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"os"
 	"testing"
@@ -17,9 +18,12 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	controllerfake "sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
 	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/controller/maas"
@@ -151,6 +155,75 @@ func TestTLSProfileForAdherence(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestBuildMetricsServerOptions(t *testing.T) {
+	serverTLSOpt := func(c *tls.Config) {
+		c.MinVersion = tls.VersionTLS13
+	}
+	nextProtosOpt := func(c *tls.Config) {
+		c.NextProtos = []string{"h2", "http/1.1"}
+	}
+
+	t.Run("secure enables HTTPS authn and profile TLSOpts", func(t *testing.T) {
+		opts := buildMetricsServerOptions(":8443", true, serverTLSOpt, nextProtosOpt)
+		if opts.BindAddress != ":8443" {
+			t.Fatalf("BindAddress = %q, want :8443", opts.BindAddress)
+		}
+		if !opts.SecureServing {
+			t.Fatal("SecureServing = false, want true")
+		}
+		if opts.FilterProvider == nil {
+			t.Fatal("FilterProvider = nil, want WithAuthenticationAndAuthorization")
+		}
+		if opts.CertDir != metricsCertDir {
+			t.Fatalf("CertDir = %q, want %q", opts.CertDir, metricsCertDir)
+		}
+		if len(opts.TLSOpts) != 2 {
+			t.Fatalf("TLSOpts len = %d, want 2 (profile + NextProtos)", len(opts.TLSOpts))
+		}
+
+		cfg := &tls.Config{}
+		for _, opt := range opts.TLSOpts {
+			opt(cfg)
+		}
+		if cfg.MinVersion != tls.VersionTLS13 {
+			t.Fatalf("MinVersion = %d, want TLS 1.3 from profile opt", cfg.MinVersion)
+		}
+		if got := len(cfg.NextProtos); got != 2 {
+			t.Fatalf("NextProtos len = %d, want 2", got)
+		}
+	})
+
+	t.Run("insecure keeps HTTP without FilterProvider or CertDir", func(t *testing.T) {
+		opts := buildMetricsServerOptions(":8080", false, serverTLSOpt, nextProtosOpt)
+		if opts.BindAddress != ":8080" {
+			t.Fatalf("BindAddress = %q, want :8080", opts.BindAddress)
+		}
+		if opts.SecureServing {
+			t.Fatal("SecureServing = true, want false")
+		}
+		if opts.FilterProvider != nil {
+			t.Fatal("FilterProvider should be nil when SecureServing is false")
+		}
+		if opts.CertDir != "" {
+			t.Fatalf("CertDir = %q, want empty", opts.CertDir)
+		}
+		if len(opts.TLSOpts) != 1 {
+			t.Fatalf("TLSOpts len = %d, want 1 (NextProtos only)", len(opts.TLSOpts))
+		}
+
+		cfg := &tls.Config{}
+		for _, opt := range opts.TLSOpts {
+			opt(cfg)
+		}
+		if cfg.MinVersion != 0 {
+			t.Fatalf("MinVersion = %d, want unset when insecure", cfg.MinVersion)
+		}
+		if got := len(cfg.NextProtos); got != 2 {
+			t.Fatalf("NextProtos len = %d, want 2", got)
+		}
+	})
 }
 
 func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *testing.T) {
@@ -913,4 +986,68 @@ func TestParseAITenantDeletionTimeout(t *testing.T) {
 			}
 		})
 	}
+}
+
+func newTestManager(t *testing.T) ctrl.Manager {
+	t.Helper()
+	mgr, err := ctrl.NewManager(&rest.Config{Host: "https://127.0.0.1:1"}, ctrl.Options{
+		Scheme:                 runtime.NewScheme(),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+	})
+	if err != nil {
+		t.Fatalf("failed to create test manager: %v", err)
+	}
+	return mgr
+}
+
+func TestSetupWatcher_SkipsWhenAPIUnavailable(t *testing.T) {
+	cfg := managerTLSConfig{available: false}
+	if err := cfg.setupWatcher(nil, func() {}); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSetupWatcher_ReturnsErrorWhenRegistrationFails(t *testing.T) {
+	cfg := managerTLSConfig{
+		available: true,
+		profile:   *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+	}
+	err := cfg.setupWatcher(newTestManager(t), func() {})
+	if err == nil {
+		t.Fatal("expected error when the manager cannot watch APIServer")
+	}
+}
+
+func TestRegisterWatcher_FailsClosedWhenSetupFails(t *testing.T) {
+	mgr := newTestManager(t)
+	cfg := managerTLSConfig{
+		available: true,
+		profile:   *confv1.TLSProfiles[confv1.TLSProfileIntermediateType],
+	}
+
+	orig := fatalExit
+	defer func() { fatalExit = orig }()
+	exited := 0
+	fatalExit = func(code int) {
+		exited = code
+		panic("fatalExit")
+	}
+
+	cancelled := false
+	defer func() {
+		r := recover()
+		if r != "fatalExit" {
+			t.Fatalf("recover = %v, want fatalExit", r)
+		}
+		if exited != 1 {
+			t.Fatalf("exit code = %d, want 1", exited)
+		}
+		if !cancelled {
+			t.Fatal("expected cancel before exit")
+		}
+	}()
+
+	cfg.registerWatcher(mgr, func() { cancelled = true })
+	t.Fatal("registerWatcher should have exited")
 }

@@ -54,7 +54,7 @@ jobs:
       - name: Checkout tag
         env:
           TAG: ${{ inputs.tag }}
-        run: git checkout --detach -- "$TAG"
+        run: git checkout --detach "$TAG"
 
       - name: Setup Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0

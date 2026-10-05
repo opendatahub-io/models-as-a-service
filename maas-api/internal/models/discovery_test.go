@@ -24,7 +24,7 @@ import (
 
 func TestNewManager(t *testing.T) {
 	t.Run("returns error when logger is nil", func(t *testing.T) {
-		manager, err := models.NewManager(nil, 15, "", false)
+		manager, err := models.NewManager(nil, 15, "", false, 0, nil)
 		require.Error(t, err)
 		assert.Nil(t, manager)
 		assert.Contains(t, err.Error(), "log is required")
@@ -33,7 +33,7 @@ func TestNewManager(t *testing.T) {
 	t.Run("creates manager successfully with valid logger", func(t *testing.T) {
 		log := logger.New(true)
 
-		manager, err := models.NewManager(log, 15, "", false)
+		manager, err := models.NewManager(log, 15, "", false, 0, nil)
 		require.NoError(t, err)
 		assert.NotNil(t, manager)
 	})
@@ -65,7 +65,7 @@ func TestBuildClusterTLSConfig(t *testing.T) {
 
 func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("returns error when logger is nil", func(t *testing.T) {
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(nil, "/nonexistent", false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(nil, "/nonexistent", false, 0, nil)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 	})
@@ -73,7 +73,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("uses system root CAs when CA file is absent", func(t *testing.T) {
 		log := logger.New(true)
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false, 0, nil)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
@@ -91,7 +91,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false, 0, nil)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 		assert.Contains(t, err.Error(), "failed to parse")
@@ -105,7 +105,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, os.WriteFile(caPath, []byte("placeholder"), 0o000))
 		t.Cleanup(func() { _ = os.Chmod(caPath, 0o644) })
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, caPath, false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, caPath, false, 0, nil)
 		require.Error(t, err)
 		assert.Nil(t, tlsConfig)
 	})
@@ -120,7 +120,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 		require.NoError(t, err)
 		require.NoError(t, f.Close())
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, f.Name(), false, 0, nil)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
@@ -132,7 +132,7 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("sets NextProtos when HTTP/2 is enabled", func(t *testing.T) {
 		log := logger.New(true)
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", true)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", true, 0, nil)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
@@ -142,18 +142,30 @@ func TestBuildClusterTLSConfigFromPath(t *testing.T) {
 	t.Run("does not set NextProtos when HTTP/2 is disabled", func(t *testing.T) {
 		log := logger.New(true)
 
-		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false)
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false, 0, nil)
 		require.NoError(t, err)
 		require.NotNil(t, tlsConfig)
 
 		assert.Nil(t, tlsConfig.NextProtos)
+	})
+
+	t.Run("applies cluster TLS profile when provided", func(t *testing.T) {
+		log := logger.New(true)
+		cipherSuites := []uint16{tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256}
+
+		tlsConfig, err := models.BuildClusterTLSConfigFromPath(log, "/nonexistent/ca.crt", false, tls.VersionTLS13, cipherSuites)
+		require.NoError(t, err)
+		require.NotNil(t, tlsConfig)
+
+		assert.Equal(t, uint16(tls.VersionTLS13), tlsConfig.MinVersion)
+		assert.Equal(t, cipherSuites, tlsConfig.CipherSuites)
 	})
 }
 
 func TestFilterModelsByAccess_ReadinessBased(t *testing.T) {
 	log := logger.New(true)
 
-	mgr, err := models.NewManager(log, 5, "", false)
+	mgr, err := models.NewManager(log, 5, "", false, 0, nil)
 	require.NoError(t, err)
 
 	// FilterModelsByAccess is purely readiness-based: no backend probing, no URL validation.

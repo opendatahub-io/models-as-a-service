@@ -7,8 +7,8 @@
 # Security constraints:
 # - podSelector: covers payload-processing and payload-pre-processing pods
 # - ingress: gateway ext_proc traffic (port 9004), monitoring scrape (9005, 9090)
-# - egress: DNS + Kubernetes API server only (this container is a pure
-#   Kubernetes controller with no external HTTP/gRPC calls)
+# - egress: DNS, Kubernetes API server, and OTLP trace export (port 4317) to the
+#   platform OpenTelemetry collector when --tracing=true
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -73,3 +73,15 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
+    # Allow OTLP trace export to the platform OpenTelemetry collector
+    - ports:
+        - protocol: TCP
+          port: 4317
+      to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: opendatahub
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: data-science-collector-collector
+              app.kubernetes.io/component: opentelemetry-collector

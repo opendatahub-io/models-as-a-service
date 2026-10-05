@@ -6,6 +6,8 @@ import (
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 )
 
 const testGatewayName = "my-gateway"
@@ -49,14 +51,51 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "LOG_FORMAT selects OTel JSON logging",
+			envVars: map[string]string{"LOG_FORMAT": "otel-json"},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.LogFormat != logger.FormatOTelJSON {
+					t.Errorf("expected OTel JSON log format, got %q", cfg.LogFormat)
+				}
+			},
+		},
+		{
+			name:    "metrics secure defaults",
+			envVars: map[string]string{},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if !cfg.MetricsSecure {
+					t.Error("expected MetricsSecure default true")
+				}
+				if cfg.MetricsPort != 9090 {
+					t.Errorf("expected MetricsPort 9090, got %d", cfg.MetricsPort)
+				}
+				if cfg.MetricsCertDir != "/tmp/k8s-metrics-server/metrics-certs" {
+					t.Errorf("unexpected MetricsCertDir %q", cfg.MetricsCertDir)
+				}
+			},
+		},
+		{
+			name:    "METRICS_SECURE=false disables secure metrics",
+			envVars: map[string]string{"METRICS_SECURE": "false"},
+			check: func(t *testing.T, cfg *Config) {
+				t.Helper()
+				if cfg.MetricsSecure {
+					t.Error("expected MetricsSecure false")
+				}
+			},
+		},
 	}
 
 	// All env vars that Load() reads, to be cleared before each subtest.
 	allEnvVars := []string{
-		"DEBUG_MODE", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
+		"DEBUG_MODE", "LOG_FORMAT", "GATEWAY_NAME", "SECURE", "INSTANCE_NAME",
 		"NAMESPACE", "GATEWAY_NAMESPACE", "ADDRESS",
 		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
+		"METRICS_PORT", "METRICS_SECURE", "METRICS_CERT_DIR",
 	}
 
 	for _, tt := range tests {
@@ -113,6 +152,19 @@ func TestValidate(t *testing.T) {
 				TLS:             TLSConfig{Cert: "/cert.pem"},
 			},
 			expectError: "--tls-cert and --tls-key must both be provided together",
+		},
+		{
+			name: "invalid log format returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				LogFormat:                 "unknown",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				MetricsPort:               9090,
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectError: "unsupported log format",
 		},
 		{
 			name: "valid insecure config sets default address :8080",
@@ -241,6 +293,50 @@ func TestValidate(t *testing.T) {
 				TenantName:                "test-tenant",
 			},
 			expectError: "METRICS_PORT must be between 1 and 65535",
+		},
+		{
+			name: "MetricsSecure with empty MetricsCertDir returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               9090,
+				MetricsSecure:             true,
+				MetricsCertDir:            "",
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectError: "METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true",
+		},
+		{
+			name: "MetricsSecure with whitespace MetricsCertDir returns error",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               9090,
+				MetricsSecure:             true,
+				MetricsCertDir:            "   ",
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
+			expectError: "METRICS_CERT_DIR must be non-empty when METRICS_SECURE is true",
+		},
+		{
+			name: "MetricsSecure false allows empty MetricsCertDir",
+			cfg: Config{
+				DBConnectionURL:           "postgresql://localhost/test",
+				APIKeyMaxExpirationDays:   30,
+				AccessCheckTimeoutSeconds: 15,
+				SARCacheMaxSize:           8192,
+				MetricsPort:               9090,
+				MetricsSecure:             false,
+				MetricsCertDir:            "",
+				MaaSSubscriptionNamespace: "models-as-a-service",
+				TenantName:                "test-tenant",
+			},
 		},
 	}
 

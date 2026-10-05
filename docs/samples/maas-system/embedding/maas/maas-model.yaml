@@ -1,0 +1,12 @@
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: embedding-simulated
+  namespace: llm
+  annotations:
+    openshift.io/display-name: "BGE-M3 Embedding (Simulated)"
+    openshift.io/description: "A simulated bge-m3 embedding model for testing"
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: embedding-simulated

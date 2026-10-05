@@ -41,7 +41,7 @@ func TenantLogger(base *logger.Logger, cfg TenantLoggerConfig) gin.HandlerFunc {
 			fields = append(fields, "request_id", requestID)
 		}
 
-		enriched := base.WithFields(fields...)
+		enriched := base.WithContext(c.Request.Context()).WithFields(fields...)
 		c.Set(loggerKey, enriched)
 		c.Next()
 	}

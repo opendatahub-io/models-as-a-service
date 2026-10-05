@@ -1,7 +1,9 @@
 package logger
 
 import (
+	"context"
 	"os"
+	"time"
 
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -31,36 +33,60 @@ func Development() *Logger {
 // It supports different log levels (DEBUG, INFO, WARN, ERROR) and structured output.
 // Prefer using Production() or Development() for better readability.
 func New(debug bool) *Logger {
-	var config zap.Config
-	if debug {
-		config = zap.NewDevelopmentConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
-		config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+	return NewWithFormat(debug, FormatZap)
+}
+
+// NewWithFormat creates a logger using the selected output format.
+func NewWithFormat(debug bool, format Format) *Logger {
+	var baseLogger *zap.Logger
+	if format == FormatOTelJSON {
+		level := zapcore.InfoLevel
+		if debug {
+			level = zapcore.DebugLevel
+		}
+		enc := zapcore.NewJSONEncoder(EncoderConfig())
+		core := zapcore.NewCore(enc, zapcore.AddSync(os.Stdout), level)
+		if !debug {
+			core = zapcore.NewSamplerWithOptions(core, time.Second, 100, 100)
+		}
+		core = WrapCore(core)
+		baseLogger = zap.New(core,
+			zap.AddCaller(),
+			zap.AddCallerSkip(1),
+			zap.AddStacktrace(zapcore.ErrorLevel),
+			zap.Fields(zap.String("service.name", ServiceName(defaultServiceName))),
+			zap.ErrorOutput(zapcore.AddSync(os.Stderr)),
+		).Named(defaultServiceName)
 	} else {
-		config = zap.NewProductionConfig()
-		config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
-		config.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
-	}
+		var config zap.Config
+		if debug {
+			config = zap.NewDevelopmentConfig()
+			config.Level = zap.NewAtomicLevelAt(zapcore.DebugLevel)
+			config.EncoderConfig.EncodeLevel = zapcore.CapitalColorLevelEncoder
+		} else {
+			config = zap.NewProductionConfig()
+			config.Level = zap.NewAtomicLevelAt(zapcore.InfoLevel)
+			config.EncoderConfig.EncodeLevel = zapcore.LowercaseLevelEncoder
+		}
 
-	// KServe-style configuration
-	config.EncoderConfig.TimeKey = "timestamp"
-	config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
-	config.EncoderConfig.MessageKey = "message"
-	config.EncoderConfig.LevelKey = "level"
-	config.EncoderConfig.CallerKey = "caller"
-	config.EncoderConfig.StacktraceKey = "stacktrace"
-	config.OutputPaths = []string{"stdout"}
-	config.ErrorOutputPaths = []string{"stderr"}
+		config.EncoderConfig.TimeKey = "timestamp"
+		config.EncoderConfig.EncodeTime = zapcore.ISO8601TimeEncoder
+		config.EncoderConfig.MessageKey = "message"
+		config.EncoderConfig.LevelKey = "level"
+		config.EncoderConfig.CallerKey = "caller"
+		config.EncoderConfig.StacktraceKey = "stacktrace"
+		config.OutputPaths = []string{"stdout"}
+		config.ErrorOutputPaths = []string{"stderr"}
 
-	// Build logger
-	baseLogger, err := config.Build(
-		zap.AddCaller(),
-		zap.AddCallerSkip(1), // Skip this package in call stack
-		zap.AddStacktrace(zapcore.ErrorLevel),
-	)
-	if err != nil {
-		// Fallback to a basic logger if configuration fails
-		baseLogger = zap.NewExample()
+		var err error
+		baseLogger, err = config.Build(
+			zap.AddCaller(),
+			zap.AddCallerSkip(1),
+			zap.AddStacktrace(zapcore.ErrorLevel),
+		)
+		if err != nil {
+			baseLogger = zap.NewExample()
+		}
 	}
 
 	level := zapcore.InfoLevel
@@ -78,7 +104,11 @@ func New(debug bool) *Logger {
 // Checks DEBUG_MODE environment variable to determine log level.
 func NewFromEnv() *Logger {
 	debug := os.Getenv("DEBUG_MODE") == "true" || os.Getenv("DEBUG_MODE") == "1"
-	return New(debug)
+	format, err := ParseFormat(os.Getenv("LOG_FORMAT"))
+	if err != nil {
+		format = FormatZap
+	}
+	return NewWithFormat(debug, format)
 }
 
 // WithFields returns a logger with additional structured fields.
@@ -100,6 +130,15 @@ func (l *Logger) WithError(err error) *Logger {
 		SugaredLogger: l.With("error", err.Error()),
 		level:         l.level,
 	}
+}
+
+// WithContext returns a logger with trace_id and span_id when a span is active on ctx.
+func (l *Logger) WithContext(ctx context.Context) *Logger {
+	fields := TraceFields(ctx)
+	if len(fields) == 0 {
+		return l
+	}
+	return l.WithFields(fields...)
 }
 
 // WithRequestID returns a logger with a request_id field attached.

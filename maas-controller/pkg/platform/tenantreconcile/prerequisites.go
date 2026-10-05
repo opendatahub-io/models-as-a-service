@@ -12,7 +12,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
-	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/oteljson"
 )
 
 // IsGVKAvailable uses the REST mapper (same spirit as ODH dependency checks).
@@ -41,7 +42,7 @@ type PrerequisiteReport struct {
 
 // CollectPrerequisiteReport runs prerequisite checks and returns blocking vs warning messages.
 func CollectPrerequisiteReport(ctx context.Context, c client.Client, appNamespace string) PrerequisiteReport {
-	log := log.FromContext(ctx)
+	log := oteljson.FromContext(ctx)
 	var rep PrerequisiteReport
 
 	if msg := checkAuthorinoTLS(ctx, c); msg != "" {
@@ -74,7 +75,7 @@ func ValidatePrerequisites(ctx context.Context, c client.Client, appNamespace st
 func checkAuthorinoTLS(ctx context.Context, c client.Client) string {
 	has, err := IsGVKAvailable(c, GVKAuthorino)
 	if err != nil {
-		log.FromContext(ctx).Error(err, "failed to check Authorino API availability")
+		oteljson.FromContext(ctx).Error(err, "failed to check Authorino API availability")
 		return "failed to check Authorino CRD availability due to a cluster API error"
 	}
 	if !has {
@@ -84,7 +85,7 @@ func checkAuthorinoTLS(ctx context.Context, c client.Client) string {
 	authorinoList := &unstructured.UnstructuredList{}
 	authorinoList.SetGroupVersionKind(gvkListKind(GVKAuthorino))
 	if err := c.List(ctx, authorinoList); err != nil {
-		log.FromContext(ctx).Error(err, "failed to list Authorino instances")
+		oteljson.FromContext(ctx).Error(err, "failed to list Authorino instances")
 		return "failed to list Authorino instances due to a cluster API error"
 	}
 
@@ -97,12 +98,12 @@ func checkAuthorinoTLS(ctx context.Context, c client.Client) string {
 		item := &authorinoList.Items[i]
 		enabled, _, err := unstructured.NestedBool(item.Object, "spec", "listener", "tls", "enabled")
 		if err != nil {
-			log.FromContext(ctx).Error(err, "failed to read spec.listener.tls.enabled from Authorino", "name", item.GetName())
+			oteljson.FromContext(ctx).Error(err, "failed to read spec.listener.tls.enabled from Authorino", "name", item.GetName())
 			continue
 		}
 		certName, _, err := unstructured.NestedString(item.Object, "spec", "listener", "tls", "certSecretRef", "name")
 		if err != nil {
-			log.FromContext(ctx).Error(err, "failed to read spec.listener.tls.certSecretRef.name from Authorino", "name", item.GetName())
+			oteljson.FromContext(ctx).Error(err, "failed to read spec.listener.tls.certSecretRef.name from Authorino", "name", item.GetName())
 			continue
 		}
 		if enabled && certName != "" {
@@ -129,7 +130,7 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 				"MaaS API cannot start without a database connection",
 				MaaSDBSecretName, appNamespace, MaaSDBSecretKey)
 		}
-		log.FromContext(ctx).Error(err, "failed to check database Secret", "name", MaaSDBSecretName, "namespace", appNamespace)
+		oteljson.FromContext(ctx).Error(err, "failed to check database Secret", "name", MaaSDBSecretName, "namespace", appNamespace)
 		return fmt.Sprintf("failed to check database Secret '%s' in namespace '%s' due to a cluster API error",
 			MaaSDBSecretName, appNamespace)
 	}
@@ -145,7 +146,7 @@ func checkDatabaseSecret(ctx context.Context, c client.Client, appNamespace stri
 }
 
 func checkDSCIMonitoring(ctx context.Context, c client.Client) string {
-	log := log.FromContext(ctx)
+	log := oteljson.FromContext(ctx)
 
 	// Look for DSCInitialization resources
 	dsciList := &unstructured.UnstructuredList{}

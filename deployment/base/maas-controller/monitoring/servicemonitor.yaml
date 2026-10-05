@@ -1,0 +1,25 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: maas-controller-metrics
+  labels:
+    app: maas-controller
+    monitoring.opendatahub.io/scrape: "true"
+spec:
+  selector:
+    matchLabels:
+      control-plane: maas-controller
+      app: maas-controller
+  endpoints:
+    - path: /metrics
+      port: metrics
+      scheme: https
+      interval: 30s
+      bearerTokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+      tlsConfig:
+        ca:
+          configMap:
+            name: openshift-service-ca.crt
+            key: service-ca.crt
+        # name.namespace.svc — filled by kustomize replacements in default/
+        serverName: maas-controller-metrics.opendatahub.svc

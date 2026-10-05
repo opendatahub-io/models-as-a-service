@@ -147,7 +147,7 @@ DEV_MODE="${DEV_MODE:-false}"
 OPERATOR_CATALOG="${OPERATOR_CATALOG:-}"
 OPERATOR_IMAGE="${OPERATOR_IMAGE:-}"
 OPERATOR_CHANNEL="${OPERATOR_CHANNEL:-}"
-OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
+OPERATOR_STARTING_CSV="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.6.0-ea.2}"
 OPERATOR_INSTALL_PLAN_APPROVAL="${OPERATOR_INSTALL_PLAN_APPROVAL:-}"
 MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
@@ -257,7 +257,7 @@ ENVIRONMENT VARIABLES:
   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
-  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.5.0-ea.2; set "-" to follow channel head)
+  OPERATOR_STARTING_CSV     ODH Subscription startingCSV (default: opendatahub-operator.v3.6.0-ea.2; set "-" to follow channel head)
   OPERATOR_INSTALL_PLAN_APPROVAL  ODH Subscription OLM approval (default: Manual — no auto-upgrades; first InstallPlan is auto-approved by the script)
   OPERATOR_TYPE             Operator type (rhoai/odh)
   POLICY_ENGINE             Policy engine override (rhcl|kuadrant)
@@ -697,8 +697,25 @@ configMapGenerator:
       - payload-processing-image=${cm_payload_processing_image}
       - maas-api-key-cleanup-image=${cm_cleanup_image}
       - monitoring-namespace=${cm_monitoring_namespace}
+      - namespace=${NAMESPACE}
 generatorOptions:
   disableNameSuffixHash: true
+# Re-run the serverName replacement at the parent level so it picks up the
+# merged namespace value (child replacements run before parent merge).
+replacements:
+  - source:
+      kind: ConfigMap
+      name: maas-parameters
+      fieldPath: data.namespace
+    targets:
+      - select:
+          kind: ServiceMonitor
+          name: maas-controller-metrics
+        fieldPaths:
+          - spec.endpoints.0.tlsConfig.serverName
+        options:
+          delimiter: "."
+          index: 1
 EOF
     (
       cd "${controller_overlay_dir}" && \
@@ -1282,8 +1299,8 @@ install_primary_operator() {
         channel="${OPERATOR_CHANNEL:-fast-3}"
       fi
 
-      # Pin to ODH 3.5 EA2 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
-      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.5.0-ea.2}"
+      # Pin to ODH 3.6 EA2 unless overridden (omit with OPERATOR_STARTING_CSV=- to follow channel head)
+      local odh_starting_csv="${OPERATOR_STARTING_CSV:-opendatahub-operator.v3.6.0-ea.2}"
       [[ "$odh_starting_csv" == "-" ]] && odh_starting_csv=""
 
       # Manual = no auto-upgrades; install_olm_operator auto-approves the first InstallPlan only
@@ -1519,7 +1536,7 @@ apply_kuadrant_cr() {
     fi
   fi
 
-  INGRESS_MODE="${INGRESS_MODE:-route}" \
+  INGRESS_MODE="${INGRESS_MODE:-loadbalancer}" \
   DISCONNECTED="${DISCONNECTED:-false}" \
   CLUSTER_DOMAIN="${CLUSTER_DOMAIN:-}" \
   CERT_NAME="${CERT_NAME:-}" \

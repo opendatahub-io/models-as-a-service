@@ -18,13 +18,12 @@ Environment variables:
   This file uses no additional file-specific environment variables.
 """
 
-import json
 import logging
-import os
 
 import pytest
 import requests
 
+import test_helper
 from test_helper import (
     DISTINCT_MODEL_2_REF,
     DISTINCT_MODEL_REF,
@@ -39,16 +38,88 @@ from test_helper import (
     _create_test_auth_policy,
     _create_test_subscription,
     _delete_cr,
+    _delete_governance_and_wait,
     _delete_sa,
+    _get_auth_policies_authorizing_identity_for_model,
     _maas_api_url,
     _ns,
+    _request_with_gateway_retry,
     _sa_to_user,
-    _wait_reconcile,
+    _wait_for_maas_auth_policy_phase,
+    _wait_for_subscription_discovery_ready,
 )
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("api_keys")
+pytestmark = [pytest.mark.xdist_group("api_keys"), pytest.mark.worker_tenant]
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _worker_subscription_list_context(request):
+    """Bind subscription-list tests to worker-owned MaaS resources."""
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        ensure_worker_models,
+        serial_only_selection,
+    )
+
+    if serial_only_selection(request):
+        yield
+        return
+
+    context = request.getfixturevalue("worker_tenant_context")
+    ensure_worker_models(
+        context,
+        (context.distinct_model_ref, context.distinct_model_2_ref),
+    )
+    original_values = {
+        name: globals()[name]
+        for name in (
+            "MODEL_NAMESPACE",
+            "MODEL_REF",
+            "DISTINCT_MODEL_REF",
+            "DISTINCT_MODEL_2_REF",
+            "SIMULATOR_SUBSCRIPTION",
+        )
+    }
+    original_auth_helper = globals()["_create_test_auth_policy"]
+    original_subscription_helper = globals()["_create_test_subscription"]
+    original_gateway_auth_policy = test_helper.GATEWAY_AUTH_POLICY_NAME
+
+    globals().update(
+        {
+            "MODEL_NAMESPACE": context.model_namespace,
+            "MODEL_REF": context.model_ref,
+            "DISTINCT_MODEL_REF": context.distinct_model_ref,
+            "DISTINCT_MODEL_2_REF": context.distinct_model_2_ref,
+            "SIMULATOR_SUBSCRIPTION": context.subscription_name,
+        }
+    )
+
+    def create_auth_policy(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_auth_helper(*args, **kwargs)
+
+    def create_subscription(*args, **kwargs):
+        kwargs.setdefault("namespace", context.tenant_namespace)
+        kwargs.setdefault("model_namespace", context.model_namespace)
+        return original_subscription_helper(*args, **kwargs)
+
+    globals()["_create_test_auth_policy"] = create_auth_policy
+    globals()["_create_test_subscription"] = create_subscription
+    # _wait_for_maas_auth_policy_phase waits for this gateway AuthPolicy to be
+    # Enforced; the worker's MaaSAuthPolicies land on its tenant gateway.
+    test_helper.GATEWAY_AUTH_POLICY_NAME = context.gateway_authpolicy_name
+
+    try:
+        with activate_worker_tenant(context):
+            yield
+    finally:
+        globals().update(original_values)
+        globals()["_create_test_auth_policy"] = original_auth_helper
+        globals()["_create_test_subscription"] = original_subscription_helper
+        test_helper.GATEWAY_AUTH_POLICY_NAME = original_gateway_auth_policy
 
 
 def _validate_subscription_info_schema(sub):
@@ -101,14 +172,11 @@ class TestListSubscriptions:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            _wait_reconcile()
-
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -133,12 +201,20 @@ class TestListSubscriptions:
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
 
-    def test_unauthenticated_returns_401(self):
-        """Request without auth returns 401."""
-        url = f"{_maas_api_url()}/v1/subscriptions"
+    @pytest.mark.parametrize(
+        "endpoint",
+        [
+            "/v1/subscriptions",
+            f"/v1/model/{MODEL_REF}/subscriptions",
+        ],
+        ids=["all-subscriptions", "subscriptions-for-model"],
+    )
+    def test_unauthenticated_returns_401(self, endpoint):
+        """Both subscription-list endpoints require authentication."""
+        url = f"{_maas_api_url()}{endpoint}"
         r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
         assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
-        log.info(f"GET /v1/subscriptions (no auth) -> {r.status_code}")
+        log.info("GET %s (no auth) -> %s", endpoint, r.status_code)
 
     def test_subscription_includes_model_refs(self):
         """Subscriptions include model_refs with name and rate limit info."""
@@ -158,14 +234,14 @@ class TestListSubscriptions:
             )
 
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -205,6 +281,7 @@ class TestListSubscriptions:
         model_ref_name = "e2e-enrichment-model-ref"
         model_ns = MODEL_NAMESPACE
         subscription_name = "e2e-enrichment-sub"
+        auth_policy_name = "e2e-enrichment-auth"
         expected_display_name = "E2E Enrichment Test Model"
         expected_description = "Model created by e2e test to verify display_name/description enrichment"
 
@@ -229,7 +306,7 @@ class TestListSubscriptions:
                 "spec": {
                     "modelRef": {
                         "kind": "LLMInferenceService",
-                        "name": "e2e-distinct-simulated",
+                        "name": DISTINCT_MODEL_REF,
                     }
                 },
             })
@@ -240,15 +317,22 @@ class TestListSubscriptions:
                 users=[sa_user],
             )
 
+            _create_test_auth_policy(
+                auth_policy_name,
+                model_ref_name,
+                users=[sa_user],
+            )
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -283,6 +367,7 @@ class TestListSubscriptions:
             )
 
         finally:
+            _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_cr("maasmodelref", model_ref_name, namespace=model_ns)
             _delete_sa(sa_name, namespace=sa_ns)
@@ -296,8 +381,11 @@ class TestListSubscriptionsForModel:
         sa_name = "e2e-subs-model-sa"
         sa_ns = "default"
         maas_ns = _ns()
-        sub_with_model = "e2e-subs-model-match"
-        sub_without_model = "e2e-subs-model-nomatch"
+        sub_with_model = "e2e-model-match-sub"
+        sub_without_model = "e2e-model-nomatch-sub"
+
+        ap_with_model = "e2e-model-match-auth"
+        ap_without_model = "e2e-model-nomatch-auth"
 
         try:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
@@ -307,16 +395,23 @@ class TestListSubscriptionsForModel:
             _create_test_subscription(sub_with_model, DISTINCT_MODEL_REF, users=[sa_user])
             _create_test_subscription(sub_without_model, DISTINCT_MODEL_2_REF, users=[sa_user])
 
+            _create_test_auth_policy(ap_with_model, DISTINCT_MODEL_REF, users=[sa_user])
+            _create_test_auth_policy(ap_without_model, DISTINCT_MODEL_2_REF, users=[sa_user])
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            _wait_reconcile()
+
+            _wait_for_subscription_discovery_ready(sub_with_model, namespace=maas_ns)
+            _wait_for_subscription_discovery_ready(sub_without_model, namespace=maas_ns)
+
+            _wait_for_maas_auth_policy_phase(ap_with_model, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(ap_without_model, namespace=maas_ns)
 
             # Query for subscriptions that include DISTINCT_MODEL_REF
             url = f"{_maas_api_url()}/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -341,8 +436,16 @@ class TestListSubscriptionsForModel:
             log.info(f"GET /v1/model/{DISTINCT_MODEL_REF}/subscriptions -> {len(data)} subscription(s): {sub_ids}")
 
         finally:
-            _delete_cr("maassubscription", sub_with_model, namespace=maas_ns)
-            _delete_cr("maassubscription", sub_without_model, namespace=maas_ns)
+            _delete_governance_and_wait(
+                subscriptions=[
+                    (sub_with_model, maas_ns),
+                    (sub_without_model, maas_ns),
+                ],
+                auth_policies=[
+                    (ap_with_model, maas_ns),
+                    (ap_without_model, maas_ns),
+                ],
+            )
             _delete_sa(sa_name, namespace=sa_ns)
 
     def test_unknown_model_returns_empty(self):
@@ -354,14 +457,11 @@ class TestListSubscriptionsForModel:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            _wait_reconcile()
-
             url = f"{_maas_api_url()}/v1/model/nonexistent-model-xyz/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -374,14 +474,6 @@ class TestListSubscriptionsForModel:
 
         finally:
             _delete_sa(sa_name, namespace=sa_ns)
-
-    def test_unauthenticated_returns_401(self):
-        """Request without auth returns 401."""
-        url = f"{_maas_api_url()}/v1/model/{MODEL_REF}/subscriptions"
-        r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
-        assert r.status_code == 401, f"Expected 401, got {r.status_code}: {r.text}"
-        log.info(f"GET /v1/model/{MODEL_REF}/subscriptions (no auth) -> {r.status_code}")
-
 
 class TestSubscriptionModelAccessFiltering:
     """E2E tests for model access filtering in GET /v1/subscriptions."""
@@ -412,16 +504,16 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_reconcile()
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
+            _wait_for_subscription_discovery_ready(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -459,10 +551,28 @@ class TestSubscriptionModelAccessFiltering:
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
-            # Subscription with MODEL_REF and DISTINCT_MODEL_REF
+            # Verify the assumption that the user has no pre-existing access to DISTINCT_MODEL_REF model
+            sa_groups = [
+                "system:serviceaccounts",
+                f"system:serviceaccounts:{sa_ns}",
+                "system:authenticated",
+            ]
+            authorizing_policies = _get_auth_policies_authorizing_identity_for_model(
+                DISTINCT_MODEL_REF,
+                sa_user,
+                sa_groups,
+                namespace=maas_ns,
+                model_namespace=MODEL_NAMESPACE,
+            )
+            assert not authorizing_policies, (
+                f"Policies {authorizing_policies} authorize '{sa_user}' for "
+                f"model '{DISTINCT_MODEL_REF}'."
+            )
+
+            # Subscription with DISTINCT_MODEL_REF with no associated auth policy for the user
             _create_test_subscription(
                 subscription_name,
-                [MODEL_REF, DISTINCT_MODEL_REF],
+                [DISTINCT_MODEL_REF],
                 users=[sa_user],
                 namespace=maas_ns,
             )
@@ -475,16 +585,16 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_reconcile()
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
+            _wait_for_subscription_discovery_ready(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200

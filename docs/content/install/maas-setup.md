@@ -9,6 +9,7 @@ Complete [Operator Setup](platform-setup.md) before proceeding.
 3. [Configure DataScienceCluster](#configure-datasciencecluster) — Enable modelsAsAService in your DataScienceCluster
 4. [Model Setup](model-setup.md) — Deploy sample models
 5. [Validation](validation.md) — Verify the deployment
+6. [Enable Observability](../observability/setup.md) — Set up metrics, dashboards, and monitoring (recommended)
 
 ## Database Setup
 
@@ -74,15 +75,15 @@ postgresql://USERNAME:PASSWORD@HOSTNAME:PORT/DATABASE?sslmode=require
 
 Create `maas-default-gateway` in `openshift-ingress` **before** enabling `aigateway.modelsAsAService` in your DataScienceCluster.
 
-`scripts/deploy.sh` runs this step automatically in **route** mode. Run the script yourself when installing via DataScienceCluster first, using **clusterip** mode, or on disconnected clusters.
+`scripts/deploy.sh` runs this step automatically in **loadbalancer** mode. Run the script yourself when installing via DataScienceCluster first, using **ocproute** mode, or on disconnected clusters.
 
-| Environment | Command |
-|-------------|---------|
-| ROSA, OSD, cloud (default) | `./scripts/setup-gateway.sh` |
-| On-prem, bare-metal, disconnected | `INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
-| Air-gapped (no GitHub fetch) | `DISCONNECTED=true INGRESS_MODE=clusterip ./scripts/setup-gateway.sh` |
+| Deployment Model | Command |
+|---|---|
+| External LoadBalancer (default) | `./scripts/setup-gateway.sh` |
+| OpenShift Route (any cluster) | `INGRESS_MODE=ocproute ./scripts/setup-gateway.sh` |
+| Air-gapped / No GitHub fetch | `DISCONNECTED=true INGRESS_MODE=ocproute ./scripts/setup-gateway.sh` |
 
-Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (route mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
+Common overrides: `CLUSTER_DOMAIN`, `CERT_NAME` (loadbalancer mode only), `DRY_RUN`, `MAAS_MANIFEST_REF` (pinned git ref for remote kustomize fallback). For the full variable list, TLS auto-detection order, and examples, see [scripts/README.md](https://github.com/opendatahub-io/models-as-a-service/blob/main/scripts/README.md#setup-gatewaysh).
 
 **Verify:**
 
@@ -192,6 +193,7 @@ After creating the database Secret and Gateways, create or update your DataScien
     | `spec.telemetry.metrics.captureUser` | Include user labels on metrics (default `false`; privacy-sensitive). |
     | `spec.telemetry.metrics.captureGroup` | Include group labels on metrics (default `false`; higher cardinality). |
     | `spec.telemetry.metrics.captureModelUsage` | Include model labels on usage metrics (default `true`). |
+    | `spec.telemetry.logs.captureUser` | Include `user_id` on usage logs (default `false`; privacy-sensitive). Independent of `metrics.captureUser`. |
 
     Example (patch common values):
 
@@ -209,6 +211,8 @@ After creating the database Secret and Gateways, create or update your DataScien
         metrics:
           captureUser: false
           captureGroup: false
+        logs:
+          captureUser: false
     ```
 
     ```bash
@@ -255,7 +259,7 @@ After creating the database Secret and Gateways, create or update your DataScien
 
 The RHOAI Dashboard uses feature flags in the `OdhDashboardConfig` resource to control which tabs
 and features are visible in the UI. The operator creates this resource automatically when the
-Dashboard component is deployed, but the following flags may need to be enabled manually.
+Dashboard component is deployed. Enable `genAiStudio` manually if you need GenAI Studio.
 
 Patch the `OdhDashboardConfig` in your applications namespace (typically `redhat-ods-applications`
 for RHOAI or `opendatahub` for ODH):
@@ -263,13 +267,34 @@ for RHOAI or `opendatahub` for ODH):
 ```bash
 kubectl patch odhdashboardconfig odh-dashboard-config \
   -n redhat-ods-applications --type=merge \
-  -p '{"spec":{"dashboardConfig":{"genAiStudio":true,"observabilityDashboard":true}}}'
+  -p '{"spec":{"dashboardConfig":{"genAiStudio":true}}}'
 ```
 
 | Flag | Effect | Prerequisites |
 |------|--------|---------------|
 | `genAiStudio: true` | Shows the **GenAI Studio** tab in the Dashboard | `llamastackoperator` set to `Managed` in DSC |
-| `observabilityDashboard: true` | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+| `observabilityDashboard: true` (default) | Shows the **Observability** tab in the Dashboard | COO, OpenTelemetry Operator installed; DSCI `monitoring.metrics` configured |
+
+When using the **Managed** deployment path (i.e. `aigateway.modelsAsAService` set to `Managed` in
+the DSC), also enable the MaaS-specific dashboard flags:
+
+```bash
+kubectl patch odhdashboardconfig odh-dashboard-config \
+  -n redhat-ods-applications --type=merge \
+  -p '{"spec":{"dashboardConfig":{"modelAsService":true,"vLLMDeploymentOnMaaS":true}}}'
+```
+
+| Flag | Effect | Prerequisites |
+|------|--------|---------------|
+| `modelAsService: true` | Enables the **Models as a Service** UI in the Dashboard | `aigateway.modelsAsAService` set to `Managed` in DSC |
+| `vLLMDeploymentOnMaaS: true` | Enables vLLM model deployment via the MaaS Dashboard UI | `modelAsService` enabled |
+
+!!! warning "Deprecated field: `maasAuthPolicies`"
+    The field `maasAuthPolicies` is **deprecated** and frozen via a CEL transition rule in the
+    `OdhDashboardConfig` CRD. On new installs, setting it returns a validation error. Clusters
+    upgraded from RHOAI 3.4 that already had the field set will retain the existing value without
+    error, but the field is no longer used. The field will be removed in a future release.
+    Use `modelAsService: true` instead.
 
 !!! note "Namespace"
     For ODH installations, replace `redhat-ods-applications` with `opendatahub` (or your configured
@@ -346,8 +371,58 @@ kubectl delete aitenant team-red -n ai-tenants
 
 Deletion revokes active API keys and removes per-tenant maas-api resources, MaaS CRs (`MaaSSubscription`, `MaaSAuthPolicy`), and AITenant-owned RBAC. The tenant namespace is kept so non-MaaS user objects and workloads there survive; AITenant ownership metadata (labels and annotations) is cleared from the namespace. The `AITenant` can remain in `Terminating` phase while cleanup is in progress, or report `Ready=False` with reason `DeletionBlocked` if a cleanup step fails. The shared Gateway object and user model workloads outside the tenant namespace are also preserved.
 
+## Operand NetworkPolicies
+
+MaaS operand NetworkPolicies follow [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md). `maas-controller` reconciles operand policies (server-side apply) and recreates them if deleted. The operator bundle policy `maas-controller-allow-monitoring` is managed separately by the platform operator.
+
+| Policy | Workload | Direction | Allowed peers |
+| ------ | -------- | --------- | ------------- |
+| `maas-api-allow-gateway` | `maas-api` | Ingress | Gateway pods in `openshift-ingress` → `:8443` |
+| `maas-authorino-allow` | `maas-api` | Ingress | Authorino pods in Kuadrant/RHCL namespaces → `:8443` |
+| `maas-api-allow-monitoring` | `maas-api` | Ingress | `redhat-ods-monitoring` → `:9090` |
+| `maas-api-egress-restrict` | `maas-api` | Egress | OpenShift CoreDNS; Kubernetes API; bundled Postgres (`app=postgres`) when `maas-db-config` targets in-cluster Postgres |
+| `usage-logs-collector-egress-restrict` | usage-logs collector | Egress | CoreDNS; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
+| `usage-tenancy-proxy-allow-perses` | tenancy proxy | Ingress | Perses pods and kubelet probes (`host-network`) → `:8443` (when `usageLogging=true`) |
+| `usage-tenancy-proxy-egress-restrict` | tenancy proxy | Egress | CoreDNS; Kubernetes API; LokiStack gateway pods (`app.kubernetes.io/name=lokistack`, `app.kubernetes.io/instance=usage`, `app.kubernetes.io/component=lokistack-gateway`) → `:8080` (when `usageLogging=true`) |
+
+### External PostgreSQL
+
+When `maas-db-config` points at an external database (for example `--postgres-connection` or RDS), `maas-api-egress-restrict` does **not** include the `app=postgres` peer. Apply a companion egress policy in the infrastructure namespace with `ipBlock` CIDRs for your database endpoint:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: maas-api-egress-external-postgres
+  labels:
+    app.opendatahub.io/modelsasservice: "true"
+    app.kubernetes.io/part-of: maas
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: maas-api
+      app.kubernetes.io/component: api
+      app.kubernetes.io/part-of: models-as-a-service
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - ipBlock:
+            cidr: 10.0.0.0/16   # replace with your database subnet/CIDR
+      ports:
+        - protocol: TCP
+          port: 5432
+```
+
+Per [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md), external destinations with stable address ranges use the narrowest applicable CIDR; DNS-named endpoints cannot be selected by standard NetworkPolicy.
+
+### Kubernetes API egress (port-only rule)
+
+`maas-api-egress-restrict` and `usage-tenancy-proxy-egress-restrict` allow egress to TCP ports `443` and `6443` without a `to` peer. This is a documented platform exception: in-cluster clients reach the API through the `kubernetes.default` Service ClusterIP, and on OVN-Kubernetes the policy may be evaluated against that VIP before apiserver endpoint DNAT. A `namespaceSelector` for `openshift-kube-apiserver` does not match that path and can block required API access (token projection, TokenReview). [ODH-ADR-Operator-0016](https://github.com/opendatahub-io/architecture-decision-records/blob/main/architecture-decision-records/operator/ODH-ADR-Operator-0016-networkpolicy-platform-contract.md) does not define a shared API-server peer mapping; components document this limitation instead of adding a broad ingress or egress allow-all.
+
 ## Next steps
 
 * **Deploy models.** See [Model Setup](model-setup.md) for sample model deployments.
 * **Perform validation.** Follow the [validation guide](validation.md) to verify that
   MaaS is working correctly.
+* **Enable observability.** See [Observability Setup](../observability/setup.md).

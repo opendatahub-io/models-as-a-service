@@ -11,8 +11,10 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
@@ -29,6 +31,8 @@ type RunResult struct {
 	// Warnings contains non-fatal issues discovered during reconciliation
 	// (e.g. invalid replica-count annotations) that should be surfaced as status conditions.
 	Warnings []string
+	// KuadrantDetectionWarning reports that Kuadrant auth on the gateway could not be verified.
+	KuadrantDetectionWarning string
 }
 
 // CheckDependencies verifies required CRDs (AuthConfig) are registered on the cluster.
@@ -54,6 +58,7 @@ func RunPlatform(
 	appNs string,
 	controllerNs string,
 	clusterAudience string,
+	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
@@ -76,9 +81,38 @@ func RunPlatform(
 		return nil, fmt.Errorf("gateway lookup: %w", err)
 	}
 
-	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, log)
+	params, err := BuildPlatformParams(tenant, platformContext, appNs, controllerNs, clusterAudience, monitoringNamespace, log)
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
+	}
+
+	bundledPostgres, postgresNS, err := resolveBundledPostgres(ctx, c, appNs)
+	if err != nil {
+		return nil, fmt.Errorf("resolve bundled postgres: %w", err)
+	}
+	params.BundledPostgres = bundledPostgres
+	params.BundledPostgresNamespace = postgresNS
+	if bundledPostgres {
+		log.V(1).Info("maas-api egress NP will allow bundled in-cluster postgres",
+			"appNamespace", appNs, "postgresNamespace", postgresNS)
+	} else {
+		log.V(1).Info("maas-api egress NP omits postgres peer (external or missing maas-db-config)", "namespace", appNs)
+	}
+
+	if !params.SkipIPP {
+		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
+		if err != nil {
+			return nil, fmt.Errorf("detect gateway kuadrant wasm: %w", err)
+		}
+		if warning != "" {
+			log.Info(warning, "gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+			params.KuadrantDetectionWarning = warning
+		}
+		params.PayloadProcessingRouterExtProcFallback = !wasmPresent
+		if params.PayloadProcessingRouterExtProcFallback {
+			log.Info("Kuadrant WASM auth not found on gateway; enabling ext_proc router fallback patches",
+				"gateway", platformContext.GatewayRef.Namespace+"/"+platformContext.GatewayRef.Name)
+		}
 	}
 
 	rendered, err := RenderKustomize(manifestPath, appNs)
@@ -89,6 +123,51 @@ func RunPlatform(
 	resources, err := PostRender(ctx, log, tenant, rendered, params)
 	if err != nil {
 		return nil, fmt.Errorf("post-render: %w", err)
+	}
+
+	// SSA only creates/updates resources in the rendered set; it does NOT delete
+	// absent resources. When SkipIPP is true (praxis), run a one-shot, ownership-
+	// gated cleanup of existing MaaS-owned IPP operands, then stop touching
+	// payload-processing names — ai-gateway-controller owns them for praxis tenants.
+	if params.SkipIPP {
+		switch payloadProcessingStatus(tenant) {
+		case PayloadProcessingStatusCleanupComplete:
+			// Already signaled; do not re-cleanup.
+		case "":
+			// Absent: legacy still owned the names — clean up, then signal.
+			if err := cleanupIPPResources(ctx, c, params, mcfg.UID, log); err != nil {
+				return nil, fmt.Errorf("cleanup IPP resources: %w", err)
+			}
+			if err := markPayloadProcessingCleanupComplete(ctx, c, tenant); err != nil {
+				return nil, fmt.Errorf("mark payload-processing cleanup complete: %w", err)
+			}
+		default:
+			// Any other value is a peer claim; do not overwrite it.
+		}
+	} else {
+		// Legacy IPP is selected. Status drives the handshake (no bundleExists gate):
+		//   absent            → apply
+		//   cleanup-complete  → CAS-claim to absent, then apply
+		//   any other value   → wait for peer switch-off
+		ready, err := ensureLegacyMayDeploy(ctx, c, tenant)
+		if err != nil {
+			return nil, fmt.Errorf("ensure legacy may deploy: %w", err)
+		}
+		if !ready {
+			return &RunResult{
+				DeploymentPending: true,
+				Detail:            "waiting for the praxis payload-processing cleanup to finish before redeploying legacy IPP",
+				Warnings:          params.Warnings,
+
+				KuadrantDetectionWarning: params.KuadrantDetectionWarning,
+			}, nil
+		}
+		if err := cleanupPayloadProcessingHPA(ctx, c, params, log); err != nil {
+			return nil, fmt.Errorf("cleanup payload-processing HPA: %w", err)
+		}
+		if err := cleanupPayloadPreProcessingHPA(ctx, c, params, log); err != nil {
+			return nil, fmt.Errorf("cleanup payload-pre-processing HPA: %w", err)
+		}
 	}
 
 	if err := ApplyRendered(ctx, c, scheme, tenant, appNs, mcfg, resources); err != nil {
@@ -108,16 +187,20 @@ func RunPlatform(
 		return nil, fmt.Errorf("deployment status: %w", err)
 	}
 	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
+		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+			KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 	}
-	ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
-	if err != nil {
-		return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
+	if !params.SkipIPP {
+		ready, detail, err = PayloadProcessingEnvoyFilterReady(ctx, c, params.GatewayNamespace, params.GatewayName, tenantID)
+		if err != nil {
+			return nil, fmt.Errorf("payload-processing EnvoyFilter status: %w", err)
+		}
+		if !ready {
+			return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings,
+				KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
+		}
 	}
-	if !ready {
-		return &RunResult{DeploymentPending: true, Detail: detail, Warnings: params.Warnings}, nil
-	}
-	return &RunResult{Warnings: params.Warnings}, nil
+	return &RunResult{Warnings: params.Warnings, KuadrantDetectionWarning: params.KuadrantDetectionWarning}, nil
 }
 
 // Run executes the Tenant platform pipeline (dependencies → prerequisites → render → apply → status).
@@ -132,6 +215,7 @@ func Run(
 	manifestPath string,
 	controllerNs string,
 	clusterAudience string,
+	monitoringNamespace string,
 	mcfg *maasv1alpha1.Config,
 ) (*RunResult, error) {
 	manifestPath, err := filepath.Abs(manifestPath)
@@ -157,7 +241,7 @@ func Run(
 		return nil, err
 	}
 
-	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, mcfg)
+	return RunPlatform(ctx, log, c, scheme, tenant, platformContext, manifestPath, appNs, controllerNs, clusterAudience, monitoringNamespace, mcfg)
 }
 
 const maasParametersConfigMapName = "maas-parameters"
@@ -275,4 +359,434 @@ func PayloadProcessingEnvoyFilterReady(ctx context.Context, c client.Client, gat
 			gatewayNamespace, efName, gatewayNameLabel, got, gatewayName), nil
 	}
 	return true, "", nil
+}
+
+const aiGatewayControllerFieldOwner = "ai-gateway-controller"
+
+const ippExternalModelManagedBy = "ipp-external-model-reconciler"
+
+const ippExternalModelLabel = "inference.opendatahub.io/external-model"
+
+var inferenceExternalModelRouteOwnerGVK = schema.GroupVersionKind{Group: "inference.opendatahub.io", Version: "v1alpha1", Kind: "ExternalModel"}
+
+func payloadProcessingStatus(tenant client.Object) string {
+	annotations := tenant.GetAnnotations()
+	if annotations == nil {
+		return ""
+	}
+	return annotations[AnnotationPayloadProcessingStatus]
+}
+
+func isPayloadProcessingCleanupComplete(tenant client.Object) bool {
+	return payloadProcessingStatus(tenant) == PayloadProcessingStatusCleanupComplete
+}
+
+func markPayloadProcessingCleanupComplete(ctx context.Context, c client.Client, tenant client.Object) error {
+	return patchTenantAnnotations(ctx, c, tenant, func(annotations map[string]string) {
+		annotations[AnnotationPayloadProcessingStatus] = PayloadProcessingStatusCleanupComplete
+	})
+}
+
+// ensureLegacyMayDeploy decides whether legacy IPP may apply for tenant.
+//
+//	absent           → ready
+//	cleanup-complete → CAS-claim to absent, then ready
+//	any other value  → wait (peer owns the dataplane)
+func ensureLegacyMayDeploy(ctx context.Context, c client.Client, tenant client.Object) (ready bool, err error) {
+	switch payloadProcessingStatus(tenant) {
+	case "":
+		return true, nil
+	case PayloadProcessingStatusCleanupComplete:
+		return claimLegacySteady(ctx, c, tenant)
+	default:
+		return false, nil
+	}
+}
+
+// legacyIPPBundleExists reports whether this tenant's legacy IPP Deployment is
+// already present. Kept for tests / diagnostics; the deploy gate no longer
+// uses it (status is the durable claim).
+func legacyIPPBundleExists(ctx context.Context, c client.Client, params PlatformParams) (bool, error) {
+	dep := &appsv1.Deployment{}
+	key := types.NamespacedName{Namespace: params.GatewayNamespace, Name: PayloadProcessingDeploymentName(params.TenantIdentifier)}
+	if err := c.Get(ctx, key, dep); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("get legacy IPP deployment %s/%s: %w", key.Namespace, key.Name, err)
+	}
+	return true, nil
+}
+
+// claimLegacySteady atomically consumes cleanup-complete by deleting the
+// status annotation (legacy steady = absent) via optimistic-concurrency Update.
+func claimLegacySteady(ctx context.Context, c client.Client, tenant client.Object) (claimed bool, err error) {
+	latest, ok := tenant.DeepCopyObject().(client.Object)
+	if !ok {
+		return false, fmt.Errorf("expected client.Object copy, got %T", tenant.DeepCopyObject())
+	}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(tenant), latest); err != nil {
+		return false, fmt.Errorf("get tenant config for payload-processing status claim: %w", err)
+	}
+	if payloadProcessingStatus(latest) != PayloadProcessingStatusCleanupComplete {
+		return false, nil
+	}
+	annotations := latest.GetAnnotations()
+	if annotations == nil {
+		annotations = map[string]string{}
+	}
+	delete(annotations, AnnotationPayloadProcessingStatus)
+	latest.SetAnnotations(annotations)
+	if err := c.Update(ctx, latest); err != nil {
+		if apierrors.IsConflict(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("claim payload-processing status to legacy steady: %w", err)
+	}
+	return true, nil
+}
+
+func patchTenantAnnotations(ctx context.Context, c client.Client, tenant client.Object, mutate func(map[string]string)) error {
+	key := client.ObjectKeyFromObject(tenant)
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		latest, ok := tenant.DeepCopyObject().(client.Object)
+		if !ok {
+			return fmt.Errorf("expected client.Object copy, got %T", tenant.DeepCopyObject())
+		}
+		if err := c.Get(ctx, key, latest); err != nil {
+			return err
+		}
+		base, ok := latest.DeepCopyObject().(client.Object)
+		if !ok {
+			return fmt.Errorf("expected client.Object copy, got %T", latest.DeepCopyObject())
+		}
+		annotations := latest.GetAnnotations()
+		if annotations == nil {
+			annotations = make(map[string]string)
+		}
+		mutate(annotations)
+		latest.SetAnnotations(annotations)
+		return c.Patch(ctx, latest, client.MergeFrom(base))
+	})
+}
+
+func hasSSAFieldManager(obj *unstructured.Unstructured, manager string) bool {
+	managedFields, found, err := unstructured.NestedSlice(obj.Object, "metadata", "managedFields")
+	if err != nil || !found {
+		return false
+	}
+	for _, entry := range managedFields {
+		field, ok := entry.(map[string]any)
+		if !ok {
+			continue
+		}
+		if mgr, _ := field["manager"].(string); mgr == manager {
+			return true
+		}
+	}
+	return false
+}
+
+func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UID) bool {
+	if configUID == "" {
+		return false
+	}
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind != "Config" || ref.UID != configUID {
+			continue
+		}
+		if ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+// isMaaSOwnedIPPResource reports whether obj is safe to delete during the one-shot
+// Praxis enablement cleanup. Resources owned by ai-gateway-controller are excluded.
+//
+// opendatahub.io/managed=false does NOT block cleanup: that annotation only opts a
+// resource out of steady-state SSA (see ApplyRendered). Backend switch-off must
+// still remove the whole IPP name set — including the plugins ConfigMap maas
+// stamps managed=false on — so the other controller can recreate it in its own
+// schema. Unmanaged leftovers (and MaaS-owned operands) are therefore deleted;
+// only cross-controller praxis ownership is preserved as a race guard.
+func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {
+	if hasSSAFieldManager(obj, aiGatewayControllerFieldOwner) {
+		return false
+	}
+	if ann := obj.GetAnnotations(); ann != nil && ann[AnnotationManaged] == "false" {
+		return true
+	}
+	if hasConfigControllerOwner(obj, configUID) {
+		return true
+	}
+	if hasSSAFieldManager(obj, ssaFieldOwner) {
+		return true
+	}
+	labels := obj.GetLabels()
+	if labels != nil && labels[LabelTenantName] != "" {
+		return true
+	}
+	return false
+}
+
+func setConfigControllerOwnerRef(obj *unstructured.Unstructured, configUID types.UID) {
+	if configUID == "" {
+		return
+	}
+	controller := true
+	obj.SetOwnerReferences([]metav1.OwnerReference{{
+		APIVersion: "maas.opendatahub.io/v1alpha1",
+		Kind:       "Config",
+		Name:       maasv1alpha1.ConfigInstanceName,
+		UID:        configUID,
+		Controller: &controller,
+	}})
+}
+
+type ippResourceRef struct {
+	gvk       schema.GroupVersionKind
+	namespace string
+	name      string
+}
+
+// ippResourcesForTenant lists IPP operands maas-controller may have created for a tenant.
+// When SkipIPP is true these are omitted from the rendered set; explicit deletion is
+// required because SSA apply does not remove absent resources (see cleanupPayloadProcessingHPA).
+func ippResourcesForTenant(params PlatformParams) []ippResourceRef {
+	tenantID := params.TenantIdentifier
+	gatewayNamespace := params.GatewayNamespace
+	return []ippResourceRef{
+		{gvk: GVKHPA, namespace: gatewayNamespace, name: PayloadProcessingHPAName(tenantID)},
+		{gvk: GVKHPA, namespace: gatewayNamespace, name: PayloadPreProcessingHPAName(tenantID)},
+		{gvk: GVKDeployment, namespace: gatewayNamespace, name: PayloadProcessingDeploymentName(tenantID)},
+		{gvk: GVKDeployment, namespace: gatewayNamespace, name: PayloadPreProcessingDeploymentName(tenantID)},
+		{gvk: GVKService, namespace: gatewayNamespace, name: PayloadProcessingServiceName(tenantID)},
+		{gvk: GVKService, namespace: gatewayNamespace, name: PayloadPreProcessingServiceName(tenantID)},
+		{gvk: GVKEnvoyFilter, namespace: gatewayNamespace, name: PayloadProcessingEnvoyFilterName(tenantID)},
+		{gvk: GVKNetworkPolicy, namespace: gatewayNamespace, name: PayloadProcessingNetworkPolicyName(tenantID)},
+		{gvk: GVKDestinationRule, namespace: gatewayNamespace, name: PayloadProcessingDeploymentName(tenantID)},
+		{gvk: GVKDestinationRule, namespace: gatewayNamespace, name: PayloadPreProcessingDeploymentName(tenantID)},
+		{gvk: GVKServiceAccount, namespace: gatewayNamespace, name: PayloadProcessingServiceAccountName(tenantID)},
+		{gvk: GVKConfigMap, namespace: gatewayNamespace, name: PayloadProcessingPluginsConfigMapForTenant(tenantID)},
+		{gvk: GVKClusterRoleBinding, name: PayloadProcessingReaderClusterRoleBindingNameForTenant(tenantID)},
+	}
+}
+
+// cleanupIPPResources removes maas-controller IPP operands during one-shot Praxis
+// enablement. Only MaaS-owned resources are deleted; ai-gateway-controller resources
+// at the same names are left intact.
+func cleanupIPPResources(ctx context.Context, c client.Client, params PlatformParams, configUID types.UID, log logr.Logger) error {
+	for _, ref := range ippResourcesForTenant(params) {
+		if err := deleteIPPResourceIfManaged(ctx, c, ref, configUID, log); err != nil {
+			return err
+		}
+	}
+	if err := ensureIPPWritersStopped(ctx, c, params, configUID); err != nil {
+		return err
+	}
+	if err := cleanupIPPExternalModelRoutes(ctx, c, params, log); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureIPPWritersStopped(ctx context.Context, c client.Client, params PlatformParams, configUID types.UID) error {
+	// The pinned IPP entrypoint enables its ExternalModel reconciler unless
+	// DISABLE_EXTERNAL_MODEL_CONTROLLER=true. MaaS does not claim to observe
+	// that flag; it proves the writer is stopped by observing its owned
+	// Deployment and tenant-scoped pods disappear before route cleanup.
+	var writerChecks []ippResourceRef
+	for _, ref := range ippResourcesForTenant(params) {
+		if ref.gvk != GVKDeployment {
+			continue
+		}
+		writerChecks = append(writerChecks, ref)
+		obj := &unstructured.Unstructured{}
+		obj.SetGroupVersionKind(ref.gvk)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: ref.namespace, Name: ref.name}, obj); err == nil {
+			if isMaaSOwnedIPPResource(obj, configUID) {
+				if obj.GetDeletionTimestamp() != nil {
+					return fmt.Errorf("IPP writer %s/%s is terminating; defer IPP-owned HTTPRoute cleanup", ref.namespace, ref.name)
+				}
+				return fmt.Errorf("IPP writer %s/%s is still present; defer IPP-owned HTTPRoute cleanup", ref.namespace, ref.name)
+			}
+		} else if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("check IPP writer %s/%s: %w", ref.namespace, ref.name, err)
+		}
+	}
+	for _, ref := range writerChecks {
+		pods := &corev1.PodList{}
+		if err := c.List(ctx, pods, client.InNamespace(ref.namespace), client.MatchingLabels{LabelTenantInstance: ref.name}); err != nil {
+			return fmt.Errorf("check IPP writer pods for %s/%s: %w", ref.namespace, ref.name, err)
+		}
+		for i := range pods.Items {
+			pod := &pods.Items[i]
+			labels := pod.GetLabels()
+			if labels["app.kubernetes.io/managed-by"] == aiGatewayControllerFieldOwner {
+				continue
+			}
+			app := labels["app"]
+			if app == "" {
+				return fmt.Errorf("IPP writer pod %s/%s has ambiguous identity; defer IPP-owned HTTPRoute cleanup", pod.Namespace, pod.Name)
+			}
+			if app == PayloadProcessingName || app == PayloadPreProcessingName {
+				return fmt.Errorf("IPP writer pod %s/%s is still present; defer IPP-owned HTTPRoute cleanup", pod.Namespace, pod.Name)
+			}
+		}
+	}
+	return nil
+}
+
+// cleanupIPPExternalModelRoutes removes only routes created by the IPP ExternalModel
+// reconciler. Route names alone do not prove ownership. ModelNamespace is the
+// tenant namespace containing ExternalModels and their routes; AppNamespace may
+// be shared infrastructure and must not be searched by this cleanup. Foreground
+// deletion of the IPP Deployments completes before this runs, ensuring their
+// in-process route writer has stopped.
+func cleanupIPPExternalModelRoutes(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.ModelNamespace == "" {
+		return errors.New("model namespace is required for IPP-owned HTTPRoute cleanup")
+	}
+	routes := &unstructured.UnstructuredList{}
+	routes.SetGroupVersionKind(GVKHTTPRoute.GroupVersion().WithKind("HTTPRouteList"))
+	if err := c.List(ctx, routes, client.InNamespace(params.ModelNamespace)); err != nil {
+		return fmt.Errorf("list existing IPP HTTPRoutes in %s: %w", params.ModelNamespace, err)
+	}
+	for i := range routes.Items {
+		route := &routes.Items[i]
+		labels := route.GetLabels()
+		if labels["app.kubernetes.io/managed-by"] != ippExternalModelManagedBy {
+			continue
+		}
+		modelName := labels[ippExternalModelLabel]
+		if modelName == "" || hasSSAFieldManager(route, aiGatewayControllerFieldOwner) {
+			continue
+		}
+		owner := controllerOwner(route, inferenceExternalModelRouteOwnerGVK, modelName)
+		if owner == nil || owner.UID == "" {
+			log.Info("Skipping ambiguous IPP HTTPRoute cleanup", "name", route.GetName(), "namespace", route.GetNamespace())
+			continue
+		}
+		inference := &unstructured.Unstructured{}
+		inference.SetGroupVersionKind(inferenceExternalModelRouteOwnerGVK)
+		if err := c.Get(ctx, client.ObjectKey{Namespace: params.ModelNamespace, Name: modelName}, inference); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("get inference ExternalModel %s/%s for IPP-owned route %s: %w", params.ModelNamespace, modelName, route.GetName(), err)
+		}
+		if inference.GetUID() != owner.UID {
+			continue
+		}
+		log.Info("Deleting IPP-owned ExternalModel HTTPRoute while enabling Praxis", "name", route.GetName(), "namespace", route.GetNamespace(), "model", modelName)
+		deleteOptions, err := validatedDeleteOptions(route)
+		if err != nil {
+			return fmt.Errorf("prepare IPP-owned HTTPRoute %s/%s deletion: %w", route.GetNamespace(), route.GetName(), err)
+		}
+		if err := c.Delete(ctx, route, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+			return fmt.Errorf("delete stale IPP HTTPRoute %s/%s: %w", route.GetNamespace(), route.GetName(), err)
+		}
+	}
+	return nil
+}
+
+func controllerOwner(obj *unstructured.Unstructured, gvk schema.GroupVersionKind, name string) *metav1.OwnerReference {
+	var match *metav1.OwnerReference
+	for _, owner := range obj.GetOwnerReferences() {
+		if owner.Controller != nil && *owner.Controller && owner.APIVersion == gvk.GroupVersion().String() && owner.Kind == gvk.Kind && owner.Name == name {
+			if match != nil {
+				return nil
+			}
+			ownerRef := owner
+			match = &ownerRef
+		}
+	}
+	return match
+}
+
+func deleteIPPResourceIfManaged(ctx context.Context, c client.Client, ref ippResourceRef, configUID types.UID, log logr.Logger) error {
+	obj := &unstructured.Unstructured{}
+	obj.SetGroupVersionKind(ref.gvk)
+	obj.SetName(ref.name)
+	obj.SetNamespace(ref.namespace)
+
+	key := client.ObjectKeyFromObject(obj)
+	if err := c.Get(ctx, key, obj); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get %s %s/%s: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
+	}
+
+	if !isMaaSOwnedIPPResource(obj, configUID) {
+		log.V(1).Info("Skipping IPP cleanup for resource not owned by maas-controller",
+			"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
+		return nil
+	}
+
+	log.Info("Deleting IPP resource while enabling Praxis",
+		"kind", ref.gvk.Kind, "name", ref.name, "namespace", ref.namespace)
+	deleteOptions, err := validatedDeleteOptions(obj)
+	if err != nil {
+		return fmt.Errorf("prepare %s %s/%s deletion: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
+	}
+	if ref.gvk == GVKDeployment {
+		deleteOptions = append(deleteOptions, client.PropagationPolicy(metav1.DeletePropagationForeground))
+	}
+	if err := c.Delete(ctx, obj, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete %s %s/%s: %w", ref.gvk.Kind, ref.namespace, ref.name, err)
+	}
+	return nil
+}
+
+func validatedDeleteOptions(obj client.Object) ([]client.DeleteOption, error) {
+	uid := obj.GetUID()
+	resourceVersion := obj.GetResourceVersion()
+	if uid == "" || resourceVersion == "" {
+		return nil, fmt.Errorf("validated object %s/%s is missing UID or resourceVersion", obj.GetNamespace(), obj.GetName())
+	}
+	return []client.DeleteOption{client.Preconditions{UID: &uid, ResourceVersion: &resourceVersion}}, nil
+}
+
+// cleanupPayloadProcessingHPA deletes the payload-processing HPA when autoscaling
+// is disabled. This is necessary because SSA only creates/updates resources but never
+// deletes resources that are no longer in the rendered set. Without explicit cleanup,
+// an HPA created during an autoscaling-enabled reconcile would remain active after
+// the autoscaling annotation is removed, continuing to scale pods.
+func cleanupPayloadProcessingHPA(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.PayloadProcessingAutoscaling {
+		// Autoscaling is enabled; the HPA is (being) created, nothing to clean up.
+		return nil
+	}
+	return deleteOrphanedHPA(ctx, c, params.GatewayNamespace, PayloadProcessingHPAName(params.TenantIdentifier), "payload-processing", log)
+}
+
+// cleanupPayloadPreProcessingHPA deletes the payload-pre-processing HPA when autoscaling is disabled.
+func cleanupPayloadPreProcessingHPA(ctx context.Context, c client.Client, params PlatformParams, log logr.Logger) error {
+	if params.PayloadPreProcessingAutoscaling {
+		return nil
+	}
+	return deleteOrphanedHPA(ctx, c, params.GatewayNamespace, PayloadPreProcessingHPAName(params.TenantIdentifier), "payload-pre-processing", log)
+}
+
+func deleteOrphanedHPA(ctx context.Context, c client.Client, namespace, hpaName, logLabel string, log logr.Logger) error {
+	hpa := &unstructured.Unstructured{}
+	hpa.SetGroupVersionKind(GVKHPA)
+	key := types.NamespacedName{Namespace: namespace, Name: hpaName}
+
+	if err := c.Get(ctx, key, hpa); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil // No HPA exists, nothing to clean up.
+		}
+		return fmt.Errorf("get HPA %s/%s: %w", namespace, hpaName, err)
+	}
+
+	log.Info("Deleting orphaned "+logLabel+" HPA (autoscaling disabled)",
+		"hpa", hpaName, "namespace", namespace)
+	if err := c.Delete(ctx, hpa); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete HPA %s/%s: %w", namespace, hpaName, err)
+	}
+	return nil
 }

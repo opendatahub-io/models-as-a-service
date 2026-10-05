@@ -12,7 +12,7 @@ Identifies an AI/ML model for the MaaS platform. The backend may be on-cluster (
 |-------|------|----------|-------------|
 | modelRef | ModelReference | Yes | Reference to the model backend (kind and name) |
 | endpointOverride | string | No | Optional override for the endpoint URL. See [Endpoint Override](#endpoint-override) below. |
-| tenantRef | string | No | Name of the AITenant this model belongs to. When omitted, the model is assigned to the default tenant. See [Multi-Tenant Models](#multi-tenant-models) below. |
+| tenantRef | string | No | Name of the AITenant this model belongs to. When omitted, the controller auto-resolves the tenant from the HTTPRoute's gateway. See [Multi-Tenant Models](#multi-tenant-models) below. |
 
 ### ModelReference
 
@@ -105,13 +105,10 @@ The override does not bypass backend validation. The controller still checks tha
 
 ## Multi-Tenant Models
 
-By default, the controller resolves the gateway for a MaaSModelRef using namespace-based inference — it looks for a MaasTenantConfig in the model's namespace and uses the associated default-tenant gateway.
+The controller auto-resolves the tenant for a MaaSModelRef from the HTTPRoute's gateway parentRef. Because the platform enforces a 1:1 Gateway-to-Tenant mapping (via the AITenant webhook), the controller can unambiguously derive which tenant owns a model by finding the AITenant whose gateway matches the HTTPRoute's parentRef.
 
-In multi-tenant deployments, models often live in a shared namespace (e.g. `llm`) but need to route through a specific tenant's gateway. Set `spec.tenantRef` to the name of the AITenant. The controller looks up the AITenant in the AITenant namespace and uses its gateway directly.
+**Recommended (auto-resolve):** Omit `spec.tenantRef`. The controller resolves the tenant automatically from the gateway configured on the backend resource (LLMInferenceService or ExternalModel HTTPRoute). The MaaSModelRef enters `Pending` state during resolution and moves to `Ready` once the tenant is resolved and governance is attached. If no matching AITenant is found, the model enters `Failed` state with a descriptive message.
 
-A validating webhook rejects `tenantRef` values that do not match an existing AITenant. The value must use lowercase alphanumeric characters and hyphens (matching the CRD pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`) and be no longer than 253 characters.
-
-**Example:**
 ```yaml
 apiVersion: maas.opendatahub.io/v1alpha1
 kind: MaaSModelRef
@@ -122,10 +119,25 @@ spec:
   modelRef:
     kind: LLMInferenceService
     name: granite-7b-instruct
-  tenantRef: red-team
+  # tenantRef omitted — auto-resolved from the HTTPRoute gateway
 ```
 
-The resolved tenant appears in `status.resolvedTenantRef`. When `tenantRef` is removed or left empty, the field is cleared and the controller reverts to namespace-based resolution.
+**Advanced override:** Set `spec.tenantRef` to explicitly select an AITenant. The controller looks up the named AITenant and uses its gateway directly, bypassing auto-resolution. A validating webhook rejects values that do not match an existing AITenant. The value must use lowercase alphanumeric characters and hyphens (matching the CRD pattern `^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`) and be no longer than 253 characters.
+
+```yaml
+apiVersion: maas.opendatahub.io/v1alpha1
+kind: MaaSModelRef
+metadata:
+  name: granite-7b
+  namespace: llm
+spec:
+  modelRef:
+    kind: LLMInferenceService
+    name: granite-7b-instruct
+  tenantRef: red-team  # explicit override
+```
+
+The resolved tenant appears in `status.resolvedTenantRef` whether auto-resolved or explicitly set.
 
 For step-by-step instructions, see [Multi-Tenant Setup — Configure Models](../../install/multi-tenant-setup.md#5-configure-models).
 
@@ -144,7 +156,7 @@ For step-by-step instructions, see [Multi-Tenant Setup — Configure Models](../
 | httpRouteGatewayName | string | Name of the Gateway that the HTTPRoute references |
 | httpRouteGatewayNamespace | string | Namespace of the Gateway that the HTTPRoute references |
 | httpRouteHostnames | []string | Hostnames configured on the HTTPRoute |
-| resolvedTenantRef | string | The explicitly selected AITenant from `spec.tenantRef`; empty when `tenantRef` is omitted and namespace-based resolution is used. |
+| resolvedTenantRef | string | The AITenant this model was resolved to — set from `spec.tenantRef` when provided explicitly, or auto-resolved from the HTTPRoute's gateway parentRef. |
 | conditions | []Condition | Latest observations of the model's state |
 
 ---

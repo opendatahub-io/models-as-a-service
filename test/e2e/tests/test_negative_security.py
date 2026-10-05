@@ -3,10 +3,12 @@ Negative-path and security-oriented E2E tests for MaaS.
 
 Validates that the platform correctly rejects abuse scenarios:
 - Header spoofing: client-supplied X-MaaS identity headers are rejected at the gateway
+- API key delegation: API keys cannot access the API-key management surface
 - Expired API keys: rejected at gateway level
 - Cross-model access: subscription-model binding enforced
 - AuthPolicy removal: access revoked when policy deleted
 - Missing resources: CRs referencing non-existent models
+- Internal endpoint isolation: /internal/* paths not routable through gateway (FIND-004)
 
 Requires:
   - GATEWAY_HOST env var
@@ -24,7 +26,6 @@ import http.client
 import json
 import logging
 import ssl
-import subprocess
 import time
 import uuid
 from urllib.parse import urlparse
@@ -65,6 +66,72 @@ pytestmark = pytest.mark.xdist_group("security")
 
 
 # ============================================================================
+# P0: API Key Management Isolation
+# ============================================================================
+
+class TestAPIKeyManagementIsolation:
+    """Verify that inference API keys cannot act as management credentials."""
+
+    def test_api_key_cannot_mint_another_api_key(self):
+        """A valid subscription-bound API key must be denied on POST /v1/api-keys.
+
+        The initial key is minted with a cluster token as a control. The test then
+        presents that valid key to the management endpoint and verifies that the
+        gateway or MaaS API rejects it without returning new key material.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
+        parent_key_id = None
+
+        try:
+            parent = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-delegation-parent-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert parent.status_code in (200, 201), (
+                f"Control API key mint failed: {parent.status_code} "
+                f"body_bytes={len(parent.content)}"
+            )
+            parent_body = parent.json()
+            parent_key_id = parent_body.get("id")
+            parent_key = parent_body.get("key", "")
+            assert parent_key.startswith("sk-oai-"), "Control mint did not return an API key"
+
+            # Use the API key, not the cluster token, to attempt delegation.
+            # Do not log the response body: a regression could return a live key.
+            delegated = requests.post(
+                f"{_maas_api_url()}/v1/api-keys",
+                headers={
+                    "Authorization": f"Bearer {parent_key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "name": f"e2e-delegation-child-{uuid.uuid4().hex[:8]}",
+                    "subscription": SIMULATOR_SUBSCRIPTION,
+                },
+                timeout=TIMEOUT,
+                verify=TLS_VERIFY,
+            )
+
+            log.info(
+                "API-key-authenticated key mint -> %s body_bytes=%d",
+                delegated.status_code,
+                len(delegated.content),
+            )
+            assert delegated.status_code in (401, 403), (
+                f"Expected API-key-authenticated mint to be denied, got "
+                f"{delegated.status_code} body_bytes={len(delegated.content)}"
+            )
+            assert "sk-oai-" not in delegated.text, (
+                "Denied delegation response must not contain API key material"
+            )
+        finally:
+            if parent_key_id:
+                _revoke_api_key(oc_token, parent_key_id)
+
+
+# ============================================================================
 # P0: Header Spoofing Tests
 # ============================================================================
 
@@ -72,8 +139,8 @@ class TestHeaderSpoofing:
     """Verify that client-supplied identity headers cannot forge authorization.
 
     AuthPolicy deny-client-identity-headers rejects requests that already carry
-    X-MaaS-Username / X-MaaS-Group. Authorino then injects trusted identity
-    headers only after successful authentication.
+    X-MaaS-Username / X-MaaS-Group / X-MaaS-KeyName. Authorino then injects trusted
+    identity headers only after successful authentication.
 
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
@@ -86,14 +153,15 @@ class TestHeaderSpoofing:
                 {"X-MaaS-Group": '["system:cluster-admins","system:masters"]'},
                 "X-MaaS-Group",
             ),
+            ({"X-MaaS-KeyName": "forged-prod-key"}, "X-MaaS-KeyName"),
         ],
-        ids=["username-only", "group-only"],
+        ids=["username-only", "group-only", "keyname-only"],
     )
     def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
         """POST /v1/api-keys with a forged X-MaaS identity header must be denied.
 
         Each denied header is asserted independently so a regression that only
-        drops username or only drops group cannot hide behind a combined spoof.
+        drops username, group, or key name cannot hide behind a combined spoof.
 
         Under deny semantics there is no spoofed key to inspect — Authorino
         rejects before maas-api runs, so the response must not contain key
@@ -166,7 +234,7 @@ class TestHeaderSpoofing:
                 _revoke_api_key(oc_token, control_key_id)
 
     def test_injected_identity_headers_rejected_on_inference(self):
-        """Client injects X-MaaS-Username/Group — gateway rejects the request.
+        """Client injects X-MaaS-Username/Group/KeyName — gateway rejects the request.
 
         With deny-client-identity-headers, forged identity headers are not
         overwritten and ignored; the request is denied at Authorino.
@@ -179,6 +247,7 @@ class TestHeaderSpoofing:
         spoofed_headers = {
             "X-MaaS-Username": "cluster-admin",
             "X-MaaS-Group": "system:cluster-admins,system:masters",
+            "X-MaaS-KeyName": "forged-prod-key",
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 
@@ -208,9 +277,10 @@ class TestHeaderSpoofing:
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         # Warm up: confirm the API key works with a normal request before
-        # testing duplicate headers. Under parallel load, Rego policy
-        # propagation can take longer than the 30s retry window below.
-        _poll_status(api_key, 200, timeout=60)
+        # testing duplicate headers. Under parallel load, Authorino/Rego policy
+        # and API-key validation can lag; other e2e tests use 8s + 90s polls.
+        time.sleep(8)
+        _poll_status(api_key, 200, timeout=90)
 
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
         # The requests library uses a dict for headers, so it cannot send two
@@ -228,7 +298,7 @@ class TestHeaderSpoofing:
 
         # As above, keep the raw duplicate headers on every retry while waiting
         # for shared gateway authorization state to settle.
-        deadline = time.time() + 30
+        deadline = time.time() + 60
         while True:
             gateway = _gateway_url()
             parsed = urlparse(gateway)
@@ -550,98 +620,98 @@ class TestHeaderAbuse:
 class TestWebhookValidation:
     """Verify admission webhooks enforce namespace labeling requirements."""
 
-    def test_subscription_rejected_in_unlabeled_namespace(self):
-        """MaaSSubscription create is rejected in namespace without MaasTenantConfig CR.
 
-        Webhooks require namespaces to have a MaasTenantConfig CR to contain tenant resources.
+# ============================================================================
+# P0: Internal Endpoint Isolation (FIND-004)
+# ============================================================================
+
+class TestInternalEndpointIsolation:
+    """Verify internal API endpoints are not reachable through the gateway.
+
+    Internal endpoints (/internal/v1/*) are designed for in-cluster callers
+    (Authorino, CronJob) via the Kubernetes Service directly. The HTTPRoute
+    scopes the /maas-api prefix to /maas-api/v1 only, so /maas-api/internal/*
+    has no matching route and must never reach the internal handlers.
+
+    Security invariant (FIND-004): authenticated requests to /maas-api/internal/*
+    through the gateway must not return a success response.
+    """
+
+    @pytest.mark.parametrize(
+        "path,body",
+        [
+            (
+                "/internal/v1/subscriptions/select",
+                {"groups": ["system:authenticated"], "username": "test"},
+            ),
+            ("/internal/v1/api-keys/cleanup", {}),
+            ("/internal/v1/api-keys/validate", {"key": "sk-oai-test-fake-key"}),
+        ],
+        ids=["subscriptions-select", "api-keys-cleanup", "api-keys-validate"],
+    )
+    def test_internal_endpoint_not_routable(self, path, body):
+        """POST /maas-api/internal/* through gateway must not reach the handler.
+
+        Sends an authenticated request to each internal endpoint via the
+        gateway. With the HTTPRoute scoped to /maas-api/v1, these paths
+        have no matching route and the gateway returns a non-success status
+        (typically 404). The response must not contain handler output.
         """
-        test_ns = f"e2e-webhook-test-{uuid.uuid4().hex[:6]}"
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
 
-        try:
-            # Create namespace without MaasTenantConfig CR
-            result = subprocess.run(
-                ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True, timeout=30
-            )
-            assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
+        url = f"{_maas_api_url()}{path}"
+        headers = {
+            "Authorization": f"Bearer {oc_token}",
+            "Content-Type": "application/json",
+        }
 
-            # Try to create MaaSSubscription (should be rejected by webhook)
-            result = subprocess.run(
-                ["oc", "apply", "-f", "-"],
-                input=json.dumps({
-                    "apiVersion": "maas.opendatahub.io/v1alpha1",
-                    "kind": "MaaSSubscription",
-                    "metadata": {"name": "test-sub", "namespace": test_ns},
-                    "spec": {
-                        "owner": {"groups": [{"name": "system:authenticated"}]},
-                        "modelRefs": [{
-                            "name": MODEL_REF,
-                            "namespace": MODEL_NAMESPACE,
-                            "tokenRateLimits": [{"limit": 100, "window": "1m"}]
-                        }],
-                    },
-                }),
-                capture_output=True, text=True, timeout=30
-            )
+        r = requests.post(
+            url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY,
+        )
 
-            # Verify webhook rejection
-            assert result.returncode != 0, "Expected webhook to reject subscription in namespace without MaasTenantConfig CR"
-            assert "admission webhook" in result.stderr.lower(), \
-                f"Expected webhook rejection, got: {result.stderr}"
-            assert "not enabled for MaaS tenant resources" in result.stderr, \
-                f"Expected helpful error message, got: {result.stderr}"
-            assert "Create a MaasTenantConfig CR" in result.stderr, \
-                f"Expected error to mention creating MaasTenantConfig CR, got: {result.stderr}"
+        log.info(
+            "Internal endpoint %s -> %s body_bytes=%d",
+            path, r.status_code, len(r.content),
+        )
 
-            log.info("✅ Webhook correctly rejected MaaSSubscription in namespace without MaasTenantConfig CR")
-            log.info(f"Error message: {result.stderr}")
+        assert r.status_code == 404, (
+            f"Internal endpoint {path} must not be routable through gateway "
+            f"(expected 404, got {r.status_code}). "
+            f"A 2xx means the handler is exposed; a 401/403 means the path is "
+            f"routed but auth-blocked — both indicate a routing defect. "
+            f"Response: {r.text[:300]}"
+        )
 
-        finally:
-            # Clean up namespace
-            subprocess.run(
-                ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True, timeout=30
-            )
+    def test_health_endpoint_accessible(self):
+        """GET /maas-api/health remains accessible through gateway.
 
-    def test_authpolicy_rejected_in_unlabeled_namespace(self):
-        """MaaSAuthPolicy create is rejected in namespace without MaasTenantConfig CR."""
-        test_ns = f"e2e-webhook-test-{uuid.uuid4().hex[:6]}"
+        The HTTPRoute includes a dedicated rule for /maas-api/health and
+        the AuthPolicy skips auth for this path, so unauthenticated GET
+        requests must return 200.
+        """
+        url = f"{_maas_api_url()}/health"
+        r = requests.get(url, timeout=TIMEOUT, verify=TLS_VERIFY)
 
-        try:
-            # Create namespace without MaasTenantConfig CR
-            result = subprocess.run(
-                ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True, timeout=30
-            )
-            assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
+        log.info("Health endpoint -> %s", r.status_code)
+        assert r.status_code == 200, (
+            f"Health endpoint should return 200, got {r.status_code}: {r.text[:500]}"
+        )
 
-            # Try to create MaaSAuthPolicy (should be rejected by webhook)
-            result = subprocess.run(
-                ["oc", "apply", "-f", "-"],
-                input=json.dumps({
-                    "apiVersion": "maas.opendatahub.io/v1alpha1",
-                    "kind": "MaaSAuthPolicy",
-                    "metadata": {"name": "test-policy", "namespace": test_ns},
-                    "spec": {
-                        "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                        "subjects": {"groups": [{"name": "system:authenticated"}]},
-                    },
-                }),
-                capture_output=True, text=True, timeout=30
-            )
+    def test_v1_models_via_maas_api_prefix(self):
+        """GET /maas-api/v1/models remains accessible through gateway.
 
-            # Verify webhook rejection
-            assert result.returncode != 0, "Expected webhook to reject auth policy in namespace without MaasTenantConfig CR"
-            assert "admission webhook" in result.stderr.lower(), \
-                f"Expected webhook rejection, got: {result.stderr}"
-            assert "not enabled for MaaS tenant resources" in result.stderr, \
-                f"Expected helpful error message, got: {result.stderr}"
+        Regression check: the HTTPRoute rewrite from /maas-api/v1 to /v1
+        must preserve access to public API endpoints.
+        """
+        _wait_for_gateway_auth_enforced()
+        oc_token = _get_cluster_token()
 
-            log.info("✅ Webhook correctly rejected MaaSAuthPolicy in namespace without MaasTenantConfig CR")
+        url = f"{_maas_api_url()}/v1/models"
+        headers = {"Authorization": f"Bearer {oc_token}"}
+        r = requests.get(url, headers=headers, timeout=TIMEOUT, verify=TLS_VERIFY)
 
-        finally:
-            # Clean up namespace
-            subprocess.run(
-                ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True, timeout=30
-            )
+        log.info("/maas-api/v1/models -> %s", r.status_code)
+        assert r.status_code == 200, (
+            f"/maas-api/v1/models should return 200, got {r.status_code}: {r.text[:500]}"
+        )

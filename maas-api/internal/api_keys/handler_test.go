@@ -17,9 +17,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-
-	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/config"
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/logger"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/subscription"
 	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/token"
@@ -126,6 +125,7 @@ type metricsCall struct {
 type spyMetricsRecorder struct {
 	keyValidations []metricsCall
 	tokenMints     []metricsCall
+	rejections     []string
 }
 
 func (s *spyMetricsRecorder) RecordKeyValidation(tenant, result string) {
@@ -134,6 +134,10 @@ func (s *spyMetricsRecorder) RecordKeyValidation(tenant, result string) {
 
 func (s *spyMetricsRecorder) RecordTokenMint(tenant, result string) {
 	s.tokenMints = append(s.tokenMints, metricsCall{tenant, result})
+}
+
+func (s *spyMetricsRecorder) RecordRejection(reason string) {
+	s.rejections = append(s.rejections, reason)
 }
 
 // TestCreateAPIKey_TokenMintMetrics verifies that the token mint counter records
@@ -178,6 +182,34 @@ func TestCreateAPIKey_TokenMintMetrics(t *testing.T) {
 	}
 }
 
+func TestCreateAPIKey_RejectsAPIKeyAuthentication(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{TenantName: "redteam"}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	spy := &spyMetricsRecorder{}
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), spy)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/api-keys", strings.NewReader(`{"name":"escalation-attempt","subscription":"other-sub"}`))
+	c.Request.Header.Set("Authorization", "Bearer "+KeyPrefix+"caller_secret")
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Set("user", &token.UserContext{
+		Username: "alice",
+		Groups:   []string{"system:authenticated"},
+		Tenant:   "redteam",
+	})
+
+	handler.CreateAPIKey(c)
+
+	require.Equal(t, http.StatusForbidden, w.Code)
+	assert.JSONEq(t, `{"error":"API keys cannot create API keys"}`, w.Body.String())
+	assert.Empty(t, store.keys, "rejected requests must not persist a child key")
+	require.Len(t, spy.tokenMints, 1)
+	assert.Equal(t, metricsCall{tenant: "redteam", result: "rejected"}, spy.tokenMints[0])
+}
+
 func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	store := NewMockStore()
@@ -206,6 +238,27 @@ func TestValidateAPIKey_RecordsValidationMetric(t *testing.T) {
 	require.Len(t, spy.keyValidations, 1)
 	assert.Equal(t, "redteam", spy.keyValidations[0].tenant)
 	assert.Equal(t, "valid", spy.keyValidations[0].result)
+}
+
+func TestValidateAPIKey_RecordsUnauthorizedRejection(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	store := NewMockStore()
+	cfg := &config.Config{}
+	service := NewServiceWithLogger(store, cfg, fixedSubSelector{}, logger.Development())
+	spy := &spyMetricsRecorder{}
+	handler := NewHandler(logger.Development(), service, newMockAdminChecker(), spy)
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodPost, "/internal/v1/api-keys/validate", nil)
+	c.Request.Header.Set("Content-Type", "application/json")
+	c.Request.Body = io.NopCloser(strings.NewReader(`{"key": "invalid-key"}`))
+
+	handler.ValidateAPIKeyHandler(c)
+
+	assert.Equal(t, http.StatusOK, w.Code)
+	require.Len(t, spy.rejections, 1)
+	assert.Equal(t, "unauthorized", spy.rejections[0])
 }
 
 func TestIsAuthorizedForKey(t *testing.T) {
@@ -423,7 +476,7 @@ func TestSearchAPIKeys_StatusFilter(t *testing.T) {
 	// Create active and revoked keys
 	err := store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, "test-tenant", nil, false, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "revoked-key", "revoked-hash", "Revoked Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", nil, false, nil)
 	require.NoError(t, err)
 	err = store.Revoke(ctx, "revoked-key")
@@ -1672,7 +1725,7 @@ func TestCleanupExpiredEphemeralKeys(t *testing.T) {
 
 	// Create expired ephemeral key within 30-minute grace period (should NOT be deleted)
 	recentExpiry := time.Now().Add(-10 * time.Minute)
-	err = store.AddKey(ctx, "alice", "recently-expired-ephemeral", "hash-5", "Recently Expired Ephemeral", "", []string{"users"}, testSubscriptionName, 
+	err = store.AddKey(ctx, "alice", "recently-expired-ephemeral", "hash-5", "Recently Expired Ephemeral", "", []string{"users"}, testSubscriptionName,
 		"test-tenant", &recentExpiry, true, nil)
 	require.NoError(t, err)
 
@@ -1823,10 +1876,10 @@ func TestSearchExcludesEphemeralByDefault(t *testing.T) {
 
 	// Create ephemeral keys
 	futureExpiry := time.Now().Add(1 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-1", "hash-3", "Ephemeral Key 1", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &futureExpiry, true, nil)
 	require.NoError(t, err)
-	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "ephemeral-key-2", "hash-4", "Ephemeral Key 2", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &futureExpiry, true, nil)
 	require.NoError(t, err)
 
@@ -1874,18 +1927,18 @@ func TestSearchAPIKeys_ExpiredStatusComputation(t *testing.T) {
 
 	// Create a key that expired yesterday (stored as active, but past expiration)
 	pastExpiry := time.Now().Add(-24 * time.Hour)
-	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &pastExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with future expiration
 	futureExpiry := time.Now().Add(24 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key","", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &futureExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with no expiration
-	err = store.AddKey(ctx, testUser.Username, "permanent-key", "permanent-hash", "Permanent Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "permanent-key", "permanent-hash", "Permanent Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", nil, false, nil)
 	require.NoError(t, err)
 
@@ -1939,13 +1992,13 @@ func TestGetAPIKey_ExpiredStatusComputation(t *testing.T) {
 
 	// Create a key that expired yesterday
 	pastExpiry := time.Now().Add(-24 * time.Hour)
-	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err := store.AddKey(ctx, testUser.Username, "expired-key", "expired-hash", "Expired Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &pastExpiry, false, nil)
 	require.NoError(t, err)
 
 	// Create an active key with future expiration
 	futureExpiry := time.Now().Add(24 * time.Hour)
-	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName, 
+	err = store.AddKey(ctx, testUser.Username, "active-key", "active-hash", "Active Key", "", []string{"system:authenticated"}, testSubscriptionName,
 		"test-tenant", &futureExpiry, false, nil)
 	require.NoError(t, err)
 
@@ -2686,7 +2739,7 @@ func TestValidateLabels_Success(t *testing.T) {
 			},
 		},
 		{
-			name: "max entries (50)",
+			name:   "max entries (50)",
 			labels: makeLargeLabels(constant.MaxLabelsEntries),
 		},
 	}
@@ -2957,7 +3010,7 @@ func TestCreateAPIKey_InvalidLabels(t *testing.T) {
 			handler.CreateAPIKey(c)
 
 			assert.Equal(t, tt.wantStatus, w.Code)
-			
+
 			var errResp map[string]any
 			err := json.Unmarshal(w.Body.Bytes(), &errResp)
 			require.NoError(t, err)

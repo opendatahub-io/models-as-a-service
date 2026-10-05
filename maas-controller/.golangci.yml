@@ -58,6 +58,9 @@ linters:
       ignore-string-values:
         - "true"
         - "false"
+    modernize:
+      disable:
+        - newexpr
     gocritic:
       enabled-checks:
         - deferInLoop
