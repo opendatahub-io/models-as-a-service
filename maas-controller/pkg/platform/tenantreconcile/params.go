@@ -56,6 +56,19 @@ type PlatformParams struct {
 	// PayloadProcessingTargetMemory is the HPA target memory utilization percentage (default 80).
 	PayloadProcessingTargetMemory int32
 
+	// PayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count when non-nil.
+	// When PayloadPreProcessingAutoscaling is true, this value becomes the HPA minReplicas instead.
+	PayloadPreProcessingReplicas *int32
+
+	// PayloadPreProcessingAutoscaling enables HPA for payload-pre-processing pods when true.
+	PayloadPreProcessingAutoscaling bool
+	// PayloadPreProcessingMaxReplicas is the HPA maxReplicas (default 10, only used when autoscaling is true).
+	PayloadPreProcessingMaxReplicas int32
+	// PayloadPreProcessingTargetCPU is the HPA target CPU utilization percentage (default 70).
+	PayloadPreProcessingTargetCPU int32
+	// PayloadPreProcessingTargetMemory is the HPA target memory utilization percentage (default 80).
+	PayloadPreProcessingTargetMemory int32
+
 	// MonitoringNamespace is the namespace where the platform monitoring stack (OTLP collector) runs.
 	MonitoringNamespace string
 
@@ -70,6 +83,10 @@ type PlatformParams struct {
 	// PayloadProcessingResources overrides resource requests/limits for the payload-processing container.
 	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
 	PayloadProcessingResources *corev1.ResourceRequirements
+
+	// PayloadPreProcessingResources overrides resource requests/limits for the payload-pre-processing container.
+	// Full replacement: when set, the entire resources block is replaced (not merged with base manifest).
+	PayloadPreProcessingResources *corev1.ResourceRequirements
 
 	// Warnings collects non-fatal issues found during param resolution (e.g. invalid annotations).
 	Warnings []string
@@ -113,7 +130,7 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		SkipIPP:                 platformContext.SkipIPP,
 	}
 
-	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
+	params.MaaSAPIReplicas, params.PayloadProcessingReplicas, params.PayloadPreProcessingReplicas, params.Warnings = resolveReplicaAnnotations(tenant, log)
 
 	maasAPIReplicas, maasAPIResources := resolveMaasAPIConfig(tenant, log)
 	params.MaaSAPIResources = maasAPIResources
@@ -152,6 +169,33 @@ func BuildPlatformParams(tenant client.Object, platformContext PlatformContext, 
 		}
 	}
 
+	var preReplicas *int32
+	var preResourceWarnings []string
+	params.PayloadPreProcessingAutoscaling,
+		preReplicas,
+		params.PayloadPreProcessingMaxReplicas,
+		params.PayloadPreProcessingTargetCPU,
+		params.PayloadPreProcessingTargetMemory,
+		params.PayloadPreProcessingResources,
+		preResourceWarnings = resolvePayloadPreProcessingConfig(tenant, log)
+	params.Warnings = append(params.Warnings, preResourceWarnings...)
+
+	if preReplicas != nil {
+		params.PayloadPreProcessingReplicas = preReplicas
+	}
+
+	if params.PayloadPreProcessingAutoscaling && params.PayloadPreProcessingReplicas != nil {
+		if *params.PayloadPreProcessingReplicas > params.PayloadPreProcessingMaxReplicas {
+			params.Warnings = append(params.Warnings, fmt.Sprintf(
+				"spec.payloadPreProcessing.replicas (%d) exceeds spec.payloadPreProcessing.autoscaling.maxReplicas (%d); clamping maxReplicas to match",
+				*params.PayloadPreProcessingReplicas, params.PayloadPreProcessingMaxReplicas))
+			params.PayloadPreProcessingMaxReplicas = *params.PayloadPreProcessingReplicas
+			log.Info("Clamped spec.payloadPreProcessing.autoscaling.maxReplicas to match replicas",
+				"minReplicas", *params.PayloadPreProcessingReplicas,
+				"maxReplicas", params.PayloadPreProcessingMaxReplicas)
+		}
+	}
+
 	log.V(1).Info("Built platform params",
 		"tenant", tenant.GetNamespace()+"/"+tenant.GetName(),
 		"tenantID", tenantID,
@@ -172,10 +216,10 @@ func firstNonEmpty(values ...string) string {
 
 // resolveReplicaAnnotations reads replica-count annotations from the tenant object
 // and returns parsed values (nil if not set) plus any validation warnings.
-func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIReplicas, payloadProcessingReplicas *int32, warnings []string) {
+func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIReplicas, payloadProcessingReplicas, payloadPreProcessingReplicas *int32, warnings []string) {
 	annotations := tenant.GetAnnotations()
 	if annotations == nil {
-		return nil, nil, nil
+		return nil, nil, nil, nil
 	}
 
 	var w []string
@@ -199,7 +243,17 @@ func resolveReplicaAnnotations(tenant client.Object, log logr.Logger) (maasAPIRe
 			log.Info("Resolved payload-processing replicas from annotation", "replicas", *r)
 		}
 	}
-	return maasAPIReplicas, payloadProcessingReplicas, w
+	if v, ok := annotations[AnnotationPayloadPreProcessingReplicas]; ok {
+		r, warn := parseReplicaAnnotation(AnnotationPayloadPreProcessingReplicas, v)
+		if warn != "" {
+			w = append(w, warn)
+			log.Info("Invalid replica annotation", "annotation", AnnotationPayloadPreProcessingReplicas, "value", v, "warning", warn)
+		} else {
+			payloadPreProcessingReplicas = r
+			log.Info("Resolved payload-pre-processing replicas from annotation", "replicas", *r)
+		}
+	}
+	return maasAPIReplicas, payloadProcessingReplicas, payloadPreProcessingReplicas, w
 }
 
 const maxReplicaCount = 100
@@ -234,23 +288,48 @@ func resolvePayloadProcessingConfig(tenant client.Object, log logr.Logger) (
 	resources *corev1.ResourceRequirements,
 	warnings []string,
 ) {
+	return resolveIPPWorkloadConfig(payloadProcessingConfigFor(tenant), "spec.payloadProcessing", "Payload-processing", log)
+}
+
+// resolvePayloadPreProcessingConfig reads autoscaling and resource configuration for
+// payload-pre-processing from the tenant spec.
+func resolvePayloadPreProcessingConfig(tenant client.Object, log logr.Logger) (
+	enabled bool,
+	replicas *int32,
+	maxReplicas, targetCPU, targetMemory int32,
+	resources *corev1.ResourceRequirements,
+	warnings []string,
+) {
+	return resolveIPPWorkloadConfig(payloadPreProcessingConfigFor(tenant), "spec.payloadPreProcessing", "Payload-pre-processing", log)
+}
+
+func resolveIPPWorkloadConfig(
+	cfg *maasv1alpha1.TenantPayloadProcessingConfig,
+	fieldPath, logLabel string,
+	log logr.Logger,
+) (
+	enabled bool,
+	replicas *int32,
+	maxReplicas, targetCPU, targetMemory int32,
+	resources *corev1.ResourceRequirements,
+	warnings []string,
+) {
 	maxReplicas = defaultMaxReplicas
 	targetCPU = defaultTargetCPU
 	targetMemory = defaultTargetMemory
 
-	cfg := payloadProcessingConfigFor(tenant)
 	if cfg == nil {
 		return false, nil, maxReplicas, targetCPU, targetMemory, nil, nil
 	}
 
 	replicas = cfg.Replicas
-	resourceWarnings, resources := validatePayloadProcessingResources(cfg)
+	resourceWarnings, resources := validatePayloadProcessingResources(cfg, fieldPath)
 	if len(resourceWarnings) > 0 {
 		warnings = append(warnings, resourceWarnings...)
 	}
 
 	if resources != nil {
-		log.Info("Payload-processing resource overrides configured")
+		log.Info(logLabel + " resource overrides configured")
 	}
 
 	if cfg.Autoscaling == nil {
@@ -258,7 +337,7 @@ func resolvePayloadProcessingConfig(tenant client.Object, log logr.Logger) (
 	}
 
 	enabled = true
-	log.Info("Payload-processing autoscaling enabled")
+	log.Info(logLabel + " autoscaling enabled")
 
 	if cfg.Autoscaling.MaxReplicas != nil {
 		maxReplicas = *cfg.Autoscaling.MaxReplicas
@@ -273,7 +352,7 @@ func resolvePayloadProcessingConfig(tenant client.Object, log logr.Logger) (
 	return enabled, replicas, maxReplicas, targetCPU, targetMemory, resources, warnings
 }
 
-func validatePayloadProcessingResources(cfg *maasv1alpha1.TenantPayloadProcessingConfig) (warnings []string, resources *corev1.ResourceRequirements) {
+func validatePayloadProcessingResources(cfg *maasv1alpha1.TenantPayloadProcessingConfig, fieldPath string) (warnings []string, resources *corev1.ResourceRequirements) {
 	if cfg.Resources == nil {
 		return nil, nil
 	}
@@ -286,18 +365,18 @@ func validatePayloadProcessingResources(cfg *maasv1alpha1.TenantPayloadProcessin
 	if cfg.Autoscaling != nil {
 		if resources.Requests == nil {
 			return []string{
-				"spec.payloadProcessing.resources.requests is required when autoscaling is enabled; " +
-					"specify both cpu and memory requests or remove spec.payloadProcessing.resources to use manifest defaults",
+				fieldPath + ".resources.requests is required when autoscaling is enabled; " +
+					"specify both cpu and memory requests or remove " + fieldPath + ".resources to use manifest defaults",
 			}, nil
 		}
 		if _, ok := resources.Requests[corev1.ResourceCPU]; !ok {
 			return []string{
-				"spec.payloadProcessing.resources.requests.cpu is required when autoscaling is enabled",
+				fieldPath + ".resources.requests.cpu is required when autoscaling is enabled",
 			}, nil
 		}
 		if _, ok := resources.Requests[corev1.ResourceMemory]; !ok {
 			return []string{
-				"spec.payloadProcessing.resources.requests.memory is required when autoscaling is enabled",
+				fieldPath + ".resources.requests.memory is required when autoscaling is enabled",
 			}, nil
 		}
 	}
@@ -352,6 +431,17 @@ func payloadProcessingConfigFor(tenant client.Object) *maasv1alpha1.TenantPayloa
 		return t.Spec.PayloadProcessing
 	case *maasv1alpha1.Tenant:
 		return t.Spec.PayloadProcessing
+	default:
+		return nil
+	}
+}
+
+func payloadPreProcessingConfigFor(tenant client.Object) *maasv1alpha1.TenantPayloadProcessingConfig {
+	switch t := tenant.(type) {
+	case *maasv1alpha1.MaasTenantConfig:
+		return t.Spec.PayloadPreProcessing
+	case *maasv1alpha1.Tenant:
+		return t.Spec.PayloadPreProcessing
 	default:
 		return nil
 	}
@@ -768,6 +858,19 @@ func patchPayloadProcessingDeployment(log logr.Logger, r *unstructured.Unstructu
 func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured, params PlatformParams) error {
 	r.SetNamespace(params.GatewayNamespace)
 	deploymentName := PayloadPreProcessingDeploymentName(params.TenantIdentifier)
+
+	// When autoscaling is enabled, remove spec.replicas so the HPA has sole ownership.
+	// SSA would otherwise reset the HPA-selected count on every reconciliation.
+	if params.PayloadPreProcessingAutoscaling {
+		unstructured.RemoveNestedField(r.Object, "spec", "replicas")
+		log.V(4).Info("Removed spec.replicas from payload-pre-processing (HPA manages replicas)", "deployment", deploymentName)
+	} else if params.PayloadPreProcessingReplicas != nil {
+		if err := unstructured.SetNestedField(r.Object, int64(*params.PayloadPreProcessingReplicas), "spec", "replicas"); err != nil {
+			return fmt.Errorf("patch payload-pre-processing replicas: %w", err)
+		}
+		log.V(4).Info("Patching payload-pre-processing replicas", "deployment", deploymentName, "replicas", *params.PayloadPreProcessingReplicas)
+	}
+
 	if params.PayloadProcessingImage != "" {
 		if err := setContainerImage(r, PayloadPreProcessingName, params.PayloadProcessingImage); err != nil {
 			return fmt.Errorf("patch payload-pre-processing image: %w", err)
@@ -784,6 +887,12 @@ func patchPreProcessingDeployment(log logr.Logger, r *unstructured.Unstructured,
 	}
 	if err := patchConfigMapVolumeRef(r, "plugins-config-volume", PayloadProcessingPluginsConfigMapForTenant(params.TenantIdentifier)); err != nil {
 		return fmt.Errorf("patch plugins ConfigMap volume: %w", err)
+	}
+	if params.PayloadPreProcessingResources != nil {
+		if err := setContainerResources(r, PayloadPreProcessingName, params.PayloadPreProcessingResources); err != nil {
+			return fmt.Errorf("patch payload-pre-processing resources: %w", err)
+		}
+		log.V(4).Info("Patched payload-pre-processing resources", "deployment", deploymentName)
 	}
 	return nil
 }

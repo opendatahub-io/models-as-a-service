@@ -85,10 +85,17 @@ if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
 fi
 
 # ── Venv ─────────────────────────────────────────────────────────────────
-if [[ ! -d "$TEST_DIR/.venv" ]]; then
-    echo "Creating Python venv for e2e tests..."
-    python3 -m venv "$TEST_DIR/.venv" --upgrade-deps
+# shellcheck source=ensure_e2e_python.sh
+source "$SCRIPT_DIR/ensure_e2e_python.sh"
+if [[ -d "$TEST_DIR/.venv" ]] && ! "$TEST_DIR/.venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    echo "Recreating e2e venv (existing interpreter is older than Python 3.10)..."
+    rm -rf "$TEST_DIR/.venv"
 fi
+if [[ ! -d "$TEST_DIR/.venv" ]]; then
+    echo "Creating Python venv for e2e tests ($E2E_PYTHON)..."
+    "$E2E_PYTHON" -m venv "$TEST_DIR/.venv" --upgrade-deps
+fi
+# shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
 python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
