@@ -923,6 +923,11 @@ func (in *MaasTenantConfigSpec) DeepCopyInto(out *MaasTenantConfigSpec) {
 		*out = new(TenantPayloadProcessingConfig)
 		(*in).DeepCopyInto(*out)
 	}
+	if in.PayloadPreProcessing != nil {
+		in, out := &in.PayloadPreProcessing, &out.PayloadPreProcessing
+		*out = new(TenantPayloadProcessingConfig)
+		(*in).DeepCopyInto(*out)
+	}
 	if in.Guardrails != nil {
 		in, out := &in.Guardrails, &out.Guardrails
 		*out = make([]GuardrailAttachment, len(*in))
@@ -1433,6 +1438,11 @@ func (in *TenantSpec) DeepCopyInto(out *TenantSpec) {
 	}
 	if in.PayloadProcessing != nil {
 		in, out := &in.PayloadProcessing, &out.PayloadProcessing
+		*out = new(TenantPayloadProcessingConfig)
+		(*in).DeepCopyInto(*out)
+	}
+	if in.PayloadPreProcessing != nil {
+		in, out := &in.PayloadPreProcessing, &out.PayloadPreProcessing
 		*out = new(TenantPayloadProcessingConfig)
 		(*in).DeepCopyInto(*out)
 	}
