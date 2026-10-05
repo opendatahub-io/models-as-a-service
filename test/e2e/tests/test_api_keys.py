@@ -230,8 +230,10 @@ def model_completions_url(model_v1: str) -> str:
 
 
 @pytest.fixture
-def inference_model_name() -> str:
-    """Model name for inference requests. Override with INFERENCE_MODEL_NAME env var."""
+def inference_model_name(_worker_api_keys_context) -> str:
+    """Use the worker model name or the shared tenant environment override."""
+    if _worker_api_keys_context is not None:
+        return f"e2e/{_worker_api_keys_context.model_ref}"
     return os.environ.get("INFERENCE_MODEL_NAME", MODEL_NAME)
 
 
