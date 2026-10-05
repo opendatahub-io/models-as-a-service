@@ -85,6 +85,7 @@ func RunPlatform(
 	if err != nil {
 		return nil, fmt.Errorf("build params: %w", err)
 	}
+	applyMaaSAPIEgressConfig(&params, mcfg)
 
 	if !params.SkipIPP {
 		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
@@ -110,6 +111,12 @@ func RunPlatform(
 	resources, err := PostRender(ctx, log, tenant, rendered, params)
 	if err != nil {
 		return nil, fmt.Errorf("post-render: %w", err)
+	}
+
+	if params.MaaSAPIEgressNetworkPolicyDisabled && mcfg != nil {
+		if err := cleanupMaaSAPIEgressNetworkPolicy(ctx, c, appNs, mcfg.UID, log); err != nil {
+			return nil, fmt.Errorf("cleanup maas-api egress networkpolicy: %w", err)
+		}
 	}
 
 	// SSA only creates/updates resources in the rendered set; it does NOT delete
@@ -761,6 +768,71 @@ func cleanupPayloadProcessingHPA(ctx context.Context, c client.Client, params Pl
 		"hpa", hpaName, "namespace", params.GatewayNamespace)
 	if err := c.Delete(ctx, hpa); err != nil && !apierrors.IsNotFound(err) {
 		return fmt.Errorf("delete HPA %s/%s: %w", params.GatewayNamespace, hpaName, err)
+	}
+	return nil
+}
+
+func maasAPIEgressNetworkPolicyDisabled(spec maasv1alpha1.ConfigSpec) bool {
+	return spec.MaasAPIEgressNetworkPolicy == maasv1alpha1.MaaSAPIEgressNetworkPolicyDisabled
+}
+
+func applyMaaSAPIEgressConfig(params *PlatformParams, mcfg *maasv1alpha1.Config) {
+	if params == nil || mcfg == nil {
+		return
+	}
+	params.MaaSAPIEgressNetworkPolicyDisabled = maasAPIEgressNetworkPolicyDisabled(mcfg.Spec)
+	if params.MaaSAPIEgressNetworkPolicyDisabled {
+		params.MaaSAPIEgressRules = nil
+		params.MaaSAPIAdditionalEgressRules = nil
+		return
+	}
+	params.MaaSAPIEgressRules = mcfg.Spec.NetworkPolicyEgressRules
+	params.MaaSAPIAdditionalEgressRules = mcfg.Spec.NetworkPolicyAdditionalEgressRules
+}
+
+// isMaaSManagedMaaSAPIEgressNetworkPolicy reports whether maas-controller may delete
+// maas-api-egress-restrict during Disabled cleanup. External controller ownership wins.
+func isMaaSManagedMaaSAPIEgressNetworkPolicy(np *unstructured.Unstructured, configUID types.UID) bool {
+	for _, ref := range np.GetOwnerReferences() {
+		if ref.Controller != nil && *ref.Controller && ref.UID != configUID {
+			return false
+		}
+	}
+	if hasConfigControllerOwner(np, configUID) {
+		return true
+	}
+	return hasSSAFieldManager(np, ssaFieldOwner)
+}
+
+// cleanupMaaSAPIEgressNetworkPolicy deletes maas-api-egress-restrict when
+// maasApiEgressNetworkPolicy is Disabled. SSA only creates/updates resources in
+// the rendered set; explicit cleanup is required when the policy is omitted.
+func cleanupMaaSAPIEgressNetworkPolicy(ctx context.Context, c client.Client, appNs string, configUID types.UID, log logr.Logger) error {
+	np := &unstructured.Unstructured{}
+	np.SetGroupVersionKind(GVKNetworkPolicy)
+	key := types.NamespacedName{Namespace: appNs, Name: baseMaaSAPIEgressRestrictNetworkPolicyName}
+
+	if err := c.Get(ctx, key, np); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
+	}
+
+	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, configUID) {
+		log.V(1).Info("Skipping maas-api egress NetworkPolicy cleanup; not managed by maas-controller",
+			"name", baseMaaSAPIEgressRestrictNetworkPolicyName, "namespace", appNs)
+		return nil
+	}
+
+	log.Info("Deleting maas-api egress NetworkPolicy; maasApiEgressNetworkPolicy is Disabled",
+		"name", baseMaaSAPIEgressRestrictNetworkPolicyName, "namespace", appNs)
+	deleteOptions, err := validatedDeleteOptions(np)
+	if err != nil {
+		return fmt.Errorf("prepare NetworkPolicy %s/%s deletion: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
+	}
+	if err := c.Delete(ctx, np, deleteOptions...); err != nil && !apierrors.IsNotFound(err) {
+		return fmt.Errorf("delete NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
 	return nil
 }

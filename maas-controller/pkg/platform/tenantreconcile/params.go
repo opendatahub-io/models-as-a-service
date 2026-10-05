@@ -10,6 +10,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -77,6 +78,14 @@ type PlatformParams struct {
 	// KuadrantDetectionWarning is set when Kuadrant auth on the gateway could not be verified
 	// and the Kuadrant anchors were kept.
 	KuadrantDetectionWarning string
+
+	// MaaSAPIEgressRules replaces the default maas-api egress block when non-empty.
+	MaaSAPIEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIAdditionalEgressRules are appended after the base egress block.
+	MaaSAPIAdditionalEgressRules []netwv1.NetworkPolicyEgressRule
+	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
+	// rendered set and deletes any Config-owned instance on reconcile.
+	MaaSAPIEgressNetworkPolicyDisabled bool
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -447,6 +456,8 @@ func patchResource(log logr.Logger, r *unstructured.Unstructured, params Platfor
 		r.SetNamespace(params.GatewayNamespace)
 	case gvk == GVKNetworkPolicy && name == baseMaaSAPIDeploymentNSNetworkPolicyName:
 		return patchDeploymentNSNetworkPolicy(r, params.ControllerNamespace)
+	case gvk == GVKNetworkPolicy && name == baseMaaSAPIEgressRestrictNetworkPolicyName:
+		return patchMaaSAPIEgressRestrictNetworkPolicy(r, params)
 	case gvk == GVKNetworkPolicy && name == PayloadProcessingName:
 		r.SetName(PayloadProcessingNetworkPolicyName(tenantID))
 		return patchPayloadProcessingNetworkPolicy(log, r, params)
@@ -489,6 +500,73 @@ func patchDeploymentNSNetworkPolicy(r *unstructured.Unstructured, controllerName
 		"kubernetes.io/metadata.name": controllerNamespace,
 	}
 	return unstructured.SetNestedSlice(r.Object, ingress, "spec", "ingress")
+}
+
+// patchMaaSAPIEgressRestrictNetworkPolicy applies maasconfig egress overrides to
+// maas-api-egress-restrict. Default: DNS + API + allow-all. networkPolicyEgressRules
+// on Config replaces the default block; networkPolicyAdditionalEgressRules appends.
+func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, params PlatformParams) error {
+	egress, found, err := unstructured.NestedSlice(r.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read maas-api egress NP egress rules: %w", err)
+	}
+	if !found {
+		return errors.New("maas-api egress NP missing egress rules")
+	}
+
+	egress = removeAllowAllEgressRules(egress)
+
+	switch {
+	case len(params.MaaSAPIEgressRules) > 0:
+		egress, err = networkPolicyEgressRulesToUnstructured(params.MaaSAPIEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
+		}
+	default:
+		egress = append(egress, map[string]any{})
+	}
+
+	if len(params.MaaSAPIAdditionalEgressRules) > 0 {
+		additional, err := networkPolicyEgressRulesToUnstructured(params.MaaSAPIAdditionalEgressRules)
+		if err != nil {
+			return fmt.Errorf("convert additional maas-api egress rules: %w", err)
+		}
+		egress = append(egress, additional...)
+	}
+
+	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func removeAllowAllEgressRules(egress []any) []any {
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if !ok {
+			filtered = append(filtered, ruleRaw)
+			continue
+		}
+		if len(rule) == 0 {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+func networkPolicyEgressRulesToUnstructured(rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {
+	out := make([]any, 0, len(rules))
+	for _, rule := range rules {
+		data, err := json.Marshal(rule)
+		if err != nil {
+			return nil, err
+		}
+		var converted map[string]any
+		if err := json.Unmarshal(data, &converted); err != nil {
+			return nil, err
+		}
+		out = append(out, converted)
+	}
+	return out, nil
 }
 
 // patchMaaSAPIServingCert remaps the Certificate's secretName and dnsNames to use

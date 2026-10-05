@@ -5,9 +5,8 @@
 # behavior. PostgreSQL and other customer-provided dependencies cannot be narrowed
 # by portable pod selectors; see ODH-ADR-Operator-0016 and maas-setup.md.
 #
-# DNS and Kubernetes API rules document critical paths. The allow-all rule permits
-# outbound connections to customer databases (bundled, shared in-cluster, external)
-# and other dependencies without inferring topology from maas-db-config.
+# DNS and Kubernetes API rules document critical paths. maas-controller adds allow-all
+# egress at reconcile time unless maasconfig/default sets networkPolicyEgressRules.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
@@ -51,7 +50,3 @@ spec:
           port: 443
         - protocol: TCP
           port: 6443
-    # Allow-all egress per ODH-ADR-Operator-0016. NetworkPolicies are additive;
-    # this rule cannot be narrowed by companion policies. Future releases may
-    # expose configurable egress peers (similar to MLflow).
-    - {}
