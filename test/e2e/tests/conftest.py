@@ -53,9 +53,10 @@ def single_subscription_tenant(monkeypatch):
         bootstrap_worker_tenant,
         build_worker_tenant_case,
         teardown_worker_tenant,
+        xdist_worker_suffix,
     )
 
-    context = build_worker_tenant_case("single-sub")
+    context = build_worker_tenant_case(f"single-sub-{xdist_worker_suffix()}")
     try:
         context = bootstrap_worker_tenant(context, baseline=False)
         monkeypatch.setattr(
