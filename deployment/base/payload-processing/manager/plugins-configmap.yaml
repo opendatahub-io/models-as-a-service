@@ -3,11 +3,10 @@ kind: ConfigMap
 metadata:
   name: payload-processing-plugins
   namespace: openshift-ingress
-  # Do NOT set opendatahub.io/managed=false here: PostRender drops any resource that
-  # already carries that annotation, which would prevent first-time creation.
-  # The tenant reconciler stamps managed=false after bootstrap/migrate so later
-  # SSA leaves this ConfigMap alone (see ApplyRendered). Set managed=true on the
-  # live ConfigMap to opt back into continuous reconciler management.
+  # Operators may set opendatahub.io/managed=false on the live ConfigMap to opt
+  # out of reconciler SSA. Do not put that annotation in this source YAML:
+  # PostRender drops resources that already carry it, which would prevent
+  # first-time creation.
 data:
   custom-pre-processing-ipp-config.yaml: |
     apiVersion: llm-d.ai/v1alpha1

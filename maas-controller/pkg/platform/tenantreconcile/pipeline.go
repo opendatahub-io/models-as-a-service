@@ -507,8 +507,8 @@ func hasConfigControllerOwner(obj *unstructured.Unstructured, configUID types.UI
 //
 // opendatahub.io/managed=false does NOT block cleanup: that annotation only opts a
 // resource out of steady-state SSA (see ApplyRendered). Backend switch-off must
-// still remove the whole IPP name set — including the plugins ConfigMap maas
-// stamps managed=false on — so the other controller can recreate it in its own
+// still remove the whole IPP name set — including plugins ConfigMaps operators
+// may have opted out — so the other controller can recreate them in its own
 // schema. Unmanaged leftovers (and MaaS-owned operands) are therefore deleted;
 // only cross-controller praxis ownership is preserved as a race guard.
 func isMaaSOwnedIPPResource(obj *unstructured.Unstructured, configUID types.UID) bool {

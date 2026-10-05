@@ -47,27 +47,32 @@ MaaS deploys the payload-processing component from the [`ai-gateway-payload-proc
 
 By default, the `api-translation` plugin runs on the **request** path only. Response-side `api-translation` is off so SSE streaming for internal and OpenAI-compatible models is not held by a response processor.
 
-Providers that rewrite responses (notably Anthropic Messages ↔ OpenAI) need response translation enabled manually on the plugins ConfigMap. After MaaS creates `payload-processing-plugins`, the controller stamps `opendatahub.io/managed: "false"` and then leaves the ConfigMap alone so your edits stick.
+Providers that rewrite responses (notably Anthropic Messages ↔ OpenAI) need response translation enabled manually on the plugins ConfigMap. Opt the live ConfigMap out of reconciler SSA first (`opendatahub.io/managed: "false"`), then edit — otherwise the next reconcile overwrites your changes.
 
 ```bash
 GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 
-# 1. Edit the live ConfigMap — under profiles[0].plugins.response add:
+# 1. Opt out of reconciler overwrites
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" \
+  opendatahub.io/managed=false --overwrite
+
+# 2. Edit the live ConfigMap — under profiles[0].plugins.response add:
 #      - pluginRef: api-translation
 kubectl edit configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}"
 
-# 2. Reload IPP
+# 3. Reload IPP
 kubectl rollout restart deployment/payload-processing -n "${GATEWAY_NAMESPACE}"
 ```
 
-To reset the ConfigMap to product defaults once, remove the opt-out annotation (or set `opendatahub.io/managed=true` for continuous reconciler management), wait for reconcile, then optionally set `opendatahub.io/managed=false` again after editing:
+To reset the ConfigMap to product defaults, remove the opt-out annotation (or set `opendatahub.io/managed=true`) and wait for reconcile:
 
 ```bash
-# One-shot reset to defaults (controller re-applies, then stamps managed=false again)
+# Reset to defaults (controller re-applies on the next reconcile)
 kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed-
 
 # Or keep the reconciler owning the ConfigMap continuously:
-kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" opendatahub.io/managed=true --overwrite
+kubectl annotate configmap payload-processing-plugins -n "${GATEWAY_NAMESPACE}" \
+  opendatahub.io/managed=true --overwrite
 ```
 
 !!! note
