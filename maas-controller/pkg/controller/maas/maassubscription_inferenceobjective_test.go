@@ -19,7 +19,6 @@ package maas
 import (
 	"context"
 	"errors"
-	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -35,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/tools/record"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -55,7 +55,16 @@ const (
 	ioSubUID  = types.UID("sub-uid-1")
 )
 
-var dnsLabelPattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]*[a-z0-9])?$`)
+// assertValidObjectiveName fails if name is not a valid InferenceObjective name.
+func assertValidObjectiveName(t *testing.T, name string) {
+	t.Helper()
+	if len(name) > inferenceObjectiveNameMaxLength {
+		t.Errorf("name %q is %d characters, want at most %d", name, len(name), inferenceObjectiveNameMaxLength)
+	}
+	if errs := validation.IsDNS1123Subdomain(name); len(errs) > 0 {
+		t.Errorf("name %q is not a valid object name: %v", name, errs)
+	}
+}
 
 // --- Fixtures ---
 
@@ -302,23 +311,28 @@ func TestInferenceObjectiveName_LongIdentitiesAreTruncated(t *testing.T) {
 	other := inferenceObjectiveName(long, sub, types.NamespacedName{Namespace: "models", Name: long + "-pool2"})
 
 	for _, n := range []string{name, other} {
-		if len(n) > inferenceObjectiveNameMaxLength {
-			t.Errorf("name %q is %d characters, want at most %d", n, len(n), inferenceObjectiveNameMaxLength)
-		}
-		if !dnsLabelPattern.MatchString(n) {
-			t.Errorf("name %q is not a valid DNS label", n)
-		}
+		assertValidObjectiveName(t, n)
 	}
 	if name == other {
 		t.Errorf("pools sharing a truncated prefix produced the same name %q", name)
 	}
 }
 
-func TestInferenceObjectiveName_SanitizesDottedNames(t *testing.T) {
-	name := inferenceObjectiveName(tenantreconcile.DefaultAITenantName,
-		types.NamespacedName{Namespace: "tenant-a", Name: "gold.v2"}, types.NamespacedName{Namespace: "models", Name: "Pool.One"})
-	if !dnsLabelPattern.MatchString(name) {
-		t.Errorf("name %q is not a valid DNS label", name)
+// TestInferenceObjectiveName_DottedNames verifies names keep the dots of Kubernetes object
+// names and stay valid wherever truncation cuts them.
+func TestInferenceObjectiveName_DottedNames(t *testing.T) {
+	sub := types.NamespacedName{Namespace: "tenant-a", Name: "gold.v2"}
+	name := inferenceObjectiveName(tenantreconcile.DefaultAITenantName, sub, types.NamespacedName{Namespace: "models", Name: "pool.one"})
+	if !strings.HasPrefix(name, "maas-models-as-a-service-gold.v2-pool.one-") {
+		t.Errorf("name %q does not keep the dotted subscription and pool names", name)
+	}
+	assertValidObjectiveName(t, name)
+
+	// Slide a dot through a long tenant name so truncation cuts right before, on, and after it.
+	pool := types.NamespacedName{Namespace: "models", Name: "pool"}
+	for i := 1; i <= inferenceObjectiveNameMaxLength; i++ {
+		tenant := strings.Repeat("a", i) + ".b" + strings.Repeat("b", inferenceObjectiveNameMaxLength)
+		assertValidObjectiveName(t, inferenceObjectiveName(tenant, sub, pool))
 	}
 }
 
