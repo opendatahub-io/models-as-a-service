@@ -154,6 +154,7 @@ spec:
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | maxExpirationDays | int32 | No | Maximum number of days an API key can be valid. Must be at least 1. |
+| deletionRetentionDays | int32 | No | Number of days lifecycle-invalidated API keys remain soft-deleted for audit before physical deletion. Defaults to 90; must be at least 1. |
 
 ---
 
@@ -235,6 +236,7 @@ metadata:
 spec:
   apiKeys:
     maxExpirationDays: 90
+    deletionRetentionDays: 90
 ```
 
 ### Example: Autoscaling Payload Processing

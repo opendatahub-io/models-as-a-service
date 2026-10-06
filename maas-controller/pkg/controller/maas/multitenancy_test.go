@@ -340,6 +340,7 @@ func TestMaaSSubscriptionReconciler_DeletionRunsAfterNamespaceDelabeled(t *testi
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
 		Scheme:                          scheme,
+		AppNamespace:                    "odh-ai-gateway-infra",
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
 	}

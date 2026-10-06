@@ -153,6 +153,7 @@ func newIOEnv(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *io
 		r: &MaaSSubscriptionReconciler{
 			Client:                 c,
 			Scheme:                 scheme,
+			AppNamespace:           "odh-ai-gateway-infra",
 			DefaultTenantNamespace: ioNS,
 			GatewayName:            testGatewayName,
 			GatewayNamespace:       testGatewayNamespace,

@@ -54,7 +54,6 @@ from test_helper import (
     _delete_governance_and_wait,
     _delete_sa,
     _get_auth_policies_for_model,
-    _get_cluster_token,
     _get_cr,
     _get_subscriptions_for_model,
     _inference,
@@ -1594,7 +1593,8 @@ class TestModelsEndpoint:
         but that subscription is later deleted. The gateway injects X-MaaS-Subscription
         from the key, but the subscription no longer exists.
 
-        Expected: HTTP 403 with error type: permission_error
+        Expected: HTTP 403. The gateway may reject the revoked key before the
+        request reaches maas-api, in which case the response body is empty.
         """
         ns = _ns()
         auth_policy_name = "e2e-api-key-deleted-sub-auth"
@@ -1638,13 +1638,7 @@ class TestModelsEndpoint:
             assert r.status_code == 403, \
                 f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
 
-            data = r.json()
-            assert "error" in data, "Response missing 'error' field"
-            error = data["error"]
-            assert error.get("type") == "permission_error", \
-                f"Expected error type 'permission_error', got {error.get('type')}"
-
-            log.info(f"✅ API key with deleted subscription → {r.status_code} (permission_error)")
+            log.info(f"✅ API key with deleted subscription → {r.status_code}")
 
         finally:
             # subscription_name already deleted
