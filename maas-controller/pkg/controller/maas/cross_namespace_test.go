@@ -18,6 +18,7 @@ package maas
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -532,8 +533,8 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 
 	// Both subscriptions share the same name AND rate, so they land in the same
 	// grouped limit (tokens-100-per-1m). Isolation must therefore come from the
-	// predicate's fully-qualified subscription keys and the counters, not from
-	// the map key or from having separate limit objects.
+	// predicate's distinct short IDs and the counters, not from the map key or
+	// from having separate limit objects.
 	if len(limitsMap) != 1 {
 		t.Fatalf("expected exactly 1 grouped limit, got %d: %v", len(limitsMap), getMapKeys(limitsMap))
 	}
@@ -555,25 +556,34 @@ func TestMaaSSubscriptionReconciler_DuplicateNameIsolation(t *testing.T) {
 		t.Fatal("predicate is not string")
 	}
 
-	keyA := `auth.identity.selected_subscription_key == "` + namespaceA + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
-	keyB := `auth.identity.selected_subscription_key == "` + namespaceB + "/" + subscriptionName + "@" + modelNamespace + "/" + modelName + `"`
-	expectedPred := "(" + keyA + " || " + keyB + `) && !request.path.endsWith("/v1/models")`
+	idA := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceA, subscriptionName, modelNamespace, modelName))
+	idB := SubscriptionRateLimitID(ModelScopedSubscriptionKey(namespaceB, subscriptionName, modelNamespace, modelName))
+	if idA == idB {
+		t.Fatalf("SECURITY BUG: short IDs collide (%q), this would cause quota isolation bypass!", idA)
+	}
+	clauseA := `auth.identity.selected_subscription_id == "` + idA + `"`
+	clauseB := `auth.identity.selected_subscription_id == "` + idB + `"`
+	// buildGroupLimit sorts short IDs lexicographically before OR-ing.
+	ids := []string{idA, idB}
+	sort.Strings(ids)
+	expectedPred := `(auth.identity.selected_subscription_id == "` + ids[0] + `" || ` +
+		`auth.identity.selected_subscription_id == "` + ids[1] + `") && !request.path.endsWith("/v1/models")`
 	if pred != expectedPred {
 		t.Errorf("grouped predicate = %q, want %q", pred, expectedPred)
 	}
-	// CRITICAL: each clause must name its own namespace-qualified subscription key,
+	// CRITICAL: each clause must name its own short ID (namespace is hashed in),
 	// so a request for tenant-a's "gold" cannot be counted (or capped) as tenant-b's.
-	if !containsString(pred, keyA) {
-		t.Errorf("SECURITY BUG: predicate is missing tenant-a's fully-qualified clause: %s", pred)
+	if !containsString(pred, clauseA) {
+		t.Errorf("SECURITY BUG: predicate is missing tenant-a's short-ID clause: %s", pred)
 	}
-	if !containsString(pred, keyB) {
-		t.Errorf("SECURITY BUG: predicate is missing tenant-b's fully-qualified clause: %s", pred)
+	if !containsString(pred, clauseB) {
+		t.Errorf("SECURITY BUG: predicate is missing tenant-b's short-ID clause: %s", pred)
 	}
 
-	// CRITICAL: counters must key on selected_subscription_key as well as userid,
+	// CRITICAL: counters must key on selected_subscription_id as well as userid,
 	// or tenant-a and tenant-b would share one Limitador bucket despite the OR.
 	counters, _, _ := unstructured.NestedSlice(limit, "counters")
-	wantCounters := []string{"auth.identity.selected_subscription_key", "auth.identity.userid"}
+	wantCounters := []string{"auth.identity.selected_subscription_id", "auth.identity.userid"}
 	if len(counters) != len(wantCounters) {
 		t.Fatalf("expected %d counters, got %d: %v", len(wantCounters), len(counters), counters)
 	}

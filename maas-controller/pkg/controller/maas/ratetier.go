@@ -26,8 +26,9 @@ import (
 // subInfo is one (subscription, modelRef) pair that reconcileTRLPForModel
 // needs to place in the grouped TokenRateLimitPolicy: the rates that put it in
 // a group (groupKey), or unlimited when it has no token budget, the fully
-// model-scoped identity that goes into that group's predicate (modelScoped),
-// and the subscription's own name for the TRLP's tracking annotation.
+// model-scoped identity hashed into that group's short-ID predicate
+// (modelScoped), and the subscription's own name for the TRLP's tracking
+// annotation.
 type subInfo struct {
 	subNamespace, subName string
 	rates                 []any
@@ -38,8 +39,8 @@ type subInfo struct {
 
 // buildGroupedLimits turns the valid (subscription, modelRef) pairs for one
 // model into a TokenRateLimitPolicy limits map: one limit per distinct rate
-// set, predicate the OR of that group's subscriptions' selected_subscription_key,
-// counters keyed on both selected_subscription_key and userid so subscriptions
+// set, predicate the OR of that group's subscriptions' selected_subscription_id,
+// counters keyed on both selected_subscription_id and userid so subscriptions
 // sharing a limit still get independent budgets. It also returns the sorted,
 // deduplicated subscription names for the TRLP's tracking annotation.
 // Unlimited subscriptions go into the shared unlimitedLimitName limit instead
@@ -54,7 +55,7 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 	var groupKeys []string
 	seenSub := map[string]struct{}{}
 	var subNames []string
-	var unlimitedKeys []string
+	var unlimitedIDs []string
 	for _, si := range subs {
 		name := qualifiedName(si.subNamespace, si.subName)
 		if _, ok := seenSub[name]; !ok {
@@ -63,7 +64,7 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 		}
 
 		if si.unlimited {
-			unlimitedKeys = append(unlimitedKeys, si.modelScoped)
+			unlimitedIDs = append(unlimitedIDs, SubscriptionRateLimitID(si.modelScoped))
 			continue
 		}
 		if _, ok := byGroup[si.groupKey]; !ok {
@@ -78,8 +79,8 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 	for _, key := range groupKeys {
 		limitsMap[rateGroupLimitName(key)] = buildGroupLimit(byGroup[key])
 	}
-	if len(unlimitedKeys) > 0 {
-		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimitedKeys)
+	if len(unlimitedIDs) > 0 {
+		limitsMap[unlimitedLimitName] = unlimitedTokenLimit(unlimitedIDs)
 	}
 	return limitsMap, subNames
 }
@@ -89,16 +90,18 @@ func buildGroupedLimits(subs []subInfo) (map[string]any, []string) {
 // duplicates, and List gives no ordering guarantee, so the rates are rendered
 // in canonical order rather than as any one member wrote them - otherwise the
 // spec could change between reconciles and trigger needless policy updates.
+// Predicates and counters use the short selected_subscription_id so the
+// Kuadrant WASM shim does not embed long subscription@model strings.
 func buildGroupLimit(members []subInfo) map[string]any {
-	refs := make([]string, len(members))
+	ids := make([]string, len(members))
 	for i, si := range members {
-		refs[i] = si.modelScoped
+		ids[i] = SubscriptionRateLimitID(si.modelScoped)
 	}
-	sort.Strings(refs)
+	sort.Strings(ids)
 
-	clauses := make([]string, len(refs))
-	for i, ref := range refs {
-		clauses[i] = fmt.Sprintf(`auth.identity.selected_subscription_key == "%s"`, ref)
+	clauses := make([]string, len(ids))
+	for i, id := range ids {
+		clauses[i] = fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id)
 	}
 	predicate := clauses[0]
 	if len(clauses) > 1 {
@@ -116,7 +119,7 @@ func buildGroupLimit(members []subInfo) map[string]any {
 			},
 		},
 		"counters": []any{
-			map[string]any{"expression": "auth.identity.selected_subscription_key"},
+			map[string]any{"expression": "auth.identity.selected_subscription_id"},
 			map[string]any{"expression": "auth.identity.userid"},
 		},
 	}

@@ -23,6 +23,7 @@ import logging
 import pytest
 import requests
 
+import test_helper
 from test_helper import (
     DISTINCT_MODEL_2_REF,
     DISTINCT_MODEL_REF,
@@ -42,6 +43,7 @@ from test_helper import (
     _get_auth_policies_authorizing_identity_for_model,
     _maas_api_url,
     _ns,
+    _request_with_gateway_retry,
     _sa_to_user,
     _wait_for_maas_auth_policy_phase,
     _wait_for_subscription_discovery_ready,
@@ -82,6 +84,7 @@ def _worker_subscription_list_context(request):
     }
     original_auth_helper = globals()["_create_test_auth_policy"]
     original_subscription_helper = globals()["_create_test_subscription"]
+    original_gateway_auth_policy = test_helper.GATEWAY_AUTH_POLICY_NAME
 
     globals().update(
         {
@@ -105,6 +108,9 @@ def _worker_subscription_list_context(request):
 
     globals()["_create_test_auth_policy"] = create_auth_policy
     globals()["_create_test_subscription"] = create_subscription
+    # _wait_for_maas_auth_policy_phase waits for this gateway AuthPolicy to be
+    # Enforced; the worker's MaaSAuthPolicies land on its tenant gateway.
+    test_helper.GATEWAY_AUTH_POLICY_NAME = context.gateway_authpolicy_name
 
     try:
         with activate_worker_tenant(context):
@@ -113,6 +119,7 @@ def _worker_subscription_list_context(request):
         globals().update(original_values)
         globals()["_create_test_auth_policy"] = original_auth_helper
         globals()["_create_test_subscription"] = original_subscription_helper
+        test_helper.GATEWAY_AUTH_POLICY_NAME = original_gateway_auth_policy
 
 
 def _validate_subscription_info_schema(sub):
@@ -166,11 +173,10 @@ class TestListSubscriptions:
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -232,11 +238,10 @@ class TestListSubscriptions:
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -321,14 +326,13 @@ class TestListSubscriptions:
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -399,16 +403,15 @@ class TestListSubscriptionsForModel:
             _wait_for_subscription_discovery_ready(sub_with_model, namespace=maas_ns)
             _wait_for_subscription_discovery_ready(sub_without_model, namespace=maas_ns)
 
-            _wait_for_maas_auth_policy_phase(ap_with_model, require_enforced=False, namespace=maas_ns)
-            _wait_for_maas_auth_policy_phase(ap_without_model, require_enforced=False, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(ap_with_model, namespace=maas_ns)
+            _wait_for_maas_auth_policy_phase(ap_without_model, namespace=maas_ns)
 
             # Query for subscriptions that include DISTINCT_MODEL_REF
             url = f"{_maas_api_url()}/v1/model/{DISTINCT_MODEL_REF}/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -455,11 +458,10 @@ class TestListSubscriptionsForModel:
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
             url = f"{_maas_api_url()}/v1/model/nonexistent-model-xyz/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
@@ -502,17 +504,16 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
             _wait_for_subscription_discovery_ready(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200
@@ -584,17 +585,16 @@ class TestSubscriptionModelAccessFiltering:
                 namespace=maas_ns,
             )
 
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name)
             _wait_for_subscription_discovery_ready(subscription_name)
 
             api_key = _create_api_key(sa_token, subscription=subscription_name)
 
             url = f"{_maas_api_url()}/v1/subscriptions"
-            r = requests.get(
+            r = _request_with_gateway_retry(
+                requests.get,
                 url,
                 headers={"Authorization": f"Bearer {api_key}"},
-                timeout=TIMEOUT,
-                verify=TLS_VERIFY,
             )
 
             assert r.status_code == 200

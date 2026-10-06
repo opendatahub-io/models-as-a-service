@@ -58,7 +58,8 @@ from multitenancy_helpers import (
     wait_for_status_phase,
 )
 
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+# Runs on the models worker to even out pass 1; mt_lifecycle alone would set its length.
+pytestmark = [pytest.mark.xdist_group("models"), pytest.mark.worker_tenant]
 
 
 @pytest.fixture(scope="module", autouse=True)

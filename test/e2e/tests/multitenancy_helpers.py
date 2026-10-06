@@ -26,14 +26,20 @@ from test_helper import (
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
+    OC_TIMEOUT,
+    SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
     _delete_cr,
+    _is_transient_gateway_response,
     _ns,
     _request_with_gateway_retry,
+    _run_oc,
     kubectl_curl,
 )
+
+AUTH_REASON_HEADER = "x-ext-auth-reason"
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
@@ -63,7 +69,6 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
-OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
 SENSITIVE_FIELD_PATTERN = (
@@ -89,14 +94,7 @@ def _oc_bin() -> str:
 
 
 def _oc_run(args, *, input_text: Optional[str] = None, timeout: Optional[int] = None):
-    return subprocess.run(
-        [_oc_bin(), *args],
-        input=input_text,
-        capture_output=True,
-        text=True,
-        timeout=OC_TIMEOUT if timeout is None else timeout,
-        check=False,
-    )
+    return _run_oc([_oc_bin(), *args], input_text=input_text, timeout=timeout)
 
 
 def _oc_output_not_found(result) -> bool:
@@ -152,7 +150,26 @@ def redact_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
 
 
 def response_summary(response: requests.Response, *, max_body: int = 300) -> str:
-    return f"status={response.status_code} body={redact_sensitive(response.text, max_length=max_body)}"
+    reason = response.headers.get(AUTH_REASON_HEADER)
+    return (
+        f"status={response.status_code} {AUTH_REASON_HEADER}={reason!r} "
+        f"body={redact_sensitive(response.text, max_length=max_body)}"
+    )
+
+
+def is_gateway_auth_denial(response: requests.Response) -> bool:
+    """True when a 401/403 is the gateway AuthPolicy's verdict, not a reload gap.
+
+    Authorino's denials carry ``x-ext-auth-reason`` and the wasm-shim forwards it
+    even when the body is empty. Unknown API keys get exactly that: maas-api
+    validation returns no groups, the ``subscription-info`` metadata is never
+    fetched, and the policy's unauthorized body expression renders empty. The
+    header's value varies across Authorino versions, so only its presence counts.
+    Empty 401/403 without it stay transient (``_is_transient_gateway_response``).
+    """
+    if response.status_code not in (401, 403):
+        return False
+    return AUTH_REASON_HEADER in response.headers or not _is_transient_gateway_response(response)
 
 
 def _apply(obj: dict) -> None:
@@ -346,6 +363,56 @@ def wait_for_gateway_authpolicy_ready(
         return accepted and enforced
 
     return wait_for_json("authpolicy", auth_name, namespace, predicate=_predicate, timeout=timeout)
+
+
+def wait_for_route_auth_enforced(
+    model_url: str,
+    *,
+    model_name: str = "facebook/opt-125m",
+    what: Optional[str] = None,
+    timeout: int = 180,
+    stable_for: int = 10,
+) -> None:
+    """Wait until the gateway rejects an unknown API key on a model route.
+
+    ``model_url`` is the model's OpenAI base URL (ending in ``/v1``). AuthPolicy
+    Enforced does not cover a route Kuadrant has not programmed yet: the
+    wasm-shim passes unmatched routes through, so any key gets a 200. The real
+    rejection of an unknown key is the gateway AuthPolicy's auth-valid rule,
+    recognised by ``is_gateway_auth_denial``. Tenant gateways' istio-proxy also
+    crashes once on the first Kuadrant wasm load, so rejections must hold across
+    ``stable_for`` seconds, not one probe.
+    """
+    url = f"{model_url}/chat/completions"
+    headers = bearer_headers(f"sk-oai-probe-{uuid.uuid4().hex[:16]}")
+    body = {"model": model_name, "messages": [{"role": "user", "content": "hello"}]}
+    rejected_since: Optional[float] = None
+
+    def _check() -> bool:
+        nonlocal rejected_since
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+        except requests.RequestException:
+            rejected_since = None
+            raise
+        if not is_gateway_auth_denial(response):
+            rejected_since = None
+            raise AssertionError(response_summary(response))
+        now = time.time()
+        if rejected_since is None:
+            rejected_since = now
+        if now - rejected_since < stable_for:
+            raise AssertionError(
+                f"rejected for {now - rejected_since:.0f}s of {stable_for}s: {response_summary(response)}"
+            )
+        return True
+
+    wait_until(
+        _check,
+        timeout,
+        what or f"{url} did not reject an unknown API key for {stable_for}s",
+        interval=2,
+    )
 
 
 def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
@@ -736,25 +803,74 @@ def wait_for_llmisvc_backend_ready(
             condition_type="Ready",
             timeout=timeout,
         )
+        wait_for_llmisvc_route_ready(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            timeout=timeout,
+        )
+        wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
+        return llmisvc
     except AssertionError as exc:
-        deploy = get_json_or_none("deployment", deploy_name, namespace)
-        deploy_status = (deploy or {}).get("status") if deploy is not None else None
-        raise AssertionError(
-            f"{exc}\n"
-            f"Hint: LLMIS Ready=False often means {deploy_name} is still unavailable "
-            f"(MinimumReplicasUnavailable / image pull / probe). "
-            f"deployment/{deploy_name} status: {deploy_status}"
-        ) from None
+        diagnostics = _llmisvc_readiness_diagnostics(
+            name,
+            namespace,
+            gateway_name,
+            gateway_namespace,
+            deploy_name,
+        )
+        raise AssertionError(f"{exc}\nBackend readiness snapshot: {diagnostics}") from None
 
-    wait_for_llmisvc_route_ready(
-        name,
-        namespace,
-        gateway_name,
-        gateway_namespace,
-        timeout=timeout,
-    )
-    wait_for_deployment_available(deploy_name, namespace=namespace, timeout=timeout)
-    return llmisvc
+
+def _llmisvc_readiness_diagnostics(
+    name: str,
+    namespace: str,
+    gateway_name: str,
+    gateway_namespace: str,
+    deployment_name: str,
+) -> str:
+    """Capture route, Gateway, namespace, and workload state for readiness failures."""
+
+    def _get(kind: str, resource_name: str, resource_namespace: Optional[str]) -> Optional[dict]:
+        try:
+            return get_json_or_none(kind, resource_name, resource_namespace)
+        except Exception as exc:  # noqa: BLE001 - diagnostics must not hide the readiness failure
+            return {"diagnosticError": f"{type(exc).__name__}: {exc}"}
+
+    llmisvc = _get("llminferenceservice", name, namespace) or {}
+    route = _get("httproute", f"{name}-kserve-route", namespace) or {}
+    gateway = _get("gateway", gateway_name, gateway_namespace) or {}
+    tenant_namespace = _get("namespace", namespace, None) or {}
+    deployment = _get("deployment", deployment_name, namespace) or {}
+
+    llmisvc_status = llmisvc.get("status") or {}
+    route_status = route.get("status") or {}
+    gateway_status = gateway.get("status") or {}
+    snapshot = {
+        "llminferenceservice": {
+            "conditions": llmisvc_status.get("conditions"),
+            "router": llmisvc_status.get("router"),
+            "workloads": llmisvc_status.get("workloads"),
+            "diagnosticError": llmisvc.get("diagnosticError"),
+        },
+        "httpRoute": {
+            "parentRefs": (route.get("spec") or {}).get("parentRefs"),
+            "parents": route_status.get("parents"),
+            "diagnosticError": route.get("diagnosticError"),
+        },
+        "gateway": {
+            "listeners": (gateway.get("spec") or {}).get("listeners"),
+            "conditions": gateway_status.get("conditions"),
+            "listenerStatuses": gateway_status.get("listeners"),
+            "diagnosticError": gateway.get("diagnosticError"),
+        },
+        "namespaceLabels": (tenant_namespace.get("metadata") or {}).get("labels"),
+        "namespaceDiagnosticError": tenant_namespace.get("diagnosticError"),
+        "deploymentStatus": deployment.get("status"),
+        "deploymentDiagnosticError": deployment.get("diagnosticError"),
+    }
+    return json.dumps(snapshot, sort_keys=True, default=str)
 
 
 def wait_for_llmisvc_route_ready(
@@ -1041,7 +1157,7 @@ def provision_tenant_model(
     tenant_namespace: str,
     gateway_name: str,
     *,
-    ready_timeout: int = 180,
+    ready_timeout: int = MODEL_BACKEND_READY_TIMEOUT,
 ) -> None:
     """Deploy a model in a tenant namespace per ADR MS-0003 (model deployer role).
 
@@ -1077,7 +1193,7 @@ def make_tenant_model_accessible(
     token_limit: int = 100,
     window: str = "1m",
     priority: Optional[int] = None,
-    trlp_timeout: int = 120,
+    trlp_timeout: int = SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     require_trlp_ready: bool = True,
     gateway_name: str | None = None,
     gateway_namespace: str = GATEWAY_NAMESPACE,

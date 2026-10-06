@@ -128,6 +128,45 @@ func TestExternalModel_ReconcileRoute_Success(t *testing.T) {
 	}
 }
 
+func TestExternalModel_ReconcileRoute_GatewayStopsAccepting(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", "maas-default-gateway", "openshift-ingress")
+	route.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse
+	route.Status.Parents[0].Conditions[0].Reason = string(gatewayapiv1.RouteReasonNotAllowedByListeners)
+	// Status left by an earlier reconcile, when the gateway still accepted the route.
+	model.Status.HTTPRouteName = route.Name
+	model.Status.HTTPRouteNamespace = route.Namespace
+	model.Status.HTTPRouteGatewayName = "maas-default-gateway"
+	model.Status.HTTPRouteGatewayNamespace = "openshift-ingress"
+	model.Status.HTTPRouteHostnames = []string{"api.example.com"}
+
+	r, _ := newTestReconciler(model, externalModelCR, route)
+	r.GatewayName = "maas-default-gateway"
+	r.GatewayNamespace = "openshift-ingress"
+	handler := &externalModelHandler{r: r}
+	log := zap.New(zap.UseDevMode(true))
+
+	if err := handler.ReconcileRoute(t.Context(), log, model); err != nil {
+		t.Fatalf("ReconcileRoute: unexpected error: %v", err)
+	}
+
+	if model.Status.HTTPRouteGatewayName != "" || model.Status.HTTPRouteGatewayNamespace != "" || model.Status.HTTPRouteHostnames != nil {
+		t.Errorf("gateway status kept after the gateway stopped accepting the route: gateway=%s/%s hostnames=%v",
+			model.Status.HTTPRouteGatewayNamespace, model.Status.HTTPRouteGatewayName, model.Status.HTTPRouteHostnames)
+	}
+	_, ready, err := handler.Status(t.Context(), log, model)
+	if err != nil {
+		t.Fatalf("Status: unexpected error: %v", err)
+	}
+	if ready {
+		t.Error("model reported ready although its gateway no longer accepts the route")
+	}
+	if reason, _ := handler.NotReadyReason(); reason != maasv1alpha1.ReasonNotAccepted {
+		t.Errorf("NotReadyReason = %q, want %q", reason, maasv1alpha1.ReasonNotAccepted)
+	}
+}
+
 func TestExternalModel_ReconcileRoute_MissingHTTPRoute(t *testing.T) {
 	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
 	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
@@ -258,7 +297,7 @@ func TestExternalModel_ReadyFollowsRouteAccepted(t *testing.T) {
 	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName(modelName), ns, testGatewayName, testGatewayNamespace)
 	route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
 	apimeta.SetStatusCondition(&route.Status.Parents[0].Conditions, metav1.Condition{
-		Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionFalse, Reason: "Pending",
+		Type: string(gatewayapiv1.RouteConditionAccepted), Status: metav1.ConditionUnknown, Reason: string(gatewayapiv1.RouteReasonPending),
 	})
 	sub := newMaaSSubscription("sub1", "admin-ns", "team-a", modelName, 100)
 	sub.Spec.ModelRefs[0].Namespace = ns

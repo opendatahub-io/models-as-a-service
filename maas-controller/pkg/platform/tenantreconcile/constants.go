@@ -31,6 +31,12 @@ const (
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
+	// AnnotationPayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count for a tenant.
+	// When autoscaling is enabled via spec.payloadPreProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadPreProcessing.replicas on MaasTenantConfig/Tenant.
+	AnnotationPayloadPreProcessingReplicas = "maas.opendatahub.io/payload-pre-processing-replicas"
+
 	// AnnotationPayloadProcessingStatus coordinates the payload-processing backend
 	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
 	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
@@ -277,6 +283,10 @@ func PayloadProcessingNetworkPolicyName(tenantID string) string {
 
 func PayloadProcessingHPAName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func PayloadPreProcessingHPAName(tenantID string) string {
+	return resourceNameForTenant(PayloadPreProcessingName, tenantID)
 }
 
 func MaaSAPIServingCertName(tenantID string) string {

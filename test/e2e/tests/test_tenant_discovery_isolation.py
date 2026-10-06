@@ -20,7 +20,7 @@ from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _get_cluster_token, kubec
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("mt_lifecycle")
+pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
 
 @pytest.fixture

@@ -55,6 +55,10 @@ type BackendHandler interface {
 	ReconcileRoute(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) error
 	// Status returns the endpoint URL and whether the model is ready (phase Ready).
 	Status(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (endpoint string, ready bool, err error)
+	// NotReadyReason explains a not-ready Status with a RuntimeReady reason and message, or
+	// returns an empty reason to keep the generic one. It reports what earlier calls on this
+	// handler observed, so it is only meaningful within the reconcile that built the handler.
+	NotReadyReason() (reason maasv1alpha1.ConditionReason, message string)
 	// GetModelEndpoint returns the endpoint URL for the model. Kind-specific: e.g. llmisvc uses gateway/HTTPRoute
 	// hostname + path; ExternalModel (when implemented) would use its own logic and need not follow the same path assumptions.
 	GetModelEndpoint(ctx context.Context, log logr.Logger, model *maasv1alpha1.MaaSModelRef) (string, error)
@@ -70,6 +74,8 @@ type BackendHandler interface {
 }
 
 // backendHandlerFactory creates a BackendHandler that uses the given reconciler for client/scheme and shared helpers.
+// Reconcile builds a new handler per call: a handler may keep state between its own
+// method calls (see NotReadyReason), so it must not be cached or shared across reconciles.
 type backendHandlerFactory func(*MaaSModelRefReconciler) BackendHandler
 
 // routeResolverFactory creates a RouteResolver. RouteResolvers are stateless and only need a client.Reader at call time,
@@ -85,7 +91,7 @@ func init() {
 	// CRD enum is LLMInferenceService;ExternalModel (see api/maas/v1alpha1/maasmodelref_types.go). Register both.
 	backendHandlerFactories["LLMInferenceService"] = func(r *MaaSModelRefReconciler) BackendHandler { return &llmisvcHandler{r} }
 	backendHandlerFactories["llmisvc"] = func(r *MaaSModelRefReconciler) BackendHandler { return &llmisvcHandler{r} } // alias for backwards compatibility
-	backendHandlerFactories["ExternalModel"] = func(r *MaaSModelRefReconciler) BackendHandler { return &externalModelHandler{r} }
+	backendHandlerFactories["ExternalModel"] = func(r *MaaSModelRefReconciler) BackendHandler { return &externalModelHandler{r: r} }
 
 	routeResolverFactories["LLMInferenceService"] = func() RouteResolver { return &llmisvcRouteResolver{} }
 	routeResolverFactories["llmisvc"] = func() RouteResolver { return &llmisvcRouteResolver{} }

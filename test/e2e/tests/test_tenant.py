@@ -119,6 +119,12 @@ _MAAS_API_OVERRIDE_REPLICAS = 2
 _MAAS_API_OVERRIDE_REQUESTS = {"memory": "320Mi", "cpu": "150m"}
 _MAAS_API_OVERRIDE_LIMITS = {"memory": "768Mi", "cpu": "750m"}
 
+# Distinct overrides so a shared default cannot accidentally satisfy both checks.
+_PAYLOAD_PROCESSING_OVERRIDE_REQUESTS = {"memory": "192Mi", "cpu": "125m"}
+_PAYLOAD_PROCESSING_OVERRIDE_LIMITS = {"memory": "640Mi", "cpu": "600m"}
+_PAYLOAD_PRE_PROCESSING_OVERRIDE_REQUESTS = {"memory": "96Mi", "cpu": "75m"}
+_PAYLOAD_PRE_PROCESSING_OVERRIDE_LIMITS = {"memory": "384Mi", "cpu": "350m"}
+
 
 def _maas_api_deployment(namespace: str) -> dict | None:
     try:
@@ -187,6 +193,45 @@ def _wait_maas_api_replicas(
         replicas = _maas_api_replica_count(namespace)
         if replicas == expected_replicas:
             return replicas
+        time.sleep(interval)
+    return None
+
+
+def _payload_deployment(name: str, namespace: str) -> dict | None:
+    try:
+        return _oc_json(["get", "deployment", name, "-n", namespace, "-o", "json"])
+    except subprocess.CalledProcessError as exc:
+        if _oc_not_found(exc):
+            return None
+        raise
+
+
+def _payload_container_resources(deployment_name: str, namespace: str, container_name: str) -> dict | None:
+    deployment = _payload_deployment(deployment_name, namespace)
+    if deployment is None:
+        return None
+    containers = deployment.get("spec", {}).get("template", {}).get("spec", {}).get("containers") or []
+    for container in containers:
+        if container.get("name") == container_name:
+            return container.get("resources") or {}
+    return {}
+
+
+def _wait_payload_resources(
+    deployment_name: str,
+    namespace: str,
+    container_name: str,
+    expected_requests: dict,
+    expected_limits: dict,
+    *,
+    timeout: int = 180,
+    interval: int = 5,
+) -> dict | None:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        resources = _payload_container_resources(deployment_name, namespace, container_name)
+        if resources is not None and _resources_match(resources, expected_requests, expected_limits):
+            return resources
         time.sleep(interval)
     return None
 
@@ -337,6 +382,126 @@ class TestTenantLifecycle:
                 "maas-api Deployment resources did not match MaasTenantConfig override within timeout; "
                 f"expected requests={_MAAS_API_OVERRIDE_REQUESTS!r} limits={_MAAS_API_OVERRIDE_LIMITS!r}, "
                 f"last observed={_maas_api_container_resources(MAAS_API_DEPLOYMENT_NAMESPACE)!r}"
+            )
+        finally:
+            _restore_tenant_spec(baseline, original_spec)
+
+    @pytest.mark.serial
+    def test_payload_processing_and_pre_processing_resources(self):
+        """MaasTenantConfig resource overrides must stick on both IPP workloads.
+
+        Covers distinct `spec.payloadProcessing.resources` and
+        `spec.payloadPreProcessing.resources` values so a shared default cannot
+        falsely satisfy both assertions. Works for legacy IPP (maas-controller)
+        and Praxis (ai-gateway-controller) ownership of the Deployments.
+        """
+        st = _wait_tenant_ready()
+        assert st is not None, "MaasTenantConfig not Ready; skip workload checks."
+        phase = st.get("phase")
+        if phase not in ("Active", "Degraded"):
+            pytest.skip(f"Tenant phase {phase!r}; workload checks require Active or Degraded")
+
+        deployments_ready = any(
+            cond.get("type") == "DeploymentsAvailable" and cond.get("status") == "True"
+            for cond in (st.get("conditions") or [])
+        )
+        if not deployments_ready:
+            pytest.skip("Tenant DeploymentsAvailable is not True; skipping workload checks")
+
+        for name in ("payload-processing", "payload-pre-processing"):
+            result = _oc_run(
+                [
+                    "get",
+                    "deployment",
+                    name,
+                    "-n",
+                    GATEWAY_NAMESPACE,
+                    "-o",
+                    "name",
+                ]
+            )
+            if result.returncode != 0:
+                if _oc_output_not_found(result):
+                    pytest.skip(
+                        f"{name} deployment not found in namespace {GATEWAY_NAMESPACE!r}; "
+                        "skipping payload resource override checks."
+                    )
+                combined = (result.stderr or "") + (result.stdout or "")
+                pytest.fail(
+                    f"`oc get deployment {name} -n {GATEWAY_NAMESPACE}` failed: {combined.strip()}"
+                )
+
+        baseline = _tenant_doc()
+        original_spec = copy.deepcopy(baseline.get("spec") or {})
+        patch = {
+            "spec": {
+                "payloadProcessing": {
+                    "resources": {
+                        "requests": _PAYLOAD_PROCESSING_OVERRIDE_REQUESTS,
+                        "limits": _PAYLOAD_PROCESSING_OVERRIDE_LIMITS,
+                    },
+                },
+                "payloadPreProcessing": {
+                    "resources": {
+                        "requests": _PAYLOAD_PRE_PROCESSING_OVERRIDE_REQUESTS,
+                        "limits": _PAYLOAD_PRE_PROCESSING_OVERRIDE_LIMITS,
+                    },
+                },
+            }
+        }
+        patch_result = _oc_run(
+            [
+                "patch",
+                "maastenantconfig",
+                TENANT_NAME,
+                "-n",
+                _ns(),
+                "--type=merge",
+                "-p",
+                json.dumps(patch),
+            ]
+        )
+        if patch_result.returncode != 0:
+            combined = (patch_result.stderr or "") + (patch_result.stdout or "")
+            lowered = combined.lower()
+            if "unknown field" in lowered:
+                pytest.skip(
+                    "MaasTenantConfig payload resource fields not supported by installed "
+                    f"CRD/controller; skipping: {combined.strip()}"
+                )
+            pytest.fail(
+                f"`oc patch maastenantconfig/{TENANT_NAME}` failed: {combined.strip()}"
+            )
+
+        try:
+            matched_processing = _wait_payload_resources(
+                "payload-processing",
+                GATEWAY_NAMESPACE,
+                "payload-processing",
+                _PAYLOAD_PROCESSING_OVERRIDE_REQUESTS,
+                _PAYLOAD_PROCESSING_OVERRIDE_LIMITS,
+            )
+            assert matched_processing is not None, (
+                "payload-processing Deployment resources did not match "
+                "MaasTenantConfig.spec.payloadProcessing.resources within timeout; "
+                f"expected requests={_PAYLOAD_PROCESSING_OVERRIDE_REQUESTS!r} "
+                f"limits={_PAYLOAD_PROCESSING_OVERRIDE_LIMITS!r}, "
+                f"last observed={_payload_container_resources('payload-processing', GATEWAY_NAMESPACE, 'payload-processing')!r}"
+            )
+
+            matched_pre = _wait_payload_resources(
+                "payload-pre-processing",
+                GATEWAY_NAMESPACE,
+                "payload-pre-processing",
+                _PAYLOAD_PRE_PROCESSING_OVERRIDE_REQUESTS,
+                _PAYLOAD_PRE_PROCESSING_OVERRIDE_LIMITS,
+            )
+            assert matched_pre is not None, (
+                "payload-pre-processing Deployment resources did not match "
+                "MaasTenantConfig.spec.payloadPreProcessing.resources within timeout; "
+                f"expected requests={_PAYLOAD_PRE_PROCESSING_OVERRIDE_REQUESTS!r} "
+                f"limits={_PAYLOAD_PRE_PROCESSING_OVERRIDE_LIMITS!r}, "
+                f"last observed={_payload_container_resources('payload-pre-processing', GATEWAY_NAMESPACE, 'payload-pre-processing')!r}"
             )
         finally:
             _restore_tenant_spec(baseline, original_spec)

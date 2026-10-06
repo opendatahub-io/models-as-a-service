@@ -143,6 +143,11 @@ func (h *llmisvcHandler) Status(ctx context.Context, log logr.Logger, model *maa
 	return endpoint, true, nil
 }
 
+// NotReadyReason keeps the generic RuntimeReady reason and message.
+func (h *llmisvcHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return "", ""
+}
+
 // GetModelEndpoint returns the model endpoint URL using gateway/HTTPRoute hostname and path.
 // Used when LLMInferenceService status does not expose an endpoint. ExternalModel and other kinds
 // implement their own logic and need not use these path assumptions.
