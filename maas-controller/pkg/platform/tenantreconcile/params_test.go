@@ -506,6 +506,31 @@ func TestApplyPlatformParamsWithRenderedOverlay(t *testing.T) {
 	assert.ElementsMatch(t, []any{"kuadrant-system", "openshift-operators", "rh-connectivity-link"}, namespaceExpression["values"])
 }
 
+// The cleanup image runs as root. OpenShift's restricted SCC assigns a non-root UID
+// (and rejects an explicit UID outside the namespace range), while xKS has no SCC, so
+// only the xKS overlay may pin runAsUser — without it the kubelet refuses the container.
+func TestAPIKeyCleanupCronJobUserPerPlatform(t *testing.T) {
+	for _, tc := range []struct {
+		overlay  string
+		wantUser any
+	}{
+		{overlay: "odh", wantUser: nil},
+		{overlay: "xks", wantUser: int64(1001)},
+	} {
+		t.Run(tc.overlay, func(t *testing.T) {
+			resources := renderPlatformOverlayResources(t, tc.overlay, "tenant-ns")
+			cronJob := requireResource(t, resources, GVKCronJob, MaaSAPIKeyCleanupCronJobName(""))
+			podSecurity, found, err := unstructured.NestedMap(cronJob.Object,
+				"spec", "jobTemplate", "spec", "template", "spec", "securityContext")
+			require.NoError(t, err)
+			require.True(t, found)
+
+			assert.Equal(t, true, podSecurity["runAsNonRoot"])
+			assert.EqualValues(t, tc.wantUser, podSecurity["runAsUser"])
+		})
+	}
+}
+
 func TestApplyPlatformParamsWithReplicaOverrides(t *testing.T) {
 	resources := renderOverlayResources(t, "tenant-ns")
 	maasReplicas := int32(3)
@@ -792,13 +817,19 @@ func TestRenderKustomizeRemapsServiceMonitorServerName(t *testing.T) {
 func renderOverlayResources(t *testing.T, appNamespace string) []unstructured.Unstructured {
 	t.Helper()
 
+	return renderPlatformOverlayResources(t, "odh", appNamespace)
+}
+
+func renderPlatformOverlayResources(t *testing.T, overlay, appNamespace string) []unstructured.Unstructured {
+	t.Helper()
+
 	_, currentFile, _, ok := runtime.Caller(0)
 	require.True(t, ok)
 
 	overlayDir := filepath.Clean(filepath.Join(
 		filepath.Dir(currentFile),
 		"..", "..", "..", "..",
-		"maas-api", "deploy", "overlays", "odh",
+		"maas-api", "deploy", "overlays", overlay,
 	))
 
 	resources, err := RenderKustomize(overlayDir, appNamespace)

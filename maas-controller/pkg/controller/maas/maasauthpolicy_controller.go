@@ -1080,15 +1080,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					// Only inject X-MaaS-Subscription when there is a real value to inject.
-					// An empty string injected for K8s tokens without a subscription header
-					// causes maas-api to filter by an empty subscription name and return 0 models.
-					// The old maas-api-auth-policy never injected this header for K8s tokens —
-					// only for API keys with a non-empty subscription field.
+					// Inject only for API keys with a subscription. Token requests keep the
+					// client header, which subscription-info uses to select a subscription.
+					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
 							},
 						},
 						"plain": map[string]any{
