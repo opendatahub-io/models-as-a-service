@@ -24,6 +24,7 @@ from multitenancy_helpers import (
     DEFAULT_GATEWAY_NAME,
     GATEWAY_NAMESPACE,
     LABEL_TENANT_INSTANCE,
+    PAYLOAD_PROCESSING_TYPE_IPP,
     TLS_VERIFY,
     _oc_run,
     bootstrap_aitenant_tenant,
@@ -120,7 +121,7 @@ def ipp_tenant_cases():
     case_b = new_named_tenant_case("e2e-ipp-b")
     try:
         for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+            bootstrap_aitenant_tenant(case, payload_processing_type=PAYLOAD_PROCESSING_TYPE_IPP)
             wait_for_per_tenant_ipp_ready(case)
         yield case_a, case_b
     finally:
@@ -477,22 +478,19 @@ class TestPerTenantIPPRouting:
 class TestPerTenantIPPCleanup:
     """Verify tenant-scoped IPP resources are removed when the AITenant is deleted."""
 
-    def test_ipp_resources_removed_on_aitenant_delete(self):
-        case = new_named_tenant_case("e2e-ipp-cleanup")
-        names = per_tenant_ipp_names(case["tenant_label_name"])
-        try:
-            bootstrap_aitenant_tenant(case)
-            wait_for_per_tenant_ipp_ready(case)
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
+    def test_ipp_resources_removed_on_aitenant_delete(self, ipp_tenant_cases):
+        case_a, case_b = ipp_tenant_cases
+        names = per_tenant_ipp_names(case_a["tenant_label_name"])
+        sibling = per_tenant_ipp_names(case_b["tenant_label_name"])
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
 
-            cleanup_discovery_case(case, delete_gateway=True)
-            wait_for_aitenant_cleanup_resources_deleted(case, timeout=240)
+        cleanup_discovery_case(case_a, delete_gateway=True)
+        wait_for_aitenant_cleanup_resources_deleted(case_a, timeout=240)
 
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
-            assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
-            wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
-        finally:
-            cleanup_discovery_case(case, delete_gateway=True)
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
+        assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
+        wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
 
+        assert get_json_or_none("deployment", sibling["processing_deployment"], GATEWAY_NAMESPACE) is not None
         assert get_json_or_none("deployment", "payload-processing", GATEWAY_NAMESPACE) is not None
-        assert ipp_tenant_id(case["tenant_label_name"]) != ""
+        assert ipp_tenant_id(case_a["tenant_label_name"]) != ""

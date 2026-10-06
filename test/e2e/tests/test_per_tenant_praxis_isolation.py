@@ -419,26 +419,21 @@ class TestPerTenantPraxisRouting:
 class TestPerTenantPraxisCleanup:
     """Verify tenant-scoped praxis resources are removed when the AITenant is deleted."""
 
-    def test_praxis_resources_removed_on_aitenant_delete(self):
+    def test_praxis_resources_removed_on_aitenant_delete(self, praxis_tenant_cases):
         _skip_unless_default_praxis()
-        require_tenant_namespace_discovery()
-        require_aitenant_crd()
-        case = new_named_tenant_case("e2e-praxis-cleanup")
-        names = per_tenant_ipp_names(case["tenant_label_name"])
-        try:
-            bootstrap_aitenant_tenant(case)
-            wait_for_per_tenant_ipp_ready(case)
-            assert extproc_deployment_uses_praxis(names["processing_deployment"])
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
+        case_a, case_b = praxis_tenant_cases
+        names = per_tenant_ipp_names(case_a["tenant_label_name"])
+        sibling = per_tenant_ipp_names(case_b["tenant_label_name"])
+        assert extproc_deployment_uses_praxis(names["processing_deployment"])
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
 
-            cleanup_discovery_case(case, delete_gateway=True)
-            wait_for_aitenant_cleanup_resources_deleted(case, timeout=240)
+        cleanup_discovery_case(case_a, delete_gateway=True)
+        wait_for_aitenant_cleanup_resources_deleted(case_a, timeout=240)
 
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
-            assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
-            wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
-        finally:
-            cleanup_discovery_case(case, delete_gateway=True)
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
+        assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
+        wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
 
+        assert get_json_or_none("deployment", sibling["processing_deployment"], GATEWAY_NAMESPACE) is not None
         assert get_json_or_none("deployment", "payload-processing", GATEWAY_NAMESPACE) is not None
-        assert ipp_tenant_id(case["tenant_label_name"]) != ""
+        assert ipp_tenant_id(case_a["tenant_label_name"]) != ""

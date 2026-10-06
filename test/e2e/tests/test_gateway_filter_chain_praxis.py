@@ -22,7 +22,7 @@ from multitenancy_helpers import (
 )
 from test_gateway_filter_chain import (
     ENVOY_FILTER_NAME,
-    _assert_chain,
+    _assert_praxis_chain,
     _listener_state,
 )
 
@@ -40,7 +40,7 @@ def _skip_unless_praxis_payload_processing():
 
 
 class TestGatewayFilterChainPraxis:
-    """Praxis payload-processing EnvoyFilter yields ipp-pre -> auth -> ipp -> EPP -> router."""
+    """Praxis payload-processing EnvoyFilter yields ipp-pre -> auth -> ipp -> router."""
 
     @pytest.fixture(scope="class")
     def gateway_state(self):
@@ -51,7 +51,7 @@ class TestGatewayFilterChainPraxis:
         for pod, (_, rejected) in gateway_state.items():
             assert not rejected, f"{pod}: Envoy rejected listener config: {rejected}"
 
-    def test_epp_runs_after_payload_processing(self, gateway_state):
+    def test_payload_processing_precedes_router(self, gateway_state):
         for pod, (chains, _) in gateway_state.items():
             for listener, filters in chains:
-                _assert_chain(pod, listener, filters)
+                _assert_praxis_chain(pod, listener, filters)

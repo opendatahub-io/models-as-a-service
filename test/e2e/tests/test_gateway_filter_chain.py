@@ -183,6 +183,24 @@ def _assert_chain(pod: str, listener: str, filters: list[dict]):
     )
 
 
+def _assert_praxis_chain(pod: str, listener: str, filters: list[dict]):
+    """Default MaaS path has no InferencePool; EPP is optional when present."""
+    names = [f.get("name") for f in filters]
+    for name in (IPP_PRE, IPP, ROUTER):
+        assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    order = [names.index(IPP_PRE), names.index(IPP), names.index(ROUTER)]
+    auth = _auth_index(names)
+    if auth >= 0:
+        order.insert(1, auth)
+    assert order == sorted(order), (
+        f"{pod} {listener}: expected ipp-pre -> auth -> ipp -> router, got {names}"
+    )
+    if names.count(EPP) == 1:
+        assert names.index(IPP) < names.index(EPP) < names.index(ROUTER), (
+            f"{pod} {listener}: {EPP} must sit after ipp and before router, got {names}"
+        )
+
+
 @dataclass(frozen=True)
 class PoolRoute:
     """A gateway replica's route to an InferencePool, as bound to its endpoint picker."""
