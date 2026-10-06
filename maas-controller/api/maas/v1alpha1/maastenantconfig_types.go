@@ -111,5 +111,5 @@ type MaasTenantConfigList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaasTenantConfig{}, &MaasTenantConfigList{})
+	register(&MaasTenantConfig{}, &MaasTenantConfigList{})
 }

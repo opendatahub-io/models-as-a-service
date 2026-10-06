@@ -158,5 +158,5 @@ type AITenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AITenant{}, &AITenantList{})
+	register(&AITenant{}, &AITenantList{})
 }

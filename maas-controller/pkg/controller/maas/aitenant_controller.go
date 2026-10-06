@@ -42,7 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -112,7 +112,7 @@ type AITenantReconciler struct {
 	// before force-removing the finalizer. Zero disables the timeout.
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -284,7 +284,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // SetupWithManager registers the AITenant controller.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-aitenant-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-aitenant-controller")
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
@@ -1023,7 +1023,7 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		statusSnapshot = aitenant.Status.DeepCopy()
 		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
 		if r.Recorder != nil {
-			r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "APIKeyCleanupFailed",
+			r.Recorder.Eventf(aitenant, nil, corev1.EventTypeWarning, "APIKeyCleanupFailed", "InvalidateAPIKeys",
 				"failed to invalidate API keys for tenant %s: %v", aitenant.Name, err)
 		}
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
@@ -1108,7 +1108,7 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	}
 
 	if r.Recorder != nil {
-		r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "AITenantCleanupForced",
+		r.Recorder.Eventf(aitenant, nil, corev1.EventTypeWarning, "AITenantCleanupForced", "Cleanup",
 			"Deletion timeout (%s) reached for AITenant %s/%s after API-key invalidation; remaining cleanup is best effort",
 			r.DeletionTimeout, aitenant.Namespace, aitenant.Name)
 	}

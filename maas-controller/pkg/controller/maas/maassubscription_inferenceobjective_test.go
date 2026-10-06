@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -33,9 +34,10 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -129,7 +131,7 @@ func defaultObjectiveKey(pool string) types.NamespacedName {
 }
 
 // ownedObjective returns an InferenceObjective as this controller would have written it.
-func ownedObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, pool string, priority int64) *unstructured.Unstructured {
+func ownedObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, pool string, priority int32) *llmdv1alpha2.InferenceObjective {
 	return buildInferenceObjective(sub, key, &desiredObjective{
 		Pool:       inferencePoolRef{Group: defaultInferencePoolGroup, Kind: defaultInferencePoolKind, Name: pool},
 		TenantName: tenantreconcile.DefaultAITenantName,
@@ -140,7 +142,7 @@ func ownedObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName
 type ioEnv struct {
 	c   client.WithWatch
 	r   *MaaSSubscriptionReconciler
-	rec *record.FakeRecorder
+	rec *events.FakeRecorder
 }
 
 func newIOEnv(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *ioEnv {
@@ -155,7 +157,7 @@ func newIOEnv(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *io
 		b = b.WithInterceptorFuncs(*funcs)
 	}
 	c := b.Build()
-	rec := record.NewFakeRecorder(100)
+	rec := events.NewFakeRecorder(100)
 	return &ioEnv{
 		c:   c,
 		rec: rec,
@@ -193,14 +195,13 @@ func (e *ioEnv) updateSubscription(t *testing.T, mutate func(*maasv1alpha1.MaaSS
 	}
 }
 
-func (e *ioEnv) objectives(t *testing.T) map[types.NamespacedName]*unstructured.Unstructured {
+func (e *ioEnv) objectives(t *testing.T) map[types.NamespacedName]*llmdv1alpha2.InferenceObjective {
 	t.Helper()
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(inferenceObjectiveListGVK)
+	list := &llmdv1alpha2.InferenceObjectiveList{}
 	if err := e.c.List(context.Background(), list); err != nil {
 		t.Fatalf("List InferenceObjectives: %v", err)
 	}
-	out := make(map[types.NamespacedName]*unstructured.Unstructured, len(list.Items))
+	out := make(map[types.NamespacedName]*llmdv1alpha2.InferenceObjective, len(list.Items))
 	for i := range list.Items {
 		out[client.ObjectKeyFromObject(&list.Items[i])] = &list.Items[i]
 	}
@@ -229,33 +230,28 @@ func hasEvent(events []string, reason string) bool {
 	return false
 }
 
-func objectivePriority(t *testing.T, obj *unstructured.Unstructured) int64 {
+func objectivePriority(t *testing.T, obj *llmdv1alpha2.InferenceObjective) int32 {
 	t.Helper()
-	p, found, err := unstructured.NestedFieldNoCopy(obj.Object, "spec", "priority")
-	if err != nil || !found {
-		t.Fatalf("spec.priority missing on %s: %v", obj.GetName(), err)
+	if obj == nil || obj.Spec.Priority == nil {
+		t.Fatalf("spec.priority missing on %v", obj)
 	}
-	v, ok := p.(int64)
-	if !ok {
-		t.Fatalf("spec.priority is %T, want int64", p)
-	}
-	return v
+	return *obj.Spec.Priority
 }
 
-func objectivePoolRef(t *testing.T, obj *unstructured.Unstructured) map[string]string {
+func objectivePoolRef(t *testing.T, obj *llmdv1alpha2.InferenceObjective) map[string]string {
 	t.Helper()
-	ref, found, err := unstructured.NestedStringMap(obj.Object, "spec", "poolRef")
-	if err != nil || !found {
-		t.Fatalf("spec.poolRef missing on %s: %v", obj.GetName(), err)
+	if obj == nil {
+		t.Fatal("objective missing")
 	}
-	return ref
+	ref := obj.Spec.PoolRef
+	return map[string]string{"group": string(ref.Group), "kind": string(ref.Kind), "name": string(ref.Name)}
 }
 
 // countInferenceObjectiveWrites returns interceptor funcs counting InferenceObjective Updates.
 func countInferenceObjectiveUpdates(updates *atomic.Int32) *interceptor.Funcs {
 	return &interceptor.Funcs{
 		Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
-			if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == inferenceObjectiveGVK {
+			if _, ok := obj.(*llmdv1alpha2.InferenceObjective); ok {
 				updates.Add(1)
 			}
 			return cl.Update(ctx, obj, opts...)
@@ -351,7 +347,7 @@ func TestReconcileInferenceObjectives_Create(t *testing.T) {
 		if len(objs) != 1 || !ok {
 			t.Fatalf("priority %d: objectives = %v, want only %s", priority, objs, key)
 		}
-		if got := objectivePriority(t, obj); got != int64(priority) {
+		if got := objectivePriority(t, obj); got != priority {
 			t.Errorf("priority %d: spec.priority = %d", priority, got)
 		}
 		wantPool := map[string]string{"group": defaultInferencePoolGroup, "kind": defaultInferencePoolKind, "name": "llama-pool"}
@@ -678,12 +674,10 @@ func TestValidateHTTPRouteReferencesGateway_WrapsSentinelOnlyForMismatch(t *test
 
 func TestReconcileInferenceObjectives_ForeignObjectIsNotTouched(t *testing.T) {
 	key := defaultObjectiveKey("llama-pool")
-	foreign := &unstructured.Unstructured{}
-	foreign.SetGroupVersionKind(inferenceObjectiveGVK)
-	foreign.SetName(key.Name)
-	foreign.SetNamespace(key.Namespace)
-	foreign.SetLabels(map[string]string{"owner": "someone-else"})
-	_ = unstructured.SetNestedField(foreign.Object, int64(42), "spec", "priority")
+	foreign := &llmdv1alpha2.InferenceObjective{
+		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: key.Namespace, Labels: map[string]string{"owner": "someone-else"}},
+		Spec:       llmdv1alpha2.InferenceObjectiveSpec{Priority: ptrInt32(42), PoolRef: llmdv1alpha2.PoolObjectReference{Name: "llama-pool"}},
+	}
 
 	sub := newPrioritySubscription(ptrInt32(1), "llama")
 	sub.Finalizers = []string{maasSubscriptionFinalizer}
@@ -698,7 +692,7 @@ func TestReconcileInferenceObjectives_ForeignObjectIsNotTouched(t *testing.T) {
 	}
 	got := env.objectives(t)[key]
 	if objectivePriority(t, got) != 42 || got.GetLabels()["owner"] != "someone-else" || hasInferenceObjectiveOwnerLabels(got.GetLabels()) {
-		t.Errorf("foreign objective was modified: %v", got.Object)
+		t.Errorf("foreign objective was modified: %+v", got)
 	}
 	if !hasEvent(env.events(), eventReasonInferenceObjectiveConflict) {
 		t.Error("expected a conflict warning")
@@ -722,7 +716,7 @@ func TestReconcileInferenceObjectives_OtherSubscriptionsObjectIsNotTouched(t *te
 	}
 	got := env.objectives(t)[key]
 	if objectivePriority(t, got) != 9 || got.GetAnnotations()[annotationSubscriptionName] != "silver" {
-		t.Errorf("other subscription's objective was modified: %v", got.Object)
+		t.Errorf("other subscription's objective was modified: %+v", got)
 	}
 }
 
@@ -905,10 +899,8 @@ func subscriptionPhase(t *testing.T, c client.Client) maasv1alpha1.Phase {
 func TestReconcileInferenceObjectives_CreateFailureDoesNotBlockOtherPools(t *testing.T) {
 	funcs := &interceptor.Funcs{
 		Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
-			if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == inferenceObjectiveGVK {
-				if name, _, _ := unstructured.NestedString(u.Object, "spec", "poolRef", "name"); name == "a-pool" {
-					return errors.New("simulated create failure")
-				}
+			if o, ok := obj.(*llmdv1alpha2.InferenceObjective); ok && o.Spec.PoolRef.Name == "a-pool" {
+				return errors.New("simulated create failure")
 			}
 			return cl.Create(ctx, obj, opts...)
 		},
@@ -927,6 +919,46 @@ func TestReconcileInferenceObjectives_CreateFailureDoesNotBlockOtherPools(t *tes
 	}
 }
 
+// TestReconcileInferenceObjectives_StaleCacheRetriesQuietly verifies AlreadyExists and
+// Conflict, which a cache behind our own last write produces, are retried without a
+// Warning event.
+func TestReconcileInferenceObjectives_StaleCacheRetriesQuietly(t *testing.T) {
+	gr := schema.GroupResource{Group: llmdv1alpha2.GroupVersion.Group, Resource: "inferenceobjectives"}
+	for name, writeErr := range map[string]error{
+		"AlreadyExists": apierrors.NewAlreadyExists(gr, "obj"),
+		"Conflict":      apierrors.NewConflict(gr, "obj", errors.New("stale resourceVersion")),
+	} {
+		t.Run(name, func(t *testing.T) {
+			sub := newPrioritySubscription(ptrInt32(2), "llama")
+			objs := append(poolModel("llama", "llama-pool"), sub)
+			if name == "Conflict" {
+				objs = append(objs, ownedObjective(sub, defaultObjectiveKey("llama-pool"), "llama-pool", 1))
+			}
+			env := newIOEnv(t, &interceptor.Funcs{
+				Create: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.CreateOption) error {
+					if _, ok := obj.(*llmdv1alpha2.InferenceObjective); ok {
+						return writeErr
+					}
+					return cl.Create(ctx, obj, opts...)
+				},
+				Update: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+					if _, ok := obj.(*llmdv1alpha2.InferenceObjective); ok {
+						return writeErr
+					}
+					return cl.Update(ctx, obj, opts...)
+				},
+			}, objs...)
+
+			if _, err := env.reconcileIO(t); err == nil {
+				t.Fatal("expected the error to be returned for retry")
+			}
+			if events := env.events(); len(events) != 0 {
+				t.Errorf("unexpected events %v", events)
+			}
+		})
+	}
+}
+
 // --- API missing ---
 
 func TestReconcileInferenceObjectives_APIMissing(t *testing.T) {
@@ -937,10 +969,16 @@ func TestReconcileInferenceObjectives_APIMissing(t *testing.T) {
 
 	t.Run("GVK not served", func(t *testing.T) {
 		var calls atomic.Int32
-		noMatch := &apimeta.NoKindMatchError{GroupKind: inferenceObjectiveGVK.GroupKind(), SearchedVersions: []string{inferenceObjectiveGVK.Version}}
+		noMatch := &apimeta.NoKindMatchError{
+			GroupKind:        schema.GroupKind{Group: llmdv1alpha2.GroupVersion.Group, Kind: "InferenceObjective"},
+			SearchedVersions: []string{llmdv1alpha2.GroupVersion.Version},
+		}
 		isObjective := func(obj runtime.Object) bool {
-			gvk := obj.GetObjectKind().GroupVersionKind()
-			return gvk == inferenceObjectiveGVK || gvk == inferenceObjectiveListGVK
+			switch obj.(type) {
+			case *llmdv1alpha2.InferenceObjective, *llmdv1alpha2.InferenceObjectiveList:
+				return true
+			}
+			return false
 		}
 		env := newIOEnv(t, &interceptor.Funcs{
 			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
@@ -981,13 +1019,13 @@ func TestReconcileInferenceObjectives_APIMissing(t *testing.T) {
 		calls := atomic.Int32{}
 		funcs := &interceptor.Funcs{
 			Get: func(ctx context.Context, cl client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-				if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == inferenceObjectiveGVK {
+				if _, ok := obj.(*llmdv1alpha2.InferenceObjective); ok {
 					calls.Add(1)
 				}
 				return cl.Get(ctx, key, obj, opts...)
 			},
 			List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
-				if u, ok := list.(*unstructured.UnstructuredList); ok && u.GroupVersionKind() == inferenceObjectiveListGVK {
+				if _, ok := list.(*llmdv1alpha2.InferenceObjectiveList); ok {
 					calls.Add(1)
 				}
 				return cl.List(ctx, list, opts...)
@@ -1062,7 +1100,7 @@ func TestHandleDeletion_DeleteErrorKeepsFinalizer(t *testing.T) {
 	sub.Finalizers = []string{maasSubscriptionFinalizer}
 	funcs := &interceptor.Funcs{
 		Delete: func(ctx context.Context, cl client.WithWatch, obj client.Object, opts ...client.DeleteOption) error {
-			if u, ok := obj.(*unstructured.Unstructured); ok && u.GroupVersionKind() == inferenceObjectiveGVK {
+			if _, ok := obj.(*llmdv1alpha2.InferenceObjective); ok {
 				return errors.New("simulated delete failure")
 			}
 			return cl.Delete(ctx, obj, opts...)
@@ -1135,8 +1173,7 @@ func TestOwnedInferenceObjectivePredicate(t *testing.T) {
 	sub := newPrioritySubscription(ptrInt32(1))
 	owned := ownedObjective(sub, types.NamespacedName{Namespace: ioNS, Name: "obj"}, "pool", 1)
 	owned.SetGeneration(1)
-	foreign := &unstructured.Unstructured{}
-	foreign.SetGroupVersionKind(inferenceObjectiveGVK)
+	foreign := &llmdv1alpha2.InferenceObjective{}
 
 	if !p.Create(event.CreateEvent{Object: owned}) || p.Create(event.CreateEvent{Object: foreign}) {
 		t.Error("Create should pass only owned objectives")
@@ -1146,7 +1183,7 @@ func TestOwnedInferenceObjectivePredicate(t *testing.T) {
 	}
 
 	statusOnly := owned.DeepCopy()
-	_ = unstructured.SetNestedSlice(statusOnly.Object, []any{map[string]any{"type": "Accepted", "status": "True"}}, "status", "conditions")
+	statusOnly.Status.Conditions = []metav1.Condition{{Type: "Accepted", Status: metav1.ConditionTrue}}
 	if p.Update(event.UpdateEvent{ObjectOld: owned, ObjectNew: statusOnly}) {
 		t.Error("status-only update should be dropped")
 	}

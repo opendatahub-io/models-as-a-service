@@ -21,7 +21,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2749,7 +2749,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		},
 	}
 	var failedJobDeletePropagation *metav1.DeletionPropagation
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -3394,7 +3394,7 @@ func TestAITenantReconcile_DeletionTimeoutDoesNotBypassAPIKeyCleanup(t *testing.
 		},
 	}
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -3453,7 +3453,7 @@ func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {
 		},
 	}
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).

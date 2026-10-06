@@ -31,7 +31,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -251,7 +251,7 @@ func TestEnsureSubscriptionAPIKeysRevoked_RequiresApplicationNamespace(t *testin
 func TestEnsureSubscriptionAPIKeysRevoked_SkipsWhenTenantConfigIsGone(t *testing.T) {
 	subscription := newMaaSSubscription("sub-delete", "team-a-maas", "team-a", "llm", 100)
 	c := fake.NewClientBuilder().WithScheme(scheme).Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSSubscriptionReconciler{
 		Client:       c,
 		APIReader:    c,
