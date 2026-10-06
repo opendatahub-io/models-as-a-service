@@ -3540,7 +3540,7 @@
 <hr />
 <h2 id="tenant-namespace">Tenant Namespace</h2>
 <p>For non-default tenants, the controller derives the tenant namespace from the <code>AITenant</code> name as <code>ai-tenant-&lt;aitenant-name&gt;</code>. <code>AITenant</code> names are limited to 41 characters so per-tenant platform resources stay within Kubernetes 63-character name limits. The default <code>AITenant/models-as-a-service</code> keeps the configured MaaS tenant namespace, usually <code>models-as-a-service</code>, for migration compatibility.</p>
-<p>Deleting an <code>AITenant</code> performs a cleanup of the tenant's MaaS state. The controller revokes active API keys through the tenant maas-api instance, deletes the bridge <code>MaasTenantConfig/default-tenant</code>, deletes tenant-scoped MaaS resources such as <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code>, removes per-tenant maas-api platform resources and AITenant-owned RBAC, and releases ownership metadata from the tenant namespace. The tenant namespace itself is not deleted, so non-MaaS user objects in that namespace remain. The shared Gateway object is never deleted or modified by <code>AITenant</code> reconciliation; tenant-scoped gateway AuthPolicy and claim resources are cleaned up during deletion.</p>
+<p>Deleting an <code>AITenant</code> performs a cleanup of the tenant's MaaS state. The controller synchronously waits for a tenant cleanup Job to call the tenant maas-api internal endpoint, which soft-deletes and invalidates every API key for that tenant. Soft-deleted keys are retained for 90 days by default (configurable through <code>spec.apiKeys.deletionRetentionDays</code> on <code>MaasTenantConfig</code>, or <code>API_KEY_DELETION_RETENTION_DAYS</code> for a standalone maas-api) for audit and can never validate. The controller then deletes the bridge <code>MaasTenantConfig/default-tenant</code>, deletes tenant-scoped MaaS resources such as <code>MaaSSubscription</code> and <code>MaaSAuthPolicy</code>, removes per-tenant maas-api platform resources and AITenant-owned RBAC, and releases ownership metadata from the tenant namespace. The tenant namespace itself is not deleted, so non-MaaS user objects in that namespace remain. The shared Gateway object is never deleted or modified by <code>AITenant</code> reconciliation; tenant-scoped gateway AuthPolicy and claim resources are cleaned up during deletion.</p>
 <p>The <code>AITenant</code> stays in <code>Terminating</code> phase while MaaS resource finalizers run. If a cleanup step fails, it reports <code>Ready=False</code> with reason <code>DeletionBlocked</code>. A tenant namespace that is already terminating does not block AITenant cleanup.</p>
 <hr />
 <h2 id="namespace-discovery">Namespace Discovery</h2>
@@ -3660,7 +3660,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="August 21, 2026 11:55:22 UTC">August 21, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 6, 2026 14:47:31 UTC">October 6, 2026</span>
   </span>
 
     
