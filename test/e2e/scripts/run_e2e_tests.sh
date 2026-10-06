@@ -85,10 +85,17 @@ if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
 fi
 
 # ── Venv ─────────────────────────────────────────────────────────────────
-if [[ ! -d "$TEST_DIR/.venv" ]]; then
-    echo "Creating Python venv for e2e tests..."
-    python3 -m venv "$TEST_DIR/.venv" --upgrade-deps
+# shellcheck source=ensure_e2e_python.sh
+source "$SCRIPT_DIR/ensure_e2e_python.sh"
+if [[ -d "$TEST_DIR/.venv" ]] && ! "$TEST_DIR/.venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    echo "Recreating e2e venv (existing interpreter is older than Python 3.10)..."
+    rm -rf "$TEST_DIR/.venv"
 fi
+if [[ ! -d "$TEST_DIR/.venv" ]]; then
+    echo "Creating Python venv for e2e tests ($E2E_PYTHON)..."
+    "$E2E_PYTHON" -m venv "$TEST_DIR/.venv" --upgrade-deps
+fi
+# shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
 python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
@@ -99,41 +106,8 @@ html="$ARTIFACTS_DIR/e2e-${user}.html"
 xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 xml_serial="${xml%.xml}-serial.xml"
 
-# ── Test file list ───────────────────────────────────────────────────────
-e2e_test_files=(
-    "$TEST_DIR/tests/test_api_keys.py"
-    "$TEST_DIR/tests/test_x_api_key_auth.py"
-    "$TEST_DIR/tests/test_namespace_scoping.py"
-    "$TEST_DIR/tests/test_negative_security.py"
-    "$TEST_DIR/tests/test_subscription.py"
-    "$TEST_DIR/tests/test_trlp_rate_grouping.py"
-    "$TEST_DIR/tests/test_model_identity_conflict.py"
-    "$TEST_DIR/tests/test_subscription_list_endpoints.py"
-    "$TEST_DIR/tests/test_models_endpoint.py"
-    "$TEST_DIR/tests/test_external_models.py"
-    "$TEST_DIR/tests/test_smoke.py"
-    "$TEST_DIR/tests/test_tenant.py"
-    "$TEST_DIR/tests/test_config_tenant.py"
-    "$TEST_DIR/tests/test_tenant_discovery.py"
-    "$TEST_DIR/tests/test_aitenant_lifecycle.py"
-    "$TEST_DIR/tests/test_tenant_namespace_discovery.py"
-    "$TEST_DIR/tests/test_tenant_discovery_isolation.py"
-    "$TEST_DIR/tests/test_gateway_scoped_authpolicy.py"
-    "$TEST_DIR/tests/test_multi_tenant_integration.py"
-    "$TEST_DIR/tests/test_multi_tenant_maas_api.py"
-    "$TEST_DIR/tests/test_tenant_model_inference.py"
-    "$TEST_DIR/tests/test_tenant_auth_isolation.py"
-    "$TEST_DIR/tests/test_tenant_subscription_isolation.py"
-    "$TEST_DIR/tests/test_tenant_rate_limit_isolation.py"
-    "$TEST_DIR/tests/test_per_tenant_ipp_isolation.py"
-    "$TEST_DIR/tests/test_tenant_auto_resolve.py"
-    "$TEST_DIR/tests/test_external_oidc.py"
-    "$TEST_DIR/tests/test_embedding_inference.py"
-    "$TEST_DIR/tests/test_gateway_filter_chain.py"
-)
-
-# If extra args include a path (file or directory), skip the default smoke list
-# so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
+# If extra args include a path (file or directory), replace the default test
+# directory so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
 # Resolve relative paths against TEST_DIR so they work regardless of cwd.
 resolved_extra_args=()
 has_path_arg=false
@@ -159,7 +133,7 @@ else
     pytest_common_args=(
         -v --disable-warnings
         --capture=tee-sys --show-capture=all --log-level=INFO
-        "${e2e_test_files[@]}"
+        "$TEST_DIR/tests"
         "${extra_pytest_args[@]}"
     )
 fi
@@ -246,6 +220,14 @@ run_serial_pass() {
     fi
 }
 
+maybe_run_serial_pass() {
+    if [[ "$parallel_rc" -ne 0 ]]; then
+        echo "Skipping E2E pass 2/2 (serial): parallel pass failed"
+        return 0
+    fi
+    run_serial_pass
+}
+
 if [[ "$serial_only" == "true" ]]; then
     echo "Running E2E tests (serial pass only, -m 'serial and not legacy_ipp')"
     run_serial_pass
@@ -263,7 +245,7 @@ elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
-    run_serial_pass
+    maybe_run_serial_pass
 else
     echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial and not legacy_ipp')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
@@ -277,7 +259,7 @@ else
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
-    run_serial_pass
+    maybe_run_serial_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────
