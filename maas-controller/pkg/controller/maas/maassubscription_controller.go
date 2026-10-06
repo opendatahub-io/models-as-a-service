@@ -66,6 +66,8 @@ type MaaSSubscriptionReconciler struct {
 	Scheme *runtime.Scheme
 	// APIReader bypasses the cache for cleanup Job reads. The controller does
 	// not watch Jobs and therefore must not require list/watch permission.
+	// Finalizer cleanup also lists InferenceObjectives with it, so an objective
+	// the cache has not seen yet is not missed.
 	APIReader client.Reader
 	// AppNamespace is where per-tenant maas-api Services and cleanup Jobs run.
 	AppNamespace string

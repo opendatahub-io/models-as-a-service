@@ -143,7 +143,7 @@ func TestMaaSSubscriptionReconciler_ManagedAnnotation(t *testing.T) {
 				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
-			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -305,7 +305,7 @@ func TestMaaSSubscriptionReconciler_DuplicateReconciliation(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	ctx := context.Background()
 
 	// Reconcile sub-a: creates the aggregated TokenRateLimitPolicy (covering both sub-a and sub-b).
@@ -370,7 +370,7 @@ func TestMaaSSubscriptionReconciler_MapGeneratedTRLPToParent_AllModelSubscriptio
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	requests := r.mapGeneratedTRLPToParent(context.Background(), trlp)
 
 	got := make(map[types.NamespacedName]bool, len(requests))
@@ -421,7 +421,7 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateCondition(t *testing.T)
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	ctx := context.Background()
 
 	if _, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}); err != nil {
@@ -481,7 +481,7 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateConditionAllowsSamePrio
 		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	ctx := context.Background()
 
 	r.scanForDuplicatePriority(ctx)
@@ -569,7 +569,7 @@ func TestMaaSSubscriptionReconciler_DeleteAnnotation(t *testing.T) {
 				t.Fatalf("Delete MaaSSubscription: %v", err)
 			}
 
-			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -631,7 +631,7 @@ func TestMaaSSubscriptionReconciler_RemoveModelRef(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	ctx := context.Background()
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
 
@@ -727,7 +727,7 @@ func TestMaaSSubscriptionReconciler_RemoveModelRef_Aggregation(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	ctx := context.Background()
 
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub1", Namespace: namespace}}
@@ -866,7 +866,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsDeletion(t *testing.T) 
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme, AppNamespace: "odh-ai-gateway-infra"}
 
 	// Reconcile both subscriptions to create the aggregated TokenRateLimitPolicy
 	req1 := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub1Name, Namespace: subNS}}
@@ -964,7 +964,7 @@ func TestMaaSSubscriptionReconciler_SimplifiedTRLP(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1058,7 +1058,7 @@ func TestMaaSSubscriptionReconciler_MultipleSubscriptionsSimplified(t *testing.T
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 
 	// Reconcile both subscriptions
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
@@ -1191,7 +1191,7 @@ func TestMaaSSubscriptionReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1259,7 +1259,7 @@ func TestMaaSSubscriptionReconciler_DeletingModelRef_FailedPhase(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1326,7 +1326,7 @@ func TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase(t *testing.T)
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1426,7 +1426,7 @@ func TestMaaSSubscriptionReconciler_AllValidModelRefs_ActivePhase(t *testing.T) 
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1533,7 +1533,7 @@ func TestMaaSSubscriptionReconciler_WindowValuesInTRLP(t *testing.T) {
 				WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 				Build()
 
-			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: maasSubName, Namespace: namespace}}
 			if _, err := r.Reconcile(context.Background(), req); err != nil {
 				t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1603,7 +1603,7 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: sub.Name, Namespace: namespace}}
 	if _, err := r.Reconcile(context.Background(), req); err != nil {
 		t.Fatalf("Reconcile: unexpected error: %v", err)
@@ -1682,7 +1682,7 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 			SubResourceUpdate: func(ctx context.Context, cl client.Client, subResource string, obj client.Object, opts ...client.SubResourceUpdateOption) error {
 				if !raced {
 					raced = true
-					scanner := &MaaSSubscriptionReconciler{Client: cl, Scheme: scheme}
+					scanner := &MaaSSubscriptionReconciler{Client: cl, APIReader: cl, Scheme: scheme}
 					scanner.scanForDuplicatePriority(ctx)
 				}
 				return cl.SubResource(subResource).Update(ctx, obj, opts...)
@@ -1690,7 +1690,7 @@ func TestMaaSSubscriptionReconciler_StatusConflictWithDuplicateScanRequeues(t *t
 		}).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: subName, Namespace: namespace}}
 
 	_, err := r.Reconcile(t.Context(), req)
@@ -1733,7 +1733,7 @@ func TestMaaSSubscriptionReconciler_StatusWriteFailureReturned(t *testing.T) {
 				WithInterceptorFuncs(failStatusUpdates(statusErr)).
 				Build()
 
-			r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+			r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 			_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)})
 			if !errors.Is(err, statusErr) {
 				t.Fatalf("Reconcile error = %v, want status error %v", err, statusErr)
@@ -1764,7 +1764,7 @@ func TestMaaSSubscriptionReconciler_ReconcileErrorPreservedOnStatusFailure(t *te
 		WithInterceptorFuncs(funcs).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	_, err := r.Reconcile(t.Context(), ctrl.Request{NamespacedName: client.ObjectKeyFromObject(sub)})
 	if !errors.Is(err, listErr) || errors.Is(err, statusErr) {
 		t.Fatalf("Reconcile error = %v, want original error %v", err, listErr)

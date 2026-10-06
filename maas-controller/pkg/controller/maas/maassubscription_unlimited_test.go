@@ -343,7 +343,7 @@ func newUnlimitedTestClient(objs ...client.Object) client.Client {
 
 func reconcileTestSub(t *testing.T, c client.Client, name string) {
 	t.Helper()
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: unlimitedTestNamespace}}
 	if _, err := r.Reconcile(t.Context(), req); err != nil {
 		t.Fatalf("Reconcile %s: unexpected error: %v", name, err)

@@ -542,7 +542,9 @@ func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.
 	list := &llmdv1alpha2.InferenceObjectiveList{}
 	selector := client.MatchingLabels(inferenceObjectiveOwnerLabels())
 	selector[labelSubscriptionNamespace] = sub.Namespace
-	if err := r.List(ctx, list, selector); err != nil {
+	// Read from the API server: the cache may not have seen an objective created moments
+	// ago, and missing it here during finalizer cleanup would orphan it.
+	if err := r.APIReader.List(ctx, list, selector); err != nil {
 		if isAPIUnavailable(err) {
 			return nil
 		}

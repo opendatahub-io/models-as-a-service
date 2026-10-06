@@ -163,6 +163,7 @@ func newIOEnv(t *testing.T, funcs *interceptor.Funcs, objs ...client.Object) *io
 		rec: rec,
 		r: &MaaSSubscriptionReconciler{
 			Client:                 c,
+			APIReader:              c,
 			Scheme:                 scheme,
 			AppNamespace:           "odh-ai-gateway-infra",
 			DefaultTenantNamespace: ioNS,
@@ -1113,6 +1114,34 @@ func TestHandleDeletion_DeleteErrorKeepsFinalizer(t *testing.T) {
 	}
 	if !subscriptionExists(t, env.c) {
 		t.Error("finalizer was removed although an objective could not be deleted")
+	}
+}
+
+// TestHandleDeletion_ListsFromAPIReader verifies finalizer cleanup finds an objective the
+// cache has not seen yet, so it is deleted rather than orphaned.
+func TestHandleDeletion_ListsFromAPIReader(t *testing.T) {
+	sub := newPrioritySubscription(ptrInt32(1))
+	sub.Finalizers = []string{maasSubscriptionFinalizer}
+	env := newIOEnv(t, nil, sub, ownedObjective(sub, types.NamespacedName{Namespace: ioNS, Name: "obj-a"}, "pool-a", 1))
+	apiServer := env.c
+	// The cached client has not observed the objective yet.
+	env.r.Client = interceptor.NewClient(apiServer, interceptor.Funcs{
+		List: func(ctx context.Context, cl client.WithWatch, list client.ObjectList, opts ...client.ListOption) error {
+			if _, ok := list.(*llmdv1alpha2.InferenceObjectiveList); ok {
+				return nil
+			}
+			return cl.List(ctx, list, opts...)
+		},
+	})
+
+	if err := deleteSubscription(t, env); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+	if got := env.objectives(t); len(got) != 0 {
+		t.Errorf("objectives = %v, want the objective the cache missed to be deleted", got)
+	}
+	if subscriptionExists(t, env.c) {
+		t.Error("finalizer was not removed")
 	}
 }
 
