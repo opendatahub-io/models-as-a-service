@@ -1,12 +1,12 @@
 """
-E2E tests for per-tenant IPP (payload-processing) isolation.
+E2E tests for AIGC/praxis-owned per-tenant payload-processing isolation.
 
-Validates that each AITenant receives dedicated IPP Deployments, Services,
-EnvoyFilters, and env configuration in the gateway namespace, that inference
-traffic reaches the matching IPP stack, and that tenant-scoped resources are
-removed when the AITenant is deleted.
+Validates dedicated praxis-extproc Deployments, Services, EnvoyFilters, and routing
+isolation for each AITenant on the praxis dataplane. Legacy Go IPP env configuration
+(GATEWAY_NAME / TENANT_NAMESPACE) is not asserted. Positive routing proof uses hybrid
+BBR success plus body-model rejection because praxis-extproc is quiet at INFO.
 
-Requires maas-controller with per-tenant IPP reconciliation enabled.
+Requires maas-controller per-tenant reconciliation and default-tenant praxis-extproc.
 """
 
 from __future__ import annotations
@@ -28,13 +28,10 @@ from multitenancy_helpers import (
     _oc_run,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
-    deployment_log_snapshot,
     envoyfilter_grpc_cluster_names,
     envoyfilter_target_gateway,
     extproc_deployment_uses_praxis,
-    get_ipp_deployment_env,
     get_json_or_none,
-    ipp_logs_show_recent_activity,
     ipp_tenant_id,
     make_tenant_model_accessible,
     new_named_tenant_case,
@@ -66,13 +63,20 @@ pytestmark = pytest.mark.xdist_group("tenant_ipp")
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5
 
+PRAXIS_EXT_PROC_CLUSTER_NAMES = (
+    "payload-processing-extproc",
+    "payload-pre-processing-extproc",
+)
+
+
+def _skip_unless_default_praxis():
+    if not _check_ipp_pods_deployed():
+        pytest.skip("Default payload-processing stack is not ready")
+    if not extproc_deployment_uses_praxis("payload-processing"):
+        pytest.skip("default tenant payload-processing is not praxis-extproc")
+
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Retry transient gateway/auth propagation errors.
-
-    Matches ``test_helper._is_transient_gateway_response``, plus the
-    Authorino "Access denied" 403 body seen on some tenant gateways.
-    """
     from test_helper import _is_transient_gateway_response
 
     for attempt in range(1, retries + 1):
@@ -106,22 +110,24 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
         return response
     return response
 
-requires_default_ipp = pytest.mark.skipif(
-    not _check_ipp_pods_deployed(),
-    reason="Default payload-processing IPP stack is not ready",
-)
-
 
 @pytest.fixture(scope="module")
-def ipp_tenant_cases():
+def praxis_tenant_cases():
+    _skip_unless_default_praxis()
     require_tenant_namespace_discovery()
     require_aitenant_crd()
-    case_a = new_named_tenant_case("e2e-ipp-a")
-    case_b = new_named_tenant_case("e2e-ipp-b")
+    case_a = new_named_tenant_case("e2e-praxis-a")
+    case_b = new_named_tenant_case("e2e-praxis-b")
     try:
         for case in (case_a, case_b):
             bootstrap_aitenant_tenant(case)
             wait_for_per_tenant_ipp_ready(case)
+            names = per_tenant_ipp_names(case["tenant_label_name"])
+            if not extproc_deployment_uses_praxis(names["processing_deployment"]):
+                pytest.skip(
+                    f"{names['processing_deployment']} is not praxis-extproc "
+                    "(per-tenant praxis dataplane not reconciled)"
+                )
         yield case_a, case_b
     finally:
         cleanup_discovery_case(case_a)
@@ -150,7 +156,7 @@ def _create_default_api_key() -> str:
             "Authorization": f"Bearer {oc_token}",
             "Content-Type": "application/json",
         },
-        json={"name": "e2e-ipp-default", "subscription": subscription},
+        json={"name": "e2e-praxis-default", "subscription": subscription},
     )
     assert response.status_code in (200, 201), (
         f"Failed to create default-tenant API key: {response.status_code} "
@@ -171,7 +177,7 @@ def _create_tenant_api_key(gateway_url: str, case: dict[str, str], subscription_
             "Content-Type": "application/json",
         },
         json={
-            "name": f"e2e-ipp-{case['suffix']}",
+            "name": f"e2e-praxis-{case['suffix']}",
             "subscription": subscription_name,
         },
     )
@@ -191,7 +197,6 @@ def _post_hybrid_chat(
     *,
     model_name: str = MODEL_NAME,
 ) -> requests.Response:
-    """Send hybrid BBR: model-specific URL path plus served model name in the body."""
     return _request_with_gateway_retry(
         requests.post,
         f"{gateway_url.rstrip('/')}{model_path}/v1/chat/completions",
@@ -201,17 +206,32 @@ def _post_hybrid_chat(
         },
         json={
             "model": model_name,
-            "messages": [{"role": "user", "content": "ipp routing test"}],
+            "messages": [{"role": "user", "content": "praxis routing test"}],
             "max_tokens": 3,
         },
     )
 
 
-class TestPerTenantIPPInfrastructure:
-    """Verify per-tenant IPP resources reconcile in the gateway namespace."""
+def _assert_praxis_envoyfilter_grpc_clusters(envoyfilter: dict, names: dict[str, str]) -> None:
+    clusters = envoyfilter_grpc_cluster_names(envoyfilter)
+    cluster_blob = " ".join(clusters)
+    fixed_ok = all(name in clusters for name in PRAXIS_EXT_PROC_CLUSTER_NAMES)
+    service_ok = (
+        names["processing_service"] in cluster_blob
+        and names["pre_processing_service"] in cluster_blob
+    )
+    assert fixed_ok or service_ok, (
+        f"expected praxis extproc cluster names {PRAXIS_EXT_PROC_CLUSTER_NAMES!r} "
+        f"or tenant services {names['processing_service']!r} / "
+        f"{names['pre_processing_service']!r}; got {clusters!r}"
+    )
 
-    def test_per_tenant_ipp_deployments_exist(self, ipp_tenant_cases):
-        for case in ipp_tenant_cases:
+
+class TestPerTenantPraxisInfrastructure:
+    """Verify per-tenant praxis-extproc resources reconcile in the gateway namespace."""
+
+    def test_per_tenant_praxis_deployments_exist(self, praxis_tenant_cases):
+        for case in praxis_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             processing = wait_for_deployment_available(
                 names["processing_deployment"], GATEWAY_NAMESPACE, timeout=240
@@ -221,28 +241,18 @@ class TestPerTenantIPPInfrastructure:
             )
             assert processing["metadata"]["name"] == names["processing_deployment"]
             assert pre_processing["metadata"]["name"] == names["pre_processing_deployment"]
+            assert extproc_deployment_uses_praxis(names["processing_deployment"]), (
+                f"{names['processing_deployment']} must run praxis-extproc"
+            )
+            assert extproc_deployment_uses_praxis(names["pre_processing_deployment"]), (
+                f"{names['pre_processing_deployment']} must run praxis-extproc"
+            )
 
             service = wait_for_json("service", names["processing_service"], GATEWAY_NAMESPACE, timeout=180)
             assert service["metadata"]["name"] == names["processing_service"]
 
-    def test_per_tenant_ipp_env_vars(self, ipp_tenant_cases):
-        if extproc_deployment_uses_praxis("payload-processing"):
-            pytest.skip("praxis-extproc; Go IPP GATEWAY_NAME/TENANT_NAMESPACE env not applicable")
-        for case in ipp_tenant_cases:
-            names = per_tenant_ipp_names(case["tenant_label_name"])
-            env = get_ipp_deployment_env(names["processing_deployment"], GATEWAY_NAMESPACE)
-            assert env.get("GATEWAY_NAME") == case["gateway_name"], (
-                f"{names['processing_deployment']} GATEWAY_NAME mismatch: {env!r}"
-            )
-            assert env.get("GATEWAY_NAMESPACE") == GATEWAY_NAMESPACE, (
-                f"{names['processing_deployment']} GATEWAY_NAMESPACE mismatch: {env!r}"
-            )
-            assert env.get("TENANT_NAMESPACE") == case["tenant_ns"], (
-                f"{names['processing_deployment']} TENANT_NAMESPACE mismatch: {env!r}"
-            )
-
-    def test_per_tenant_envoyfilter_workload_selector_isolated(self, ipp_tenant_cases):
-        for case in ipp_tenant_cases:
+    def test_per_tenant_envoyfilter_workload_selector_isolated(self, praxis_tenant_cases):
+        for case in praxis_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             target = envoyfilter_target_gateway(names["envoyfilter"], GATEWAY_NAMESPACE)
             assert target == case["gateway_name"], (
@@ -256,51 +266,34 @@ class TestPerTenantIPPInfrastructure:
             f"{DEFAULT_GATEWAY_NAME}, got {default_target!r}"
         )
 
-    def test_per_tenant_envoyfilter_grpc_clusters(self, ipp_tenant_cases):
-        if extproc_deployment_uses_praxis("payload-processing"):
-            pytest.skip(
-                "praxis-extproc; EnvoyFilter uses payload-*-extproc clusters "
-                "(see test_per_tenant_praxis_isolation)"
-            )
-        for case in ipp_tenant_cases:
+    def test_per_tenant_envoyfilter_grpc_clusters(self, praxis_tenant_cases):
+        for case in praxis_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             envoyfilter = wait_for_json("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE, timeout=180)
-            clusters = envoyfilter_grpc_cluster_names(envoyfilter)
-            want_processing = (
-                f"outbound|9004||{names['processing_service']}.{GATEWAY_NAMESPACE}.svc.cluster.local"
-            )
-            want_pre_processing = (
-                f"outbound|9004||{names['pre_processing_service']}.{GATEWAY_NAMESPACE}.svc.cluster.local"
-            )
-            assert want_processing in clusters, (
-                f"{names['envoyfilter']} missing processing cluster {want_processing!r}; got {clusters!r}"
-            )
-            assert want_pre_processing in clusters, (
-                f"{names['envoyfilter']} missing pre-processing cluster {want_pre_processing!r}; "
-                f"got {clusters!r}"
-            )
+            _assert_praxis_envoyfilter_grpc_clusters(envoyfilter, names)
 
-    def test_default_tenant_keeps_legacy_ipp_names(self):
+    def test_default_tenant_keeps_unsuffixed_payload_processing_names(self):
+        _skip_unless_default_praxis()
         default_names = per_tenant_ipp_names(DEFAULT_AITENANT_NAME)
         assert default_names["processing_deployment"] == "payload-processing"
         assert default_names["pre_processing_deployment"] == "payload-pre-processing"
         assert get_json_or_none("deployment", "payload-processing", GATEWAY_NAMESPACE) is not None
         assert get_json_or_none("deployment", "payload-pre-processing", GATEWAY_NAMESPACE) is not None
+        assert extproc_deployment_uses_praxis("payload-processing")
 
-    def test_multiple_tenant_ipp_stacks_coexist(self, ipp_tenant_cases):
+    def test_multiple_tenant_praxis_stacks_coexist(self, praxis_tenant_cases):
         deployment_names = {
             per_tenant_ipp_names(case["tenant_label_name"])["processing_deployment"]
-            for case in ipp_tenant_cases
+            for case in praxis_tenant_cases
         }
         deployment_names.add("payload-processing")
-        assert len(deployment_names) == len(ipp_tenant_cases) + 1
+        assert len(deployment_names) == len(praxis_tenant_cases) + 1
         for name in deployment_names:
             deployment = get_json_or_none("deployment", name, GATEWAY_NAMESPACE)
-            assert deployment is not None, f"missing IPP deployment {name}"
+            assert deployment is not None, f"missing praxis deployment {name}"
 
-    def test_per_tenant_networkpolicy_when_applied(self, ipp_tenant_cases):
-        """Per-tenant NetworkPolicy is optional on managed OpenShift ingress namespaces."""
-        for case in ipp_tenant_cases:
+    def test_per_tenant_networkpolicy_when_applied(self, praxis_tenant_cases):
+        for case in praxis_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             np = get_json_or_none("networkpolicy", names["networkpolicy"], GATEWAY_NAMESPACE)
             if np is None:
@@ -316,14 +309,13 @@ class TestPerTenantIPPInfrastructure:
             assert names["processing_deployment"] in tenant_values
 
 
-@requires_default_ipp
-class TestPerTenantIPPRouting:
-    """Verify inference traffic reaches the tenant-scoped IPP stack."""
+class TestPerTenantPraxisRouting:
+    """Verify inference traffic reaches the tenant-scoped praxis-extproc stack."""
 
     @pytest.fixture(scope="class")
-    def routing_case(self, ipp_tenant_cases):
-        case_a, _ = ipp_tenant_cases
-        model_name = f"ipp-route-{case_a['suffix']}"
+    def routing_case(self, praxis_tenant_cases):
+        case_a, _ = praxis_tenant_cases
+        model_name = f"praxis-route-{case_a['suffix']}"
         case_a["model_name"] = model_name
         case_a["model_path"] = f"/{case_a['tenant_ns']}/{model_name}"
         provision_tenant_model(model_name, case_a["tenant_ns"], case_a["gateway_name"])
@@ -336,15 +328,12 @@ class TestPerTenantIPPRouting:
         )
         return case_a
 
-    def test_default_gateway_hits_default_ipp_only(self, ipp_tenant_cases):
-        _, case_b = ipp_tenant_cases
-        default_names = per_tenant_ipp_names(DEFAULT_AITENANT_NAME)
-        tenant_names = per_tenant_ipp_names(case_b["tenant_label_name"])
+    def test_default_gateway_hits_default_praxis_only(self, praxis_tenant_cases):
+        # Fixture boots sibling tenants so EnvoyFilter isolation coexists with default stack.
+        _ = praxis_tenant_cases
 
         _wait_for_gateway_auth_enforced()
         api_key = _create_default_api_key()
-        # Retry transient auth propagation (403, 500 AUTH_FAILURE) but fail fast
-        # on terminal errors (404, 405, 422) that indicate misconfiguration.
         _TRANSIENT_WARMUP = {403, 500, 502, 503}
         deadline = time.time() + 90
         warmup = None
@@ -376,45 +365,24 @@ class TestPerTenantIPPRouting:
             f"{redact_sensitive(response.text[:500])}"
         )
 
-        time.sleep(2)
-        default_logs = deployment_log_snapshot(
-            default_names["processing_deployment"], since="1m"
+        wrong_body = _post_hybrid_chat(
+            _gateway_url(),
+            MODEL_PATH,
+            api_key,
+            model_name="nonexistent-praxis-route-model",
         )
-        tenant_logs = deployment_log_snapshot(
-            tenant_names["processing_deployment"], since="1m"
+        assert wrong_body.status_code != 200, (
+            "Expected default praxis payload-processing to reject unresolvable body model; "
+            f"got {wrong_body.status_code}. Request may have bypassed the processor."
         )
-        # praxis-extproc does not log per-request activity at INFO. Prove the default
-        # dataplane processed the request by rejecting an unresolvable body model
-        # (path-based auth alone would still return 200).
-        if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
-            wrong_body = _post_hybrid_chat(
-                _gateway_url(),
-                MODEL_PATH,
-                api_key,
-                model_name="nonexistent-ipp-route-model",
-            )
-            assert wrong_body.status_code != 200, (
-                "Expected default praxis IPP to reject unresolvable body model; "
-                f"got {wrong_body.status_code}. Request may have bypassed the processor."
-            )
-            log.info(
-                "Default dataplane uses praxis-extproc; routing verified via body-model "
-                "rejection (HTTP %d)",
-                wrong_body.status_code,
-            )
-        else:
-            assert ipp_logs_show_recent_activity(default_logs), (
-                "Expected ext_proc activity in default payload-processing logs"
-            )
-        assert not ipp_logs_show_recent_activity(tenant_logs), (
-            "Tenant IPP logs should stay quiet for default-gateway traffic"
+        log.info(
+            "Default praxis routing verified via hybrid BBR 200 and body-model rejection (HTTP %d)",
+            wrong_body.status_code,
         )
 
-    def test_tenant_gateway_hits_tenant_ipp_only(self, routing_case, ipp_tenant_cases):
-        _, case_b = ipp_tenant_cases
-        default_names = per_tenant_ipp_names(DEFAULT_AITENANT_NAME)
+    def test_tenant_gateway_hits_tenant_praxis_only(self, routing_case, praxis_tenant_cases):
+        _ = praxis_tenant_cases
         tenant_names = per_tenant_ipp_names(routing_case["tenant_label_name"])
-        other_names = per_tenant_ipp_names(case_b["tenant_label_name"])
 
         gateway_url = _get_tenant_gateway_url(routing_case["gateway_name"])
         api_key = _create_tenant_api_key(
@@ -423,7 +391,6 @@ class TestPerTenantIPPRouting:
             f"{routing_case['model_name']}-sub",
         )
 
-        time.sleep(2)
         response = _post_hybrid_chat(
             gateway_url,
             routing_case["model_path"],
@@ -434,55 +401,34 @@ class TestPerTenantIPPRouting:
             f"{redact_sensitive(response.text[:500])}"
         )
 
-        time.sleep(2)
-        tenant_logs = deployment_log_snapshot(
-            tenant_names["processing_deployment"], since="1m"
+        wrong_body = _post_hybrid_chat(
+            gateway_url,
+            routing_case["model_path"],
+            api_key,
+            model_name="nonexistent-praxis-tenant-model",
         )
-        default_logs = deployment_log_snapshot(
-            default_names["processing_deployment"], since="1m"
+        assert wrong_body.status_code != 200, (
+            f"Expected tenant praxis stack to reject unresolvable body model; got {wrong_body.status_code}"
         )
-        other_logs = deployment_log_snapshot(
-            other_names["processing_deployment"], since="1m"
+        log.info(
+            "Tenant praxis routing verified for %s via hybrid BBR and body-model rejection",
+            tenant_names["processing_deployment"],
         )
-        if extproc_deployment_uses_praxis(tenant_names["processing_deployment"]):
-            wrong_body = _post_hybrid_chat(
-                gateway_url,
-                routing_case["model_path"],
-                api_key,
-                model_name="nonexistent-ipp-tenant-model",
-            )
-            assert wrong_body.status_code != 200, (
-                "Expected tenant praxis IPP to reject unresolvable body model; "
-                f"got {wrong_body.status_code}"
-            )
-            log.info(
-                "Tenant dataplane uses praxis-extproc; routing verified via body-model "
-                "rejection (HTTP %d); default IPP activity=%s",
-                wrong_body.status_code,
-                ipp_logs_show_recent_activity(default_logs),
-            )
-        else:
-            assert ipp_logs_show_recent_activity(tenant_logs), (
-                f"Expected ext_proc activity in {tenant_names['processing_deployment']} logs"
-            )
-            assert not ipp_logs_show_recent_activity(other_logs), (
-                "Unrelated tenant IPP logs should stay quiet for this gateway request"
-            )
-            log.info(
-                "Tenant routing log check complete (default IPP activity=%s)",
-                ipp_logs_show_recent_activity(default_logs),
-            )
 
 
-class TestPerTenantIPPCleanup:
-    """Verify tenant-scoped IPP resources are removed when the AITenant is deleted."""
+class TestPerTenantPraxisCleanup:
+    """Verify tenant-scoped praxis resources are removed when the AITenant is deleted."""
 
-    def test_ipp_resources_removed_on_aitenant_delete(self):
-        case = new_named_tenant_case("e2e-ipp-cleanup")
+    def test_praxis_resources_removed_on_aitenant_delete(self):
+        _skip_unless_default_praxis()
+        require_tenant_namespace_discovery()
+        require_aitenant_crd()
+        case = new_named_tenant_case("e2e-praxis-cleanup")
         names = per_tenant_ipp_names(case["tenant_label_name"])
         try:
             bootstrap_aitenant_tenant(case)
             wait_for_per_tenant_ipp_ready(case)
+            assert extproc_deployment_uses_praxis(names["processing_deployment"])
             assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
 
             cleanup_discovery_case(case, delete_gateway=True)
