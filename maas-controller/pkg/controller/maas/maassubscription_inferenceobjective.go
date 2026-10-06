@@ -37,6 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/kmeta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -48,8 +49,8 @@ import (
 )
 
 const (
-	// inferenceObjectiveNameMaxLength keeps generated InferenceObjective names valid as
-	// DNS labels and as header values.
+	// inferenceObjectiveNameMaxLength is the longest generated InferenceObjective name, the
+	// limit kmeta.ChildName enforces. It keeps names valid as DNS labels and header values.
 	inferenceObjectiveNameMaxLength = 63
 	inferenceObjectiveNamePrefix    = "maas"
 	// inferenceObjectiveNameHashLength is the number of hex characters of the identity
@@ -107,11 +108,12 @@ func hasInferenceObjectiveOwnerLabels(labels map[string]string) bool {
 }
 
 // inferenceObjectiveName returns the deterministic InferenceObjective name for a
-// subscription and InferencePool. The readable tenant, subscription, and pool parts are
-// truncated as needed; the hash of their full identities keeps names unique. The name
-// does not depend on spec.inferencePriority, so it is stable across priority changes.
-// It also excludes the pool's API group and kind: KServe keeps the pool name stable but
-// reports the group of whichever pool API version the gateway currently accepts.
+// subscription and InferencePool: "maas-<tenant>-<subscription>-<pool>-<hash>". The hash
+// of the full identities keeps names unique; kmeta.ChildName keeps it as the suffix and,
+// when the name is too long, truncates the readable part. The name does not depend on
+// spec.inferencePriority, so it is stable across priority changes. It also excludes the
+// pool's API group and kind: KServe keeps the pool name stable but reports the group of
+// whichever pool API version the gateway currently accepts.
 func inferenceObjectiveName(tenantName string, subscription, pool types.NamespacedName) string {
 	identity := strings.Join([]string{
 		tenantName,
@@ -121,30 +123,16 @@ func inferenceObjectiveName(tenantName string, subscription, pool types.Namespac
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
 
-	parts := []string{
-		dnsLabelPart(tenantName),
-		dnsLabelPart(subscription.Name),
-		dnsLabelPart(pool.Name),
-	}
-	// Budget for the readable parts and the separators between them.
-	budget := inferenceObjectiveNameMaxLength - len(inferenceObjectiveNamePrefix) - len(hash) - 2
-	if len(strings.Join(parts, "-")) > budget {
-		perPart := (budget - (len(parts) - 1)) / len(parts)
-		for i := range parts {
-			if len(parts[i]) > perPart {
-				parts[i] = strings.TrimRight(parts[i][:perPart], "-")
-			}
-		}
-	}
-
-	nameParts := []string{inferenceObjectiveNamePrefix}
-	for _, p := range parts {
+	parts := []string{inferenceObjectiveNamePrefix}
+	for _, p := range []string{dnsLabelPart(tenantName), dnsLabelPart(subscription.Name), dnsLabelPart(pool.Name)} {
 		if p != "" {
-			nameParts = append(nameParts, p)
+			parts = append(parts, p)
 		}
 	}
-	nameParts = append(nameParts, hash)
-	return strings.Join(nameParts, "-")
+	// ChildName alone hashes only names that are too long, so short names would collide
+	// (tenant "a-b" + subscription "c" vs tenant "a" + subscription "b-c"), and the
+	// subscription namespace is not in the readable part. The identity hash covers both.
+	return kmeta.ChildName(strings.Join(parts, "-"), "-"+hash)
 }
 
 // dnsLabelPart lowercases s and replaces characters not allowed in a DNS label with '-'.
@@ -614,11 +602,9 @@ func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.
 	return errors.Join(errs...)
 }
 
-// warnf records a Warning event on the subscription when a recorder is configured.
+// warnf records a Warning event on the subscription. SetupWithManager always sets Recorder.
 func (r *MaaSSubscriptionReconciler) warnf(sub *maasv1alpha1.MaaSSubscription, reason, messageFmt string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(sub, corev1.EventTypeWarning, reason, messageFmt, args...)
-	}
+	r.Recorder.Eventf(sub, corev1.EventTypeWarning, reason, messageFmt, args...)
 }
 
 // mapLLMISvcToMaaSSubscriptions returns reconcile requests for the MaaSSubscriptions that
