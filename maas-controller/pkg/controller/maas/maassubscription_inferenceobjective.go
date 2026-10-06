@@ -50,7 +50,7 @@ import (
 
 const (
 	// inferenceObjectiveNameMaxLength is the longest generated InferenceObjective name, the
-	// limit kmeta.ChildName enforces. It keeps names valid as DNS labels and header values.
+	// limit kmeta.ChildName enforces.
 	inferenceObjectiveNameMaxLength = 63
 	inferenceObjectiveNamePrefix    = "maas"
 	// inferenceObjectiveNameHashLength is the number of hex characters of the identity
@@ -123,29 +123,13 @@ func inferenceObjectiveName(tenantName string, subscription, pool types.Namespac
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
 
-	parts := []string{inferenceObjectiveNamePrefix}
-	for _, p := range []string{dnsLabelPart(tenantName), dnsLabelPart(subscription.Name), dnsLabelPart(pool.Name)} {
-		if p != "" {
-			parts = append(parts, p)
-		}
-	}
-	// ChildName alone hashes only names that are too long, so short names would collide
-	// (tenant "a-b" + subscription "c" vs tenant "a" + subscription "b-c"), and the
-	// subscription namespace is not in the readable part. The identity hash covers both.
-	return kmeta.ChildName(strings.Join(parts, "-"), "-"+hash)
-}
-
-// dnsLabelPart lowercases s and replaces characters not allowed in a DNS label with '-'.
-func dnsLabelPart(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	// The tenant, subscription, and pool names are Kubernetes object names, so the joined
+	// string is already a valid name. ChildName alone hashes only names that are too long,
+	// so short names would collide (tenant "a-b" + subscription "c" vs tenant "a" +
+	// subscription "b-c"), and the subscription namespace is not in the readable part. The
+	// identity hash covers both.
+	parent := strings.Join([]string{inferenceObjectiveNamePrefix, tenantName, subscription.Name, pool.Name}, "-")
+	return kmeta.ChildName(parent, "-"+hash)
 }
 
 // flowControlTenantName returns the AITenant name for a subscription namespace. It falls
