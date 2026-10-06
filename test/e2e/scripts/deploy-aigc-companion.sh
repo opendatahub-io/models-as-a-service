@@ -4,7 +4,7 @@
 # =============================================================================
 # Clone the AIGC checkout and run deploy-ai-gateway-controller.sh so praxis can own
 # payload-processing. Intended for direct invocation or from prow_run_smoke_test.sh when
-# AI_GATEWAY_CONTROLLER_IMAGE is set (prow does not default the image).
+# AI_GATEWAY_CONTROLLER_IMAGE is non-empty (prow defaults to AIGC :latest).
 #
 # Env:
 #   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required; e.g. quay.io/.../odh-ai-gateway-controller:odh-stable)
@@ -22,7 +22,7 @@ if [[ -z "${PROJECT_ROOT:-}" ]]; then
 fi
 
 if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
-  echo "ERROR: AI_GATEWAY_CONTROLLER_IMAGE must be set (prow_run_smoke_test.sh only runs this script when it is set)." >&2
+  echo "ERROR: AI_GATEWAY_CONTROLLER_IMAGE must be set (prow_run_smoke_test.sh skips this script when it is empty)." >&2
   echo "  Example: AI_GATEWAY_CONTROLLER_IMAGE=quay.io/opendatahub/odh-ai-gateway-controller:odh-stable $0" >&2
   exit 1
 fi
