@@ -7,6 +7,9 @@ traffic reaches the matching IPP stack, and that tenant-scoped resources are
 removed when the AITenant is deleted.
 
 Requires maas-controller with per-tenant IPP reconciliation enabled.
+
+After praxis became the product default for absent payload-processing-type,
+these tests explicitly annotate MaasTenantConfig with legacy ``ipp``.
 """
 
 from __future__ import annotations
@@ -26,6 +29,7 @@ from multitenancy_helpers import (
     LABEL_TENANT_INSTANCE,
     TLS_VERIFY,
     _oc_run,
+    PAYLOAD_PROCESSING_TYPE_IPP,
     bootstrap_aitenant_tenant,
     cleanup_discovery_case,
     deployment_log_snapshot,
@@ -120,7 +124,7 @@ def ipp_tenant_cases():
     case_b = new_named_tenant_case("e2e-ipp-b")
     try:
         for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+            bootstrap_aitenant_tenant(case, payload_processing_type=PAYLOAD_PROCESSING_TYPE_IPP)
             wait_for_per_tenant_ipp_ready(case)
         yield case_a, case_b
     finally:
@@ -456,7 +460,7 @@ class TestPerTenantIPPCleanup:
         case = new_named_tenant_case("e2e-ipp-cleanup")
         names = per_tenant_ipp_names(case["tenant_label_name"])
         try:
-            bootstrap_aitenant_tenant(case)
+            bootstrap_aitenant_tenant(case, payload_processing_type=PAYLOAD_PROCESSING_TYPE_IPP)
             wait_for_per_tenant_ipp_ready(case)
             assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
 
