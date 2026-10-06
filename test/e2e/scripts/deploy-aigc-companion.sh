@@ -2,11 +2,12 @@
 # =============================================================================
 # Deploy ai-gateway-controller companion for MaaS e2e
 # =============================================================================
-# When AI_GATEWAY_CONTROLLER_IMAGE is set, clone the AIGC checkout and run its
-# deploy-ai-gateway-controller.sh so praxis can own payload-processing.
+# Clone the AIGC checkout and run deploy-ai-gateway-controller.sh so praxis can own
+# payload-processing. Intended for direct invocation or from prow_run_smoke_test.sh when
+# AI_GATEWAY_CONTROLLER_IMAGE is set (prow does not default the image).
 #
 # Env:
-#   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required to run; default below)
+#   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required; e.g. quay.io/.../odh-ai-gateway-controller:odh-stable)
 #   AIGC_GIT_URL                 Default: opendatahub-io/ai-gateway-controller
 #   AIGC_GIT_REF                 Default: main
 #   PRAXIS_EXTPROC_IMAGE         Optional; AIGC script defaults to odh-stable
@@ -20,7 +21,12 @@ if [[ -z "${PROJECT_ROOT:-}" ]]; then
   PROJECT_ROOT="$(cd "${_dir}/../../.." && pwd)"
 fi
 
-export AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-quay.io/opendatahub/odh-ai-gateway-controller:odh-stable}"
+if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
+  echo "ERROR: AI_GATEWAY_CONTROLLER_IMAGE must be set (prow_run_smoke_test.sh only runs this script when it is set)." >&2
+  echo "  Example: AI_GATEWAY_CONTROLLER_IMAGE=quay.io/opendatahub/odh-ai-gateway-controller:odh-stable $0" >&2
+  exit 1
+fi
+export AI_GATEWAY_CONTROLLER_IMAGE
 AIGC_GIT_URL="${AIGC_GIT_URL:-https://github.com/opendatahub-io/ai-gateway-controller.git}"
 AIGC_GIT_REF="${AIGC_GIT_REF:-main}"
 export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"

@@ -29,8 +29,8 @@
 #   MAAS_API_IMAGE - Custom MaaS API image (optional)
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional, requires DEPLOY_MODE=operator)
-#   AI_GATEWAY_CONTROLLER_IMAGE - Install AIGC after platform deploy (default: odh-stable)
-#   AIGC_GIT_URL / AIGC_GIT_REF - AIGC checkout for deploy-aigc-companion.sh (default: main)
+#   AI_GATEWAY_CONTROLLER_IMAGE - Optional; when set, installs AIGC after platform deploy (no default image)
+#   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
 #   DEPLOY_MODE           - kustomize (default) or operator
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
@@ -76,10 +76,8 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
-# Install AIGC after platform deploy so praxis owns payload-processing. Clear to skip.
-export AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-quay.io/opendatahub/odh-ai-gateway-controller:odh-stable}"
-export AIGC_GIT_URL="${AIGC_GIT_URL:-https://github.com/opendatahub-io/ai-gateway-controller.git}"
-export AIGC_GIT_REF="${AIGC_GIT_REF:-main}"
+# AIGC companion is opt-in: set AI_GATEWAY_CONTROLLER_IMAGE to install after platform deploy.
+export AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-}"
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
