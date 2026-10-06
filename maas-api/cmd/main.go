@@ -256,23 +256,31 @@ func registerHandlers(
 	v1Routes := router.Group("/v1")
 
 	authPolicyChecker := authpolicy.NewChecker(log, cluster.MaaSAuthPolicyLister)
-	subscriptionSelector := subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
-
-	resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
-	gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
-	resolveCancel()
-	if err != nil {
-		return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+	var subscriptionSelector *subscription.Selector
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		subscriptionSelector = subscription.NewSelector(log, cluster.MaaSSubscriptionLister, cluster.MaaSModelRefLister, authPolicyChecker)
 	}
-	if gatewayInternalHost == "" {
-		return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
-			cfg.GatewayNamespace, cfg.GatewayName)
-	}
-	log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
 
-	modelManager, err := models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2, profileMinVersion, profileCipherSuites)
-	if err != nil {
-		log.Fatal("Failed to create model manager", "error", err)
+	var modelManager *models.Manager
+	if cfg.SubscriptionMode == config.SubscriptionModeEnforced {
+		resolveCtx, resolveCancel := context.WithTimeout(ctx, time.Duration(cfg.AccessCheckTimeoutSeconds)*time.Second)
+		gatewayInternalHost, err := config.ResolveGatewayInternalHost(resolveCtx, cluster.ClientSet, cfg.GatewayName, cfg.GatewayNamespace)
+		resolveCancel()
+		if err != nil {
+			return fmt.Errorf("failed to resolve gateway internal address: %w", err)
+		}
+		if gatewayInternalHost == "" {
+			return fmt.Errorf("gateway service not found for %s/%s: model access probes require a resolvable gateway internal host",
+				cfg.GatewayNamespace, cfg.GatewayName)
+		}
+		log.Info("Resolved gateway internal host for access probes", "host", gatewayInternalHost)
+
+		modelManager, err = models.NewManager(log, cfg.AccessCheckTimeoutSeconds, gatewayInternalHost, cfg.DiscoveryEnableHTTP2, profileMinVersion, profileCipherSuites)
+		if err != nil {
+			log.Fatal("Failed to create model manager", "error", err)
+		}
+	} else {
+		log.Info("Standalone subscription mode enabled; skipping MaaS Gateway model probes")
 	}
 
 	tokenHandler := token.NewHandler(log, cfg.TenantName)

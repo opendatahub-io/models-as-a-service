@@ -45,17 +45,17 @@ var _ MetadataStore = (*MockStore)(nil)
 // ephemeral marks the key as short-lived for programmatic use.
 // Note: keyPrefix is NOT stored (security - reduces brute-force attack surface).
 func (m *MockStore) AddKey(
-	ctx context.Context, 
-	username, 
-	keyID, 
-	keyHash, 
-	name, 
-	description string, 
-	userGroups []string, 
-	subscription string, 
-	tenant string, 
-	expiresAt *time.Time, 
-	ephemeral bool, 
+	ctx context.Context,
+	username,
+	keyID,
+	keyHash,
+	name,
+	description string,
+	userGroups []string,
+	subscription string,
+	tenant string,
+	expiresAt *time.Time,
+	ephemeral bool,
 	labels map[string]string,
 ) error {
 	if keyID == "" {
@@ -64,10 +64,6 @@ func (m *MockStore) AddKey(
 	if name == "" {
 		return ErrEmptyName
 	}
-	if subscription == "" {
-		return errors.New("subscription is required")
-	}
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -77,7 +73,7 @@ func (m *MockStore) AddKey(
 	}
 
 	if len(labels) == 0 {
-		labels = nil 
+		labels = nil
 	}
 
 	// userGroups is already []string - no parsing needed

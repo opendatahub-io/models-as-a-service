@@ -24,8 +24,9 @@ import (
 var validGroupNamePattern = regexp.MustCompile(`^[a-zA-Z0-9:._ -]+$`)
 
 var (
-	ErrTenantRequired = errors.New("tenant is required")
-	ErrTenantMismatch = errors.New("tenant mismatch")
+	ErrTenantRequired        = errors.New("tenant is required")
+	ErrTenantMismatch        = errors.New("tenant mismatch")
+	ErrSubscriptionsDisabled = errors.New("subscriptions are disabled in standalone mode")
 )
 
 // SubscriptionSelector resolves which MaaSSubscription to bind when minting an API key.
@@ -162,23 +163,35 @@ func (s *Service) CreateAPIKey(
 		return nil, fmt.Errorf("failed to generate API key: %w", err)
 	}
 
-	var subResp *subscription.SelectResponse
-	var selectErr error
-	if requestedSubscription != "" {
-		//nolint:unqueryvet,nolintlint // Select is subscription resolution, not a SQL query
-		subResp, selectErr = s.subSelector.Select(userGroups, username, requestedSubscription, "")
-	} else {
-		subResp, selectErr = s.subSelector.SelectHighestPriority(userGroups, username)
+	subscriptionName := ""
+	if s.subscriptionsEnforced() {
+		if requestedSubscription != "" {
+			//nolint:unqueryvet,nolintlint // Select is subscription resolution, not a SQL query
+			subResp, selectErr := s.subSelector.Select(userGroups, username, requestedSubscription, "")
+			if selectErr != nil {
+				s.logger.WithContext(ctx).Warn("Subscription selection failed when creating API key",
+					"user", logger.RedactValue(username),
+					"requestedSubscription", requestedSubscription,
+					"error", selectErr,
+				)
+				return nil, selectErr
+			}
+			subscriptionName = subResp.Name
+		} else {
+			subResp, selectErr := s.subSelector.SelectHighestPriority(userGroups, username)
+			if selectErr != nil {
+				s.logger.WithContext(ctx).Warn("Subscription selection failed when creating API key",
+					"user", logger.RedactValue(username),
+					"requestedSubscription", requestedSubscription,
+					"error", selectErr,
+				)
+				return nil, selectErr
+			}
+			subscriptionName = subResp.Name
+		}
+	} else if requestedSubscription != "" {
+		return nil, ErrSubscriptionsDisabled
 	}
-	if selectErr != nil {
-		s.logger.WithContext(ctx).Warn("Subscription selection failed when creating API key",
-			"user", logger.RedactValue(username),
-			"requestedSubscription", requestedSubscription,
-			"error", selectErr,
-		)
-		return nil, selectErr
-	}
-	subscriptionName := subResp.Name
 
 	// Generate unique ID for this key
 	keyID := uuid.New().String()
@@ -298,7 +311,7 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 	// Fail closed: reject keys with no bound subscription (CWE-284)
 	// This prevents legacy keys, bad migrations, or manual writes with empty subscription
 	// from bypassing the "subscription bound at mint" access control invariant
-	if strings.TrimSpace(metadata.Subscription) == "" {
+	if s.subscriptionsEnforced() && strings.TrimSpace(metadata.Subscription) == "" {
 		s.logger.WithContext(ctx).Warn("API key missing bound subscription", "key_id", metadata.ID)
 		return &ValidationResult{
 			Valid:  false,
@@ -325,6 +338,10 @@ func (s *Service) ValidateAPIKey(ctx context.Context, key string) (*ValidationRe
 		Subscription: metadata.Subscription,
 		Tenant:       metadata.Tenant,
 	}, nil
+}
+
+func (s *Service) subscriptionsEnforced() bool {
+	return s.config == nil || s.config.SubscriptionMode != config.SubscriptionModeStandalone
 }
 
 // RevokeAPIKey revokes a specific permanent API key.
