@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Deploy ai-gateway-controller companion for MaaS e2e (temporary pairing)
+# Deploy ai-gateway-controller companion for MaaS e2e
 # =============================================================================
 # When AI_GATEWAY_CONTROLLER_IMAGE is set, clone the AIGC checkout and run its
 # deploy-ai-gateway-controller.sh so praxis can own payload-processing.
 #
-# Short-term defaults pair MaaS #1579 with AIGC #91 (absent → UsesPraxis).
-#
 # Env:
 #   AI_GATEWAY_CONTROLLER_IMAGE  Manager image (required to run; default below)
 #   AIGC_GIT_URL                 Default: opendatahub-io/ai-gateway-controller
-#   AIGC_GIT_REF                 Default: pull/91/head (jland-redhat branch)
+#   AIGC_GIT_REF                 Default: main
 #   PRAXIS_EXTPROC_IMAGE         Optional; AIGC script defaults to odh-stable
 #   GATEWAY_NAMESPACE, GATEWAY_NAME, DEPLOYMENT_NAMESPACE
 # =============================================================================
@@ -22,17 +20,14 @@ if [[ -z "${PROJECT_ROOT:-}" ]]; then
   PROJECT_ROOT="$(cd "${_dir}/../../.." && pwd)"
 fi
 
-# TEMP: pair with https://github.com/opendatahub-io/ai-gateway-controller/pull/91
-# until absent→praxis lands on AIGC main and Konflux installs AIGC by default.
-export AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-quay.io/opendatahub/odh-ai-gateway-controller:odh-pr-91}"
+export AI_GATEWAY_CONTROLLER_IMAGE="${AI_GATEWAY_CONTROLLER_IMAGE:-quay.io/opendatahub/odh-ai-gateway-controller:odh-stable}"
 AIGC_GIT_URL="${AIGC_GIT_URL:-https://github.com/opendatahub-io/ai-gateway-controller.git}"
-AIGC_GIT_REF="${AIGC_GIT_REF:-refs/pull/91/head}"
+AIGC_GIT_REF="${AIGC_GIT_REF:-main}"
 export PRAXIS_EXTPROC_IMAGE="${PRAXIS_EXTPROC_IMAGE:-quay.io/opendatahub/odh-praxis-extproc:odh-stable}"
 export GATEWAY_NAMESPACE="${GATEWAY_NAMESPACE:-openshift-ingress}"
 export GATEWAY_NAME="${GATEWAY_NAME:-maas-default-gateway}"
 export DEPLOYMENT_NAMESPACE="${DEPLOYMENT_NAMESPACE:-opendatahub}"
 export AI_GATEWAY_CONTROLLER_NAMESPACE="${AI_GATEWAY_CONTROLLER_NAMESPACE:-${DEPLOYMENT_NAMESPACE}}"
-# MaaS #1579 already SkipIPP-on-absent; still let AIGC script clear leftovers / wait.
 export REMOVE_MAAS_IPP="${REMOVE_MAAS_IPP:-true}"
 
 echo "Installing AIGC companion for praxis dataplane..."
