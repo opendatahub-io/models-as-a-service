@@ -1,15 +1,14 @@
 """
-E2E tests for per-tenant IPP (payload-processing) isolation.
+Legacy maas-controller IPP (payload-processing) per-tenant isolation tests.
 
-Validates that each AITenant receives dedicated IPP Deployments, Services,
-EnvoyFilters, and env configuration in the gateway namespace, that inference
-traffic reaches the matching IPP stack, and that tenant-scoped resources are
-removed when the AITenant is deleted.
+Validates that each AITenant annotated with legacy ``ipp`` receives dedicated
+IPP Deployments, Services, EnvoyFilters, and env configuration in the gateway
+namespace, that inference traffic reaches the matching IPP stack, and that
+tenant-scoped resources are removed when the AITenant is deleted.
 
-Requires maas-controller with per-tenant IPP reconciliation enabled.
+Excluded from default e2e runs (``legacy_ipp`` marker). Opt in with::
 
-After praxis became the product default for absent payload-processing-type,
-these tests explicitly annotate MaasTenantConfig with legacy ``ipp``.
+    pytest -m legacy_ipp test/e2e/tests/test_per_tenant_ipp_isolation.py
 """
 
 from __future__ import annotations
@@ -65,7 +64,10 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.xdist_group("tenant_isolation"),
+]
 
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5

@@ -11,6 +11,7 @@ markers = [
     "mt_lifecycle: multi-tenant AITenant lifecycle and discovery",
     "tenant_isolation: cross-tenant auth, rate-limit, subscription, and IPP isolation",
     "external: external OIDC and ExternalModel integrations",
+    "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
 ]
 addopts = "--strict-markers"
 

@@ -58,7 +58,10 @@ from test_helper import (
     chat,
 )
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.xdist_group("readonly"),
+]
 
 ENVOY_FILTER_NAME = "payload-processing"
 IPP_PRE = "envoy.filters.http.ext_proc.ipp-pre"
