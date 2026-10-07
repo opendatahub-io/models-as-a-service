@@ -6,8 +6,9 @@
 # Owns pytest invocation for MaaS E2E tests. Separated from
 # prow_run_smoke_test.sh so that test-only changes don't touch deploy/validate
 # logic. Implements the two-phase model:
-#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp", --dist=loadgroup)
-#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp", single worker)
+#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp and not nightly", --dist=loadgroup)
+#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp and not nightly", single worker)
+#   Nightly-marked tests run on the scheduled nightly path (shepard), not on PR /group-test.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -208,14 +209,14 @@ snapshot_parallel_pass_pods() (
 )
 
 run_serial_pass() {
-    echo "Running E2E pass 2/2: serial cluster mutators (-m 'serial and not legacy_ipp', single worker)"
+    echo "Running E2E pass 2/2: serial cluster mutators (-m 'serial and not legacy_ipp and not nightly', single worker)"
     if ! run_pytest_pass "pass 2 (serial)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "serial and not legacy_ipp"; then
+        -m "serial and not legacy_ipp and not nightly"; then
         serial_rc=1
     fi
 }
@@ -229,25 +230,25 @@ maybe_run_serial_pass() {
 }
 
 if [[ "$serial_only" == "true" ]]; then
-    echo "Running E2E tests (serial pass only, -m 'serial and not legacy_ipp')"
+    echo "Running E2E tests (serial pass only, -m 'serial and not legacy_ipp and not nightly')"
     run_serial_pass
 elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     # Single worker: still split by marker so module-scoped worker fixtures never
     # see both serial and parallel tests from the same file in one session.
-    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial and not legacy_ipp')"
+    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial and not legacy_ipp and not nightly')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial and not legacy_ipp"; then
+        -m "not serial and not legacy_ipp and not nightly"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
 else
-    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial and not legacy_ipp')"
+    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial and not legacy_ipp and not nightly')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
@@ -255,7 +256,7 @@ else
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial and not legacy_ipp"; then
+        -m "not serial and not legacy_ipp and not nightly"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
