@@ -17,6 +17,8 @@ Environment:
   - E2E_GENERATION_STABILITY_WINDOW: seconds to observe for generation stability (default: 60)
 """
 
+from __future__ import annotations
+
 import json
 import logging
 import os

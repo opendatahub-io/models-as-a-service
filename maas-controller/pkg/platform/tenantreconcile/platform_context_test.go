@@ -75,49 +75,10 @@ func TestResolvePlatformContext_AITenantManagedTenantUsesAITenant(t *testing.T) 
 	assert.Equal(t, "https://issuer.example.com/realms/redteam", got.ExternalOIDC.IssuerURL)
 	assert.Equal(t, "redteam-client", got.ExternalOIDC.ClientID)
 	assert.Equal(t, "aitenant", got.Source)
-	assert.False(t, got.SkipIPP)
+	assert.True(t, got.SkipIPP, "absent payload-processing-type defaults to praxis")
 }
 
-func TestResolvePlatformContext_AITenantAnnotationSkipsIPP(t *testing.T) {
-	scheme := platformContextTestScheme(t)
-	tenant := &maasv1alpha1.Tenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      maasv1alpha1.TenantInstanceName,
-			Namespace: "ai-tenant-redteam",
-			Labels: map[string]string{
-				LabelManagedByAITenant: "true",
-				LabelTenantName:        "redteam",
-				LabelTenantNamespace:   "ai-tenant-redteam",
-			},
-			Annotations: map[string]string{
-				AnnotationAITenantName:      "redteam",
-				AnnotationAITenantNamespace: DefaultAITenantNamespace,
-			},
-		},
-	}
-	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      "redteam",
-			Namespace: DefaultAITenantNamespace,
-			Annotations: map[string]string{
-				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
-			},
-		},
-		Status: maasv1alpha1.AITenantStatus{
-			GatewayRef: maasv1alpha1.TenantGatewayRef{
-				Namespace: "openshift-ingress",
-				Name:      "redteam-gateway",
-			},
-		},
-	}
-	client := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenant, aitenant).Build()
-
-	got, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
-	require.NoError(t, err)
-	assert.True(t, got.SkipIPP)
-}
-
-func TestResolvePlatformContext_TenantConfigAnnotationOverridesAITenant(t *testing.T) {
+func TestResolvePlatformContext_TenantConfigAnnotationOptInIPP(t *testing.T) {
 	scheme := platformContextTestScheme(t)
 	tenant := &maasv1alpha1.Tenant{
 		ObjectMeta: metav1.ObjectMeta{
@@ -131,12 +92,15 @@ func TestResolvePlatformContext_TenantConfigAnnotationOverridesAITenant(t *testi
 			Annotations: map[string]string{
 				AnnotationAITenantName:          "redteam",
 				AnnotationAITenantNamespace:     DefaultAITenantNamespace,
-				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
+				AnnotationPayloadProcessingType: PayloadProcessingTypeIPP,
 			},
 		},
 	}
 	aitenant := &maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{Name: "redteam", Namespace: DefaultAITenantNamespace},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "redteam",
+			Namespace: DefaultAITenantNamespace,
+		},
 		Status: maasv1alpha1.AITenantStatus{
 			GatewayRef: maasv1alpha1.TenantGatewayRef{
 				Namespace: "openshift-ingress",
@@ -148,10 +112,37 @@ func TestResolvePlatformContext_TenantConfigAnnotationOverridesAITenant(t *testi
 
 	got, err := ResolvePlatformContext(context.Background(), client, tenant, maasv1alpha1.TenantGatewayRef{})
 	require.NoError(t, err)
-	assert.True(t, got.SkipIPP)
+	assert.False(t, got.SkipIPP)
 }
 
-func TestResolveSkipIPP_UnknownTenantAnnotationIgnoresAITenant(t *testing.T) {
+func TestResolveSkipIPP_AbsentAnnotationMeansPraxis(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{}
+	assert.True(t, resolveSkipIPP(tenant))
+}
+
+func TestResolveSkipIPP_PraxisAnnotationSkipsIPP(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
+			},
+		},
+	}
+	assert.True(t, resolveSkipIPP(tenant))
+}
+
+func TestResolveSkipIPP_IPPAnnotationUsesLegacy(t *testing.T) {
+	tenant := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Annotations: map[string]string{
+				AnnotationPayloadProcessingType: PayloadProcessingTypeIPP,
+			},
+		},
+	}
+	assert.False(t, resolveSkipIPP(tenant))
+}
+
+func TestResolveSkipIPP_UnrecognizedValueDefaultsToPraxis(t *testing.T) {
 	tenant := &maasv1alpha1.MaasTenantConfig{
 		ObjectMeta: metav1.ObjectMeta{
 			Annotations: map[string]string{
@@ -159,15 +150,7 @@ func TestResolveSkipIPP_UnknownTenantAnnotationIgnoresAITenant(t *testing.T) {
 			},
 		},
 	}
-	aitenant := maasv1alpha1.AITenant{
-		ObjectMeta: metav1.ObjectMeta{
-			Annotations: map[string]string{
-				AnnotationPayloadProcessingType: PayloadProcessingTypePraxis,
-			},
-		},
-	}
-
-	assert.False(t, resolveSkipIPP(tenant, aitenant))
+	assert.True(t, resolveSkipIPP(tenant))
 }
 
 func TestResolvePlatformContext_LegacyTenantUsesTenantSpec(t *testing.T) {

@@ -9,7 +9,6 @@ import (
 	"reflect"
 
 	"k8s.io/apimachinery/pkg/runtime/schema"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
@@ -31,6 +30,41 @@ const (
 	//
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
+
+	// AnnotationPayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count for a tenant.
+	// When autoscaling is enabled via spec.payloadPreProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadPreProcessing.replicas on MaasTenantConfig/Tenant.
+	AnnotationPayloadPreProcessingReplicas = "maas.opendatahub.io/payload-pre-processing-replicas"
+
+	// AnnotationPayloadProcessingStatus coordinates the payload-processing backend
+	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
+	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
+	//
+	// From maas-controller's perspective only two values matter:
+	//   - PayloadProcessingStatusCleanupComplete ("cleanup-complete"): clear to claim.
+	//     When legacy is selected, CAS-claim by deleting the annotation (back to absent)
+	//     then deploy. When praxis is selected (SkipIPP), this means we already finished
+	//     IPP cleanup and must not re-run it.
+	//   - absent: legacy owns / may deploy when legacy is selected (existing tenants are
+	//     assumed to run legacy IPP). When praxis is selected, absent means we still need
+	//     to clean up legacy IPP and then write cleanup-complete.
+	//   - any other value (e.g. praxis's own claim sentinel): not our turn — wait when
+	//     legacy is selected; do not overwrite when SkipIPP. maas-controller does not
+	//     interpret peer-specific values.
+	//
+	// Every new MaasTenantConfig is seeded with cleanup-complete at creation time
+	// (see AITenantReconciler.ensureTenantConfig's mutateCreate hook) so a brand-new
+	// tenant's first-ever deploy is never blocked by absent.
+	//
+	// The switch-off party deletes its bundle first, then sets cleanup-complete only
+	// after full cleanup success. Transitioning-in parties claim via optimistic-
+	// concurrency Update (resourceVersion-checked), not a blind merge-patch.
+	AnnotationPayloadProcessingStatus = "maas.opendatahub.io/payload-processing-status"
+
+	// PayloadProcessingStatusCleanupComplete means peer cleanup finished; the
+	// selected party may claim.
+	PayloadProcessingStatusCleanupComplete = "cleanup-complete"
 
 	// ComponentName is the ODH component label key suffix (app.opendatahub.io/<name>).
 	// This is the DSC component identifier, not a standalone CR kind.
@@ -66,10 +100,11 @@ const (
 	// Production deployments use this default. ROSA deployments must override to "" (empty) to disable separation.
 	DefaultInfraNamespace = "AUTO"
 
-	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-	DefaultAPIKeyMaxExpirationDays = "90"
+	DefaultMaaSAPIImage                = "quay.io/opendatahub/maas-api:latest"
+	DefaultPayloadProcessingImage      = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultMaaSAPIKeyCleanupImage      = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays     = "90"
+	DefaultAPIKeyDeletionRetentionDays = "90"
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"
@@ -100,6 +135,7 @@ const (
 	baseMaaSAPIServiceName                         = "maas-api"
 	baseMaaSAPIKeyCleanupScriptConfigMapName       = "maas-api-key-cleanup-script" //nolint:gosec // Kubernetes resource name, not a credential
 	baseMaaSAPIDeploymentNSNetworkPolicyName       = "maas-api-allow-deployment-ns"
+	baseMaaSAPIEgressRestrictNetworkPolicyName     = "maas-api-egress-restrict"
 	baseMaaSAPIServingCertName                     = "maas-api-serving-cert"
 	baseUsageLogsEnvoyFilterName                   = "maas-model-access-logs"
 
@@ -207,11 +243,7 @@ func IstioTelemetryName(tenantID string) string {
 }
 
 func MaaSAPIDeploymentName(tenantID string) string {
-	name := resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
-	ctrl.Log.WithName("MaaSAPIDeploymentName").Info("Generated deployment name",
-		"tenantID", tenantID,
-		"deploymentName", name)
-	return name
+	return resourceNameForTenant(baseMaaSAPIDeploymentName, tenantID)
 }
 
 func MaaSAPIServiceName(tenantID string) string {
@@ -252,6 +284,10 @@ func PayloadProcessingNetworkPolicyName(tenantID string) string {
 
 func PayloadProcessingHPAName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func PayloadPreProcessingHPAName(tenantID string) string {
+	return resourceNameForTenant(PayloadPreProcessingName, tenantID)
 }
 
 func MaaSAPIServingCertName(tenantID string) string {
@@ -301,17 +337,9 @@ func TenantIdentifierFor(obj client.Object) (string, error) {
 	}
 
 	labels := obj.GetLabels()
-	log := ctrl.Log.WithName("TenantIdentifierFor").WithValues(
-		"tenantConfig", obj.GetNamespace()+"/"+obj.GetName(),
-		"labels", labels,
-	)
-
 	if labels != nil && labels[LabelManagedByAITenant] == "true" {
 		tenantName := labels[LabelTenantName]
 		if tenantName == "" {
-			log.Error(nil, "AITenant-managed tenant config is missing LabelTenantName",
-				"managedByLabel", LabelManagedByAITenant,
-				"tenantNameLabel", LabelTenantName)
 			return "", fmt.Errorf("tenant %s/%s has %s=true but %s is missing or empty",
 				obj.GetNamespace(), obj.GetName(), LabelManagedByAITenant, LabelTenantName)
 		}
@@ -324,15 +352,11 @@ func TenantIdentifierFor(obj client.Object) (string, error) {
 				return "", fmt.Errorf("tenant config %s/%s has %s=%q but %s must match the tenant config namespace",
 					obj.GetNamespace(), obj.GetName(), LabelTenantName, DefaultAITenantName, LabelTenantNamespace)
 			}
-			log.Info("Using default AITenant legacy resource identifier (empty string)",
-				"tenantName", tenantName)
 			return "", nil
 		}
-		log.Info("Resolved tenant identifier from AITenant label", "tenantIdentifier", tenantName)
 		return tenantName, nil
 	}
 
-	log.Info("Using legacy/default tenant identifier (empty string)", "reason", "no AITenant label")
 	return "", nil
 }
 

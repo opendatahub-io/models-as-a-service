@@ -24,7 +24,12 @@ from multitenancy_helpers import (
     wait_for_gateway_authpolicy_ready,
     wait_for_status_phase,
 )
-from test_helper import _get_cluster_token, _delete_cr, _wait_for_subscription_trlp_status
+from test_helper import (
+    SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
+    _delete_cr,
+    _get_cluster_token,
+    _wait_for_subscription_trlp_status,
+)
 
 pytestmark = pytest.mark.xdist_group("tenant_isolation")
 
@@ -119,7 +124,7 @@ def tenant_subscriptions(tenant_env):
                     name,
                     expected_ready=True,
                     namespace=tenant["namespace"],
-                    timeout=120,
+                    timeout=SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
                 )
         for tenant in (tenant_a, tenant_b):
             wait_for_status_phase(

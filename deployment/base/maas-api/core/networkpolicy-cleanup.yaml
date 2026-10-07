@@ -5,15 +5,18 @@ metadata:
 spec:
   # Restrict CronJob cleanup pods: they can only communicate with maas-api on port 8080.
   # This prevents the cleanup pods from being used as a pivot to access other services.
-  # Note: L4 NetworkPolicy cannot restrict by URL path; the /internal/ endpoint is
-  # additionally protected by not being exposed via the external Service/Route.
+  # Note: L4 NetworkPolicy cannot restrict by URL path; cleanup endpoints also
+  # require a TokenReview-authenticated maas-api-cleanup ServiceAccount token.
   podSelector:
     matchLabels:
       app: maas-api-cleanup
+  # Ingress in policyTypes with no ingress rules denies all ingress. Leave the
+  # field out rather than writing `ingress: []`: the API server stores the empty
+  # list as nil, so every server-side apply bumps generation and the tenant
+  # NetworkPolicy watch turns that into a reconcile loop.
   policyTypes:
   - Egress
   - Ingress
-  ingress: []
   egress:
   - to:
     - podSelector:

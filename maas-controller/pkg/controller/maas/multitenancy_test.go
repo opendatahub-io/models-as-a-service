@@ -198,6 +198,7 @@ func TestMaaSAuthPolicyReconciler_ReconcilesTenantNamespace(t *testing.T) {
 		WithScheme(scheme).
 		WithRESTMapper(testRESTMapper()).
 		WithObjects(ns, tenant, model, route, policy, gateway).
+		WithStatusSubresource(&maasv1alpha1.MaaSAuthPolicy{}).
 		Build()
 
 	const gwNamespace = "team-a-gateway-ns"
@@ -252,6 +253,7 @@ func TestMaaSSubscriptionReconciler_IgnoresNonTenantNamespace(t *testing.T) {
 
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
@@ -338,7 +340,9 @@ func TestMaaSSubscriptionReconciler_DeletionRunsAfterNamespaceDelabeled(t *testi
 
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
+		AppNamespace:                    "odh-ai-gateway-infra",
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
 	}
@@ -528,6 +532,7 @@ func TestMapNamespaceToMaaSSubscriptions_EnqueuesWhenDiscoveryEnabled(t *testing
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(labeledSub, unlabeledSub).Build()
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,
@@ -582,6 +587,7 @@ func TestMapAITenantToMaaSSubscriptions(t *testing.T) {
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tenantNS, tenantSub, defaultSub).Build()
 	r := &MaaSSubscriptionReconciler{
 		Client:                          c,
+		APIReader:                       c,
 		Scheme:                          scheme,
 		DefaultTenantNamespace:          "models-as-a-service",
 		TenantNamespaceDiscoveryEnabled: true,

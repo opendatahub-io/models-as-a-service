@@ -485,7 +485,7 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 		return fmt.Errorf("set owner reference on ServiceMonitor: %w", err)
 	}
 
-	if err := r.Patch(ctx, sm, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(sm), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		// If ServiceMonitor CRD is not installed, skip creation (monitoring stack is optional)
 		if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
 			return nil
@@ -528,7 +528,7 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 		}
 
-		if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+		if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
 				// CRD not yet registered for a known optional dependency (e.g. Perses CRDs
 				// installed by COO which may not be present yet). Skip so the rest of the
@@ -615,7 +615,7 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 				return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
 			}
 
-			if err := r.Patch(ctx, &res, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+			if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 				if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
 					log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
 						"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
@@ -747,12 +747,15 @@ func patchTenancyProxyImage(res *unstructured.Unstructured) error {
 	return errors.New("proxy container not found in usage-logs-tenancy-proxy deployment")
 }
 
+// tenantsHealthReason enumerates reasons used for ConfigConditionTenantsHealthy.
+type tenantsHealthReason string
+
 // Tenant health aggregation reasons (ADR ODH-ADR-MS-0003 three-state model).
 const (
-	tenantsHealthyReason  = "AllTenantsHealthy"
-	tenantsDegradedReason = "TenantsDegraded"
-	tenantsBlockedReason  = "TenantsBlocked"
-	tenantsNoneReason     = "NoTenantsFound"
+	tenantsHealthReasonAllTenantsHealthy tenantsHealthReason = "AllTenantsHealthy"
+	tenantsHealthReasonTenantsDegraded   tenantsHealthReason = "TenantsDegraded"
+	tenantsHealthReasonTenantsBlocked    tenantsHealthReason = "TenantsBlocked"
+	tenantsHealthReasonNoTenantsFound    tenantsHealthReason = "NoTenantsFound"
 )
 
 // conditionMessageMaxLen is the maximum length enforced by the Kubernetes condition message
@@ -890,7 +893,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		apimeta.SetStatusCondition(&cfg.Status.Conditions, metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionTrue,
-			Reason:             tenantsNoneReason,
+			Reason:             string(tenantsHealthReasonNoTenantsFound),
 			Message:            "no AITenant resources found",
 			ObservedGeneration: cfg.Generation,
 		})
@@ -915,7 +918,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionTrue,
-			Reason:             tenantsHealthyReason,
+			Reason:             string(tenantsHealthReasonAllTenantsHealthy),
 			Message:            fmt.Sprintf("all %d tenant(s) healthy", total),
 			ObservedGeneration: cfg.Generation,
 		}
@@ -923,7 +926,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionFalse,
-			Reason:             tenantsBlockedReason,
+			Reason:             string(tenantsHealthReasonTenantsBlocked),
 			Message:            truncateConditionMessage(fmt.Sprintf("all %d tenant(s) unhealthy: %s", total, formatTenantList(unhealthy, 5))),
 			ObservedGeneration: cfg.Generation,
 		}
@@ -931,7 +934,7 @@ func (r *LifecycleReconciler) syncTenantsHealth(ctx context.Context, cfg *maasv1
 		cond = metav1.Condition{
 			Type:               maasv1alpha1.ConfigConditionTenantsHealthy,
 			Status:             metav1.ConditionFalse,
-			Reason:             tenantsDegradedReason,
+			Reason:             string(tenantsHealthReasonTenantsDegraded),
 			Message:            truncateConditionMessage(fmt.Sprintf("%d of %d tenant(s) unhealthy: %s", len(unhealthy), total, formatTenantList(unhealthy, 5))),
 			ObservedGeneration: cfg.Generation,
 		}

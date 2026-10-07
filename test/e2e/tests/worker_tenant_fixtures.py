@@ -25,6 +25,7 @@ from test_helper import (
 )
 from multitenancy_helpers import (
     INFRA_NAMESPACE,
+    MODEL_BACKEND_READY_TIMEOUT,
     _oc_run,
     apply_gateway_access_label,
     bootstrap_aitenant_tenant,
@@ -99,7 +100,16 @@ def serial_only_selection(request) -> bool:
     Module-scoped fixtures cannot inspect a single test item's marker. Inspect
     the collected selection instead, and reject mixed serial/parallel runs so
     a serial test can never silently execute against worker-owned state.
+
+    When run via test/e2e/scripts/run_e2e_tests.sh, E2E_PYTEST_PASS is set to
+    ``parallel`` or ``serial`` for each marker-filtered pytest invocation.
     """
+    pass_mode = os.environ.get("E2E_PYTEST_PASS", "").strip().lower()
+    if pass_mode == "serial":
+        return True
+    if pass_mode == "parallel":
+        return False
+
     selected = [
         item for item in request.session.items
         if str(item.path) == str(request.node.path)
@@ -291,7 +301,7 @@ def ensure_worker_models(
         context.unconfigured_model_ref: f"e2e/{context.unconfigured_model_ref}",
         context.embedding_model_ref: f"e2e/{context.embedding_model_ref}",
     }
-    timeout = int(os.environ.get("E2E_MODEL_BACKEND_READY_TIMEOUT", "180"))
+    timeout = MODEL_BACKEND_READY_TIMEOUT
     for model_ref in model_refs:
         if model_ref not in aliases:
             raise ValueError(f"unsupported optional worker model {model_ref!r}")

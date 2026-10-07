@@ -410,6 +410,42 @@ func TestSelectHighestPriority(t *testing.T) {
 	})
 }
 
+func TestSelector_RejectsDeletingSubscriptions(t *testing.T) {
+	log := logger.New(false)
+	deleting := createSubscriptionWithHealth("deleting-sub", []string{"g1"}, nil, 100, defaultTestTokenRateLimit, phaseActive, true, true)
+	active := createSubscriptionWithHealth("active-sub", []string{"g1"}, nil, 10, defaultTestTokenRateLimit, phaseActive, true, false)
+
+	t.Run("explicit selection", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting}}, nil, nil)
+
+		_, err := selector.Select([]string{"g1"}, "", "deleting-sub", "")
+		if err == nil {
+			t.Fatal("expected deleting subscription to be rejected")
+		}
+	})
+
+	t.Run("automatic selection", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting}}, nil, nil)
+
+		_, err := selector.Select([]string{"g1"}, "", "", "")
+		if err == nil {
+			t.Fatal("expected deleting subscription to be excluded from automatic selection")
+		}
+	})
+
+	t.Run("highest priority selection skips deleting subscription", func(t *testing.T) {
+		selector := subscription.NewSelector(log, &fakeLister{subscriptions: []*unstructured.Unstructured{deleting, active}}, nil, nil)
+
+		selected, err := selector.SelectHighestPriority([]string{"g1"}, "")
+		if err != nil {
+			t.Fatalf("SelectHighestPriority: %v", err)
+		}
+		if selected.Name != "active-sub" {
+			t.Fatalf("selected subscription = %q, want active-sub", selected.Name)
+		}
+	})
+}
+
 // createSubscriptionWithHealth creates a subscription with health status fields.
 //
 //nolint:unparam // Test helper - parameters provide flexibility for future tests
@@ -508,7 +544,7 @@ func TestSelector_HealthFieldParsing(t *testing.T) {
 			expectedPhase:    phaseActive,
 			expectedReady:    true,
 			expectedDeleting: true,
-			expectError:      false,
+			expectError:      true, // Deleting subscriptions cannot receive new API keys
 		},
 		{
 			name: "Subscription without status - rejected (unreconciled)",

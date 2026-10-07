@@ -24,6 +24,7 @@ from multitenancy_helpers import (
     DEFAULT_GATEWAY_NAME,
     GATEWAY_NAMESPACE,
     LABEL_TENANT_INSTANCE,
+    PAYLOAD_PROCESSING_TYPE_IPP,
     TLS_VERIFY,
     _oc_run,
     bootstrap_aitenant_tenant,
@@ -31,6 +32,7 @@ from multitenancy_helpers import (
     deployment_log_snapshot,
     envoyfilter_grpc_cluster_names,
     envoyfilter_target_gateway,
+    extproc_deployment_uses_praxis,
     get_ipp_deployment_env,
     get_json_or_none,
     ipp_logs_show_recent_activity,
@@ -60,14 +62,20 @@ from test_helper import (
 
 log = logging.getLogger(__name__)
 
-pytestmark = pytest.mark.xdist_group("tenant_isolation")
+pytestmark = pytest.mark.xdist_group("tenant_ipp")
 
 GATEWAY_PROPAGATION_RETRIES = 6
 GATEWAY_PROPAGATION_DELAY = 5
 
 
 def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Retry transient gateway/auth propagation errors (empty 403, Authorino AUTH_FAILURE)."""
+    """Retry transient gateway/auth propagation errors.
+
+    Matches ``test_helper._is_transient_gateway_response``, plus the
+    Authorino "Access denied" 403 body seen on some tenant gateways.
+    """
+    from test_helper import _is_transient_gateway_response
+
     for attempt in range(1, retries + 1):
         response = method(
             url,
@@ -75,10 +83,8 @@ def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES
             verify=kwargs.pop("verify", TLS_VERIFY),
             **kwargs,
         )
-        retryable = (response.status_code == 403 and not response.text.strip()) or (
+        retryable = _is_transient_gateway_response(response) or (
             response.status_code == 403 and "Access denied" in response.text
-        ) or (
-            response.status_code == 500 and "AUTH_FAILURE" in response.text
         )
         if retryable and attempt < retries:
             log.info(
@@ -115,7 +121,7 @@ def ipp_tenant_cases():
     case_b = new_named_tenant_case("e2e-ipp-b")
     try:
         for case in (case_a, case_b):
-            bootstrap_aitenant_tenant(case)
+            bootstrap_aitenant_tenant(case, payload_processing_type=PAYLOAD_PROCESSING_TYPE_IPP)
             wait_for_per_tenant_ipp_ready(case)
         yield case_a, case_b
     finally:
@@ -221,6 +227,8 @@ class TestPerTenantIPPInfrastructure:
             assert service["metadata"]["name"] == names["processing_service"]
 
     def test_per_tenant_ipp_env_vars(self, ipp_tenant_cases):
+        if extproc_deployment_uses_praxis("payload-processing"):
+            pytest.skip("praxis-extproc; Go IPP GATEWAY_NAME/TENANT_NAMESPACE env not applicable")
         for case in ipp_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             env = get_ipp_deployment_env(names["processing_deployment"], GATEWAY_NAMESPACE)
@@ -250,6 +258,11 @@ class TestPerTenantIPPInfrastructure:
         )
 
     def test_per_tenant_envoyfilter_grpc_clusters(self, ipp_tenant_cases):
+        if extproc_deployment_uses_praxis("payload-processing"):
+            pytest.skip(
+                "praxis-extproc; EnvoyFilter uses payload-*-extproc clusters "
+                "(see test_per_tenant_praxis_isolation)"
+            )
         for case in ipp_tenant_cases:
             names = per_tenant_ipp_names(case["tenant_label_name"])
             envoyfilter = wait_for_json("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE, timeout=180)
@@ -371,9 +384,29 @@ class TestPerTenantIPPRouting:
         tenant_logs = deployment_log_snapshot(
             tenant_names["processing_deployment"], since="1m"
         )
-        assert ipp_logs_show_recent_activity(default_logs), (
-            "Expected ext_proc activity in default payload-processing logs"
-        )
+        # praxis-extproc does not log per-request activity at INFO. Prove the default
+        # dataplane processed the request by rejecting an unresolvable body model
+        # (path-based auth alone would still return 200).
+        if extproc_deployment_uses_praxis(default_names["processing_deployment"]):
+            wrong_body = _post_hybrid_chat(
+                _gateway_url(),
+                MODEL_PATH,
+                api_key,
+                model_name="nonexistent-ipp-route-model",
+            )
+            assert wrong_body.status_code != 200, (
+                "Expected default praxis IPP to reject unresolvable body model; "
+                f"got {wrong_body.status_code}. Request may have bypassed the processor."
+            )
+            log.info(
+                "Default dataplane uses praxis-extproc; routing verified via body-model "
+                "rejection (HTTP %d)",
+                wrong_body.status_code,
+            )
+        else:
+            assert ipp_logs_show_recent_activity(default_logs), (
+                "Expected ext_proc activity in default payload-processing logs"
+            )
         assert not ipp_logs_show_recent_activity(tenant_logs), (
             "Tenant IPP logs should stay quiet for default-gateway traffic"
         )
@@ -412,37 +445,52 @@ class TestPerTenantIPPRouting:
         other_logs = deployment_log_snapshot(
             other_names["processing_deployment"], since="1m"
         )
-        assert ipp_logs_show_recent_activity(tenant_logs), (
-            f"Expected ext_proc activity in {tenant_names['processing_deployment']} logs"
-        )
-        assert not ipp_logs_show_recent_activity(other_logs), (
-            "Unrelated tenant IPP logs should stay quiet for this gateway request"
-        )
-        log.info(
-            "Tenant routing log check complete (default IPP activity=%s)",
-            ipp_logs_show_recent_activity(default_logs),
-        )
+        if extproc_deployment_uses_praxis(tenant_names["processing_deployment"]):
+            wrong_body = _post_hybrid_chat(
+                gateway_url,
+                routing_case["model_path"],
+                api_key,
+                model_name="nonexistent-ipp-tenant-model",
+            )
+            assert wrong_body.status_code != 200, (
+                "Expected tenant praxis IPP to reject unresolvable body model; "
+                f"got {wrong_body.status_code}"
+            )
+            log.info(
+                "Tenant dataplane uses praxis-extproc; routing verified via body-model "
+                "rejection (HTTP %d); default IPP activity=%s",
+                wrong_body.status_code,
+                ipp_logs_show_recent_activity(default_logs),
+            )
+        else:
+            assert ipp_logs_show_recent_activity(tenant_logs), (
+                f"Expected ext_proc activity in {tenant_names['processing_deployment']} logs"
+            )
+            assert not ipp_logs_show_recent_activity(other_logs), (
+                "Unrelated tenant IPP logs should stay quiet for this gateway request"
+            )
+            log.info(
+                "Tenant routing log check complete (default IPP activity=%s)",
+                ipp_logs_show_recent_activity(default_logs),
+            )
 
 
 class TestPerTenantIPPCleanup:
     """Verify tenant-scoped IPP resources are removed when the AITenant is deleted."""
 
-    def test_ipp_resources_removed_on_aitenant_delete(self):
-        case = new_named_tenant_case("e2e-ipp-cleanup")
-        names = per_tenant_ipp_names(case["tenant_label_name"])
-        try:
-            bootstrap_aitenant_tenant(case)
-            wait_for_per_tenant_ipp_ready(case)
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
+    def test_ipp_resources_removed_on_aitenant_delete(self, ipp_tenant_cases):
+        case_a, case_b = ipp_tenant_cases
+        names = per_tenant_ipp_names(case_a["tenant_label_name"])
+        sibling = per_tenant_ipp_names(case_b["tenant_label_name"])
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE)
 
-            cleanup_discovery_case(case, delete_gateway=True)
-            wait_for_aitenant_cleanup_resources_deleted(case, timeout=240)
+        cleanup_discovery_case(case_a, delete_gateway=True)
+        wait_for_aitenant_cleanup_resources_deleted(case_a, timeout=240)
 
-            assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
-            assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
-            wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
-        finally:
-            cleanup_discovery_case(case, delete_gateway=True)
+        assert get_json_or_none("deployment", names["processing_deployment"], GATEWAY_NAMESPACE) is None
+        assert get_json_or_none("envoyfilter", names["envoyfilter"], GATEWAY_NAMESPACE) is None
+        wait_for_not_found("deployment", names["pre_processing_deployment"], GATEWAY_NAMESPACE, timeout=60)
 
+        assert get_json_or_none("deployment", sibling["processing_deployment"], GATEWAY_NAMESPACE) is not None
         assert get_json_or_none("deployment", "payload-processing", GATEWAY_NAMESPACE) is not None
-        assert ipp_tenant_id(case["tenant_label_name"]) != ""
+        assert ipp_tenant_id(case_a["tenant_label_name"]) != ""

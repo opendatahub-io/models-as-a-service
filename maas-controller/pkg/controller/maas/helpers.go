@@ -29,6 +29,14 @@ func deletionTimestampSet(e event.UpdateEvent) bool {
 		!e.ObjectNew.GetDeletionTimestamp().IsZero()
 }
 
+// uidChanged returns true when an Update event carries a different UID. An informer
+// relist reports an object deleted and recreated under the same name while the watch
+// was down as an Update, and the recreated object can match the old one on generation
+// and labels.
+func uidChanged(e event.UpdateEvent) bool {
+	return e.ObjectOld.GetUID() != e.ObjectNew.GetUID()
+}
+
 // unstructuredConditionsChangedPredicate passes Create/Delete events unconditionally
 // and Update events only when the object's generation changed or its status.conditions
 // actually transitioned (type+status pairs differ). This filters out noise from
@@ -186,6 +194,17 @@ func (t *tenantForNamespaceResult) identifier() (string, error) {
 		return tenantreconcile.TenantIdentifierFor(t.config)
 	case t.legacy != nil:
 		return tenantreconcile.TenantIdentifierFor(t.legacy)
+	default:
+		return "", errors.New("tenant config lookup result is empty")
+	}
+}
+
+func (t *tenantForNamespaceResult) name() (string, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.TenantNameFor(t.config)
+	case t.legacy != nil:
+		return tenantreconcile.TenantNameFor(t.legacy)
 	default:
 		return "", errors.New("tenant config lookup result is empty")
 	}
@@ -357,8 +376,12 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 			return nil
 		}
 	}
-	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
+	return fmt.Errorf("HTTPRoute %s/%s %w %s/%s", routeNamespace, routeName, ErrHTTPRouteNotOnTenantGateway, gatewayRef.Namespace, gatewayRef.Name)
 }
+
+// ErrHTTPRouteNotOnTenantGateway is wrapped by validateHTTPRouteReferencesGateway when the
+// route has no parentRef to the tenant Gateway. Other validation failures do not wrap it.
+var ErrHTTPRouteNotOnTenantGateway = errors.New("does not reference tenant Gateway")
 
 const (
 	maxHTTPRouteParentRefs         = 32

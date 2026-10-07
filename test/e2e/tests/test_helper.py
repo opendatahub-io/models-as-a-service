@@ -44,10 +44,14 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
-  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE (default: 6)
+  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
+  - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
+  - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
+  - E2E_OC_TIMEOUT: Per-attempt `oc` process timeout in seconds (default: 60)
+  - E2E_OC_RETRY_BUDGET: Wall-clock budget for retrying transient `oc` failures in seconds (default: 180)
 """
 
 import base64
@@ -63,6 +67,7 @@ import uuid
 from typing import Optional
 
 import requests
+from urllib3.exceptions import NewConnectionError
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +88,7 @@ MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODE
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
-# Empty 403 / Authorino AUTH_FAILURE while Envoy catches up after AuthPolicy updates.
+# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500/503 while Envoy catches up.
 GATEWAY_PROPAGATION_RETRIES = int(os.environ.get("E2E_GATEWAY_PROPAGATION_RETRIES", "6"))
 GATEWAY_PROPAGATION_DELAY = int(os.environ.get("E2E_GATEWAY_PROPAGATION_DELAY", "5"))
 # Wait for maas-gateway-auth Accepted+Enforced before minting keys / calling maas-api.
@@ -95,6 +100,15 @@ GATEWAY_ENFORCED_MISSING_GRACE = int(os.environ.get("E2E_GATEWAY_ENFORCED_MISSIN
 # Controller reconcile under pytest-xdist load needs longer phase waits (see prow_run_smoke_test.sh).
 AUTHPOLICY_PHASE_TIMEOUT = int(os.environ.get("E2E_AUTHPOLICY_PHASE_TIMEOUT", "60"))
 MAAS_SUBSCRIPTION_PHASE_TIMEOUT = int(os.environ.get("E2E_MAAS_SUBSCRIPTION_PHASE_TIMEOUT", "60"))
+# Parallel group-test can backlog Kuadrant TRLP reconciliation; 180s flaked on worker tenants.
+SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
+    os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
+)
+SUBSCRIPTION_TRLP_STATUS_TIMEOUT = int(os.environ.get("E2E_SUBSCRIPTION_TRLP_TIMEOUT", "180"))
+OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
+# An API server blip (TLS handshake timeout, admission webhook unreachable while
+# maas-controller restarts) must not fail a test or skip a teardown delete.
+OC_RETRY_BUDGET = int(os.environ.get("E2E_OC_RETRY_BUDGET", "180"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -388,11 +402,15 @@ def kubectl_curl(
         log.error("kubectl curl failed: %s", e)
         return 0, str(e)
     finally:
+        # Best-effort: a slow API server here must not replace the probe result.
         delete_cmd = [
             "kubectl", "delete", "pod", pod_name, "-n", namespace,
             "--grace-period=0", "--force", "--wait=false",
         ]
-        subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
+        try:
+            subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            log.warning("Timed out deleting curl pod %s/%s; leaving it behind", namespace, pod_name)
 
 
 def _maas_api_url():
@@ -499,13 +517,58 @@ def _get_cluster_token():
 # API Key Management
 # ---------------------------------------------------------------------------
 
+def _is_transient_gateway_response(response) -> bool:
+    """True when the gateway/Authorino response is a known propagation flake.
+
+    Retryable signals:
+    - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
+      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
+    - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
+    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
+      "Service Unavailable"): Envoy/router failure while upstream or auth
+      filters are mid-reload. Distinct from maas-api JSON errors like
+      {"error":"Failed to create API key"}.
+    """
+    body = (response.text or "").strip()
+    if response.status_code in (401, 403) and not body:
+        return True
+    if response.status_code not in (500, 503):
+        return False
+    if "AUTH_FAILURE" in body:
+        return True
+    if not body or body in (
+        "Internal Server Error",
+        "Internal Server Error.",
+        "Service Unavailable",
+        "Service Unavailable.",
+    ):
+        return True
+    if body.startswith("<") and (
+        "Internal Server Error" in body or "Service Unavailable" in body
+    ):
+        return True
+    return False
+
+
+def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
+    """True when DNS resolution or the TCP connect failed, so no request was sent.
+
+    urllib3's NameResolutionError subclasses NewConnectionError. Read timeouts
+    and connection resets are excluded: the gateway may already have acted on
+    the request, so retrying a POST could repeat it.
+    """
+    reason = exc.args[0] if exc.args else None
+    # requests wraps urllib3's MaxRetryError, which carries the connect error.
+    reason = getattr(reason, "reason", reason)
+    return isinstance(reason, NewConnectionError)
+
+
 def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
-    Retries on:
-    - Empty 403 / empty 401: Envoy has not loaded the AuthPolicy yet (common after
-      MaaSAuthPolicy churn; some gateways return 401 instead of 403).
-    - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
+    See ``_is_transient_gateway_response`` for retryable status/body patterns.
+    Connection errors are retried only when the request was never sent
+    (``_is_connect_failure``), which is safe for POST.
 
     Returns the last response — callers' assertions surface a permanent failure.
     """
@@ -515,19 +578,36 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
     verify = kwargs.pop("verify", TLS_VERIFY)
     r = None
     for attempt in range(1, retries + 1):
-        r = method(url, timeout=timeout, verify=verify, **kwargs)
-        empty_auth_reject = r.status_code in (401, 403) and not r.text.strip()
-        retryable = empty_auth_reject or (
-            r.status_code == 500 and "AUTH_FAILURE" in r.text
-        )
-        if retryable and attempt < retries:
+        try:
+            r = method(url, timeout=timeout, verify=verify, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            if attempt >= retries or not _is_connect_failure(exc):
+                raise
             log.info(
-                "Gateway returned %d (attempt %d/%d), retrying in %ds...",
+                "Gateway connection failed before sending (attempt %d/%d: %s), retrying in %ds...",
+                attempt,
+                retries,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+            continue
+        if _is_transient_gateway_response(r) and attempt < retries:
+            log.info(
+                "Gateway returned %d (attempt %d/%d, body=%.80r), retrying in %ds...",
                 r.status_code,
                 attempt,
                 retries,
+                (r.text or "").strip(),
                 delay,
             )
+            # After the first proxy-style 500/503, re-check AuthPolicy Enforced
+            # so remaining attempts are less likely to hit a mid-reload window.
+            if r.status_code in (500, 503) and attempt == 1:
+                try:
+                    _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
+                except TimeoutError:
+                    pass
             time.sleep(delay)
             continue
         return r
@@ -537,8 +617,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
 
-    Retries empty 403 / Authorino AUTH_FAILURE so callers see the real API
-    response after gateway AuthPolicy propagation, not a transient reject.
+    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500/503s so
+    callers see the real API response after gateway AuthPolicy propagation,
+    not a transient reject.
 
     Args:
         oc_token: OC token for authentication with maas-api
@@ -617,15 +698,23 @@ def _revoke_api_key(oc_token: str, key_id: str):
 # ---------------------------------------------------------------------------
 
 def _apply_cr(cr_dict):
-    subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr_dict), capture_output=True, text=True, check=True)
+    result = _run_oc(["oc", "apply", "-f", "-"], input_text=json.dumps(cr_dict))
+    if result.returncode != 0:
+        meta = cr_dict.get("metadata", {})
+        raise RuntimeError(
+            f"`oc apply` failed for {cr_dict.get('kind')} "
+            f"{meta.get('namespace', '<cluster>')}/{meta.get('name')}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def _delete_cr(kind, name, namespace=None):
     namespace = namespace or _ns()
-    result = subprocess.run(
-        ["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = _run_oc(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"])
+    except subprocess.TimeoutExpired:
+        log.warning("Timed out deleting %s/%s in %s", kind, name, namespace)
+        return
     if result.returncode != 0:
         log.warning("Failed to delete %s/%s in %s: %s", kind, name, namespace, result.stderr.strip())
 
@@ -641,6 +730,9 @@ def _is_transient_kubectl_error(stderr):
         "EOF",
         "temporary failure",
         "network is unreachable",
+        "Unable to connect to the server",
+        # Admission webhook backend unreachable, not a webhook denial.
+        "failed calling webhook",
     ]
     stderr_lower = stderr.lower()
     return any(pattern.lower() in stderr_lower for pattern in transient_patterns)
@@ -652,6 +744,45 @@ def _is_not_found_error(stderr):
     return "notfound" in stderr_lower or "not found" in stderr_lower
 
 
+def _run_oc(cmd, *, input_text=None, timeout=None):
+    """Run an oc/kubectl command, retrying transient API server and network errors.
+
+    Retries while stderr matches ``_is_transient_kubectl_error`` or the process
+    exceeds ``timeout`` (default OC_TIMEOUT), until OC_RETRY_BUDGET is spent.
+    Any other outcome, NotFound included, is returned on the first attempt so
+    callers keep interpreting ``returncode``/``stderr`` themselves. Once the
+    budget is spent, the last result is returned or TimeoutExpired re-raised.
+    """
+    timeout = OC_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + OC_RETRY_BUDGET
+    what = " ".join([os.path.basename(cmd[0]), *cmd[1:3]])
+    attempt = 0
+    while True:
+        attempt += 1
+        delay = min(2 * attempt, 10)
+        try:
+            result = subprocess.run(cmd, input=input_text, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if time.monotonic() + delay >= deadline:
+                raise
+            log.warning("`%s` timed out after %ss (attempt %d), retrying in %ds", what, timeout, attempt, delay)
+        else:
+            if (
+                result.returncode == 0
+                or not _is_transient_kubectl_error(result.stderr or "")
+                or time.monotonic() + delay >= deadline
+            ):
+                return result
+            log.warning(
+                "`%s` hit a transient error (attempt %d), retrying in %ds: %s",
+                what,
+                attempt,
+                delay,
+                result.stderr.strip(),
+            )
+        time.sleep(delay)
+
+
 def _get_cr(kind, name, namespace=None):
     """Get a CR as dict, or None if not found. Retries on transient errors.
 
@@ -661,33 +792,18 @@ def _get_cr(kind, name, namespace=None):
     from true absence.
     """
     namespace = namespace or _ns()
-    max_retries = 3
-    retry_delay = 2
+    result = _run_oc(["oc", "get", kind, name, "-n", namespace, "-o", "json"])
 
-    for attempt in range(max_retries):
-        result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
+    if result.returncode == 0:
+        return json.loads(result.stdout)
 
-        if result.returncode == 0:
-            return json.loads(result.stdout)
+    if _is_not_found_error(result.stderr):
+        return None
 
-        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
-            log.warning(
-                f"Transient kubectl error getting {kind}/{name} (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
-            )
-            time.sleep(retry_delay * (attempt + 1))
-            continue
-
-        # Terminal failure — distinguish not-found from other errors
-        if _is_not_found_error(result.stderr):
-            return None
-
-        log.error(
-            f"Failed to get {kind}/{name} in namespace '{namespace}' after {attempt + 1} attempts. "
-            f"Last error: {result.stderr.strip()}"
-        )
-        raise RuntimeError(
-            f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
-        )
+    log.error(f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}")
+    raise RuntimeError(
+        f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
+    )
 
 
 def _snapshot_cr(kind, name, namespace=None):
@@ -937,6 +1053,7 @@ def _create_test_subscription(
     namespace=None,
     priority=None,
     model_namespace=MODEL_NAMESPACE,
+    unlimited=False,
 ):
     """Create a MaaSSubscription CR for testing.
 
@@ -950,6 +1067,7 @@ def _create_test_subscription(
         namespace: Namespace for the subscription (defaults to _ns())
         priority: Optional spec.priority (higher wins for default API key binding)
         model_namespace: Namespace containing the referenced MaaSModelRefs
+        unlimited: Grant access without a token budget; token_limit and window are ignored
     """
     namespace = namespace or _ns()
     if not isinstance(model_refs, list):
@@ -957,6 +1075,7 @@ def _create_test_subscription(
 
     groups_formatted = [{"name": g} for g in (groups or [])]
 
+    budget = {"unlimited": True} if unlimited else {"tokenRateLimits": [{"limit": token_limit, "window": window}]}
     spec = {
         "owner": {
             "users": users or [],
@@ -966,7 +1085,7 @@ def _create_test_subscription(
             {
                 "name": ref,
                 "namespace": model_namespace,
-                "tokenRateLimits": [{"limit": token_limit, "window": window}],
+                **budget,
             }
             for ref in model_refs
         ],
@@ -1017,6 +1136,7 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     deadline = time.time() + timeout
     last = None
     last_err = None
+    last_auth_recheck = 0.0
     while time.time() < deadline:
         try:
             r = inference_fn(api_key, path=path, extra_headers=extra_headers, model_name=model_name)
@@ -1025,6 +1145,21 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
             if ok:
                 return r
             last = r
+            # Parallel workers can churn maas-gateway-auth; empty 401/403,
+            # AUTH_FAILURE, or proxy-style 500/503 usually means propagation.
+            if _is_transient_gateway_response(r) and time.time() - last_auth_recheck >= 10:
+                remaining = max(0, int(deadline - time.time()))
+                if remaining > 0:
+                    log.info(
+                        "Inference poll got transient %d; re-checking gateway AuthPolicy (%ds left)...",
+                        r.status_code,
+                        remaining,
+                    )
+                    try:
+                        _wait_for_gateway_auth_enforced(timeout=min(60, remaining))
+                    except TimeoutError:
+                        pass
+                    last_auth_recheck = time.time()
         except requests.RequestException as exc:
             last_err = exc
             log.debug(f"Transient request error while polling: {exc}")
@@ -1036,6 +1171,11 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
     err_msg = f"Expected {exp_str} within {timeout}s"
     if last is not None:
         err_msg += f", last status: {last.status_code}"
+        body_preview = (last.text or "").strip()[:200]
+        if body_preview:
+            from multitenancy_helpers import redact_sensitive
+
+            err_msg += f", last body: {redact_sensitive(body_preview, max_length=200)}"
     if last_err is not None:
         err_msg += f", last error: {last_err}"
     if last is None and last_err is None:
@@ -1058,10 +1198,15 @@ def _post(url: str, payload: dict, headers: dict, timeout_sec: int = 45) -> requ
     )
 
 
-def chat(prompt: str, model_v1: str, headers: dict, model_name: str):
+def chat(prompt: str, model_v1: str, headers: dict, model_name: str, *,
+         stream: bool = False, max_tokens: Optional[int] = None):
     url = f"{model_v1}/chat/completions"
     body = {"model": model_name, "messages": [{"role": "user", "content": prompt}]}
-    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY)
+    if max_tokens is not None:
+        body["max_tokens"] = max_tokens
+    if stream:
+        body["stream"] = True
+    return requests.post(url, headers=headers, json=body, timeout=30, verify=TLS_VERIFY, stream=stream)
 
 
 def completions(prompt: str, model_v1: str, headers: dict, model_name: str):
@@ -1332,12 +1477,124 @@ def _wait_for_maas_subscription_phase(name, expected_phase="Active", namespace=N
     cr = _get_cr("maassubscription", name, namespace)
     status = cr.get("status", {}) if cr else {}
     raise TimeoutError(
-        f"MaaSSubscription {name} did not reach phase '{expected_phase}' within {timeout}s "
-        f"(current: phase={status.get('phase')}, modelRefStatuses={len(status.get('modelRefStatuses', []))})"
+        f"MaaSSubscription {namespace}/{name} did not reach {expected_phase!r} within {timeout}s: "
+        f"phase={status.get('phase')}, "
+        f"conditions={status.get('conditions', [])}, "
+        f"modelRefStatuses={status.get('modelRefStatuses', [])}, "
+        f"tokenRateLimitStatuses={status.get('tokenRateLimitStatuses', [])}"
     )
 
 
-def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None, timeout=60):
+def _wait_for_subscription_discovery_ready(name, namespace=None, timeout=90):
+    """Wait until a subscription can support discovery and management APIs.
+
+    A subscription may remain Degraded while its model-wide TRLP is being
+    rebuilt. Discovery and API-key management only require every referenced
+    model to exist and be ready; they do not require rate-limit enforcement.
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    last_status = {}
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            status = cr.get("status", {})
+            last_status = status
+            expected_refs = {
+                (model_ref.get("name"), model_ref.get("namespace"))
+                for model_ref in cr.get("spec", {}).get("modelRefs", [])
+                if isinstance(model_ref, dict)
+            }
+            model_statuses = status.get("modelRefStatuses", [])
+            statuses_by_ref = {}
+            for model_status in model_statuses:
+                model_ref = (
+                    model_status.get("name"),
+                    model_status.get("namespace"),
+                )
+                statuses_by_ref.setdefault(model_ref, []).append(model_status)
+            models_valid = all(
+                bool(statuses_by_ref.get(model_ref))
+                and all(
+                    model_status.get("ready") is True
+                    for model_status in statuses_by_ref[model_ref]
+                )
+                for model_ref in expected_refs
+            )
+            if status.get("phase") in ("Active", "Degraded") and models_valid:
+                log.info(
+                    "MaaSSubscription %s/%s is discovery-ready in phase %s",
+                    namespace,
+                    name,
+                    status.get("phase"),
+                )
+                return cr
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"MaaSSubscription {namespace}/{name} was not discovery-ready within {timeout}s: "
+        f"phase={last_status.get('phase')}, "
+        f"conditions={last_status.get('conditions', [])}, "
+        f"modelRefStatuses={last_status.get('modelRefStatuses', [])}, "
+        f"tokenRateLimitStatuses={last_status.get('tokenRateLimitStatuses', [])}"
+    )
+
+
+def _wait_for_subscription_generation_observed(name, generation, namespace=None, timeout=90):
+    """Wait until the controller has reconciled a MaaSSubscription at ``generation``.
+
+    The controller writes the Ready condition's observedGeneration at the end of
+    every reconcile, after the TRLP step, on success and failure paths alike. A
+    matching value means the controller processed that spec, not that the TRLP
+    step succeeded: callers that need that must check phase and modelRefStatuses
+    on the returned CR. Unlike phase or TRLP readiness, this does not depend on
+    Kuadrant.
+    """
+    namespace = namespace or _ns()
+    deadline = time.time() + timeout
+    cr = None
+    ready = {}
+    observed = None
+
+    while time.time() < deadline:
+        cr = _get_cr("maassubscription", name, namespace)
+        if cr:
+            ready = next(
+                (
+                    c for c in cr.get("status", {}).get("conditions", [])
+                    if c.get("type") == "Ready"
+                ),
+                {},
+            )
+            observed = ready.get("observedGeneration")
+            if observed is not None and observed >= generation:
+                log.info(
+                    "MaaSSubscription %s/%s reconciled at generation %s",
+                    namespace,
+                    name,
+                    observed,
+                )
+                return cr
+        time.sleep(2)
+
+    raise TimeoutError(
+        f"MaaSSubscription {namespace}/{name} was not reconciled at generation "
+        f"{generation} within {timeout}s: "
+        f"current generation={(cr or {}).get('metadata', {}).get('generation')}, "
+        f"Ready observedGeneration={observed}, "
+        f"status={ready.get('status')}, reason={ready.get('reason')}, "
+        f"message={ready.get('message')}"
+    )
+
+
+def _wait_for_subscription_trlp_status(
+    name,
+    expected_ready=True,
+    namespace=None,
+    timeout=60,
+    model=None,
+):
     """Wait for MaaSSubscription's TokenRateLimitPolicy status to reach expected ready state.
 
     Args:
@@ -1345,6 +1602,8 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
         expected_ready: Expected ready state for all TRLPs (True or False)
         namespace: Namespace (defaults to _ns())
         timeout: Maximum wait time in seconds (default: 60)
+        model: Optional model name. When set, only that model's mirrored TRLP
+            status is considered.
 
     Returns:
         The subscription CR dict when all TRLPs reach the expected ready state
@@ -1361,6 +1620,10 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
         if cr:
             status = cr.get("status", {})
             trlp_statuses = status.get("tokenRateLimitStatuses", [])
+            if model is not None:
+                trlp_statuses = [
+                    trlp for trlp in trlp_statuses if trlp.get("model") == model
+                ]
 
             # If we expect ready and there are no TRLPs yet, keep waiting
             if expected_ready and len(trlp_statuses) == 0:
@@ -1382,9 +1645,43 @@ def _wait_for_subscription_trlp_status(name, expected_ready=True, namespace=None
     cr = _get_cr("maassubscription", name, namespace)
     status = cr.get("status", {}) if cr else {}
     trlp_statuses = status.get("tokenRateLimitStatuses", [])
+    if model is not None:
+        trlp_statuses = [
+            trlp for trlp in trlp_statuses if trlp.get("model") == model
+        ]
     raise TimeoutError(
-        f"MaaSSubscription {name} TRLPs did not reach ready={expected_ready} within {timeout}s "
-        f"(current TRLPs: {trlp_statuses})"
+        f"MaaSSubscription {namespace}/{name} TRLPs"
+        f"{f' for model {model}' if model else ''} did not reach ready={expected_ready} "
+        f"within {timeout}s (current TRLPs: {trlp_statuses})"
+    )
+
+
+def _wait_for_subscription_inference_ready(
+    subscription_name,
+    model_name,
+    *,
+    namespace=None,
+    model_namespace=MODEL_NAMESPACE,
+    timeout=SUBSCRIPTION_INFERENCE_READY_TIMEOUT,
+):
+    """Wait for model discovery plus direct and mirrored TRLP enforcement."""
+    namespace = namespace or _ns()
+    _wait_for_subscription_discovery_ready(
+        subscription_name,
+        namespace=namespace,
+        timeout=timeout,
+    )
+    _wait_for_token_rate_limit_policy(
+        model_name,
+        model_namespace=model_namespace,
+        timeout=timeout,
+    )
+    return _wait_for_subscription_trlp_status(
+        subscription_name,
+        model=model_name,
+        expected_ready=True,
+        namespace=namespace,
+        timeout=timeout,
     )
 
 
@@ -1413,13 +1710,18 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     namespace = namespace or _ns()
     deadline = time.time() + timeout
     log.info(f"Waiting for MaaSAuthPolicy {name} to reach phase '{expected_phase}' (timeout: {timeout}s)...")
+    last_snapshot = "not found"
 
     while time.time() < deadline:
         cr = _get_cr("maasauthpolicy", name, namespace)
-        if cr:
+        if cr is None:
+            last_snapshot = "not found"
+        else:
             status = cr.get("status", {})
             phase = status.get("phase")
             auth_policies = status.get("authPolicies", [])
+            ready_count = sum(1 for ap in auth_policies if ap.get("ready") is True)
+            last_snapshot = f"phase={phase}, authPolicies={len(auth_policies)} (ready={ready_count})"
 
             if phase == expected_phase:
                 # No per-model auth policies required — phase match is sufficient for the CR,
@@ -1449,15 +1751,14 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
                         log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}' with {len(auth_policies)} auth policy status(es)")
                         return cr
 
-            log.debug(f"MaaSAuthPolicy {name}: phase={phase}, authPolicies={len(auth_policies)}")
+            log.debug(f"MaaSAuthPolicy {name}: {last_snapshot}")
         time.sleep(2)
 
-    # Timeout - return current state for debugging
-    cr = _get_cr("maasauthpolicy", name, namespace)
-    status = cr.get("status", {}) if cr else {}
+    # Report what the loop last saw: a re-read after the deadline can show a
+    # state the loop never evaluated.
     raise TimeoutError(
         f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
-        f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
+        f"(last seen: {last_snapshot})"
     )
 
 
@@ -1564,6 +1865,28 @@ def _wait_for_cr_absent(kind, name, namespace=None, timeout=30, poll_interval=2)
     )
 
 
+def _delete_crs_and_wait(resources, timeout=60):
+    """Delete a set of CRs, then wait until every deletion is complete."""
+    resources = list(resources)
+    for kind, name, namespace in resources:
+        _delete_cr(kind, name, namespace=namespace)
+    for kind, name, namespace in resources:
+        _wait_for_cr_absent(kind, name, namespace=namespace, timeout=timeout)
+
+
+def _delete_governance_and_wait(*, subscriptions=(), auth_policies=(), timeout=60):
+    """Delete subscriptions before auth policies and wait for all finalizers."""
+    resources = [
+        ("maassubscription", name, namespace)
+        for name, namespace in subscriptions
+    ]
+    resources.extend(
+        ("maasauthpolicy", name, namespace)
+        for name, namespace in auth_policies
+    )
+    _delete_crs_and_wait(resources, timeout=timeout)
+
+
 # ---------------------------------------------------------------------------
 # Controller scaling utilities
 # ---------------------------------------------------------------------------
@@ -1586,7 +1909,7 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "maas-controller",
          f"--replicas={replicas}", "-n", namespace],
         check=True,
@@ -1653,7 +1976,7 @@ def _scale_kuadrant_controller(replicas, namespace="kuadrant-system", timeout=60
     log.info(f"Scaling kuadrant-operator to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "kuadrant-operator-controller-manager",
          f"--replicas={replicas}", "-n", namespace],
         check=True,
@@ -1713,6 +2036,7 @@ def _create_llmis(
     gateway_name: str,
     gateway_namespace: str = "openshift-ingress",
     model_name: str = "facebook/opt-125m",
+    scheduler: bool = False,
 ):
     """Create a simulated LLMInferenceService pointing to a specific gateway.
 
@@ -1724,8 +2048,10 @@ def _create_llmis(
         model_name: spec.model.name (the model identity used for BBR/ResolvedModelAlias).
             Defaults to "facebook/opt-125m"; override to test model-identity-collision
             scenarios where two LLMISs intentionally share a model name.
+        scheduler: Serve the model through an InferencePool and its endpoint picker
+            instead of a plain Service.
     """
-    _apply_cr({
+    llmis = {
         "apiVersion": "serving.kserve.io/v1alpha1",
         "kind": "LLMInferenceService",
         "metadata": {
@@ -1793,7 +2119,10 @@ def _create_llmis(
                 ]
             },
         },
-    })
+    }
+    if scheduler:
+        llmis["spec"]["router"]["scheduler"] = {}
+    _apply_cr(llmis)
 
 
 def _create_maas_model_ref(name: str, namespace: str, llmis_name: str, *, tenant_ref: Optional[str] = None):

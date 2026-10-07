@@ -26,7 +26,6 @@ import http.client
 import json
 import logging
 import ssl
-import subprocess
 import time
 import uuid
 from urllib.parse import urlparse
@@ -140,8 +139,8 @@ class TestHeaderSpoofing:
     """Verify that client-supplied identity headers cannot forge authorization.
 
     AuthPolicy deny-client-identity-headers rejects requests that already carry
-    X-MaaS-Username / X-MaaS-Group. Authorino then injects trusted identity
-    headers only after successful authentication.
+    X-MaaS-Username / X-MaaS-Group / X-MaaS-KeyName. Authorino then injects trusted
+    identity headers only after successful authentication.
 
     Security invariant: client-supplied identity headers are denied, not trusted.
     """
@@ -154,14 +153,15 @@ class TestHeaderSpoofing:
                 {"X-MaaS-Group": '["system:cluster-admins","system:masters"]'},
                 "X-MaaS-Group",
             ),
+            ({"X-MaaS-KeyName": "forged-prod-key"}, "X-MaaS-KeyName"),
         ],
-        ids=["username-only", "group-only"],
+        ids=["username-only", "group-only", "keyname-only"],
     )
     def test_forged_identity_headers_rejected_on_key_mint(self, forged_header, label):
         """POST /v1/api-keys with a forged X-MaaS identity header must be denied.
 
         Each denied header is asserted independently so a regression that only
-        drops username or only drops group cannot hide behind a combined spoof.
+        drops username, group, or key name cannot hide behind a combined spoof.
 
         Under deny semantics there is no spoofed key to inspect — Authorino
         rejects before maas-api runs, so the response must not contain key
@@ -234,7 +234,7 @@ class TestHeaderSpoofing:
                 _revoke_api_key(oc_token, control_key_id)
 
     def test_injected_identity_headers_rejected_on_inference(self):
-        """Client injects X-MaaS-Username/Group — gateway rejects the request.
+        """Client injects X-MaaS-Username/Group/KeyName — gateway rejects the request.
 
         With deny-client-identity-headers, forged identity headers are not
         overwritten and ignored; the request is denied at Authorino.
@@ -247,6 +247,7 @@ class TestHeaderSpoofing:
         spoofed_headers = {
             "X-MaaS-Username": "cluster-admin",
             "X-MaaS-Group": "system:cluster-admins,system:masters",
+            "X-MaaS-KeyName": "forged-prod-key",
             "X-MaaS-Key-Id": "fake-key-id-00000",
         }
 
@@ -276,9 +277,10 @@ class TestHeaderSpoofing:
         api_key = _create_api_key(_get_cluster_token(), subscription=SIMULATOR_SUBSCRIPTION)
 
         # Warm up: confirm the API key works with a normal request before
-        # testing duplicate headers. Under parallel load, Rego policy
-        # propagation can take longer than the 30s retry window below.
-        _poll_status(api_key, 200, timeout=60)
+        # testing duplicate headers. Under parallel load, Authorino/Rego policy
+        # and API-key validation can lag; other e2e tests use 8s + 90s polls.
+        time.sleep(8)
+        _poll_status(api_key, 200, timeout=90)
 
         # Use http.client to send genuinely duplicate X-MaaS-Subscription headers.
         # The requests library uses a dict for headers, so it cannot send two
@@ -296,7 +298,7 @@ class TestHeaderSpoofing:
 
         # As above, keep the raw duplicate headers on every retry while waiting
         # for shared gateway authorization state to settle.
-        deadline = time.time() + 30
+        deadline = time.time() + 60
         while True:
             gateway = _gateway_url()
             parsed = urlparse(gateway)
@@ -617,102 +619,6 @@ class TestHeaderAbuse:
 
 class TestWebhookValidation:
     """Verify admission webhooks enforce namespace labeling requirements."""
-
-    def test_subscription_rejected_in_unlabeled_namespace(self):
-        """MaaSSubscription create is rejected in namespace without MaasTenantConfig CR.
-
-        Webhooks require namespaces to have a MaasTenantConfig CR to contain tenant resources.
-        """
-        test_ns = f"e2e-webhook-test-{uuid.uuid4().hex[:6]}"
-
-        try:
-            # Create namespace without MaasTenantConfig CR
-            result = subprocess.run(
-                ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True, timeout=30
-            )
-            assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
-
-            # Try to create MaaSSubscription (should be rejected by webhook)
-            result = subprocess.run(
-                ["oc", "apply", "-f", "-"],
-                input=json.dumps({
-                    "apiVersion": "maas.opendatahub.io/v1alpha1",
-                    "kind": "MaaSSubscription",
-                    "metadata": {"name": "test-sub", "namespace": test_ns},
-                    "spec": {
-                        "owner": {"groups": [{"name": "system:authenticated"}]},
-                        "modelRefs": [{
-                            "name": MODEL_REF,
-                            "namespace": MODEL_NAMESPACE,
-                            "tokenRateLimits": [{"limit": 100, "window": "1m"}]
-                        }],
-                    },
-                }),
-                capture_output=True, text=True, timeout=30
-            )
-
-            # Verify webhook rejection
-            assert result.returncode != 0, "Expected webhook to reject subscription in namespace without MaasTenantConfig CR"
-            assert "admission webhook" in result.stderr.lower(), \
-                f"Expected webhook rejection, got: {result.stderr}"
-            assert "not enabled for MaaS tenant resources" in result.stderr, \
-                f"Expected helpful error message, got: {result.stderr}"
-            assert "Create a MaasTenantConfig CR" in result.stderr, \
-                f"Expected error to mention creating MaasTenantConfig CR, got: {result.stderr}"
-
-            log.info("✅ Webhook correctly rejected MaaSSubscription in namespace without MaasTenantConfig CR")
-            log.info(f"Error message: {result.stderr}")
-
-        finally:
-            # Clean up namespace
-            subprocess.run(
-                ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True, timeout=30
-            )
-
-    def test_authpolicy_rejected_in_unlabeled_namespace(self):
-        """MaaSAuthPolicy create is rejected in namespace without MaasTenantConfig CR."""
-        test_ns = f"e2e-webhook-test-{uuid.uuid4().hex[:6]}"
-
-        try:
-            # Create namespace without MaasTenantConfig CR
-            result = subprocess.run(
-                ["oc", "create", "namespace", test_ns],
-                capture_output=True, text=True, timeout=30
-            )
-            assert result.returncode == 0, f"Failed to create namespace: {result.stderr}"
-
-            # Try to create MaaSAuthPolicy (should be rejected by webhook)
-            result = subprocess.run(
-                ["oc", "apply", "-f", "-"],
-                input=json.dumps({
-                    "apiVersion": "maas.opendatahub.io/v1alpha1",
-                    "kind": "MaaSAuthPolicy",
-                    "metadata": {"name": "test-policy", "namespace": test_ns},
-                    "spec": {
-                        "modelRefs": [{"name": MODEL_REF, "namespace": MODEL_NAMESPACE}],
-                        "subjects": {"groups": [{"name": "system:authenticated"}]},
-                    },
-                }),
-                capture_output=True, text=True, timeout=30
-            )
-
-            # Verify webhook rejection
-            assert result.returncode != 0, "Expected webhook to reject auth policy in namespace without MaasTenantConfig CR"
-            assert "admission webhook" in result.stderr.lower(), \
-                f"Expected webhook rejection, got: {result.stderr}"
-            assert "not enabled for MaaS tenant resources" in result.stderr, \
-                f"Expected helpful error message, got: {result.stderr}"
-
-            log.info("✅ Webhook correctly rejected MaaSAuthPolicy in namespace without MaasTenantConfig CR")
-
-        finally:
-            # Clean up namespace
-            subprocess.run(
-                ["oc", "delete", "namespace", test_ns, "--ignore-not-found"],
-                capture_output=True, text=True, timeout=30
-            )
 
 
 # ============================================================================

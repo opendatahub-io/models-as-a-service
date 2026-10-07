@@ -140,6 +140,16 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		return false, fmt.Errorf("decode EnvoyFilter manifest: %w", err)
 	}
 
+	captureUser := tenant.Spec.Telemetry != nil &&
+		tenant.Spec.Telemetry.Logs != nil &&
+		ptr.Deref(tenant.Spec.Telemetry.Logs.CaptureUser, false)
+	if captureUser {
+		log.Info("WARNING: User identity usage logs enabled - ensure GDPR/privacy compliance", "field", "logs.captureUser", "value", true)
+		if err := tenantreconcile.PatchUsageLogsUserID(ef); err != nil {
+			return false, fmt.Errorf("patch user_id into EnvoyFilter: %w", err)
+		}
+	}
+
 	collectorAddress := fmt.Sprintf("usage-logs-collector.%s.svc", r.MonitoringNamespace)
 	if err := tenantreconcile.PatchUsageLogsClusterAddress(ef, collectorAddress); err != nil {
 		return false, fmt.Errorf("patch collector address in EnvoyFilter: %w", err)
@@ -149,11 +159,17 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 		return false, fmt.Errorf("patch workloadSelector gateway in EnvoyFilter: %w", err)
 	}
 
+	// Attribute usage records to the per-tenant workload namespace, not the gateway
+	// namespace the EnvoyFilter itself lives in.
+	if err := tenantreconcile.PatchUsageLogsServiceNamespace(ef, tenant.GetNamespace()); err != nil {
+		return false, fmt.Errorf("patch service.namespace in EnvoyFilter: %w", err)
+	}
+
 	ef.SetName(efName)
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
 
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
 			return false, nil
@@ -163,7 +179,8 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 
 	log.V(1).Info("applied usage-logs EnvoyFilter",
 		"name", efName, "namespace", r.GatewayNamespace,
-		"gateway", gatewayName, "collector", collectorAddress)
+		"gateway", gatewayName, "collector", collectorAddress,
+		"serviceNamespace", tenant.GetNamespace())
 	return true, nil
 }
 

@@ -87,12 +87,27 @@ Enables Authorino to make HTTPS calls to `maas-api` for API key validation and m
 # Configure SSL environment variables for outbound HTTPS
 # Note: The Authorino CR doesn't support envVars, so we patch the deployment directly
 kubectl -n kuadrant-system set env deployment/authorino \
-  SSL_CERT_FILE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt \
-  REQUESTS_CA_BUNDLE=/etc/ssl/certs/openshift-service-ca/service-ca-bundle.crt
+  SSL_CERT_FILE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt \
+  REQUESTS_CA_BUNDLE=/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
 ```
 
 !!! note
-    OpenShift's service-ca-operator automatically populates the ConfigMap with the cluster CA certificate.
+    OpenShift projects the `openshift-service-ca.crt` ConfigMap, which service-ca-operator
+    populates with the service CA bundle, into every pod's service account volume at
+    `/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt`. This is the bundle that
+    signs the `maas-api` serving certificate, and it requires no extra volume mount on the
+    Authorino deployment — which matters because authorino-operator manages that deployment
+    and reverts volumes added to it.
+
+    Verify the file is actually present in the pod rather than relying on the absence of
+    errors. Authorino is written in Go, and Go's `crypto/x509` ignores an unreadable
+    `SSL_CERT_FILE` and falls back to the system trust store, so a path that does not exist
+    produces no certificate errors in the logs while never trusting the service CA:
+
+    ```bash
+    kubectl -n kuadrant-system exec deploy/authorino -- \
+      ls -l /var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt
+    ```
 
 ### Gateway → maas-api TLS (DestinationRule)
 

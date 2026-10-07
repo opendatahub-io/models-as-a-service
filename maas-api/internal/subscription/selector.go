@@ -3,6 +3,7 @@ package subscription
 import (
 	"errors"
 	"fmt"
+	"math"
 	"slices"
 	"sort"
 	"strings"
@@ -141,7 +142,7 @@ func (s *Selector) GetAllAccessible(groups []string, username string) ([]*Select
 		}
 
 		// Exclude subscriptions being deleted
-		if sub.DeletionTimestamp != nil {
+		if subscriptionIsDeleting(&sub) {
 			continue
 		}
 
@@ -207,6 +208,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		for _, sub := range subscriptions {
 			qualifiedName := fmt.Sprintf("%s/%s", sub.Namespace, sub.Name)
 			if qualifiedName == requestedSubscription {
+				if subscriptionIsDeleting(&sub) {
+					continue
+				}
 				if !userHasAccess(&sub, username, groups) {
 					return nil, &AccessDeniedError{Subscription: requestedSubscription}
 				}
@@ -228,6 +232,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 		if !strings.Contains(requestedSubscription, "/") {
 			for _, sub := range subscriptions {
 				if sub.Name != requestedSubscription {
+					continue
+				}
+				if subscriptionIsDeleting(&sub) {
 					continue
 				}
 				if !userHasAccess(&sub, username, groups) {
@@ -253,6 +260,9 @@ func (s *Selector) Select(groups []string, username string, requestedSubscriptio
 	// Branch 2: Auto-selection
 	var accessibleSubs []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			// If model is specified, only include subscriptions that contain that model
 			if requestedModel != "" && !subscriptionIncludesModel(&sub, requestedModel) {
@@ -302,6 +312,9 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	var accessible []subscription
 	for _, sub := range subscriptions {
+		if subscriptionIsDeleting(&sub) {
+			continue
+		}
 		if userHasAccess(&sub, username, groups) {
 			accessible = append(accessible, sub)
 		}
@@ -313,6 +326,10 @@ func (s *Selector) SelectHighestPriority(groups []string, username string) (*Sel
 
 	sortSubscriptionsByPriority(accessible)
 	return toResponse(&accessible[0]), nil
+}
+
+func subscriptionIsDeleting(sub *subscription) bool {
+	return sub != nil && sub.DeletionTimestamp != nil
 }
 
 // loadSubscriptions fetches and parses MaaSSubscription resources.
@@ -420,6 +437,10 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		for _, modelRef := range modelRefs {
 			if modelMap, ok := modelRef.(map[string]any); ok {
 				ref := parseModelRef(modelMap)
+				if ref.Unlimited {
+					// The priority tie-break prefers the most generous subscription.
+					sub.MaxLimit = math.MaxInt64
+				}
 				for _, trl := range ref.TokenRateLimits {
 					if trl.Limit > sub.MaxLimit {
 						sub.MaxLimit = trl.Limit
@@ -524,6 +545,11 @@ func parseModelRef(modelMap map[string]any) ModelRefInfo {
 				ref.TokenRateLimits = append(ref.TokenRateLimits, trl)
 			}
 		}
+	}
+	// The CRD makes unlimited and tokenRateLimits mutually exclusive. Should a ref
+	// bypass that validation, the controller enforces the declared limits.
+	if unlimited, ok := modelMap["unlimited"].(bool); ok && unlimited && len(ref.TokenRateLimits) == 0 {
+		ref.Unlimited = true
 	}
 	if billingRate, found, _ := unstructured.NestedMap(modelMap, "billingRate"); found {
 		br := &BillingRate{}
@@ -700,15 +726,16 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		}
 	}
 
-	// Check if this model has tokenRateLimits defined in the subscription spec
-	hasRateLimits := len(ref.TokenRateLimits) > 0
+	// Unlimited models depend on their TRLP too: without it the gateway default
+	// deny applies, which the user would see as an unexplained 429.
+	needsTRLP := ref.Unlimited || len(ref.TokenRateLimits) > 0
 
-	// If model doesn't have rate limits defined, allow inference (no TRLP to check)
-	if !hasRateLimits {
+	// If the model has no token budget at all, allow inference (no TRLP to check)
+	if !needsTRLP {
 		return nil
 	}
 
-	// Model has rate limits defined - verify TRLP is ready
+	// Model is governed by a TRLP - verify it is ready
 	for _, trlp := range sub.TokenRateLimitStatuses {
 		if trlp.Model == ref.Name {
 			if !trlp.Ready {
@@ -724,7 +751,7 @@ func checkModelHealth(sub *subscription, requestedModel string) error {
 		}
 	}
 
-	// Model has rate limits defined but TRLP status missing - fail closed
+	// Model is governed by a TRLP but its status is missing - fail closed
 	return &ModelUnhealthyError{
 		Subscription: sub.Name,
 		Phase:        sub.Phase,
@@ -868,6 +895,9 @@ func toResponse(sub *subscription) *SelectResponse {
 func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
 	resp := toResponse(sub)
 	resp.ResolvedModel = resolvedModel
+	if sub != nil {
+		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
+	}
 	return resp
 }
 
