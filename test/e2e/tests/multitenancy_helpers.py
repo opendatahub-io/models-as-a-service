@@ -55,6 +55,7 @@ ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 ANNOTATION_PAYLOAD_PROCESSING_TYPE = "maas.opendatahub.io/payload-processing-type"
 PAYLOAD_PROCESSING_TYPE_PRAXIS = "praxis"
+PAYLOAD_PROCESSING_TYPE_IPP = "ipp"
 
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 
@@ -939,17 +940,20 @@ def payload_processing_type_from_env() -> Optional[str]:
     value = os.environ.get("E2E_PAYLOAD_PROCESSING_TYPE", "").strip()
     if not value:
         return None
-    if value != PAYLOAD_PROCESSING_TYPE_PRAXIS:
+    if value not in (PAYLOAD_PROCESSING_TYPE_PRAXIS, PAYLOAD_PROCESSING_TYPE_IPP):
         raise RuntimeError(
             f"Unsupported E2E_PAYLOAD_PROCESSING_TYPE={value!r}; "
-            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r}"
+            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r} or {PAYLOAD_PROCESSING_TYPE_IPP!r}"
         )
     return value
 
 
-def ensure_payload_processing_type_on_tenant_config(tenant_namespace: str) -> None:
-    """Patch MaasTenantConfig when nightly (or local) opts all tenants into praxis."""
-    payload_type = payload_processing_type_from_env()
+def ensure_payload_processing_type_on_tenant_config(
+    tenant_namespace: str, payload_type: Optional[str] = None
+) -> None:
+    """Patch MaasTenantConfig when nightly (or local) opts tenants into a payload backend."""
+    if payload_type is None:
+        payload_type = payload_processing_type_from_env()
     if not payload_type:
         return
     current = _oc_run(
@@ -1029,7 +1033,12 @@ def bridge_tenant_owned_by_aitenant(case: dict[str, str]):
     return _predicate
 
 
-def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool = False) -> None:
+def bootstrap_aitenant_tenant(
+    case: dict[str, str],
+    *,
+    use_default_gateway: bool = False,
+    payload_processing_type: Optional[str] = None,
+) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
         wait_for_gateway_programmed(case["gateway_name"])
@@ -1042,7 +1051,9 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),
     )
-    ensure_payload_processing_type_on_tenant_config(case["tenant_ns"])
+    ensure_payload_processing_type_on_tenant_config(
+        case["tenant_ns"], payload_type=payload_processing_type
+    )
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(

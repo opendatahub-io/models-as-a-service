@@ -133,5 +133,5 @@ type MaaSAuthPolicyList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSAuthPolicy{}, &MaaSAuthPolicyList{})
+	register(&MaaSAuthPolicy{}, &MaaSAuthPolicyList{})
 }

@@ -121,7 +121,7 @@ func TestMaaSSubscriptionReconciler_GroupByIdenticalRate(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	for _, name := range []string{"sub-a", "sub-b", "sub-c", "sub-d"} {
 		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
 		if _, err := r.Reconcile(t.Context(), req); err != nil {
@@ -205,7 +205,7 @@ func TestMaaSSubscriptionReconciler_RateEditMovesGroup(t *testing.T) {
 		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 		Build()
 
-	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 	reqA := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-a", Namespace: namespace}}
 	reqB := ctrl.Request{NamespacedName: types.NamespacedName{Name: "sub-b", Namespace: namespace}}
 	for _, req := range []ctrl.Request{reqA, reqB} {
@@ -319,7 +319,7 @@ func TestMaaSSubscriptionReconciler_GroupingGrowsWithDistinctRates(t *testing.T)
 			WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
 			WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
 			Build()
-		r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+		r := &MaaSSubscriptionReconciler{Client: c, APIReader: c, Scheme: scheme}
 		for _, name := range names {
 			req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
 			if _, err := r.Reconcile(t.Context(), req); err != nil {

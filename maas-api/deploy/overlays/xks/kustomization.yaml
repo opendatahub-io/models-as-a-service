@@ -109,3 +109,14 @@ patches:
       - op: replace
         path: /spec/template/spec/volumes/2/secret/optional
         value: true
+
+  # The cleanup image (ubi-minimal) runs as root. OpenShift's restricted SCC assigns a
+  # non-root UID, but xKS has none, so runAsNonRoot alone makes the kubelet refuse the
+  # container (CreateContainerConfigError). Run as the same UID as the maas images.
+  - target:
+      kind: CronJob
+      name: maas-api-key-cleanup
+    patch: |
+      - op: add
+        path: /spec/jobTemplate/spec/template/spec/securityContext/runAsUser
+        value: 1001

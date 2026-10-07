@@ -96,6 +96,7 @@ func TestLoad_EnvironmentVariables(t *testing.T) {
 		"PORT",
 		"TLS_CERT", "TLS_KEY", "TLS_SELF_SIGNED",
 		"METRICS_PORT", "METRICS_SECURE", "METRICS_CERT_DIR",
+		"API_KEY_DELETION_RETENTION_DAYS",
 	}
 
 	for _, tt := range tests {
@@ -457,4 +458,44 @@ func TestHandleDeprecatedFlags(t *testing.T) {
 			t.Errorf("expected Address ':8443', got %q", cfg.Address)
 		}
 	})
+}
+
+func TestValidateAPIKeyDeletionRetention(t *testing.T) {
+	base := Config{
+		DBConnectionURL:           "postgresql://localhost/test",
+		APIKeyMaxExpirationDays:   30,
+		AccessCheckTimeoutSeconds: 15,
+		MetricsPort:               9090,
+		MaaSSubscriptionNamespace: "models-as-a-service",
+		TenantName:                "test-tenant",
+	}
+
+	defaultConfig := base
+	if err := defaultConfig.Validate(); err != nil {
+		t.Fatalf("default retention validation failed: %v", err)
+	}
+	if defaultConfig.APIKeyDeletionRetentionDays != defaultAPIKeyDeletionRetentionDays {
+		t.Fatalf("default retention = %d, want %d", defaultConfig.APIKeyDeletionRetentionDays, defaultAPIKeyDeletionRetentionDays)
+	}
+
+	customConfig := base
+	customConfig.APIKeyDeletionRetentionDays = 30
+	if err := customConfig.Validate(); err != nil {
+		t.Fatalf("custom retention validation failed: %v", err)
+	}
+	if customConfig.APIKeyDeletionRetentionDays != 30 {
+		t.Fatalf("custom retention = %d, want 30", customConfig.APIKeyDeletionRetentionDays)
+	}
+
+	invalidConfig := base
+	invalidConfig.APIKeyDeletionRetentionDays = -1
+	if err := invalidConfig.Validate(); err == nil || !strings.Contains(err.Error(), "API_KEY_DELETION_RETENTION_DAYS") {
+		t.Fatalf("negative retention validation error = %v", err)
+	}
+
+	tooLargeConfig := base
+	tooLargeConfig.APIKeyDeletionRetentionDays = maxAPIKeyDeletionRetentionDays + 1
+	if err := tooLargeConfig.Validate(); err == nil || !strings.Contains(err.Error(), "at most") {
+		t.Fatalf("too-large retention validation error = %v", err)
+	}
 }

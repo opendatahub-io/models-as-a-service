@@ -65,7 +65,6 @@ from test_helper import (
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_subscription_discovery_ready,
-    _wait_for_subscription_inference_ready,
     _wait_for_subscription_trlp_status,
     _wait_for_model_ready,
     _wait_for_token_rate_limit_policy,
@@ -169,7 +168,7 @@ def _worker_models_context(request):
     globals()["_create_test_subscription"] = create_subscription
     globals()["_get_auth_policies_for_model"] = get_auth_policies
     globals()["_get_subscriptions_for_model"] = get_subscriptions
-    # Gateway auth re-checks (Enforced waits, retry after a proxy 500) must target
+    # Gateway auth re-checks (Enforced waits, retry after a proxy 500/503) must target
     # the worker tenant's gateway AuthPolicy, not the default one.
     test_helper.GATEWAY_AUTH_POLICY_NAME = context.gateway_authpolicy_name
 
@@ -756,6 +755,8 @@ class TestModelsEndpoint:
                 text=True,
                 check=True,
             )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
+            _wait_for_gateway_auth_enforced()
 
             # Create subscription with the SAME model ref TWICE (guaranteed duplicates)
             log.info(f"Creating subscription with {MODEL_REF} listed twice (to test deduplication)")
@@ -792,12 +793,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            _wait_for_subscription_inference_ready(
-                subscription_name,
-                MODEL_REF,
-                namespace=maas_ns,
-                model_namespace=MODEL_NAMESPACE,
-            )
+            # /v1/models only needs model discovery. Requiring direct and
+            # mirrored TRLP enforcement here makes this catalog test depend on
+            # an unrelated rate-limit condition while the gateway is rebuilding
+            # policies for the duplicate model refs.
+            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-dedup-test-key", subscription=subscription_name)
@@ -1587,7 +1587,8 @@ class TestModelsEndpoint:
         but that subscription is later deleted. The gateway injects X-MaaS-Subscription
         from the key, but the subscription no longer exists.
 
-        Expected: HTTP 403 with error type: permission_error
+        Expected: HTTP 403. The gateway may reject the revoked key before the
+        request reaches maas-api, in which case the response body is empty.
         """
         ns = _ns()
         auth_policy_name = "e2e-api-key-deleted-sub-auth"
@@ -1631,13 +1632,7 @@ class TestModelsEndpoint:
             assert r.status_code == 403, \
                 f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
 
-            data = r.json()
-            assert "error" in data, "Response missing 'error' field"
-            error = data["error"]
-            assert error.get("type") == "permission_error", \
-                f"Expected error type 'permission_error', got {error.get('type')}"
-
-            log.info(f"✅ API key with deleted subscription → {r.status_code} (permission_error)")
+            log.info(f"✅ API key with deleted subscription → {r.status_code}")
 
         finally:
             # subscription_name already deleted

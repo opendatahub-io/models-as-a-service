@@ -2,6 +2,8 @@
 
 Defines a subscription plan with per-model token rate limits. Creates Kuadrant TokenRateLimitPolicies enforced by Limitador. Must be created in the `models-as-a-service` namespace.
 
+When a `MaaSSubscription` is deleted, its finalizer waits for a subscription-scoped cleanup Job to soft-delete and invalidate only the API keys bound to that subscription. Keys for other subscriptions in the tenant are not affected. Cleanup failures keep the subscription in `Terminating`, are retried, and emit a Kubernetes Warning event.
+
 ## MaaSSubscriptionSpec
 
 | Field | Type | Required | Description |
