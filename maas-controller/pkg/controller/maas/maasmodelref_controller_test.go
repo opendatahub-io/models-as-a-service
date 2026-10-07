@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -2069,7 +2069,7 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 		WithObjects(modelA, modelB).
 		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
 		Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
@@ -2096,7 +2096,7 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	setModelIdentityCondition(model, []string{"model-b"})
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model).Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
@@ -2115,7 +2115,7 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
 }
 
-func assertRecordedEvent(t *testing.T, recorder *record.FakeRecorder, want string) {
+func assertRecordedEvent(t *testing.T, recorder *events.FakeRecorder, want string) {
 	t.Helper()
 	select {
 	case event := <-recorder.Events:

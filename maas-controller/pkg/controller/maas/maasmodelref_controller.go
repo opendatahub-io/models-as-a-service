@@ -37,7 +37,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -74,7 +74,7 @@ type MaaSModelRefReconciler struct {
 	AITenantNamespace string
 
 	// Recorder emits Kubernetes events for model identity conflict warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 func (r *MaaSModelRefReconciler) gatewayName() string {
@@ -657,7 +657,7 @@ func (r *MaaSModelRefReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	ctx := context.Background()
 
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-modelref-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-modelref-controller")
 	}
 
 	if err := mgr.GetFieldIndexer().IndexField(ctx, &maasv1alpha1.MaaSModelRef{}, modelRefNameIndex, modelRefNameIndexer); err != nil {

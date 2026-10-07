@@ -30,6 +30,7 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
 	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -40,7 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -65,11 +66,13 @@ type MaaSSubscriptionReconciler struct {
 	Scheme *runtime.Scheme
 	// APIReader bypasses the cache for cleanup Job reads. The controller does
 	// not watch Jobs and therefore must not require list/watch permission.
+	// Finalizer cleanup also lists InferenceObjectives with it, so an objective
+	// the cache has not seen yet is not missed.
 	APIReader client.Reader
 	// AppNamespace is where per-tenant maas-api Services and cleanup Jobs run.
 	AppNamespace string
 	// Recorder emits Kubernetes events for API-key cleanup and InferenceObjective failures.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 
 	// DefaultTenantNamespace is the legacy single-tenant namespace (default
 	// "models-as-a-service"). Used together with the AITenant label to decide
@@ -90,6 +93,7 @@ type MaaSSubscriptionReconciler struct {
 }
 
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/finalizers,verbs=update
@@ -915,7 +919,7 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 		if err != nil {
 			log.Error(err, "failed to revoke subscription API keys; will retry", "subscription", subscription.Name)
 			if r.Recorder != nil {
-				r.Recorder.Eventf(subscription, corev1.EventTypeWarning, "APIKeyCleanupFailed",
+				r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupFailed", "InvalidateAPIKeys",
 					"failed to invalidate API keys for subscription %s: %v", subscription.Name, err)
 			}
 			return ctrl.Result{}, err
@@ -973,7 +977,7 @@ func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx contex
 			log.Info("Skipping subscription API-key cleanup because the tenant configuration no longer exists",
 				"subscription", subscription.Namespace+"/"+subscription.Name)
 			if r.Recorder != nil {
-				r.Recorder.Eventf(subscription, corev1.EventTypeWarning, "APIKeyCleanupSkipped",
+				r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
 					"Skipping API-key cleanup for MaaSSubscription %s/%s because its tenant configuration no longer exists",
 					subscription.Namespace, subscription.Name)
 			}
@@ -1203,7 +1207,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		return errors.New("application namespace is required for MaaSSubscription cleanup")
 	}
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-subscription-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-subscription-controller")
 	}
 	// Register field indexer for efficient lookup of MaaSSubscriptions by model reference.
 	// This avoids cluster-wide scans when finding subscriptions for a specific model.
@@ -1225,10 +1229,6 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("failed to setup field indexer for MaaSSubscription: %w", err)
-	}
-
-	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-subscription-controller")
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -1278,13 +1278,13 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)
 	}
 
-	// Watch generated InferenceObjectives (metadata only) so edits and deletions are
-	// reverted. If the CRD is not registered at startup, the InferenceObjective pass is
+	// Watch generated InferenceObjectives so edits and deletions are reverted. Reconcile
+	// reads them through the same cache. If the CRD is not registered at startup, the InferenceObjective pass is
 	// skipped until it appears.
 	ioExists := crdExists(context.Background(), mgr.GetAPIReader(), inferenceObjectiveCRD)
 	r.inferenceObjectivesUnavailable.Store(!ioExists)
 	if ioExists {
-		b = b.WatchesMetadata(inferenceObjectiveMetadata(),
+		b = b.Watches(&llmdv1alpha2.InferenceObjective{},
 			handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
 			builder.WithPredicates(ownedInferenceObjectivePredicate()),
 		)
@@ -1370,7 +1370,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if !ioExists {
 		if err := registerWatchWhenCRDEstablished(c, mgr, inferenceObjectiveCRD, func() source.Source {
-			return source.Kind(mgr.GetCache(), client.Object(inferenceObjectiveMetadata()),
+			return source.Kind(mgr.GetCache(), client.Object(&llmdv1alpha2.InferenceObjective{}),
 				handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
 				ownedInferenceObjectivePredicate(),
 			)

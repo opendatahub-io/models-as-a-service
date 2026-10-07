@@ -9,6 +9,7 @@ import time
 
 import pytest
 
+from multitenancy_helpers import extproc_deployment_uses_praxis
 from test_helper import MAAS_API_DEPLOYMENT_NAMESPACE, _apply_cr, _ns
 
 _OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
@@ -392,9 +393,15 @@ class TestTenantLifecycle:
 
         Covers distinct `spec.payloadProcessing.resources` and
         `spec.payloadPreProcessing.resources` values so a shared default cannot
-        falsely satisfy both assertions. Works for legacy IPP (maas-controller)
-        and Praxis (ai-gateway-controller) ownership of the Deployments.
+        falsely satisfy both assertions. Applies only while maas-controller owns
+        the Deployments (legacy IPP); AIGC praxis-extproc does not honor these
+        MaasTenantConfig resource fields today.
         """
+        if extproc_deployment_uses_praxis("payload-processing"):
+            pytest.skip(
+                "default payload-processing is praxis-extproc; "
+                "MaasTenantConfig.spec.payloadProcessing.resources is MaaS IPP-only"
+            )
         st = _wait_tenant_ready()
         assert st is not None, "MaasTenantConfig not Ready; skip workload checks."
         phase = st.get("phase")

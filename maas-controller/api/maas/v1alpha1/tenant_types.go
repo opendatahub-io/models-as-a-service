@@ -274,5 +274,5 @@ type TenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Tenant{}, &TenantList{})
+	register(&Tenant{}, &TenantList{})
 }
