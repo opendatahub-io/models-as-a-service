@@ -34,11 +34,14 @@ import (
 	utiltls "github.com/openshift/controller-runtime-common/pkg/tls"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	netwv1 "k8s.io/api/networking/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	extv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
@@ -838,6 +841,82 @@ func (c managerTLSConfig) registerWatcher(mgr ctrl.Manager, cancel context.Cance
 	}
 }
 
+type cacheParams struct {
+	controllerNamespace   string
+	infraNamespace        string
+	monitoringNamespace   string
+	aitenantNamespace     string
+	gatewayNamespace      string
+	subscriptionNamespace string
+	enableTenantDiscovery bool
+	subscriptionNSExists  bool
+}
+
+// buildCacheOptions configures per-type informer scoping so the controller only caches
+// the Kubernetes resources it actually needs. Without this, controller-runtime defaults
+// to caching every instance of each watched type cluster-wide, which causes OOM on
+// production clusters with hundreds of namespaces and thousands of Deployments/ConfigMaps/CRDs.
+// See RHOAIENG-90683 / GH#1413.
+func buildCacheOptions(p cacheParams) cache.Options {
+	infraNsCfg := map[string]cache.Config{p.infraNamespace: {}}
+
+	// --- MaaS CRs: scoped per mode ---
+	maasNsCfg := map[string]cache.Config{p.subscriptionNamespace: {}}
+	if p.enableTenantDiscovery || !p.subscriptionNSExists {
+		maasNsCfg = map[string]cache.Config{cache.AllNamespaces: {}}
+	}
+
+	// --- Deployment: only the controller's own + infra (for teardown check) ---
+	deployNsCfg := uniqueNamespaceConfigs(p.controllerNamespace, p.infraNamespace)
+
+	// --- ConfigMap: monitoring (usage-logs) + aitenant (gateway claims) ---
+	configMapNsCfg := uniqueNamespaceConfigs(p.monitoringNamespace, p.aitenantNamespace)
+
+	// --- Gateway: only in gateway namespace ---
+	gatewayNsCfg := map[string]cache.Config{p.gatewayNamespace: {}}
+
+	// --- NetworkPolicy: all platform namespaces where NPs are managed ---
+	networkPolicyNsCfg := uniqueNamespaceConfigs(
+		p.monitoringNamespace,
+		p.infraNamespace,
+		p.subscriptionNamespace,
+		p.gatewayNamespace,
+		p.controllerNamespace,
+	)
+
+	return cache.Options{
+		ByObject: map[client.Object]cache.ByObject{
+			&maasv1alpha1.MaasTenantConfig{}: {Namespaces: maasNsCfg},
+			&maasv1alpha1.Tenant{}:           {Namespaces: maasNsCfg},
+			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: maasNsCfg},
+			&maasv1alpha1.MaaSSubscription{}: {Namespaces: maasNsCfg},
+			&corev1.Secret{}:                 {Namespaces: infraNsCfg},
+			&appsv1.Deployment{}:             {Namespaces: deployNsCfg},
+			&corev1.ConfigMap{}:              {Namespaces: configMapNsCfg},
+			&gatewayapiv1.Gateway{}:          {Namespaces: gatewayNsCfg},
+			&netwv1.NetworkPolicy{}:          {Namespaces: networkPolicyNsCfg},
+			&rbacv1.ClusterRoleBinding{}: {
+				Label: labels.SelectorFromSet(labels.Set{
+					"app.kubernetes.io/managed-by": "maas-controller",
+				}),
+			},
+			// Namespace is intentionally unscoped: tenant namespace discovery watches
+			// need to see label additions on any namespace.
+		},
+	}
+}
+
+// uniqueNamespaceConfigs builds a deduped Namespaces map, skipping empty strings.
+func uniqueNamespaceConfigs(namespaces ...string) map[string]cache.Config {
+	m := make(map[string]cache.Config, len(namespaces))
+	for _, ns := range namespaces {
+		if ns != "" {
+			m[ns] = cache.Config{}
+		}
+	}
+	return m
+}
+
 // buildMetricsServerOptions configures the controller-runtime metrics endpoint.
 // When secureMetrics is true, metrics are served over HTTPS with authn/authz
 // filters and the cluster TLS profile applied (plus NextProtos).
@@ -1105,36 +1184,18 @@ func main() {
 		setupLog.Error(err, "unable to inspect subscription namespace", "namespace", maasSubscriptionNamespace)
 		os.Exit(1)
 	}
-	nsCfg := map[string]cache.Config{maasSubscriptionNamespace: {}}
-	// maas-db-config lives in the infrastructure namespace (where maas-api runs).
-	infraNsCfg := map[string]cache.Config{infraNamespace: {}}
-	cacheOpts := cache.Options{
-		ByObject: map[client.Object]cache.ByObject{
-			// MaasTenantConfig CRs are watched cluster-wide to support AITenant-created tenants in any namespace.
-			// TODO: Replace with proper namespace discovery from S1 when merged.
-			&maasv1alpha1.MaasTenantConfig{}: {},
-			&maasv1alpha1.Tenant{}:           {},
-			&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: nsCfg},
-			&maasv1alpha1.MaaSSubscription{}: {Namespaces: nsCfg},
-			// Restrict the Secret informer to the infrastructure namespace (where maas-db-config lives)
-			// to avoid caching cluster-wide Secrets.
-			&corev1.Secret{}: {Namespaces: infraNsCfg},
-		},
-	}
+	cacheOpts := buildCacheOptions(cacheParams{
+		controllerNamespace:   controllerNamespace,
+		infraNamespace:        infraNamespace,
+		monitoringNamespace:   monitoringNamespace,
+		aitenantNamespace:     aitenantNamespace,
+		gatewayNamespace:      gatewayNamespace,
+		subscriptionNamespace: maasSubscriptionNamespace,
+		enableTenantDiscovery: enableTenantNamespaceDiscovery,
+		subscriptionNSExists:  defaultSubscriptionNamespaceExists,
+	})
 	setupLog.Info("watching namespace for MaaS CRs", "namespace", maasSubscriptionNamespace)
 	if enableTenantNamespaceDiscovery || !defaultSubscriptionNamespaceExists {
-		allNamespacesCfg := map[string]cache.Config{cache.AllNamespaces: {}}
-		cacheOpts = cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&maasv1alpha1.MaasTenantConfig{}: {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.Tenant{}:           {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.MaaSAuthPolicy{}:   {Namespaces: allNamespacesCfg},
-				&maasv1alpha1.MaaSSubscription{}: {Namespaces: allNamespacesCfg},
-				// Keep Secret informer scoped to the infra namespace even in multi-tenant mode —
-				// maas-db-config always lives in the infra namespace regardless of tenant count.
-				&corev1.Secret{}: {Namespaces: infraNsCfg},
-			},
-		}
 		setupLog.Info("watching MaaS CRs across all namespaces",
 			"defaultNamespace", maasSubscriptionNamespace,
 			"defaultNamespaceExists", defaultSubscriptionNamespaceExists,
@@ -1307,6 +1368,7 @@ func main() {
 	if err := (&maas.LifecycleReconciler{
 		Client:                      mgr.GetClient(),
 		Scheme:                      mgr.GetScheme(),
+		APIReader:                   mgr.GetAPIReader(),
 		DeploymentName:              "maas-controller",
 		DeploymentNS:                controllerNamespace,
 		TenantSubscriptionNamespace: maasSubscriptionNamespace,
