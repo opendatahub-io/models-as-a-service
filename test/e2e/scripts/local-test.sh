@@ -47,10 +47,16 @@ fi
 
 # ─── Python venv ────────────────────────────────────────────────────────────
 
+# shellcheck source=ensure_e2e_python.sh
+source "$SCRIPT_DIR/ensure_e2e_python.sh"
 VENV_DIR="${E2E_DIR}/.venv"
+if [[ -d "$VENV_DIR" ]] && ! "$VENV_DIR/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+  echo "Recreating e2e venv (existing interpreter is older than Python 3.10)..."
+  rm -rf "$VENV_DIR"
+fi
 if [[ ! -d "$VENV_DIR" ]]; then
-  echo "Creating Python venv..."
-  python3 -m venv "$VENV_DIR" --upgrade-deps
+  echo "Creating Python venv ($E2E_PYTHON)..."
+  "$E2E_PYTHON" -m venv "$VENV_DIR" --upgrade-deps
 fi
 # shellcheck disable=SC1091
 source "$VENV_DIR/bin/activate"

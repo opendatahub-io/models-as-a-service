@@ -29,6 +29,10 @@
 #   MAAS_API_IMAGE - Custom MaaS API image (optional)
 #   MAAS_CONTROLLER_IMAGE - Custom MaaS controller image (optional)
 #   AI_GATEWAY_OPERATOR_IMAGE - Custom ai-gateway-operator image (optional, requires DEPLOY_MODE=operator)
+#   AI_GATEWAY_CONTROLLER_IMAGE - AIGC manager image; unset defaults to
+#                                quay.io/opendatahub/odh-ai-gateway-controller:latest (main after AIGC #91).
+#                                Set to empty to skip companion install.
+#   AIGC_GIT_URL / AIGC_GIT_REF - Optional overrides for deploy-aigc-companion.sh (defaults live in that script)
 #   DEPLOY_MODE           - kustomize (default) or operator
 #   POLICY_ENGINE - Rate-limiting policy engine (default: rhcl)
 #   RHCL_STARTING_CSV - Optional RHCL operator startingCSV pin
@@ -74,6 +78,13 @@ EXTERNAL_OIDC=${EXTERNAL_OIDC:-false}
 export MAAS_API_IMAGE=${MAAS_API_IMAGE:-}
 export MAAS_CONTROLLER_IMAGE=${MAAS_CONTROLLER_IMAGE:-}
 export AI_GATEWAY_OPERATOR_IMAGE=${AI_GATEWAY_OPERATOR_IMAGE:-}
+# Default to AIGC main (Konflux :latest after AIGC #91). odh-stable lags that merge.
+# Unset → install companion; explicit empty → skip.
+if [[ -z "${AI_GATEWAY_CONTROLLER_IMAGE+x}" ]]; then
+    export AI_GATEWAY_CONTROLLER_IMAGE="quay.io/opendatahub/odh-ai-gateway-controller:latest"
+else
+    export AI_GATEWAY_CONTROLLER_IMAGE
+fi
 export OPERATOR_CATALOG=${OPERATOR_CATALOG:-}
 export OPERATOR_IMAGE=${OPERATOR_IMAGE:-}
 DEPLOY_MODE=${DEPLOY_MODE:-kustomize}
@@ -367,6 +378,13 @@ else
     phase_mark deploy_platform start
     source "${SCRIPT_DIR}/deploy-platform.sh"
     phase_mark deploy_platform end
+
+    if [[ -n "${AI_GATEWAY_CONTROLLER_IMAGE:-}" ]]; then
+        print_header "Installing AIGC companion (praxis dataplane)"
+        phase_mark deploy_aigc start
+        bash "${SCRIPT_DIR}/deploy-aigc-companion.sh"
+        phase_mark deploy_aigc end
+    fi
 
     print_header "Deploying Models"
     phase_mark deploy_models start

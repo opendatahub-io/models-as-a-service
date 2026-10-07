@@ -24,7 +24,7 @@ const (
 	// AITenantKind is the API kind for tenant bootstrap.
 	AITenantKind = "AITenant"
 
-	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.
+	// AITenantConditionReady indicates whether the tenant bootstrap resources are reconciled.1
 	AITenantConditionReady = "Ready"
 )
 
@@ -42,8 +42,9 @@ const (
 // network-admin-provisioned Gateway reference, the MaaS tenant config object,
 // and tenant-admin Roles.
 //
-// Praxis tenants (ai-gateway-controller owns payload processing) opt out of
-// maas-controller IPP via metadata.annotations["maas.opendatahub.io/payload-processing-type"]="praxis".
+// Payload processing defaults to praxis (ai-gateway-controller). Opt into
+// maas-controller legacy IPP via MaasTenantConfig annotation
+// maas.opendatahub.io/payload-processing-type=ipp.
 //
 // The AITenant name is used as a suffix for per-tenant maas-api resources
 // (e.g., "maas-api-{tenant-name}"). To fit within the Kubernetes 63-character
@@ -76,6 +77,15 @@ type AITenantSpec struct {
 	// controller-created tenant-admin Roles instead.
 	// +kubebuilder:validation:Optional
 	RBAC *AITenantRBACConfig `json:"rbac,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies as the platform-admin
+	// baseline for this tenant. The referenced policies resolve in the accepted
+	// tenant target namespace (status.tenantNamespace) and apply to every
+	// authorized request; lower scopes add to this baseline and cannot remove it.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // AITenantGatewayRef references the existing Gateway API Gateway for this tenant.
@@ -149,5 +159,5 @@ type AITenantList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&AITenant{}, &AITenantList{})
+	register(&AITenant{}, &AITenantList{})
 }

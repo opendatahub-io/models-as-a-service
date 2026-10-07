@@ -52,6 +52,11 @@ var inferenceExternalModelGVK = schema.GroupVersionKind{
 // externalModelHandler implements BackendHandler for kind "ExternalModel".
 type externalModelHandler struct {
 	r *MaaSModelRefReconciler
+
+	// notReadyReason and notReadyMessage carry the gateway's rejection from
+	// ReconcileRoute to the RuntimeReady condition.
+	notReadyReason  maasv1alpha1.ConditionReason
+	notReadyMessage string
 }
 
 // ReconcileRoute validates the HTTPRoute for an external model and populates status.
@@ -167,7 +172,8 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	}
 
 	// Only Accepted is checked. Any route status read here has to go through
-	// acceptedRouteParents: the HTTPRoute watch drops every other status write.
+	// acceptedRouteParents or routeRejections: the HTTPRoute watch drops every other
+	// status write.
 	if gatewayFound {
 		gatewayAccepted = acceptedRouteParents(route).Has(types.NamespacedName{Name: expectedGatewayName, Namespace: expectedGatewayNamespace})
 	}
@@ -187,11 +193,24 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	}
 
 	if !gatewayAccepted {
-		log.Info("HTTPRoute references correct gateway but not yet accepted and programmed",
+		if rejected, ok := routeRejections(route)[types.NamespacedName{Name: expectedGatewayName, Namespace: expectedGatewayNamespace}]; ok {
+			log = log.WithValues("gatewayReason", rejected.Reason, "gatewayMessage", rejected.Message)
+			message := fmt.Sprintf("Gateway %s/%s has not accepted HTTPRoute %s/%s (%s)",
+				expectedGatewayNamespace, expectedGatewayName, routeNS, routeName, rejected.Reason)
+			if rejected.Message != "" {
+				message += ": " + rejected.Message
+			}
+			h.notReadyReason = maasv1alpha1.ReasonNotAccepted
+			h.notReadyMessage = truncateConditionMessage(message)
+		}
+		log.Info("HTTPRoute references correct gateway but the gateway has not accepted it",
 			"routeName", routeName, "namespace", routeNS, "model", model.Name)
 		model.Status.HTTPRouteName = routeName
 		model.Status.HTTPRouteNamespace = routeNS
-		// Don't set gateway/hostname fields until route is accepted
+		// Clear what an earlier acceptance set: Status treats a gateway name as ready.
+		model.Status.HTTPRouteGatewayName = ""
+		model.Status.HTTPRouteGatewayNamespace = ""
+		model.Status.HTTPRouteHostnames = nil
 		return nil
 	}
 
@@ -209,9 +228,9 @@ func (h *externalModelHandler) ReconcileRoute(ctx context.Context, log logr.Logg
 	return nil
 }
 
-// acceptedRouteParents returns the parents reporting Accepted=True in the route status,
-// with an omitted parentRef namespace defaulting to the route's. This is the only route
-// status MaaSModelRef reconcile reads, so the HTTPRoute watch filters on it as well.
+// acceptedRouteParents returns the parents reporting Accepted=True in the route status.
+// MaaSModelRef reconcile decides ExternalModel readiness on it, so the HTTPRoute watch
+// filters on it as well.
 func acceptedRouteParents(route *gatewayapiv1.HTTPRoute) sets.Set[types.NamespacedName] {
 	accepted := sets.New[types.NamespacedName]()
 	for _, parent := range route.Status.Parents {
@@ -220,13 +239,47 @@ func acceptedRouteParents(route *gatewayapiv1.HTTPRoute) sets.Set[types.Namespac
 		}) {
 			continue
 		}
-		ns := route.Namespace
-		if parent.ParentRef.Namespace != nil {
-			ns = string(*parent.ParentRef.Namespace)
-		}
-		accepted.Insert(types.NamespacedName{Name: string(parent.ParentRef.Name), Namespace: ns})
+		accepted.Insert(routeParentGateway(route, parent.ParentRef))
 	}
 	return accepted
+}
+
+// routeRejection is the reason and message of a gateway's Accepted=False condition.
+type routeRejection struct {
+	Reason, Message string
+}
+
+// routeRejections returns the gateways that reject the route and accept it on no other
+// listener. Accepted=Unknown means the gateway has not decided yet, so it is not a
+// rejection, and a gateway with several rejecting entries keeps the first. MaaSModelRef
+// reconcile reports these on a not-ready model, so the HTTPRoute watch filters on them
+// as well. Istio joins the messages of several rejecting listeners in no fixed order, so
+// such a route can pass the watch on a status rewrite that changes nothing.
+func routeRejections(route *gatewayapiv1.HTTPRoute) map[types.NamespacedName]routeRejection {
+	accepted := acceptedRouteParents(route)
+	rejections := map[types.NamespacedName]routeRejection{}
+	for _, parent := range route.Status.Parents {
+		cond := apimeta.FindStatusCondition(parent.Conditions, string(gatewayapiv1.RouteConditionAccepted))
+		if cond == nil || cond.Status != metav1.ConditionFalse {
+			continue
+		}
+		gateway := routeParentGateway(route, parent.ParentRef)
+		if _, seen := rejections[gateway]; seen || accepted.Has(gateway) {
+			continue
+		}
+		rejections[gateway] = routeRejection{Reason: cond.Reason, Message: cond.Message}
+	}
+	return rejections
+}
+
+// routeParentGateway returns the gateway a route parent status entry is for, with an
+// omitted parentRef namespace defaulting to the route's.
+func routeParentGateway(route *gatewayapiv1.HTTPRoute, ref gatewayapiv1.ParentReference) types.NamespacedName {
+	ns := route.Namespace
+	if ref.Namespace != nil {
+		ns = string(*ref.Namespace)
+	}
+	return types.NamespacedName{Name: string(ref.Name), Namespace: ns}
 }
 
 // ippExternalModelRouteName returns the HTTPRoute name the inference ExternalModel
@@ -251,6 +304,11 @@ func (h *externalModelHandler) Status(ctx context.Context, log logr.Logger, mode
 	}
 
 	return endpoint, true, nil
+}
+
+// NotReadyReason reports the gateway's rejection of the model's HTTPRoute, if ReconcileRoute found one.
+func (h *externalModelHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return h.notReadyReason, h.notReadyMessage
 }
 
 // GetModelEndpoint returns the shared gateway base URL for the ExternalModel.

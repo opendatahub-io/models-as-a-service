@@ -34,7 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	"knative.dev/pkg/apis"
 	duckv1 "knative.dev/pkg/apis/duck/v1"
@@ -47,6 +47,7 @@ import (
 	gatewayapiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	maasv1alpha1 "github.com/opendatahub-io/models-as-a-service/maas-controller/api/maas/v1alpha1"
+	"github.com/opendatahub-io/models-as-a-service/maas-controller/pkg/modelnaming"
 )
 
 var (
@@ -66,6 +67,9 @@ func (f *fakeHandler) ReconcileRoute(_ context.Context, _ logr.Logger, _ *maasv1
 }
 func (f *fakeHandler) Status(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, bool, error) {
 	return f.endpoint, f.ready, nil
+}
+func (f *fakeHandler) NotReadyReason() (maasv1alpha1.ConditionReason, string) {
+	return "", ""
 }
 func (f *fakeHandler) GetModelEndpoint(_ context.Context, _ logr.Logger, _ *maasv1alpha1.MaaSModelRef) (string, error) {
 	return f.endpoint, nil
@@ -993,6 +997,18 @@ func TestHTTPRouteChangedForModelRef(t *testing.T) {
 	oneListenerRejected := twoListeners.DeepCopy()
 	oneListenerRejected.Status.Parents[1].Conditions[0].Status = metav1.ConditionFalse
 	sameNamespaceGateway := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].ParentRef.Namespace = nil })
+	rejectedWith := func(reason gatewayapiv1.RouteConditionReason, message string) *gatewayapiv1.HTTPRoute {
+		return changed(func(r *gatewayapiv1.HTTPRoute) {
+			r.Status.Parents[0].Conditions[0].Status = metav1.ConditionFalse
+			r.Status.Parents[0].Conditions[0].Reason = string(reason)
+			r.Status.Parents[0].Conditions[0].Message = message
+		})
+	}
+	pending := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents[0].Conditions[0].Status = metav1.ConditionUnknown })
+	noStatus := changed(func(r *gatewayapiv1.HTTPRoute) { r.Status.Parents = nil })
+	rejected := rejectedWith(gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace llm-ns")
+	oneListenerRejectedReworded := oneListenerRejected.DeepCopy()
+	oneListenerRejectedReworded.Status.Parents[1].Conditions[0].Message = "listener https does not allow this route"
 
 	p := httpRouteChangedForModelRef()
 	if !p.Create(event.CreateEvent{Object: base}) {
@@ -1038,12 +1054,64 @@ func TestHTTPRouteChangedForModelRef(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "parent without Accepted=True is dropped",
+			name: "parent pending acceptance is dropped",
 			old:  base,
 			new: changed(func(r *gatewayapiv1.HTTPRoute) {
-				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionFalse)))
+				r.Status.Parents = append(r.Status.Parents, parent("other-gateway", istio, condition(accepted, metav1.ConditionUnknown)))
 			}),
 			want: false,
+		},
+		{
+			name: "rejection lastTransitionTime and observedGeneration rewrite is dropped",
+			old:  rejected,
+			new: func() *gatewayapiv1.HTTPRoute {
+				r := rejected.DeepCopy()
+				r.Status.Parents[0].Conditions[0].LastTransitionTime = metav1.Unix(200, 0)
+				r.Status.Parents[0].Conditions[0].ObservedGeneration = 2
+				return r
+			}(),
+			want: false,
+		},
+		{
+			name: "kuadrant policy-affected parent on a rejected route is dropped",
+			old:  rejected,
+			new: func() *gatewayapiv1.HTTPRoute {
+				r := rejected.DeepCopy()
+				r.Status.Parents = append(r.Status.Parents, parent(testGatewayName, kuadrant,
+					condition("kuadrant.io/AuthPolicyAffected", metav1.ConditionTrue)))
+				return r
+			}(),
+			want: false,
+		},
+		{
+			name: "message change on a rejecting listener of the accepting gateway is dropped",
+			old:  oneListenerRejected,
+			new:  oneListenerRejectedReworded,
+			want: false,
+		},
+		{
+			name: "rejection of a route the gateway never accepted passes",
+			old:  noStatus,
+			new:  rejected,
+			want: true,
+		},
+		{
+			name: "rejection going back to pending passes",
+			old:  rejected,
+			new:  pending,
+			want: true,
+		},
+		{
+			name: "rejection reason change passes",
+			old:  rejected,
+			new:  rejectedWith(gatewayapiv1.RouteReasonNoMatchingListenerHostname, "no listener allows routes from namespace llm-ns"),
+			want: true,
+		},
+		{
+			name: "rejection message change passes",
+			old:  rejected,
+			new:  rejectedWith(gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace other-ns"),
+			want: true,
 		},
 		{
 			name: "annotation change is dropped",
@@ -1404,6 +1472,160 @@ func TestGovernance_BothFailures(t *testing.T) {
 	}
 	assertCondition(t, got.Status.Conditions, "GovernanceAttached", metav1.ConditionFalse, "NoPairingFound")
 	assertCondition(t, got.Status.Conditions, "RuntimeReady", metav1.ConditionFalse, "RuntimeHealthFailure")
+}
+
+func TestExternalModel_Reconcile_GatewayStopsAcceptingReportsReason(t *testing.T) {
+	model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+	externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+	route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", testGatewayName, testGatewayNamespace)
+	route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+
+	r, c := newTestReconciler(model, externalModelCR, route)
+	req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+	reconcileModel := func() *maasv1alpha1.MaaSModelRef {
+		t.Helper()
+		if _, err := r.Reconcile(t.Context(), req); err != nil {
+			t.Fatalf("Reconcile: %v", err)
+		}
+		got := &maasv1alpha1.MaaSModelRef{}
+		if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+			t.Fatalf("Get MaaSModelRef: %v", err)
+		}
+		return got
+	}
+	setAccepted := func(cond metav1.Condition) {
+		t.Helper()
+		if err := c.Get(t.Context(), client.ObjectKeyFromObject(route), route); err != nil {
+			t.Fatalf("Get HTTPRoute: %v", err)
+		}
+		cond.Type = string(gatewayapiv1.RouteConditionAccepted)
+		route.Status.Parents[0].Conditions[0] = cond
+		if err := c.Status().Update(t.Context(), route); err != nil {
+			t.Fatalf("Update HTTPRoute: %v", err)
+		}
+	}
+
+	got := reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+
+	setAccepted(metav1.Condition{
+		Status:  metav1.ConditionFalse,
+		Reason:  string(gatewayapiv1.RouteReasonNotAllowedByListeners),
+		Message: "no listener allows routes from namespace default",
+	})
+	got = reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionFalse, string(maasv1alpha1.ReasonNotAccepted))
+
+	setAccepted(metav1.Condition{Status: metav1.ConditionTrue, Reason: string(gatewayapiv1.RouteReasonAccepted)})
+	got = reconcileModel()
+	assertCondition(t, got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady, metav1.ConditionTrue, string(maasv1alpha1.ReasonRuntimeHealthy))
+}
+
+func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
+	gatewayParent := func(conds ...metav1.Condition) gatewayapiv1.RouteParentStatus {
+		gwNS := gatewayapiv1.Namespace(testGatewayNamespace)
+		return gatewayapiv1.RouteParentStatus{
+			ParentRef:  gatewayapiv1.ParentReference{Name: gatewayapiv1.ObjectName(testGatewayName), Namespace: &gwNS},
+			Conditions: conds,
+		}
+	}
+	onListener := func(section gatewayapiv1.SectionName, parent gatewayapiv1.RouteParentStatus) gatewayapiv1.RouteParentStatus {
+		parent.ParentRef.SectionName = &section
+		return parent
+	}
+	accepted := func(status metav1.ConditionStatus, reason gatewayapiv1.RouteConditionReason, message string) metav1.Condition {
+		return metav1.Condition{Type: string(gatewayapiv1.RouteConditionAccepted), Status: status, Reason: string(reason), Message: message}
+	}
+	notAllowed := accepted(metav1.ConditionFalse, gatewayapiv1.RouteReasonNotAllowedByListeners, "no listener allows routes from namespace default")
+	const rejectedPrefix = "Gateway openshift-ingress/maas-default-gateway has not accepted HTTPRoute default/maas-gpt-4o"
+
+	tests := []struct {
+		name        string
+		parents     []gatewayapiv1.RouteParentStatus
+		wantStatus  metav1.ConditionStatus
+		wantReason  maasv1alpha1.ConditionReason
+		wantMessage string
+	}{
+		{
+			name:        "rejected",
+			parents:     []gatewayapiv1.RouteParentStatus{gatewayParent(notAllowed)},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NotAllowedByListeners): no listener allows routes from namespace default",
+		},
+		{
+			name: "rejected without a message",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(accepted(metav1.ConditionFalse, gatewayapiv1.RouteReasonNoMatchingListenerHostname, "")),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NoMatchingListenerHostname)",
+		},
+		{
+			name: "policy status ahead of the rejection",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(metav1.Condition{Type: "kuadrant.io/AuthPolicyAffected", Status: metav1.ConditionTrue, Reason: "Accepted"}),
+				gatewayParent(notAllowed),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonNotAccepted,
+			wantMessage: rejectedPrefix + " (NotAllowedByListeners): no listener allows routes from namespace default",
+		},
+		{
+			name: "gateway has not decided yet",
+			parents: []gatewayapiv1.RouteParentStatus{
+				gatewayParent(accepted(metav1.ConditionUnknown, gatewayapiv1.RouteReasonPending, "Waiting for controller")),
+			},
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthFailure,
+			wantMessage: "Backend is not ready",
+		},
+		{
+			name:        "no status from the gateway",
+			wantStatus:  metav1.ConditionFalse,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthFailure,
+			wantMessage: "Backend is not ready",
+		},
+		{
+			name: "rejected on one listener, accepted on another",
+			parents: []gatewayapiv1.RouteParentStatus{
+				onListener("http", gatewayParent(notAllowed)),
+				onListener("https", gatewayParent(accepted(metav1.ConditionTrue, gatewayapiv1.RouteReasonAccepted, ""))),
+			},
+			wantStatus:  metav1.ConditionTrue,
+			wantReason:  maasv1alpha1.ReasonRuntimeHealthy,
+			wantMessage: "Backend is healthy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			model := newExternalModel("gpt-4o", "default", "openai", "api.openai.com")
+			externalModelCR := newExternalModelCR("gpt-4o", "default", "openai", "api.openai.com")
+			route := newHTTPRouteWithGateway(modelnaming.ExternalModelResourceName("gpt-4o"), "default", testGatewayName, testGatewayNamespace)
+			route.Spec.Hostnames = []gatewayapiv1.Hostname{"maas.example.com"}
+			route.Status.Parents = tt.parents
+
+			r, c := newTestReconciler(model, externalModelCR, route)
+			req := ctrl.Request{NamespacedName: client.ObjectKeyFromObject(model)}
+			if _, err := r.Reconcile(t.Context(), req); err != nil {
+				t.Fatalf("Reconcile: %v", err)
+			}
+			got := &maasv1alpha1.MaaSModelRef{}
+			if err := c.Get(t.Context(), req.NamespacedName, got); err != nil {
+				t.Fatalf("Get MaaSModelRef: %v", err)
+			}
+
+			cond := findCondition(got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady)
+			if cond == nil {
+				t.Fatal("RuntimeReady condition not found")
+			}
+			if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
+				t.Errorf("RuntimeReady = %s/%s %q, want %s/%s %q",
+					cond.Status, cond.Reason, cond.Message, tt.wantStatus, tt.wantReason, tt.wantMessage)
+			}
+		})
+	}
 }
 
 // TestGovernance_NoAdminCRNamesInStatus verifies that no subscription or auth policy
@@ -1847,7 +2069,7 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 		WithObjects(modelA, modelB).
 		WithStatusSubresource(&maasv1alpha1.MaaSModelRef{}).
 		Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), modelA)
@@ -1874,7 +2096,7 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	setModelIdentityCondition(model, []string{"model-b"})
 
 	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(model).Build()
-	recorder := record.NewFakeRecorder(1)
+	recorder := events.NewFakeRecorder(1)
 	r := &MaaSModelRefReconciler{Client: c, Scheme: scheme, Recorder: recorder}
 
 	r.checkModelIdentityConflict(context.Background(), ctrl.Log.WithName("test"), model)
@@ -1893,7 +2115,7 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
 }
 
-func assertRecordedEvent(t *testing.T, recorder *record.FakeRecorder, want string) {
+func assertRecordedEvent(t *testing.T, recorder *events.FakeRecorder, want string) {
 	t.Helper()
 	select {
 	case event := <-recorder.Events:

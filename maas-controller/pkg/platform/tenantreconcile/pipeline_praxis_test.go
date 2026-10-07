@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -43,6 +44,14 @@ func praxisTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
 	utilruntime.Must(gwapiv1.Install(scheme))
 	return scheme
+}
+
+// newSSAFakeClientBuilder returns a fake client builder that can server-side apply NetworkPolicies.
+// controller-runtime's fake client (v0.23+) lists NetworkPolicy as having a status
+// subresource, which the built-in apply schema does not have, so applying one fails with
+// "expected objects with types from the same schema". The deduced type converter avoids it.
+func newSSAFakeClientBuilder(scheme *runtime.Scheme) *fake.ClientBuilder {
+	return fake.NewClientBuilder().WithScheme(scheme).WithTypeConverters(managedfields.NewDeducedTypeConverter())
 }
 
 func platformOverlayManifestPath(t *testing.T) string {
@@ -110,18 +119,23 @@ func runPlatformTestClient(
 	recordApplied *[]appliedResource,
 ) client.Client {
 	t.Helper()
-	builder := fake.NewClientBuilder().WithScheme(scheme).WithObjects(seed...)
+	builder := newSSAFakeClientBuilder(scheme).WithObjects(seed...)
 	if recordApplied != nil {
 		builder = builder.WithInterceptorFuncs(interceptor.Funcs{
-			Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
-				if u, ok := obj.(*unstructured.Unstructured); ok {
+			Apply: func(ctx context.Context, c client.WithWatch, obj runtime.ApplyConfiguration, opts ...client.ApplyOption) error {
+				// client.ApplyConfigurationFromUnstructured wraps the Unstructured object.
+				if u, ok := obj.(interface {
+					GroupVersionKind() schema.GroupVersionKind
+					GetNamespace() string
+					GetName() string
+				}); ok {
 					*recordApplied = append(*recordApplied, appliedResource{
 						gvk:       u.GroupVersionKind(),
 						namespace: u.GetNamespace(),
 						name:      u.GetName(),
 					})
 				}
-				return c.Patch(ctx, obj, patch, opts...)
+				return c.Apply(ctx, obj, opts...)
 			},
 		})
 	}
@@ -209,7 +223,7 @@ func TestRunPlatform_PraxisCleansUpExistingIPPResources(t *testing.T) {
 		Source:     "aitenant",
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
 		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ippDeployment, ippEnvoyFilter,
 	).Build()
 
@@ -275,7 +289,7 @@ func TestRunPlatform_PraxisMigrationCleanupSkipsPraxisOwnedResources(t *testing.
 		Source:     "aitenant",
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
 		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), praxisDeployment,
 	).Build()
 
@@ -324,7 +338,7 @@ func TestRunPlatform_PraxisSkipsCleanupAfterMigrationComplete(t *testing.T) {
 		Source:     "aitenant",
 	}
 
-	cl := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
+	cl := newSSAFakeClientBuilder(scheme).WithObjects(
 		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), legacyDeployment,
 	).Build()
 

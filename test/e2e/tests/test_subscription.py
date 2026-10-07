@@ -42,6 +42,7 @@ Environment variables:
 """
 
 import copy
+import hashlib
 import json
 import logging
 import os
@@ -72,6 +73,7 @@ from test_helper import (
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
+    _create_api_key_raw,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -350,13 +352,13 @@ def _wait_for_maas_model_ready(name, namespace=None, timeout=120):
     )
 
 
-def _trlp_limits_matching(limits, subscription_key):
-    """Names of the TRLP limits whose predicate matches subscription_key.
+def _trlp_limits_matching(limits, rate_limit_id):
+    """Names of the TRLP limits whose predicate matches rate_limit_id.
 
     Limits are grouped by rate and named after it (tokens-<limit>-per-<window>),
-    so a subscription is found by its selected_subscription_key clause.
+    so a subscription is found by its selected_subscription_id clause.
     """
-    clause = f'auth.identity.selected_subscription_key == "{subscription_key}"'
+    clause = f'auth.identity.selected_subscription_id == "{rate_limit_id}"'
     return sorted(
         name for name, limit in limits.items()
         if any(clause in (w.get("predicate") or "") for w in limit.get("when") or [])
@@ -849,8 +851,13 @@ UNLIMITED_LIMIT_NAME = "tokens-unlimited"
 
 
 def _subscription_key(subscription_name, model_ref):
-    """auth.identity.selected_subscription_key the TRLP predicates match on."""
+    """Human-readable model-scoped subscription key (auth.identity.selected_subscription_key)."""
     return f"{_ns()}/{subscription_name}@{MODEL_NAMESPACE}/{model_ref}"
+
+
+def _subscription_rate_limit_id(subscription_name, model_ref):
+    """Short SHA-256 ID used in TRLP when-predicates (auth.identity.selected_subscription_id)."""
+    return hashlib.sha256(_subscription_key(subscription_name, model_ref).encode()).hexdigest()[:16]
 
 
 def _server_dry_run_subscription(name, model_ref_budget):
@@ -983,10 +990,10 @@ class TestUnlimitedSubscription:
                 timeout=180,
             )
 
-            unlimited_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
+            unlimited_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
             _wait_for_trlp_limits(
                 model_ref,
-                lambda limits: unlimited_key in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
+                lambda limits: unlimited_id in limits.get(UNLIMITED_LIMIT_NAME, {}).get("when", [{}])[0].get("predicate", ""),
             )
 
             oc_token = _get_cluster_token()
@@ -1053,10 +1060,10 @@ class TestUnlimitedSubscription:
     @pytest.mark.serial
     def test_unlimited_subscriptions_share_one_wasm_limit(self, mixed_model):
         model_ref, _ = mixed_model
-        first_key = _subscription_key(self.UNLIMITED_SUB, model_ref)
-        second_key = _subscription_key(self.SECOND_UNLIMITED_SUB, model_ref)
+        first_id = _subscription_rate_limit_id(self.UNLIMITED_SUB, model_ref)
+        second_id = _subscription_rate_limit_id(self.SECOND_UNLIMITED_SUB, model_ref)
 
-        plugin_config = _wait_for_wasm_plugin_config_containing(first_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(first_id)
         before = _trlp_actions_per_action_set(plugin_config, model_ref)
         if not before:
             pytest.skip("WasmPlugin actions carry no policy sources (Kuadrant < 1.4)")
@@ -1069,7 +1076,7 @@ class TestUnlimitedSubscription:
             model_namespace=MODEL_NAMESPACE,
             timeout=180,
         )
-        plugin_config = _wait_for_wasm_plugin_config_containing(second_key)
+        plugin_config = _wait_for_wasm_plugin_config_containing(second_id)
 
         after = _trlp_actions_per_action_set(plugin_config, model_ref)
         log.info("WasmPlugin pluginConfig: %d -> %d bytes after a second unlimited subscription",
@@ -1296,15 +1303,14 @@ class TestCascadeDeletion:
             limits = trlp_with_both.get("spec", {}).get("limits", {})
             assert limits, f"TRLP {trlp_name} has no limits defined"
 
-            # Look for both subscriptions in the TRLP limit predicates
-            # Key format: {namespace}/{subscription-name}@{model-namespace}/{model-name}
-            simulator_sub_key = f"{ns}/{SIMULATOR_SUBSCRIPTION}@{MODEL_NAMESPACE}/{MODEL_REF}"
-            second_sub_key = f"{ns}/e2e-second-sub@{MODEL_NAMESPACE}/{MODEL_REF}"
+            # Look for both subscriptions in the TRLP limit predicates (short IDs)
+            simulator_sub_id = _subscription_rate_limit_id(SIMULATOR_SUBSCRIPTION, MODEL_REF)
+            second_sub_id = _subscription_rate_limit_id("e2e-second-sub", MODEL_REF)
 
-            assert _trlp_limits_matching(limits, simulator_sub_key), \
-                f"Original subscription '{simulator_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
-            assert _trlp_limits_matching(limits, second_sub_key), \
-                f"Second subscription '{second_sub_key}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, simulator_sub_id), \
+                f"Original subscription '{simulator_sub_id}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
+            assert _trlp_limits_matching(limits, second_sub_id), \
+                f"Second subscription '{second_sub_id}' not matched by any TRLP limit. Available keys: {list(limits.keys())}"
 
             log.info(f"✅ TRLP contains both subscriptions: {list(limits.keys())}")
 
@@ -1324,12 +1330,12 @@ class TestCascadeDeletion:
             assert limits_after, f"TRLP {trlp_name} has no limits after 2nd subscription deletion"
 
             # Verify original subscription still in TRLP, second subscription removed
-            assert _trlp_limits_matching(limits_after, simulator_sub_key), \
-                f"Original subscription '{simulator_sub_key}' missing after 2nd sub deletion. " \
+            assert _trlp_limits_matching(limits_after, simulator_sub_id), \
+                f"Original subscription '{simulator_sub_id}' missing after 2nd sub deletion. " \
                 f"Available: {list(limits_after.keys())}"
-            assert not _trlp_limits_matching(limits_after, second_sub_key), \
-                f"Deleted subscription '{second_sub_key}' still matched by TRLP limits " \
-                f"{_trlp_limits_matching(limits_after, second_sub_key)}"
+            assert not _trlp_limits_matching(limits_after, second_sub_id), \
+                f"Deleted subscription '{second_sub_id}' still matched by TRLP limits " \
+                f"{_trlp_limits_matching(limits_after, second_sub_id)}"
 
             log.info(f"✅ TRLP rebuilt in-place with only original subscription: {list(limits_after.keys())}")
 
@@ -1374,22 +1380,82 @@ class TestCascadeDeletion:
 
     @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+        """Delete and recreate a subscription without reviving its old API key.
 
         When the last subscription is deleted, AuthPolicy's subscription validation
         fails (no subscriptions found for user) and returns 403 Forbidden before
         the request reaches TokenRateLimitPolicy.
         """
-        api_key = _get_default_api_key()
+        oc_token = _get_cluster_token()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
+
+        # Mint a dedicated key and prove it works before deletion, rather than
+        # relying on the process-cached _get_default_api_key(). An earlier test
+        # in TestCascadeDeletion also deletes SIMULATOR_SUBSCRIPTION, which can
+        # invalidate that cached key before this test starts -- making the 403
+        # checks below pass even if this test's own deletion does nothing.
+        key_response = _create_api_key_raw(
+            oc_token,
+            name=f"e2e-cascade-delete-{uuid.uuid4().hex[:8]}",
+            subscription=SIMULATOR_SUBSCRIPTION,
+        )
+        assert key_response.status_code in (200, 201), (
+            f"failed to create dedicated API key: {key_response.status_code} "
+            f"{key_response.text[:300]}"
+        )
+        key_data = key_response.json()
+        key_id = key_data["id"]
+        api_key = key_data["key"]
+        r = _poll_status(api_key, 200, timeout=30)
+        assert r.status_code == 200, (
+            f"dedicated API key must work before subscription deletion, got {r.status_code}"
+        )
+
+        replacement_key_id = None
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
             # With no subscription, expect 403 from AuthPolicy subscription validation
             r = _poll_status(api_key, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
-        finally:
+
+            # The subscription name may be reused, but the key that was bound to
+            # the deleted subscription must remain invalidated.
             _apply_cr(original)
+            _wait_for_subscription_inference_ready(
+                SIMULATOR_SUBSCRIPTION,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
+            new_key_response = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-subscription-recreated-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert new_key_response.status_code in (200, 201), (
+                f"failed to create API key for recreated subscription: {new_key_response.status_code} "
+                f"{new_key_response.text[:300]}"
+            )
+            new_key_data = new_key_response.json()
+            replacement_key_id = new_key_data["id"]
+            new_api_key = new_key_data["key"]
+            _poll_status(new_api_key, 200, timeout=90)
+            r = _poll_status(api_key, 403, timeout=30)
+            assert r.status_code == 403, (
+                "API key bound to a deleted subscription became usable after the "
+                f"subscription was recreated: {r.status_code}"
+            )
+        finally:
+            _revoke_api_key(oc_token, key_id)
+            if replacement_key_id:
+                _revoke_api_key(oc_token, replacement_key_id)
+            if not _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION):
+                _apply_cr(original)
+            # _wait_for_subscription_inference_ready also re-enforces the TRLP, confirming
+            # the controller has fully reconciled the restored subscription and the maas-api
+            # subscription cache has caught up, preventing flaky failures in subsequent tests.
             _wait_for_subscription_inference_ready(
                 SIMULATOR_SUBSCRIPTION,
                 MODEL_REF,
@@ -2829,6 +2895,7 @@ class TestDegradedSubscriptionFiltering:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name)
 
+    @pytest.mark.serial
     def test_failed_subscription_blocks_inference(self):
         """
         Test: Failed subscription blocks inference via OPA rule.
@@ -2859,6 +2926,17 @@ class TestDegradedSubscriptionFiltering:
 
             cr = _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=60)
 
+            # This test overrides controller-owned status to exercise the gateway
+            # rejection path. Let initial TRLP/discovery reconciliation settle first,
+            # and run serially so a queued reconcile from parallel test activity does
+            # not overwrite the injected Failed phase before the inference request.
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                MODEL_REF,
+                namespace=ns,
+                model_namespace=MODEL_NAMESPACE,
+            )
+
             # Verify it starts as Active
             phase = cr.get("status", {}).get("phase")
             log.info(f"Initial phase: {phase}")
@@ -2881,7 +2959,6 @@ class TestDegradedSubscriptionFiltering:
             import subprocess
             import json
             from datetime import datetime
-
             log.info("Manually patching subscription to Failed phase...")
             patch_data = {
                 "status": {
@@ -2912,14 +2989,15 @@ class TestDegradedSubscriptionFiltering:
                 "-n", ns,
                 "--type=merge",
                 "--subresource=status",
-                "-p", json.dumps(patch_data)
+                "-p", json.dumps(patch_data),
+                "-o", "json",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             assert result.returncode == 0, f"Failed to patch to Failed phase: {result.stderr}"
-
-            # Verify phase is Failed
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            phase = cr.get("status", {}).get("phase")
+            # Read the object returned by the patch itself; a second API request
+            # leaves extra time for any queued controller reconciliation to win.
+            patched_cr = json.loads(result.stdout)
+            phase = patched_cr.get("status", {}).get("phase")
             assert phase == "Failed", f"Expected Failed phase after patch, got {phase}"
             log.info("✅ Subscription patched to Failed phase")
 

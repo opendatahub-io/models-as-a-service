@@ -50,6 +50,16 @@ type MaaSSubscriptionSpec struct {
 	// +kubebuilder:validation:Minimum=-2147483648
 	// +kubebuilder:validation:Maximum=2147483647
 	InferencePriority *int32 `json:"inferencePriority,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies for every model accessed
+	// through this subscription. References resolve in the AITenant target
+	// namespace; a namespace must not be specified on the reference. Selections
+	// are additive with the tenant baseline and cannot remove checks contributed
+	// by another scope.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // OwnerSpec defines the owner of the subscription
@@ -91,6 +101,16 @@ type ModelSubscriptionRef struct {
 	// BillingRate defines the cost per token
 	// +optional
 	BillingRate *BillingRate `json:"billingRate,omitempty"`
+
+	// Guardrails attaches reusable AIGuardrail policies for this specific model
+	// within the subscription. References resolve in the AITenant target
+	// namespace; a namespace must not be specified on the reference. Selections
+	// are additive with the subscription-wide guardrails and every other scope
+	// and cannot remove checks contributed elsewhere.
+	// +optional
+	// +listType=atomic
+	// +kubebuilder:validation:MaxItems=64
+	Guardrails []GuardrailAttachment `json:"guardrails,omitempty"`
 }
 
 // TokenRateLimit defines a token rate limit
@@ -189,5 +209,5 @@ type MaaSSubscriptionList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSSubscription{}, &MaaSSubscriptionList{})
+	register(&MaaSSubscription{}, &MaaSSubscriptionList{})
 }

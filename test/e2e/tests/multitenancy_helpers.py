@@ -26,15 +26,20 @@ from test_helper import (
     MAAS_API_DEPLOYMENT_NAMESPACE,
     MODEL_NAMESPACE,
     MODEL_REF,
+    OC_TIMEOUT,
     SUBSCRIPTION_TRLP_STATUS_TIMEOUT,
     TIMEOUT,
     TLS_VERIFY,
     _apply_cr,
     _delete_cr,
+    _is_transient_gateway_response,
     _ns,
     _request_with_gateway_retry,
+    _run_oc,
     kubectl_curl,
 )
+
+AUTH_REASON_HEADER = "x-ext-auth-reason"
 
 AITENANT_CRD = "aitenants.maas.opendatahub.io"
 AITENANT_KIND = "aitenant"
@@ -50,6 +55,7 @@ ANNOTATION_AITENANT_NAME = "maas.opendatahub.io/aitenant-name"
 ANNOTATION_AITENANT_NAMESPACE = "maas.opendatahub.io/aitenant-namespace"
 ANNOTATION_PAYLOAD_PROCESSING_TYPE = "maas.opendatahub.io/payload-processing-type"
 PAYLOAD_PROCESSING_TYPE_PRAXIS = "praxis"
+PAYLOAD_PROCESSING_TYPE_IPP = "ipp"
 
 DEFAULT_AITENANT_NAME = "models-as-a-service"
 
@@ -63,7 +69,6 @@ GATEWAY_NAMESPACE = os.environ.get("GATEWAY_NAMESPACE", "openshift-ingress")
 DEFAULT_GATEWAY_NAME = os.environ.get("GATEWAY_NAME", "maas-default-gateway")
 AITENANT_GATEWAY_CLASS_NAME = os.environ.get("AITENANT_GATEWAY_CLASS_NAME", "openshift-default")
 INFRA_NAMESPACE = MAAS_API_DEPLOYMENT_NAMESPACE
-OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
 
 DISCOVERY_ARG = "--enable-tenant-namespace-discovery=true"
 SENSITIVE_FIELD_PATTERN = (
@@ -89,14 +94,7 @@ def _oc_bin() -> str:
 
 
 def _oc_run(args, *, input_text: Optional[str] = None, timeout: Optional[int] = None):
-    return subprocess.run(
-        [_oc_bin(), *args],
-        input=input_text,
-        capture_output=True,
-        text=True,
-        timeout=OC_TIMEOUT if timeout is None else timeout,
-        check=False,
-    )
+    return _run_oc([_oc_bin(), *args], input_text=input_text, timeout=timeout)
 
 
 def _oc_output_not_found(result) -> bool:
@@ -152,7 +150,26 @@ def redact_mapping(mapping: dict[str, Any]) -> dict[str, Any]:
 
 
 def response_summary(response: requests.Response, *, max_body: int = 300) -> str:
-    return f"status={response.status_code} body={redact_sensitive(response.text, max_length=max_body)}"
+    reason = response.headers.get(AUTH_REASON_HEADER)
+    return (
+        f"status={response.status_code} {AUTH_REASON_HEADER}={reason!r} "
+        f"body={redact_sensitive(response.text, max_length=max_body)}"
+    )
+
+
+def is_gateway_auth_denial(response: requests.Response) -> bool:
+    """True when a 401/403 is the gateway AuthPolicy's verdict, not a reload gap.
+
+    Authorino's denials carry ``x-ext-auth-reason`` and the wasm-shim forwards it
+    even when the body is empty. Unknown API keys get exactly that: maas-api
+    validation returns no groups, the ``subscription-info`` metadata is never
+    fetched, and the policy's unauthorized body expression renders empty. The
+    header's value varies across Authorino versions, so only its presence counts.
+    Empty 401/403 without it stay transient (``_is_transient_gateway_response``).
+    """
+    if response.status_code not in (401, 403):
+        return False
+    return AUTH_REASON_HEADER in response.headers or not _is_transient_gateway_response(response)
 
 
 def _apply(obj: dict) -> None:
@@ -346,6 +363,56 @@ def wait_for_gateway_authpolicy_ready(
         return accepted and enforced
 
     return wait_for_json("authpolicy", auth_name, namespace, predicate=_predicate, timeout=timeout)
+
+
+def wait_for_route_auth_enforced(
+    model_url: str,
+    *,
+    model_name: str = "facebook/opt-125m",
+    what: Optional[str] = None,
+    timeout: int = 180,
+    stable_for: int = 10,
+) -> None:
+    """Wait until the gateway rejects an unknown API key on a model route.
+
+    ``model_url`` is the model's OpenAI base URL (ending in ``/v1``). AuthPolicy
+    Enforced does not cover a route Kuadrant has not programmed yet: the
+    wasm-shim passes unmatched routes through, so any key gets a 200. The real
+    rejection of an unknown key is the gateway AuthPolicy's auth-valid rule,
+    recognised by ``is_gateway_auth_denial``. Tenant gateways' istio-proxy also
+    crashes once on the first Kuadrant wasm load, so rejections must hold across
+    ``stable_for`` seconds, not one probe.
+    """
+    url = f"{model_url}/chat/completions"
+    headers = bearer_headers(f"sk-oai-probe-{uuid.uuid4().hex[:16]}")
+    body = {"model": model_name, "messages": [{"role": "user", "content": "hello"}]}
+    rejected_since: Optional[float] = None
+
+    def _check() -> bool:
+        nonlocal rejected_since
+        try:
+            response = requests.post(url, headers=headers, json=body, timeout=TIMEOUT, verify=TLS_VERIFY)
+        except requests.RequestException:
+            rejected_since = None
+            raise
+        if not is_gateway_auth_denial(response):
+            rejected_since = None
+            raise AssertionError(response_summary(response))
+        now = time.time()
+        if rejected_since is None:
+            rejected_since = now
+        if now - rejected_since < stable_for:
+            raise AssertionError(
+                f"rejected for {now - rejected_since:.0f}s of {stable_for}s: {response_summary(response)}"
+            )
+        return True
+
+    wait_until(
+        _check,
+        timeout,
+        what or f"{url} did not reject an unknown API key for {stable_for}s",
+        interval=2,
+    )
 
 
 def wait_for_deployment_available(name: str, namespace: str = INFRA_NAMESPACE, *, timeout: int = 180) -> dict:
@@ -873,17 +940,20 @@ def payload_processing_type_from_env() -> Optional[str]:
     value = os.environ.get("E2E_PAYLOAD_PROCESSING_TYPE", "").strip()
     if not value:
         return None
-    if value != PAYLOAD_PROCESSING_TYPE_PRAXIS:
+    if value not in (PAYLOAD_PROCESSING_TYPE_PRAXIS, PAYLOAD_PROCESSING_TYPE_IPP):
         raise RuntimeError(
             f"Unsupported E2E_PAYLOAD_PROCESSING_TYPE={value!r}; "
-            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r}"
+            f"expected {PAYLOAD_PROCESSING_TYPE_PRAXIS!r} or {PAYLOAD_PROCESSING_TYPE_IPP!r}"
         )
     return value
 
 
-def ensure_payload_processing_type_on_tenant_config(tenant_namespace: str) -> None:
-    """Patch MaasTenantConfig when nightly (or local) opts all tenants into praxis."""
-    payload_type = payload_processing_type_from_env()
+def ensure_payload_processing_type_on_tenant_config(
+    tenant_namespace: str, payload_type: Optional[str] = None
+) -> None:
+    """Patch MaasTenantConfig when nightly (or local) opts tenants into a payload backend."""
+    if payload_type is None:
+        payload_type = payload_processing_type_from_env()
     if not payload_type:
         return
     current = _oc_run(
@@ -963,7 +1033,12 @@ def bridge_tenant_owned_by_aitenant(case: dict[str, str]):
     return _predicate
 
 
-def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool = False) -> None:
+def bootstrap_aitenant_tenant(
+    case: dict[str, str],
+    *,
+    use_default_gateway: bool = False,
+    payload_processing_type: Optional[str] = None,
+) -> None:
     if not use_default_gateway:
         apply_gateway_fixture(case["gateway_name"], fixture_label=case["tenant_label_name"])
         wait_for_gateway_programmed(case["gateway_name"])
@@ -976,7 +1051,9 @@ def bootstrap_aitenant_tenant(case: dict[str, str], *, use_default_gateway: bool
         case["tenant_ns"],
         predicate=bridge_tenant_owned_by_aitenant(case),
     )
-    ensure_payload_processing_type_on_tenant_config(case["tenant_ns"])
+    ensure_payload_processing_type_on_tenant_config(
+        case["tenant_ns"], payload_type=payload_processing_type
+    )
     if not use_default_gateway:
         apply_gateway_access_label(case["tenant_ns"], case["gateway_name"])
         wait_for_httproute_accepted(

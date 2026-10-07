@@ -1614,6 +1614,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"userid",
 			"groups",
 			"selected_subscription_key",
+			"selected_subscription_id",
 			"selected_subscription",
 			"subscription_info",
 		}
@@ -1664,6 +1665,22 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 		if !contains(keyExpr, `resolvedModel`) {
 			t.Errorf("selected_subscription_key must prefer subscription-info.resolvedModel for BBR TRLP matching, got: %s", keyExpr)
+		}
+
+		idField, exists := identity["selected_subscription_id"]
+		if !exists {
+			t.Fatal("selected_subscription_id missing")
+		}
+		idMap, ok := idField.(map[string]any)
+		if !ok {
+			t.Fatalf("selected_subscription_id should be a map, got %T", idField)
+		}
+		idExpr, ok := idMap["expression"].(string)
+		if !ok {
+			t.Fatalf("selected_subscription_id expression missing")
+		}
+		if !contains(idExpr, `rateLimitId`) {
+			t.Errorf("selected_subscription_id must read subscription-info.rateLimitId for TRLP matching, got: %s", idExpr)
 		}
 	})
 
@@ -1840,7 +1857,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-	if err != nil || !found || len(patterns) != 3 {
+	if err != nil || !found || len(patterns) != 4 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1861,9 +1878,43 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-username" in request.headers)`,
 		`!("x-maas-group" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
+		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
 	}
-	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if len(got) != len(want) {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	predicate := nestedWhenPredicateRequired(t, obj,
+		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
+	wantPredicate := `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`
+	if predicate != wantPredicate {
+		t.Errorf("subscription header must be injected only for API keys with a subscription: got %q, want %q", predicate, wantPredicate)
+	}
+
+	// User tokens still use the client header for subscription selection, without
+	// adding another copy of that header to the upstream request.
+	wantSelection := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? auth.metadata.apiKeyValidation.subscription : ` +
+		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+	body := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression")
+	if !strings.Contains(body, `"requestedSubscription": `+wantSelection) {
+		t.Errorf("subscription-info must select the client header for user tokens, got body %q", body)
+	}
+
+	cacheKey := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+	if !strings.Contains(cacheKey, wantSelection) {
+		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
 	}
 }
 

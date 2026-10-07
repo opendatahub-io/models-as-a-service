@@ -21,7 +21,7 @@ import (
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -2419,25 +2419,22 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(job.Spec.TTLSecondsAfterFinished).NotTo(BeNil())
 	g.Expect(*job.Spec.TTLSecondsAfterFinished).To(Equal(aitenantAPIKeyCleanupTTLSeconds))
 	g.Expect(job.Spec.Template.Spec.AutomountServiceAccountToken).NotTo(BeNil())
-	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeFalse())
+	g.Expect(*job.Spec.Template.Spec.AutomountServiceAccountToken).To(BeTrue())
 	g.Expect(job.Spec.Template.Spec.Containers).To(HaveLen(1))
 	container := job.Spec.Template.Spec.Containers[0]
-	g.Expect(container.Command).To(Equal([]string{"curl"}))
-	g.Expect(container.Args).To(Equal([]string{
-		"--fail",
-		"--silent",
-		"--show-error",
-		"--max-time",
-		"30",
-		"--cacert",
-		"/etc/pki/maas-api/service-ca.crt",
-		"-X",
-		"DELETE",
-		"https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys",
-	}))
+	g.Expect(container.Command).To(Equal([]string{"/bin/sh", "-c"}))
+	g.Expect(container.Args).To(HaveLen(1))
+	g.Expect(container.Args[0]).To(ContainSubstring("/var/run/secrets/kubernetes.io/serviceaccount/token"))
+	g.Expect(container.Args[0]).To(ContainSubstring("Authorization: Bearer ${TOKEN}"))
+	g.Expect(container.Args[0]).To(ContainSubstring("https://maas-api-team-revoke.odh-ai-gateway-infra.svc:8443/internal/v1/tenants/team-revoke/api-keys"))
+	g.Expect(container.Args[0]).To(ContainSubstring(aitenantAPIKeyCleanupOpenShiftCAPath))
+	g.Expect(container.Args[0]).To(ContainSubstring(aitenantAPIKeyCleanupXKSCAPath))
+	g.Expect(container.Args[0]).To(ContainSubstring(`--cacert "${CA_BUNDLE}"`))
 	g.Expect(strings.Join(container.Args, " ")).NotTo(ContainSubstring(" -k "))
-	g.Expect(jobHasVolume(&job, "maas-api-service-ca", "openshift-service-ca.crt")).To(BeTrue())
-	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-service-ca", "/etc/pki/maas-api")).To(BeTrue())
+	g.Expect(jobHasOptionalConfigMapVolume(&job, "maas-api-openshift-ca", aitenantAPIKeyCleanupOpenShiftCABundleName)).To(BeTrue())
+	g.Expect(jobHasOptionalSecretVolume(&job, "maas-api-xks-ca", aitenantAPIKeyCleanupXKSCABundleName, "tls.crt")).To(BeTrue())
+	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-openshift-ca", "/etc/pki/maas-api/openshift")).To(BeTrue())
+	g.Expect(containerHasVolumeMount(&job.Spec.Template.Spec.Containers[0], "maas-api-xks-ca", "/etc/pki/maas-api/xks")).To(BeTrue())
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &maasv1alpha1.MaasTenantConfig{})).To(Succeed())
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(maasAPI), maasAPI)).To(Succeed(),
 		"maas-api must remain available until API-key revocation completes")
@@ -2450,10 +2447,26 @@ func TestAITenantReconcile_DeletionCreatesAPIKeyRevocationJob(t *testing.T) {
 	g.Expect(ready.Reason).To(Equal("DeletionInProgress"))
 }
 
-func jobHasVolume(job *batcv1.Job, name, configMapName string) bool {
+func jobHasOptionalConfigMapVolume(job *batcv1.Job, name, configMapName string) bool {
 	for _, volume := range job.Spec.Template.Spec.Volumes {
-		if volume.Name == name && volume.ConfigMap != nil && volume.ConfigMap.Name == configMapName {
+		if volume.Name == name && volume.ConfigMap != nil && volume.ConfigMap.Name == configMapName &&
+			volume.ConfigMap.Optional != nil && *volume.ConfigMap.Optional {
 			return true
+		}
+	}
+	return false
+}
+
+func jobHasOptionalSecretVolume(job *batcv1.Job, name, secretName, key string) bool {
+	for _, volume := range job.Spec.Template.Spec.Volumes {
+		if volume.Name != name || volume.Secret == nil || volume.Secret.SecretName != secretName ||
+			volume.Secret.Optional == nil || !*volume.Secret.Optional {
+			continue
+		}
+		for _, item := range volume.Secret.Items {
+			if item.Key == key && item.Path == "service-ca.crt" {
+				return true
+			}
 		}
 	}
 	return false
@@ -2736,6 +2749,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		},
 	}
 	var failedJobDeletePropagation *metav1.DeletionPropagation
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -2757,6 +2771,7 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 		AppNamespace:     "odh-ai-gateway-infra",
 		TenantNamespace:  "models-as-a-service",
 		GatewayNamespace: "openshift-ingress",
+		Recorder:         recorder,
 	}
 
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
@@ -2779,6 +2794,12 @@ func TestAITenantReconcile_FailedAPIKeyRevocationJobSetsDeletionBlockedAndRequeu
 	g.Expect(apierrors.IsNotFound(err)).To(BeTrue())
 	g.Expect(failedJobDeletePropagation).NotTo(BeNil())
 	g.Expect(*failedJobDeletePropagation).To(Equal(metav1.DeletePropagationBackground))
+	select {
+	case event := <-recorder.Events:
+		g.Expect(event).To(ContainSubstring("APIKeyCleanupFailed"))
+	default:
+		t.Fatal("expected APIKeyCleanupFailed warning event")
+	}
 
 	var remainingTenant maasv1alpha1.MaasTenantConfig
 	g.Expect(cl.Get(ctx, client.ObjectKeyFromObject(tenant), &remainingTenant)).To(Succeed())
@@ -3344,7 +3365,7 @@ func TestAITenantReconcile_CleanupStaleClaimsSkipsSpoofedOwnerRef(t *testing.T) 
 	g.Expect(err).NotTo(HaveOccurred(), "spoofed stale claim should survive cleanupStaleClaims")
 }
 
-func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
+func TestAITenantReconcile_DeletionTimeoutDoesNotBypassAPIKeyCleanup(t *testing.T) {
 	g := NewWithT(t)
 	s := aitenantTestScheme(t)
 	ctx := context.Background()
@@ -3373,7 +3394,7 @@ func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
 		},
 	}
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
@@ -3392,38 +3413,14 @@ func TestAITenantReconcile_DeletionTimeoutForcesFinalizerRemoval(t *testing.T) {
 	key := types.NamespacedName{Name: aitenant.Name, Namespace: aitenant.Namespace}
 	res, err := r.Reconcile(ctx, ctrl.Request{NamespacedName: key})
 	g.Expect(err).NotTo(HaveOccurred())
-	g.Expect(res.RequeueAfter).To(Equal(time.Duration(0)))
+	g.Expect(res.RequeueAfter).To(Equal(10 * time.Second))
 
 	var remaining maasv1alpha1.AITenant
 	err = cl.Get(ctx, key, &remaining)
-	if apierrors.IsNotFound(err) {
-		// Object was fully deleted after finalizer removal — forced cleanup succeeded.
-	} else {
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(remaining.Finalizers).NotTo(ContainElement(aitenantFinalizer),
-			"finalizer must be removed after deletion timeout")
-
-		cond := apimeta.FindStatusCondition(remaining.Status.Conditions, maasv1alpha1.AITenantConditionReady)
-		g.Expect(cond).NotTo(BeNil())
-		g.Expect(cond.Reason).To(Equal("CleanupForced"))
-		g.Expect(cond.Message).To(ContainSubstring("Deletion timeout"))
-	}
-
-	select {
-	case event := <-recorder.Events:
-		g.Expect(event).To(ContainSubstring("AITenantCleanupForced"))
-		g.Expect(event).To(ContainSubstring("API keys may still exist"))
-	default:
-		t.Fatal("expected a Warning event but none was emitted")
-	}
-
-	var updatedNS corev1.Namespace
-	g.Expect(cl.Get(ctx, client.ObjectKey{Name: "ai-tenant-team-timeout"}, &updatedNS)).To(Succeed())
-	g.Expect(updatedNS.Labels).NotTo(HaveKey(aitenantManagedLabel),
-		"best-effort releaseTenantNamespace must strip ownership labels during forced cleanup")
-	g.Expect(updatedNS.Labels).NotTo(HaveKey(aiGatewayTenantLabel))
-	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNameAnnotation))
-	g.Expect(updatedNS.Annotations).NotTo(HaveKey(aitenantNamespaceAnnotation))
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(remaining.Finalizers).To(ContainElement(aitenantFinalizer),
+		"security cleanup must keep the finalizer until API keys are invalidated")
+	g.Expect(recorder.Events).To(BeEmpty())
 }
 
 func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {
@@ -3456,7 +3453,7 @@ func TestAITenantReconcile_DeletionProceedsNormallyBeforeTimeout(t *testing.T) {
 		},
 	}
 
-	recorder := record.NewFakeRecorder(10)
+	recorder := events.NewFakeRecorder(10)
 	cl := fake.NewClientBuilder().
 		WithScheme(s).
 		WithStatusSubresource(&maasv1alpha1.AITenant{}).
