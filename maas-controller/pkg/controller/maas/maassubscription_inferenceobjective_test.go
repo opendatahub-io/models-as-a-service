@@ -1348,6 +1348,16 @@ func crdWithEstablished(name string, status apiextensionsv1.ConditionStatus) *ap
 	return crd
 }
 
+func crdReader(crds ...*apiextensionsv1.CustomResourceDefinition) client.Reader {
+	scheme := runtime.NewScheme()
+	_ = apiextensionsv1.AddToScheme(scheme)
+	objs := make([]client.Object, 0, len(crds))
+	for _, c := range crds {
+		objs = append(objs, c)
+	}
+	return fake.NewClientBuilder().WithScheme(scheme).WithObjects(objs...).WithStatusSubresource(objs...).Build()
+}
+
 // testCRDBootstrap returns a bootstrap with millisecond retries whose register and hook
 // fail the given number of times before succeeding.
 func testCRDBootstrap(registerFailures, hookFailures int32, registered, hooked *atomic.Int32, requests []reconcile.Request) *crdBootstrap {
@@ -1388,16 +1398,24 @@ func TestCRDBootstrap_WaitsForEstablished(t *testing.T) {
 	defer q.ShutDown()
 	ctx := context.Background()
 
-	b.handle(ctx, crdWithEstablished("other.example.com", apiextensionsv1.ConditionTrue), q)
-	b.handle(ctx, crdWithEstablished(inferenceObjectiveCRD, ""), q)
-	b.handle(ctx, crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionFalse), q)
+	// Wrong name — should be ignored.
+	reader := crdReader(crdWithEstablished("other.example.com", apiextensionsv1.ConditionTrue))
+	b.handleMetadata(ctx, "other.example.com", reader, q)
+	// Right name, no Established condition.
+	reader = crdReader(crdWithEstablished(inferenceObjectiveCRD, ""))
+	b.handleMetadata(ctx, inferenceObjectiveCRD, reader, q)
+	// Right name, Established=False.
+	reader = crdReader(crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionFalse))
+	b.handleMetadata(ctx, inferenceObjectiveCRD, reader, q)
 	if b.started.Load() {
 		t.Fatal("bootstrap started before the CRD was established")
 	}
 
-	b.handle(ctx, crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue), q)
+	// Right name, Established=True — should trigger bootstrap exactly once.
+	reader = crdReader(crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue))
+	b.handleMetadata(ctx, inferenceObjectiveCRD, reader, q)
 	waitForBootstrap(t, b)
-	b.handle(ctx, crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue), q)
+	b.handleMetadata(ctx, inferenceObjectiveCRD, reader, q)
 	if registered.Load() != 1 || hooked.Load() != 1 {
 		t.Errorf("registered=%d hooked=%d, want each once", registered.Load(), hooked.Load())
 	}
@@ -1426,7 +1444,8 @@ func TestCRDBootstrap_RetriesFailures(t *testing.T) {
 	q := workqueue.NewTyped[reconcile.Request]()
 	defer q.ShutDown()
 
-	b.handle(context.Background(), crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue), q)
+	reader := crdReader(crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue))
+	b.handleMetadata(context.Background(), inferenceObjectiveCRD, reader, q)
 	waitForBootstrap(t, b)
 	if registered.Load() != 3 || hooked.Load() != 4 {
 		t.Errorf("registered=%d hooked=%d, want 3 and 4 attempts", registered.Load(), hooked.Load())
@@ -1445,7 +1464,8 @@ func TestCRDBootstrap_OutlivesEventContext(t *testing.T) {
 	defer q.ShutDown()
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b.handle(ctx, crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue), q)
+	reader := crdReader(crdWithEstablished(inferenceObjectiveCRD, apiextensionsv1.ConditionTrue))
+	b.handleMetadata(ctx, inferenceObjectiveCRD, reader, q)
 	cancel()
 	waitForBootstrap(t, b)
 	if registered.Load() != 2 || hooked.Load() != 2 {
