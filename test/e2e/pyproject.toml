@@ -13,6 +13,7 @@ markers = [
     "tenant_inference: cross-gateway inference isolation on its own tenants",
     "tenant_ipp: per-tenant IPP stacks and routing isolation on its own tenants",
     "tenant_auto_resolve: MaaSModelRef tenant auto-resolution",
+    "legacy_ipp: legacy maas-controller IPP dataplane; excluded from default e2e passes (run with -m legacy_ipp)",
     "external: external OIDC and ExternalModel integrations",
 ]
 addopts = "--strict-markers"

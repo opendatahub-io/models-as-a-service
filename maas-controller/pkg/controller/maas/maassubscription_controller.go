@@ -26,9 +26,12 @@ import (
 	"strconv"
 	"strings"
 	"sync/atomic"
+	"time"
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
+	batcv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -38,7 +41,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -61,6 +64,15 @@ import (
 type MaaSSubscriptionReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
+	// APIReader bypasses the cache for cleanup Job reads. The controller does
+	// not watch Jobs and therefore must not require list/watch permission.
+	// Finalizer cleanup also lists InferenceObjectives with it, so an objective
+	// the cache has not seen yet is not missed.
+	APIReader client.Reader
+	// AppNamespace is where per-tenant maas-api Services and cleanup Jobs run.
+	AppNamespace string
+	// Recorder emits Kubernetes events for API-key cleanup and InferenceObjective failures.
+	Recorder events.EventRecorder
 
 	// DefaultTenantNamespace is the legacy single-tenant namespace (default
 	// "models-as-a-service"). Used together with the AITenant label to decide
@@ -75,15 +87,13 @@ type MaaSSubscriptionReconciler struct {
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
-	// Recorder emits Kubernetes events for InferenceObjective conflicts and failures.
-	Recorder record.EventRecorder
-
 	// inferenceObjectivesUnavailable is set while the InferenceObjective CRD is not
 	// installed, so reconciles skip the InferenceObjective pass.
 	inferenceObjectivesUnavailable atomic.Bool
 }
 
 //+kubebuilder:rbac:groups="",resources=events,verbs=create;patch
+//+kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=maas.opendatahub.io,resources=maassubscriptions/finalizers,verbs=update
@@ -905,6 +915,19 @@ func (r *MaaSSubscriptionReconciler) deleteModelTRLP(ctx context.Context, log lo
 
 func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (ctrl.Result, error) {
 	if controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
+		keysRevoked, err := r.ensureSubscriptionAPIKeysRevoked(ctx, log, subscription)
+		if err != nil {
+			log.Error(err, "failed to revoke subscription API keys; will retry", "subscription", subscription.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupFailed", "InvalidateAPIKeys",
+					"failed to invalidate API keys for subscription %s: %v", subscription.Name, err)
+			}
+			return ctrl.Result{}, err
+		}
+		if !keysRevoked {
+			return ctrl.Result{RequeueAfter: 10 * time.Second}, nil
+		}
+
 		// For each model referenced by this subscription, rebuild the aggregated TokenRateLimitPolicy
 		// without the deleted subscription's limits. If no other subscriptions reference the model,
 		// the TRLP will be deleted. This ensures zero-downtime rate limiting during subscription removal.
@@ -941,6 +964,76 @@ func (r *MaaSSubscriptionReconciler) handleDeletion(ctx context.Context, log log
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *MaaSSubscriptionReconciler) ensureSubscriptionAPIKeysRevoked(ctx context.Context, log logr.Logger, subscription *maasv1alpha1.MaaSSubscription) (bool, error) {
+	if strings.TrimSpace(r.AppNamespace) == "" {
+		return false, errors.New("application namespace is required for MaaSSubscription API-key cleanup")
+	}
+
+	tenant, err := fetchTenantForNamespace(ctx, r.Client, subscription.Namespace)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			log.Info("Skipping subscription API-key cleanup because the tenant configuration no longer exists",
+				"subscription", subscription.Namespace+"/"+subscription.Name)
+			if r.Recorder != nil {
+				r.Recorder.Eventf(subscription, nil, corev1.EventTypeWarning, "APIKeyCleanupSkipped", "InvalidateAPIKeys",
+					"Skipping API-key cleanup for MaaSSubscription %s/%s because its tenant configuration no longer exists",
+					subscription.Namespace, subscription.Name)
+			}
+			return true, nil
+		}
+		return false, fmt.Errorf("resolve tenant for MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+	}
+	tenantID, err := tenant.identifier()
+	if err != nil {
+		return false, fmt.Errorf("resolve tenant identifier for MaaSSubscription %s/%s: %w", subscription.Namespace, subscription.Name, err)
+	}
+	tenantName := tenantID
+	if tenantName == "" {
+		tenantName = tenantreconcile.DefaultAITenantName
+	}
+
+	job := subscriptionAPIKeyRevocationJob(subscription, tenantName, tenantID, r.AppNamespace)
+	var existing batcv1.Job
+	jobReader := r.APIReader
+	if jobReader == nil {
+		jobReader = r.Client
+	}
+	if err := jobReader.Get(ctx, client.ObjectKeyFromObject(job), &existing); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return false, fmt.Errorf("get subscription API-key cleanup Job %s/%s: %w", job.Namespace, job.Name, err)
+		}
+		if err := r.Create(ctx, job); err != nil && !apierrors.IsAlreadyExists(err) {
+			return false, fmt.Errorf("create subscription API-key cleanup Job %s/%s: %w", job.Namespace, job.Name, err)
+		}
+		return false, nil
+	}
+
+	if !apiKeyRevocationJobMatchesUID(&existing, string(subscription.UID)) {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete stale subscription API-key cleanup Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return false, nil
+	}
+	if jobComplete(&existing) {
+		return true, nil
+	}
+	if jobFailed(&existing) {
+		if err := r.Delete(ctx, &existing, client.PropagationPolicy(metav1.DeletePropagationBackground)); client.IgnoreNotFound(err) != nil {
+			return false, fmt.Errorf("delete failed subscription API-key cleanup Job %s/%s: %w", existing.Namespace, existing.Name, err)
+		}
+		return false, fmt.Errorf("subscription API-key cleanup Job %s/%s failed", existing.Namespace, existing.Name)
+	}
+	log.Info("Waiting for subscription API-key cleanup Job", "job", existing.Namespace+"/"+existing.Name)
+	return false, nil
+}
+
+func subscriptionAPIKeyRevocationJob(subscription *maasv1alpha1.MaaSSubscription, tenantName, tenantID, namespace string) *batcv1.Job {
+	const maxJobNameForGeneratedPods = 57
+	jobName := aitenantBoundedName("maas-api-revoke-sub-", subscription.Namespace+"-"+subscription.Name, string(subscription.UID), maxJobNameForGeneratedPods)
+	return apiKeyRevocationJob(jobName, subscription.Name, subscription.Namespace, string(subscription.UID),
+		tenantName, subscription.Name, tenantID, namespace)
 }
 
 // updateStatus returns the status write error so Reconcile can hand it to controller-runtime.
@@ -1110,6 +1203,12 @@ func conditionsSemanticallyEqual(a, b *metav1.Condition) bool {
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	if strings.TrimSpace(r.AppNamespace) == "" {
+		return errors.New("application namespace is required for MaaSSubscription cleanup")
+	}
+	if r.Recorder == nil {
+		r.Recorder = mgr.GetEventRecorder("maas-subscription-controller")
+	}
 	// Register field indexer for efficient lookup of MaaSSubscriptions by model reference.
 	// This avoids cluster-wide scans when finding subscriptions for a specific model.
 	if err := mgr.GetFieldIndexer().IndexField(
@@ -1130,10 +1229,6 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		},
 	); err != nil {
 		return fmt.Errorf("failed to setup field indexer for MaaSSubscription: %w", err)
-	}
-
-	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-subscription-controller")
 	}
 
 	b := ctrl.NewControllerManagedBy(mgr).
@@ -1183,13 +1278,13 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		)
 	}
 
-	// Watch generated InferenceObjectives (metadata only) so edits and deletions are
-	// reverted. If the CRD is not registered at startup, the InferenceObjective pass is
+	// Watch generated InferenceObjectives so edits and deletions are reverted. Reconcile
+	// reads them through the same cache. If the CRD is not registered at startup, the InferenceObjective pass is
 	// skipped until it appears.
 	ioExists := crdExists(context.Background(), mgr.GetAPIReader(), inferenceObjectiveCRD)
 	r.inferenceObjectivesUnavailable.Store(!ioExists)
 	if ioExists {
-		b = b.WatchesMetadata(inferenceObjectiveMetadata(),
+		b = b.Watches(&llmdv1alpha2.InferenceObjective{},
 			handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
 			builder.WithPredicates(ownedInferenceObjectivePredicate()),
 		)
@@ -1275,7 +1370,7 @@ func (r *MaaSSubscriptionReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	}
 	if !ioExists {
 		if err := registerWatchWhenCRDEstablished(c, mgr, inferenceObjectiveCRD, func() source.Source {
-			return source.Kind(mgr.GetCache(), client.Object(inferenceObjectiveMetadata()),
+			return source.Kind(mgr.GetCache(), client.Object(&llmdv1alpha2.InferenceObjective{}),
 				handler.EnqueueRequestsFromMapFunc(mapInferenceObjectiveToSubscription),
 				ownedInferenceObjectivePredicate(),
 			)

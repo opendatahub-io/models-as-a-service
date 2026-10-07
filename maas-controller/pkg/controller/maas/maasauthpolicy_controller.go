@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -89,7 +89,7 @@ type MaaSAuthPolicyReconciler struct {
 	AuthzCacheTTL int64
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
@@ -635,7 +635,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		for _, c := range conflicts {
 			names = append(names, c.String())
 		}
-		r.Recorder.Eventf(policy, "Warning", "ConflictingAuthPolicy",
+		r.Recorder.Eventf(policy, nil, "Warning", "ConflictingAuthPolicy", "DetectConflictingAuthPolicies",
 			"Detected %d non-MaaS AuthPolic%s on MaaS auth surfaces: %s",
 			len(conflicts), pluralY(len(conflicts)), strings.Join(names, "; "))
 	}
@@ -644,7 +644,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		prevConflict != nil &&
 		prevConflict.Status == metav1.ConditionTrue
 	if shouldEmitResolvedEvent && r.Recorder != nil {
-		r.Recorder.Event(policy, "Normal", "ConflictingAuthPolicyResolved",
+		r.Recorder.Eventf(policy, nil, "Normal", "ConflictingAuthPolicyResolved", "DetectConflictingAuthPolicies",
 			"All conflicting AuthPolicies on MaaS auth surfaces have been resolved")
 	}
 
@@ -1080,15 +1080,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					// Only inject X-MaaS-Subscription when there is a real value to inject.
-					// An empty string injected for K8s tokens without a subscription header
-					// causes maas-api to filter by an empty subscription name and return 0 models.
-					// The old maas-api-auth-policy never injected this header for K8s tokens —
-					// only for API keys with a non-empty subscription field.
+					// Inject only for API keys with a subscription. Token requests keep the
+					// client header, which subscription-info uses to select a subscription.
+					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
 							},
 						},
 						"plain": map[string]any{
@@ -1998,7 +1996,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := ctrl.Log.WithName("maas-authpolicy-controller")
 
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-authpolicy-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-authpolicy-controller")
 	}
 
 	// Reject negative TTL values

@@ -29,14 +29,15 @@ import (
 
 	"github.com/go-logr/logr"
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"knative.dev/pkg/kmeta"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
@@ -48,8 +49,8 @@ import (
 )
 
 const (
-	// inferenceObjectiveNameMaxLength keeps generated InferenceObjective names valid as
-	// DNS labels and as header values.
+	// inferenceObjectiveNameMaxLength is the longest generated InferenceObjective name, the
+	// limit kmeta.ChildName enforces.
 	inferenceObjectiveNameMaxLength = 63
 	inferenceObjectiveNamePrefix    = "maas"
 	// inferenceObjectiveNameHashLength is the number of hex characters of the identity
@@ -81,11 +82,6 @@ const (
 	eventReasonInferencePoolNotOnGateway  = "InferencePoolNotOnTenantGateway"
 )
 
-var (
-	inferenceObjectiveGVK     = schema.GroupVersionKind{Group: "llm-d.ai", Version: "v1alpha2", Kind: "InferenceObjective"}
-	inferenceObjectiveListGVK = schema.GroupVersionKind{Group: "llm-d.ai", Version: "v1alpha2", Kind: "InferenceObjectiveList"}
-)
-
 // inferenceObjectiveOwnerLabels are the labels every generated InferenceObjective carries.
 func inferenceObjectiveOwnerLabels() map[string]string {
 	return map[string]string{
@@ -107,11 +103,12 @@ func hasInferenceObjectiveOwnerLabels(labels map[string]string) bool {
 }
 
 // inferenceObjectiveName returns the deterministic InferenceObjective name for a
-// subscription and InferencePool. The readable tenant, subscription, and pool parts are
-// truncated as needed; the hash of their full identities keeps names unique. The name
-// does not depend on spec.inferencePriority, so it is stable across priority changes.
-// It also excludes the pool's API group and kind: KServe keeps the pool name stable but
-// reports the group of whichever pool API version the gateway currently accepts.
+// subscription and InferencePool: "maas-<tenant>-<subscription>-<pool>-<hash>". The hash
+// of the full identities keeps names unique; kmeta.ChildName keeps it as the suffix and,
+// when the name is too long, truncates the readable part. The name does not depend on
+// spec.inferencePriority, so it is stable across priority changes. It also excludes the
+// pool's API group and kind: KServe keeps the pool name stable but reports the group of
+// whichever pool API version the gateway currently accepts.
 func inferenceObjectiveName(tenantName string, subscription, pool types.NamespacedName) string {
 	identity := strings.Join([]string{
 		tenantName,
@@ -121,43 +118,13 @@ func inferenceObjectiveName(tenantName string, subscription, pool types.Namespac
 	sum := sha256.Sum256([]byte(identity))
 	hash := hex.EncodeToString(sum[:])[:inferenceObjectiveNameHashLength]
 
-	parts := []string{
-		dnsLabelPart(tenantName),
-		dnsLabelPart(subscription.Name),
-		dnsLabelPart(pool.Name),
-	}
-	// Budget for the readable parts and the separators between them.
-	budget := inferenceObjectiveNameMaxLength - len(inferenceObjectiveNamePrefix) - len(hash) - 2
-	if len(strings.Join(parts, "-")) > budget {
-		perPart := (budget - (len(parts) - 1)) / len(parts)
-		for i := range parts {
-			if len(parts[i]) > perPart {
-				parts[i] = strings.TrimRight(parts[i][:perPart], "-")
-			}
-		}
-	}
-
-	nameParts := []string{inferenceObjectiveNamePrefix}
-	for _, p := range parts {
-		if p != "" {
-			nameParts = append(nameParts, p)
-		}
-	}
-	nameParts = append(nameParts, hash)
-	return strings.Join(nameParts, "-")
-}
-
-// dnsLabelPart lowercases s and replaces characters not allowed in a DNS label with '-'.
-func dnsLabelPart(s string) string {
-	var b strings.Builder
-	for _, r := range strings.ToLower(s) {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
-			b.WriteRune(r)
-		} else {
-			b.WriteRune('-')
-		}
-	}
-	return strings.Trim(b.String(), "-")
+	// The tenant, subscription, and pool names are Kubernetes object names, so the joined
+	// string is already a valid name. ChildName alone hashes only names that are too long,
+	// so short names would collide (tenant "a-b" + subscription "c" vs tenant "a" +
+	// subscription "b-c"), and the subscription namespace is not in the readable part. The
+	// identity hash covers both.
+	parent := strings.Join([]string{inferenceObjectiveNamePrefix, tenantName, subscription.Name, pool.Name}, "-")
+	return kmeta.ChildName(parent, "-"+hash)
 }
 
 // flowControlTenantName returns the AITenant name for a subscription namespace. It falls
@@ -297,7 +264,7 @@ func activeRoutingGroupMembers(group *kservev1alpha2.GroupStatus) int {
 type desiredObjective struct {
 	Pool       inferencePoolRef
 	TenantName string
-	Priority   int64
+	Priority   int32
 	// Models are the "namespace/name" model refs served from Pool, for logs and events.
 	Models []string
 }
@@ -311,7 +278,7 @@ func (r *MaaSSubscriptionReconciler) desiredInferenceObjectives(ctx context.Cont
 	if sub.Spec.InferencePriority == nil {
 		return desired, true, nil
 	}
-	priority := int64(*sub.Spec.InferencePriority)
+	priority := *sub.Spec.InferencePriority
 
 	refs := make([]string, 0, len(sub.Spec.ModelRefs))
 	for _, ref := range sub.Spec.ModelRefs {
@@ -415,36 +382,34 @@ func isAPIUnavailable(err error) bool {
 }
 
 // buildInferenceObjective returns the InferenceObjective for a desired entry.
-func buildInferenceObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, d *desiredObjective) *unstructured.Unstructured {
-	obj := &unstructured.Unstructured{}
-	obj.SetGroupVersionKind(inferenceObjectiveGVK)
-	obj.SetName(key.Name)
-	obj.SetNamespace(key.Namespace)
+func buildInferenceObjective(sub *maasv1alpha1.MaaSSubscription, key types.NamespacedName, d *desiredObjective) *llmdv1alpha2.InferenceObjective {
 	labels := inferenceObjectiveOwnerLabels()
 	labels[labelSubscriptionNamespace] = sub.Namespace
 	labels[labelSubscriptionUID] = string(sub.UID)
-	obj.SetLabels(labels)
-	obj.SetAnnotations(map[string]string{
-		annotationSubscriptionName:       sub.Name,
-		annotationInferenceObjTenantName: d.TenantName,
-	})
-	setInferenceObjectiveSpec(obj, d)
-	return obj
+	return &llmdv1alpha2.InferenceObjective{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      key.Name,
+			Namespace: key.Namespace,
+			Labels:    labels,
+			Annotations: map[string]string{
+				annotationSubscriptionName:       sub.Name,
+				annotationInferenceObjTenantName: d.TenantName,
+			},
+		},
+		Spec: inferenceObjectiveSpec(d),
+	}
 }
 
-// setInferenceObjectiveSpec sets the fields this controller owns in spec, leaving others
-// alone. Priority is int64: unstructured deep copies panic on int32.
-func setInferenceObjectiveSpec(obj *unstructured.Unstructured, d *desiredObjective) {
-	spec, ok := obj.Object["spec"].(map[string]any)
-	if !ok {
-		spec = map[string]any{}
-		obj.Object["spec"] = spec
-	}
-	spec["priority"] = d.Priority
-	spec["poolRef"] = map[string]any{
-		"group": d.Pool.Group,
-		"kind":  d.Pool.Kind,
-		"name":  d.Pool.Name,
+// inferenceObjectiveSpec returns the spec for a desired entry.
+func inferenceObjectiveSpec(d *desiredObjective) llmdv1alpha2.InferenceObjectiveSpec {
+	priority := d.Priority
+	return llmdv1alpha2.InferenceObjectiveSpec{
+		Priority: &priority,
+		PoolRef: llmdv1alpha2.PoolObjectReference{
+			Group: llmdv1alpha2.Group(d.Pool.Group),
+			Kind:  llmdv1alpha2.Kind(d.Pool.Kind),
+			Name:  llmdv1alpha2.ObjectName(d.Pool.Name),
+		},
 	}
 }
 
@@ -460,11 +425,7 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 	log = log.WithValues("inferenceObjective", key.String(), "models", d.Models)
 	desired := buildInferenceObjective(sub, key, d)
 
-	// Unstructured reads bypass the manager cache (client.CacheOptions.Unstructured is off),
-	// so this is a live read. The watch is metadata-only and keeps its own cache; reading
-	// through it could see an edit or deletion later than the event that reported it.
-	existing := &unstructured.Unstructured{}
-	existing.SetGroupVersionKind(inferenceObjectiveGVK)
+	existing := &llmdv1alpha2.InferenceObjective{}
 	err := r.Get(ctx, key, existing)
 	switch {
 	case apimeta.IsNoMatchError(err):
@@ -506,18 +467,14 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 	// Merge our metadata over the existing object. This also adopts an objective left by
 	// an earlier subscription with the same name by rewriting the UID label.
 	snapshot := existing.DeepCopy()
-	mergedLabels := existing.GetLabels()
-	maps.Copy(mergedLabels, desired.GetLabels())
-	existing.SetLabels(mergedLabels)
-	mergedAnnotations := existing.GetAnnotations()
-	if mergedAnnotations == nil {
-		mergedAnnotations = make(map[string]string)
+	maps.Copy(existing.Labels, desired.Labels)
+	if existing.Annotations == nil {
+		existing.Annotations = make(map[string]string)
 	}
-	maps.Copy(mergedAnnotations, desired.GetAnnotations())
-	existing.SetAnnotations(mergedAnnotations)
-	setInferenceObjectiveSpec(existing, d)
+	maps.Copy(existing.Annotations, desired.Annotations)
+	existing.Spec = desired.Spec
 
-	if equality.Semantic.DeepEqual(snapshot.Object, existing.Object) {
+	if equality.Semantic.DeepEqual(snapshot.ObjectMeta, existing.ObjectMeta) && equality.Semantic.DeepEqual(snapshot.Spec, existing.Spec) {
 		return inferenceObjectiveApplied, nil
 	}
 	if err := r.Update(ctx, existing); err != nil {
@@ -560,7 +517,11 @@ func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Co
 		case inferenceObjectiveApplied:
 		}
 		if applyErr != nil {
-			r.warnf(sub, eventReasonInferenceObjectiveFailed, "%v", applyErr)
+			// AlreadyExists and Conflict mean the cache is behind our own last write; the
+			// retry resolves them, so they are not worth a Warning event.
+			if !apierrors.IsAlreadyExists(applyErr) && !apierrors.IsConflict(applyErr) {
+				r.warnf(sub, eventReasonInferenceObjectiveFailed, "%v", applyErr)
+			}
 			errs = append(errs, applyErr)
 		}
 	}
@@ -578,12 +539,12 @@ func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Co
 // annotations, so it works without tenant or gateway lookups. Objectives that opted out of
 // management are left in place.
 func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription, keep map[types.NamespacedName]struct{}) error {
-	// A live list, like the Get in applyInferenceObjective.
-	list := &unstructured.UnstructuredList{}
-	list.SetGroupVersionKind(inferenceObjectiveListGVK)
+	list := &llmdv1alpha2.InferenceObjectiveList{}
 	selector := client.MatchingLabels(inferenceObjectiveOwnerLabels())
 	selector[labelSubscriptionNamespace] = sub.Namespace
-	if err := r.List(ctx, list, selector); err != nil {
+	// Read from the API server: the cache may not have seen an objective created moments
+	// ago, and missing it here during finalizer cleanup would orphan it.
+	if err := r.APIReader.List(ctx, list, selector); err != nil {
 		if isAPIUnavailable(err) {
 			return nil
 		}
@@ -614,11 +575,9 @@ func (r *MaaSSubscriptionReconciler) deleteOwnedInferenceObjectives(ctx context.
 	return errors.Join(errs...)
 }
 
-// warnf records a Warning event on the subscription when a recorder is configured.
+// warnf records a Warning event on the subscription. SetupWithManager always sets Recorder.
 func (r *MaaSSubscriptionReconciler) warnf(sub *maasv1alpha1.MaaSSubscription, reason, messageFmt string, args ...any) {
-	if r.Recorder != nil {
-		r.Recorder.Eventf(sub, corev1.EventTypeWarning, reason, messageFmt, args...)
-	}
+	r.Recorder.Eventf(sub, nil, corev1.EventTypeWarning, reason, "ReconcileInferenceObjectives", messageFmt, args...)
 }
 
 // mapLLMISvcToMaaSSubscriptions returns reconcile requests for the MaaSSubscriptions that
@@ -678,14 +637,6 @@ func (llmisvcRouterStatusChangedPredicate) Update(e event.UpdateEvent) bool {
 	newRouter, _, _ := unstructured.NestedFieldNoCopy(newU.Object, "status", "router")
 	return !equality.Semantic.DeepEqual(oldRouter, newRouter) ||
 		unstructuredLLMIsvcReadyStatus(oldU) != unstructuredLLMIsvcReadyStatus(newU)
-}
-
-// inferenceObjectiveMetadata returns the metadata-only object for InferenceObjective watches.
-// The controller reads only ownership labels and annotations from watch events.
-func inferenceObjectiveMetadata() *metav1.PartialObjectMetadata {
-	obj := &metav1.PartialObjectMetadata{}
-	obj.SetGroupVersionKind(inferenceObjectiveGVK)
-	return obj
 }
 
 // mapInferenceObjectiveToSubscription maps a generated InferenceObjective to the
