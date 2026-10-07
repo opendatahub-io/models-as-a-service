@@ -56,7 +56,8 @@ def single_subscription_tenant(monkeypatch):
         xdist_worker_suffix,
     )
 
-    context = build_worker_tenant_case(f"single-sub-{xdist_worker_suffix()}")
+    # Keep maas-api-key-cleanup-<tenant> within the 52-character CronJob limit.
+    context = build_worker_tenant_case(f"single-{xdist_worker_suffix()}")
     try:
         context = bootstrap_worker_tenant(context, baseline=False)
         monkeypatch.setattr(
