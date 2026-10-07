@@ -3,7 +3,7 @@ apiVersion: apiextensions.k8s.io/v1
 kind: CustomResourceDefinition
 metadata:
   annotations:
-    controller-gen.kubebuilder.io/version: v0.20.1
+    controller-gen.kubebuilder.io/version: v0.19.0
   name: externalmodels.inference.opendatahub.io
 spec:
   group: inference.opendatahub.io
@@ -69,13 +69,15 @@ spec:
                     auth:
                       description: |-
                         Auth overrides the ExternalProvider authentication for this model-provider binding.
-                        If not set, the ExternalProvider auth is used.
+                        Its Secret is in the ExternalModel namespace. If not set, the
+                        ExternalProvider auth and its provider-local Secret are used.
                       properties:
                         secretRef:
                           description: |-
                             SecretRef references a Kubernetes Secret containing the provider API key.
-                            The Secret must be in the same namespace as the ExternalProvider
-                            and must contain a data key "api-key" with the credential value.
+                            Provider-level auth uses the ExternalProvider namespace. A per-model
+                            override uses the ExternalModel namespace, even for a provider in another
+                            namespace. The Secret must contain a data key "api-key" with the credential value.
                           properties:
                             name:
                               maxLength: 253
@@ -89,6 +91,7 @@ spec:
                           description: |-
                             Type identifies the auth type for this provider.
                             e.g. "apikey" (header based), "sigv4", etc.
+                            "simple" is retained for installed-schema compatibility.
                           enum:
                           - apikey
                           - simple
@@ -117,13 +120,22 @@ spec:
                       pattern: ^/.*
                       type: string
                     ref:
-                      description: Ref identifies the ExternalProvider CR (must be
-                        in the same namespace).
+                      description: |-
+                        Ref identifies the ExternalProvider CR. An omitted namespace means the
+                        ExternalModel namespace.
                       properties:
                         name:
                           maxLength: 253
                           minLength: 1
-                          pattern: ^[a-z0-9]([a-z0-9\-]*[a-z0-9])?$
+                          pattern: ^[a-z0-9]([a-z0-9.\-]*[a-z0-9])?$
+                          type: string
+                        namespace:
+                          description: |-
+                            Namespace is the ExternalProvider namespace. Cross-namespace references
+                            require authorization in the provider namespace before serving.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
                           type: string
                       required:
                       - name
@@ -154,6 +166,39 @@ spec:
                 maxItems: 64
                 minItems: 1
                 type: array
+              gatewayRefs:
+                description: |-
+                  GatewayRefs explicitly selects the Praxis gateways that serve this model.
+                  Omission retains tenant-local resolution; it does not select a global gateway.
+                  Names are distinct across namespaces. An explicit empty list is invalid.
+                items:
+                  description: NamespacedObjectReference identifies a Gateway or HTTPRoute
+                    by its full identity.
+                  properties:
+                    name:
+                      description: Name is the resource name, a Kubernetes DNS subdomain.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$
+                      type: string
+                    namespace:
+                      description: Namespace is the resource namespace, a Kubernetes
+                        DNS label.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  type: object
+                maxItems: 16
+                minItems: 1
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
               modelName:
                 description: |-
                   ModelName is the client-facing model name used in inference request bodies.
@@ -227,12 +272,147 @@ spec:
                   - type
                   type: object
                 type: array
+              gateways:
+                description: |-
+                  Gateways reports reconciliation and distribution readiness per gateway.
+                  Aggregate Ready requires all requested attachments; an independently ready
+                  attachment remains usable during partial failure. Readiness does not attest
+                  to successful inference requests.
+                items:
+                  description: ExternalModelGatewayStatus is the result for one gateway
+                    attachment.
+                  properties:
+                    conditions:
+                      description: |-
+                        Conditions describe this attachment. Each condition's observedGeneration
+                        identifies the ExternalModel generation it reflects. Missing, stale or
+                        failed status must not fall back to another gateway's result.
+                      items:
+                        description: Condition contains details for one aspect of
+                          the current state of this API Resource.
+                        properties:
+                          lastTransitionTime:
+                            description: |-
+                              lastTransitionTime is the last time the condition transitioned from one status to another.
+                              This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                            format: date-time
+                            type: string
+                          message:
+                            description: |-
+                              message is a human readable message indicating details about the transition.
+                              This may be an empty string.
+                            maxLength: 32768
+                            type: string
+                          observedGeneration:
+                            description: |-
+                              observedGeneration represents the .metadata.generation that the condition was set based upon.
+                              For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                              with respect to the current state of the instance.
+                            format: int64
+                            minimum: 0
+                            type: integer
+                          reason:
+                            description: |-
+                              reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                              Producers of specific condition types may define expected values and meanings for this field,
+                              and whether the values are considered a guaranteed API.
+                              The value should be a CamelCase string.
+                              This field may not be empty.
+                            maxLength: 1024
+                            minLength: 1
+                            pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                            type: string
+                          status:
+                            description: status of the condition, one of True, False,
+                              Unknown.
+                            enum:
+                            - "True"
+                            - "False"
+                            - Unknown
+                            type: string
+                          type:
+                            description: type of condition in CamelCase or in foo.example.com/CamelCase.
+                            maxLength: 316
+                            pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                            type: string
+                        required:
+                        - lastTransitionTime
+                        - message
+                        - reason
+                        - status
+                        - type
+                        type: object
+                      type: array
+                      x-kubernetes-list-map-keys:
+                      - type
+                      x-kubernetes-list-type: map
+                    httpRouteRef:
+                      description: HTTPRouteRef identifies the HTTPRoute for this
+                        attachment, when available.
+                      properties:
+                        name:
+                          description: Name is the resource name, a Kubernetes DNS
+                            subdomain.
+                          maxLength: 253
+                          minLength: 1
+                          pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$
+                          type: string
+                        namespace:
+                          description: Namespace is the resource namespace, a Kubernetes
+                            DNS label.
+                          maxLength: 63
+                          minLength: 1
+                          pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                          type: string
+                      required:
+                      - name
+                      - namespace
+                      type: object
+                    name:
+                      description: Name is the resource name, a Kubernetes DNS subdomain.
+                      maxLength: 253
+                      minLength: 1
+                      pattern: ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$
+                      type: string
+                    namespace:
+                      description: Namespace is the resource namespace, a Kubernetes
+                        DNS label.
+                      maxLength: 63
+                      minLength: 1
+                      pattern: ^[a-z0-9]([-a-z0-9]*[a-z0-9])?$
+                      type: string
+                  required:
+                  - name
+                  - namespace
+                  type: object
+                type: array
+                x-kubernetes-list-map-keys:
+                - namespace
+                - name
+                x-kubernetes-list-type: map
               httpRouteName:
                 description: |-
                   HTTPRouteName is the name of the HTTPRoute created by the controller
                   for this ExternalModel. Consumers (e.g., maas-controller) can read this
                   to attach policies without assuming naming conventions.
+                  Retained for legacy models and a single gateway attachment whose route is
+                  in the model namespace. Empty for multiple attachments or another route namespace.
                 type: string
+              observedGeneration:
+                description: ObservedGeneration is the latest spec generation processed
+                  by the controller.
+                format: int64
+                type: integer
+              overlayDigest:
+                description: |-
+                  OverlayDigest is the content digest distributed to Praxis. It attests to
+                  distribution, not to request-time serving.
+                type: string
+              overlayGeneration:
+                description: OverlayGeneration is the monotonic source generation
+                  distributed to Praxis.
+                format: int64
+                type: integer
               phase:
                 description: |-
                   Phase represents the current reconciliation phase.
