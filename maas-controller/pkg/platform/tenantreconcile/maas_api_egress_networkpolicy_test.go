@@ -52,7 +52,7 @@ func TestPatchMaaSAPIEgressRestrict_preservesLiveEgressOnUpgrade(t *testing.T) {
 	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	preserved := []any{
 		map[string]any{
-			"to": []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}}}},
+			"to":    []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}}}},
 			"ports": []any{map[string]any{"port": int64(5432), "protocol": "TCP"}},
 		},
 	}
