@@ -432,12 +432,15 @@ fi
 
 print_check "Gateway hostname"
 # Resolve MaaS gateway host: prefer env override, then Gateway listener (no cluster-admin), then cluster ingress config
+HOST=""
 if [ -n "${MAAS_GATEWAY_HOST:-}" ]; then
     # Normalize to https://host (strip existing protocol if present)
     HOST="${MAAS_GATEWAY_HOST#*://}"
     HOST="https://${HOST}"
     print_success "Gateway hostname (from MAAS_GATEWAY_HOST): $HOST"
 else
+    GATEWAY_CLASS=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+        -o jsonpath='{.spec.gatewayClassName}' 2>/dev/null || echo "")
     GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[?(@.protocol=="HTTPS")].hostname}' 2>/dev/null | awk '{print $1}')
     if [ -z "$GATEWAY_HOSTNAME" ]; then
         GATEWAY_HOSTNAME=$(kubectl get gateway maas-default-gateway -n openshift-ingress -o jsonpath='{.spec.listeners[0].hostname}' 2>/dev/null)
@@ -445,7 +448,15 @@ else
     if [ -n "$GATEWAY_HOSTNAME" ]; then
         HOST="https://${GATEWAY_HOSTNAME}"
         print_success "Gateway hostname: $HOST"
-    else
+    elif [ "$GATEWAY_CLASS" != "openshift-default" ]; then
+        GATEWAY_ADDRESS=$(kubectl get gateway maas-default-gateway -n openshift-ingress \
+            -o jsonpath='{.status.addresses[0].value}' 2>/dev/null || echo "")
+        if [ -n "$GATEWAY_ADDRESS" ]; then
+            HOST="https://${GATEWAY_ADDRESS#*://}"
+            print_success "Gateway hostname (from Gateway status address): $HOST"
+        fi
+    fi
+    if [ -z "$HOST" ]; then
         CLUSTER_DOMAIN=$(kubectl get ingresses.config.openshift.io cluster -o jsonpath='{.spec.domain}' 2>/dev/null || echo "")
         if [ -n "$CLUSTER_DOMAIN" ]; then
             HOST="https://maas.${CLUSTER_DOMAIN}"

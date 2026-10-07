@@ -26,34 +26,34 @@ MODEL_NAMESPACE="${MODEL_NAMESPACE:-llm}"
 
 wait_for_auth_policies_enforced() {
     local timeout="$AUTHPOLICY_TIMEOUT"
-    echo "Waiting for Kuadrant AuthPolicies to be enforced (timeout: ${timeout}s)..."
-
-    local llm_namespaces
-    llm_namespaces=$(oc get llminferenceservices -A -o jsonpath='{range .items[*]}{.metadata.namespace}{"\n"}{end}' 2>/dev/null | sort -u)
-    local namespaces
-    namespaces=$(printf '%s\n%s\n' "${GATEWAY_NAMESPACE:-openshift-ingress}" "$llm_namespaces" | sort -u | xargs)
+    local gateway_name="${GATEWAY_NAME:-maas-default-gateway}"
+    local gateway_ns="${GATEWAY_NAMESPACE:-openshift-ingress}"
+    echo "Waiting for AuthPolicies targeting gateway '$gateway_name' to be enforced (timeout: ${timeout}s)..."
 
     local deadline=$((SECONDS + timeout))
     while [[ $SECONDS -lt $deadline ]]; do
         local all_enforced=true
         local total=0
-        for ns in $namespaces; do
-            while IFS= read -r status; do
-                total=$((total + 1))
-                if [[ "$status" != "True" ]]; then
-                    all_enforced=false
-                fi
-            done < <(oc get authpolicies -n "$ns" -o jsonpath='{range .items[*]}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
-        done
+        while IFS=$'\t' read -r name target enforced; do
+            [[ -z "$name" ]] && continue
+            if [[ "$target" != "$gateway_name" ]]; then
+                echo "  Skipping $name (targets $target, not $gateway_name)"
+                continue
+            fi
+            total=$((total + 1))
+            if [[ "$enforced" != "True" ]]; then
+                all_enforced=false
+            fi
+        done < <(oc get authpolicies -n "$gateway_ns" -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.spec.targetRef.name}{"\t"}{.status.conditions[?(@.type=="Enforced")].status}{"\n"}{end}' 2>/dev/null)
         if $all_enforced && [[ $total -gt 0 ]]; then
-            echo "✅ All AuthPolicies enforced ($total policies)"
+            echo "✅ All AuthPolicies targeting $gateway_name enforced ($total policies)"
             return 0
         fi
-        echo "  Waiting... ($total policies found, not all enforced yet)"
+        echo "  Waiting... ($total policies targeting $gateway_name, not all enforced yet)"
         sleep 10
     done
-    echo "❌ ERROR: AuthPolicies not all enforced after ${timeout}s"
-    oc get authpolicies -A -o wide 2>/dev/null || true
+    echo "❌ ERROR: AuthPolicies targeting $gateway_name not all enforced after ${timeout}s"
+    oc get authpolicies -n "$gateway_ns" -o wide 2>/dev/null || true
     return 1
 }
 
@@ -101,33 +101,18 @@ deploy_models() {
     echo "✅ Simulator models ready"
 
     local governed_models=("facebook-opt-125m-simulated" "premium-simulated-simulated-premium")
-    echo "Waiting for governed MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s)..."
-    local deadline=$((SECONDS + MAASMODELREF_TIMEOUT))
-    local all_ready=false
-
-    while [[ $SECONDS -lt $deadline ]]; do
-        all_ready=true
-        for model in "${governed_models[@]}"; do
-            local phase
-            phase=$(oc get maasmodelref "$model" -n "$MODEL_NAMESPACE" -o jsonpath='{.status.phase}' 2>/dev/null || echo "")
-            if [[ "$phase" != "Ready" ]]; then
-                all_ready=false
-                break
-            fi
-        done
-        if $all_ready; then
-            echo "✅ Governed MaaSModelRefs ready"
-            break
+    echo "Waiting for governed MaaSModelRefs to be Ready (timeout: ${MAASMODELREF_TIMEOUT}s per model)..."
+    for model in "${governed_models[@]}"; do
+        if ! oc wait "maasmodelref/$model" -n "$MODEL_NAMESPACE" \
+            --for=jsonpath='{.status.phase}'=Ready --timeout="${MAASMODELREF_TIMEOUT}s"; then
+            echo "❌ ERROR: Timed out waiting for MaaSModelRef $model to reach phase=Ready"
+            oc get maasmodelref "$model" -n "$MODEL_NAMESPACE" -o yaml || true
+            oc get "llminferenceservice/$model" -n "$MODEL_NAMESPACE" -o yaml || true
+            kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 || true
+            exit 1
         fi
-        sleep 5
     done
-
-    if ! $all_ready; then
-        echo "❌ ERROR: Governed MaaSModelRefs did not reach Ready state within ${MAASMODELREF_TIMEOUT}s"
-        oc get maasmodelrefs -n "$MODEL_NAMESPACE" -o yaml || true
-        kubectl logs deployment/maas-controller -n "$DEPLOYMENT_NAMESPACE" --tail=100 || true
-        exit 1
-    fi
+    echo "✅ Governed MaaSModelRefs ready"
 
     if ! wait_for_auth_policies_enforced; then
         exit 1

@@ -1566,6 +1566,7 @@ class TestOrderingEdgeCases:
 class TestManagedAnnotation:
     """Tests that opendatahub.io/managed=false prevents the controller from updating generated resources."""
 
+    @pytest.mark.serial
     def test_authpolicy_managed_false_prevents_update(self):
         """AuthPolicy annotated with opendatahub.io/managed=false must not have
         its spec updated when the parent MaaSAuthPolicy is modified."""
@@ -1660,6 +1661,7 @@ class TestManagedAnnotation:
                 )
                 _wait_for_maas_auth_policy_phase(SIMULATOR_ACCESS_POLICY, require_enforced=False)
 
+    @pytest.mark.serial
     def test_trlp_managed_false_prevents_update(self):
         """TokenRateLimitPolicy annotated with opendatahub.io/managed=false must not
         have its spec updated when the parent MaaSSubscription is modified."""
