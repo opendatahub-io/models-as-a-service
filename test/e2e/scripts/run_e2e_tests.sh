@@ -6,9 +6,11 @@
 # Owns pytest invocation for MaaS E2E tests. Separated from
 # prow_run_smoke_test.sh so that test-only changes don't touch deploy/validate
 # logic. Implements the two-phase model:
-#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp and not nightly", --dist=loadgroup)
-#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp and not nightly", single worker)
-#   Nightly-marked tests run on the scheduled nightly path (shepard), not on PR /group-test.
+#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp", --dist=loadgroup)
+#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp", single worker)
+#   Pass 3 (optional): -m nightly when MAAS_PYTEST_INCLUDE_NIGHTLY=true (e.g. EXTERNAL_OIDC deploys)
+#
+# PR /group-test sets MAAS_EXCLUDE_NIGHTLY_TESTS=true so passes 1–2 skip @pytest.mark.nightly.
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -27,6 +29,8 @@
 #   E2E_MULTITENANCY_PHASE_TIMEOUT seconds (default: 180, parallel only)
 #   E2E_RECONCILE_WAIT            seconds between reconcile polls (default: 4)
 #   ARTIFACTS_DIR                 output directory for JUnit/HTML (default: test/e2e/reports)
+#   MAAS_EXCLUDE_NIGHTLY_TESTS    When true, passes 1–2 add "and not nightly" (group-test default)
+#   MAAS_PYTEST_INCLUDE_NIGHTLY   When true, run pass 3 (-m nightly) after serial pass
 #
 # Usage:
 #   export GATEWAY_HOST=maas.apps.cluster.example.com TOKEN=$(oc whoami -t) ...
@@ -106,6 +110,23 @@ user="$(oc whoami 2>/dev/null || echo 'unknown')"
 html="$ARTIFACTS_DIR/e2e-${user}.html"
 xml="$ARTIFACTS_DIR/e2e-${user}.xml"
 xml_serial="${xml%.xml}-serial.xml"
+xml_nightly="${xml%.xml}-nightly.xml"
+
+# ── Marker tiers ─────────────────────────────────────────────────────────
+_nightly_exclude=""
+_include_nightly_pass=false
+case "${MAAS_EXCLUDE_NIGHTLY_TESTS:-false}" in
+    1 | true | TRUE | yes | YES) _nightly_exclude=" and not nightly" ;;
+esac
+case "${MAAS_PYTEST_INCLUDE_NIGHTLY:-false}" in
+    1 | true | TRUE | yes | YES) _include_nightly_pass=true ;;
+esac
+_parallel_marker="not serial and not legacy_ipp${_nightly_exclude}"
+_serial_marker="serial and not legacy_ipp${_nightly_exclude}"
+_pass_total=2
+if [[ "$_include_nightly_pass" == true ]]; then
+    _pass_total=3
+fi
 
 # If extra args include a path (file or directory), replace the default test
 # directory so users can target specific tests: ./run_e2e_tests.sh -- tests/test_api_keys.py
@@ -142,6 +163,7 @@ fi
 # ── Run ──────────────────────────────────────────────────────────────────
 parallel_rc=0
 serial_rc=0
+nightly_rc=0
 any_pass_collected_tests=false
 
 count_pytest_collected() {
@@ -209,46 +231,71 @@ snapshot_parallel_pass_pods() (
 )
 
 run_serial_pass() {
-    echo "Running E2E pass 2/2: serial cluster mutators (-m 'serial and not legacy_ipp and not nightly', single worker)"
+    echo "Running E2E pass 2/${_pass_total}: serial cluster mutators (-m '${_serial_marker}', single worker)"
     if ! run_pytest_pass "pass 2 (serial)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "serial and not legacy_ipp and not nightly"; then
+        -m "${_serial_marker}"; then
         serial_rc=1
+    fi
+}
+
+run_nightly_pass() {
+    if [[ "$_include_nightly_pass" != true ]]; then
+        return 0
+    fi
+    echo "Running E2E pass 3/${_pass_total}: nightly (-m nightly, EXTERNAL_OIDC=${EXTERNAL_OIDC:-false})"
+    if ! run_pytest_pass "pass 3 (nightly)" \
+        env E2E_PYTEST_PASS=nightly PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
+        --maxfail=5 \
+        --junitxml="$xml_nightly" \
+        --html="${html%.html}-nightly.html" --self-contained-html \
+        "${pytest_common_args[@]}" \
+        -m nightly; then
+        nightly_rc=1
     fi
 }
 
 maybe_run_serial_pass() {
     if [[ "$parallel_rc" -ne 0 ]]; then
-        echo "Skipping E2E pass 2/2 (serial): parallel pass failed"
+        echo "Skipping E2E pass 2/${_pass_total} (serial): parallel pass failed"
         return 0
     fi
     run_serial_pass
 }
 
+maybe_run_nightly_pass() {
+    if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 ]]; then
+        echo "Skipping E2E pass 3/${_pass_total} (nightly): earlier pass failed"
+        return 0
+    fi
+    run_nightly_pass
+}
+
 if [[ "$serial_only" == "true" ]]; then
-    echo "Running E2E tests (serial pass only, -m 'serial and not legacy_ipp and not nightly')"
+    echo "Running E2E tests (serial pass only, -m '${_serial_marker}')"
     run_serial_pass
 elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     # Single worker: still split by marker so module-scoped worker fixtures never
     # see both serial and parallel tests from the same file in one session.
-    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial and not legacy_ipp and not nightly')"
+    echo "Running E2E pass 1/${_pass_total}: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m '${_parallel_marker}')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial and not legacy_ipp and not nightly"; then
+        -m "${_parallel_marker}"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
+    maybe_run_nightly_pass
 else
-    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial and not legacy_ipp and not nightly')"
+    echo "Running E2E pass 1/${_pass_total}: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m '${_parallel_marker}')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
@@ -256,11 +303,12 @@ else
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial and not legacy_ipp and not nightly"; then
+        -m "${_parallel_marker}"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
+    maybe_run_nightly_pass
 fi
 
 # ── Result ───────────────────────────────────────────────────────────────
@@ -268,8 +316,8 @@ if [[ "$any_pass_collected_tests" != "true" ]]; then
     echo "❌ ERROR: no tests collected in any pass"
     exit 1
 fi
-if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 ]]; then
-    echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc})"
+if [[ "$parallel_rc" -ne 0 || "$serial_rc" -ne 0 || "$nightly_rc" -ne 0 ]]; then
+    echo "❌ ERROR: E2E tests failed (parallel_rc=${parallel_rc}, serial_rc=${serial_rc}, nightly_rc=${nightly_rc})"
     exit 1
 fi
 
@@ -277,5 +325,8 @@ echo "✅ E2E tests completed"
 echo " - JUnit XML : ${xml}"
 if [[ -f "$xml_serial" ]]; then
     echo " - JUnit XML (serial pass): ${xml_serial}"
+fi
+if [[ -f "$xml_nightly" ]]; then
+    echo " - JUnit XML (nightly pass): ${xml_nightly}"
 fi
 echo " - HTML      : ${html}"
