@@ -45,7 +45,6 @@ from multitenancy_helpers import (
 )
 
 from test_helper import (
-    _check_ipp_pods_deployed,
     _create_llmis,
     _delete_cr,
     _get_cluster_token,
@@ -290,12 +289,6 @@ class TestTenantModelInference:
 # ─── Body-based routing ────────────────────────────────────────────────────
 
 
-requires_ipp = pytest.mark.skipif(
-    not _check_ipp_pods_deployed(),
-    reason="Payload-processing (IPP) pods not deployed; body routing tests require IPP",
-)
-
-
 def _create_tenant_api_key(gateway_url, case):
     """Create an API key for a tenant and return (api_key, gateway_url)."""
     oc_token = _get_cluster_token()
@@ -313,13 +306,12 @@ def _create_tenant_api_key(gateway_url, case):
     return api_key
 
 
-@requires_ipp
 class TestTenantBodyRouting:
     """Verify body-based routing in a multi-tenant context.
 
-    IPP pre-processing extracts the ``model`` field from the JSON body and
-    sets the ``X-Gateway-Model-Name`` header. These tests prove the body
-    model field drives routing: a correct model succeeds while a wrong
+    Payload-processing pre-processing extracts the ``model`` field from the JSON
+    body and sets the ``X-Gateway-Model-Name`` header. These tests prove the
+    body model field drives routing: a correct model succeeds while a wrong
     model is rejected by the model-provider-resolver plugin.
     """
 

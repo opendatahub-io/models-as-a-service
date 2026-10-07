@@ -209,5 +209,5 @@ type MaaSSubscriptionList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&MaaSSubscription{}, &MaaSSubscriptionList{})
+	register(&MaaSSubscription{}, &MaaSSubscriptionList{})
 }

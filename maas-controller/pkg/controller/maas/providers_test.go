@@ -23,6 +23,7 @@ import (
 	"testing"
 
 	"github.com/go-logr/logr"
+	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
 	apimeta "k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -41,6 +42,7 @@ func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(gatewayapiv1.Install(scheme))
 	utilruntime.Must(maasv1alpha1.AddToScheme(scheme))
+	utilruntime.Must(llmdv1alpha2.Install(scheme))
 }
 
 var scheme = runtime.NewScheme()
@@ -65,8 +67,6 @@ func testRESTMapper() apimeta.RESTMapper {
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"}, ns)
 	m.Add(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicyList"}, ns)
 	m.Add(inferenceExternalModelGVK, ns)
-	m.Add(inferenceObjectiveGVK, ns)
-	m.Add(inferenceObjectiveListGVK, ns)
 	return m
 }
 
