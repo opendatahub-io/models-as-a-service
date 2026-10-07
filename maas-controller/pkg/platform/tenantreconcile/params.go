@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -631,7 +632,7 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		if err != nil {
 			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
 		}
-	case params.MaaSAPIPreserveEgressOnUpgrade && len(params.MaaSAPIPreservedEgressRules) > 0:
+	case params.MaaSAPIPreserveEgressOnUpgrade:
 		egress = params.MaaSAPIPreservedEgressRules
 	default:
 		egress = removeAllowAllEgressRules(egress)
@@ -639,7 +640,7 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 	}
 
 	if len(params.MaaSAPIAdditionalEgressRules) > 0 {
-		if restrictiveBase {
+		if restrictiveBase || params.MaaSAPIPreserveEgressOnUpgrade {
 			if err := validateRestrictedEgressRules(params.MaaSAPIAdditionalEgressRules); err != nil {
 				return fmt.Errorf("validate additional maas-api egress rules: %w", err)
 			}
@@ -652,6 +653,156 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 	}
 
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func networkPolicyDeclaresEgress(np *unstructured.Unstructured) bool {
+	policyTypes, found, err := unstructured.NestedStringSlice(np.Object, "spec", "policyTypes")
+	if err != nil || !found {
+		return false
+	}
+	return slices.Contains(policyTypes, "Egress")
+}
+
+func renderedMaaSAPIEgressBaseline(rendered []unstructured.Unstructured) ([]any, error) {
+	for i := range rendered {
+		if rendered[i].GroupVersionKind() != GVKNetworkPolicy || rendered[i].GetName() != baseMaaSAPIEgressRestrictNetworkPolicyName {
+			continue
+		}
+		egress, found, err := unstructured.NestedSlice(rendered[i].Object, "spec", "egress")
+		if err != nil {
+			return nil, err
+		}
+		if !found {
+			return []any{}, nil
+		}
+		return removeAllowAllEgressRules(egress), nil
+	}
+	return []any{}, nil
+}
+
+// composePreservedMaaSAPIEgressRules builds a stable pre-configuration baseline from
+// the live operand policy, excluding rules that will be re-applied from
+// networkPolicyAdditionalEgressRules and orphaned additional rules after removal.
+func composePreservedMaaSAPIEgressRules(liveEgress []any, baseline []any, additional []netwv1.NetworkPolicyEgressRule) []any {
+	additionalUnstructured, err := networkPolicyEgressRulesToUnstructured(additional)
+	if err != nil {
+		return liveEgress
+	}
+
+	liveWithoutAdditional := removeMatchingEgressRules(liveEgress, additionalUnstructured)
+	preserved := make([]any, 0, len(baseline)+len(liveWithoutAdditional))
+	for _, rule := range baseline {
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	for _, rule := range liveWithoutAdditional {
+		if egressRuleInList(rule, baseline) || egressRuleInList(rule, additionalUnstructured) {
+			continue
+		}
+		if len(additional) == 0 && !isLegacyBundledPostgresEgressRule(rule) {
+			continue
+		}
+		if !egressRuleInList(rule, preserved) {
+			preserved = append(preserved, rule)
+		}
+	}
+	return preserved
+}
+
+func removeMatchingEgressRules(egress []any, rulesToRemove []any) []any {
+	if len(rulesToRemove) == 0 {
+		return egress
+	}
+	filtered := make([]any, 0, len(egress))
+	for _, ruleRaw := range egress {
+		if egressRuleInList(ruleRaw, rulesToRemove) {
+			continue
+		}
+		filtered = append(filtered, ruleRaw)
+	}
+	return filtered
+}
+
+func egressRuleInList(rule any, rules []any) bool {
+	for _, candidate := range rules {
+		if egressRulesEqual(rule, candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func egressRulesEqual(a, b any) bool {
+	aJSON, err := json.Marshal(a)
+	if err != nil {
+		return false
+	}
+	bJSON, err := json.Marshal(b)
+	if err != nil {
+		return false
+	}
+	return string(aJSON) == string(bJSON)
+}
+
+func networkPolicyRuleHasPort(rule map[string]any, port int64) bool {
+	ports, ok := rule["ports"].([]any)
+	if !ok {
+		return false
+	}
+	for _, portRaw := range ports {
+		portMap, ok := portRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := portMap["port"].(type) {
+		case int64:
+			if v == port {
+				return true
+			}
+		case int:
+			if int64(v) == port {
+				return true
+			}
+		case float64:
+			if int64(v) == port {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func isLegacyBundledPostgresEgressRule(rule any) bool {
+	ruleMap, ok := rule.(map[string]any)
+	if !ok {
+		return false
+	}
+	if !networkPolicyRuleHasPort(ruleMap, 5432) {
+		return false
+	}
+	to, ok := ruleMap["to"].([]any)
+	if !ok {
+		return false
+	}
+	for _, peerRaw := range to {
+		peer, ok := peerRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		podSelector, ok := peer["podSelector"].(map[string]any)
+		if !ok {
+			continue
+		}
+		matchLabels, ok := podSelector["matchLabels"].(map[string]any)
+		if !ok {
+			continue
+		}
+		if matchLabels["app"] == "postgres" {
+			return true
+		}
+	}
+	return false
 }
 
 func hasAllowAllEgressRule(egress []any) bool {

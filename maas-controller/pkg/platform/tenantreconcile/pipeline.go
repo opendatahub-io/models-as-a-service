@@ -86,9 +86,6 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
-	if err := applyMaaSAPIPreserveEgressConfig(ctx, c, &params, mcfg, appNs); err != nil {
-		return nil, fmt.Errorf("resolve maas-api egress preserve-on-upgrade: %w", err)
-	}
 
 	if !params.SkipIPP {
 		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
@@ -109,6 +106,9 @@ func RunPlatform(
 	rendered, err := RenderKustomize(manifestPath, appNs)
 	if err != nil {
 		return nil, fmt.Errorf("kustomize: %w", err)
+	}
+	if err := applyMaaSAPIPreserveEgressConfig(ctx, c, &params, mcfg, appNs, rendered); err != nil {
+		return nil, fmt.Errorf("resolve maas-api egress preserve-on-upgrade: %w", err)
 	}
 
 	resources, err := PostRender(ctx, log, tenant, rendered, params)
@@ -808,7 +808,7 @@ func applyMaaSAPIEgressConfig(params *PlatformParams, mcfg *maasv1alpha1.Config)
 
 // applyMaaSAPIPreserveEgressConfig copies the live restrictive egress block when
 // networkPolicyEgressRules is unset so upgrades do not silently add allow-all.
-func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, params *PlatformParams, mcfg *maasv1alpha1.Config, appNs string) error {
+func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, params *PlatformParams, mcfg *maasv1alpha1.Config, appNs string, rendered []unstructured.Unstructured) error {
 	if params == nil || mcfg == nil {
 		return nil
 	}
@@ -825,7 +825,7 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 		}
 		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
 	}
-	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, mcfg.UID) {
+	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, mcfg.UID) || !networkPolicyDeclaresEgress(np) {
 		return nil
 	}
 
@@ -833,16 +833,26 @@ func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, para
 	if err != nil {
 		return fmt.Errorf("read live maas-api egress rules: %w", err)
 	}
-	if !found || hasAllowAllEgressRule(egress) {
+	liveEgress := egress
+	if !found {
+		liveEgress = []any{}
+	}
+	if hasAllowAllEgressRule(liveEgress) {
 		return nil
 	}
 
-	preserved := removeAllowAllEgressRules(egress)
-	if len(preserved) == 0 {
+	liveEgress = removeAllowAllEgressRules(liveEgress)
+	baseline, err := renderedMaaSAPIEgressBaseline(rendered)
+	if err != nil {
+		return fmt.Errorf("read rendered maas-api egress baseline: %w", err)
+	}
+
+	params.MaaSAPIPreserveEgressOnUpgrade = true
+	if len(liveEgress) == 0 {
+		params.MaaSAPIPreservedEgressRules = []any{}
 		return nil
 	}
-	params.MaaSAPIPreserveEgressOnUpgrade = true
-	params.MaaSAPIPreservedEgressRules = preserved
+	params.MaaSAPIPreservedEgressRules = composePreservedMaaSAPIEgressRules(liveEgress, baseline, params.MaaSAPIAdditionalEgressRules)
 	return nil
 }
 

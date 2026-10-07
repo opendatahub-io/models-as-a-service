@@ -226,6 +226,41 @@ func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteCustomRules(t *testing.T) {
 	assert.Contains(t, err.Error(), "validate custom maas-api egress rules")
 }
 
+func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteAdditionalWhenPreserveOnUpgrade(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	tcp := corev1.ProtocolTCP
+	params := PlatformParams{
+		MaaSAPIPreserveEgressOnUpgrade: true,
+		MaaSAPIPreservedEgressRules: []any{
+			map[string]any{"ports": []any{map[string]any{"port": int64(443), "protocol": "TCP"}}},
+		},
+		MaaSAPIAdditionalEgressRules: []netwv1.NetworkPolicyEgressRule{
+			{
+				Ports: []netwv1.NetworkPolicyPort{
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 5432}},
+				},
+			},
+		},
+	}
+	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validate additional maas-api egress rules")
+}
+
+func TestPatchMaaSAPIEgressRestrict_preservesEmptyDenyAllOnUpgrade(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	params := PlatformParams{
+		MaaSAPIPreserveEgressOnUpgrade: true,
+		MaaSAPIPreservedEgressRules:    []any{},
+	}
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Empty(t, egress)
+}
+
 func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteAdditionalWhenRestrictive(t *testing.T) {
 	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	tcp := corev1.ProtocolTCP
@@ -251,10 +286,48 @@ func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteAdditionalWhenRestrictive(t
 	assert.Contains(t, err.Error(), "validate additional maas-api egress rules")
 }
 
+func sampleRenderedMaaSAPIEgressResources() []unstructured.Unstructured {
+	return []unstructured.Unstructured{*sampleMaaSAPIEgressRestrictNetworkPolicy()}
+}
+
+func TestComposePreservedMaaSAPIEgressRules(t *testing.T) {
+	baseline := []any{
+		map[string]any{"ports": []any{map[string]any{"port": int64(53), "protocol": "UDP"}}},
+		map[string]any{"ports": []any{map[string]any{"port": int64(443), "protocol": "TCP"}}},
+	}
+	postgresRule := map[string]any{
+		"to":    []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "postgres"}}}},
+		"ports": []any{map[string]any{"port": int64(5432), "protocol": "TCP"}},
+	}
+	additionalRule := map[string]any{
+		"to":    []any{map[string]any{"podSelector": map[string]any{"matchLabels": map[string]any{"app": "extra"}}}},
+		"ports": []any{map[string]any{"port": int64(15432), "protocol": "TCP"}},
+	}
+	tcp := corev1.ProtocolTCP
+	additional := []netwv1.NetworkPolicyEgressRule{
+		{
+			Ports: []netwv1.NetworkPolicyPort{{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 15432}}},
+			To:    []netwv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "extra"}}}},
+		},
+	}
+
+	live := append([]any{}, baseline[0], baseline[1], postgresRule, additionalRule)
+	preserved := composePreservedMaaSAPIEgressRules(live, baseline, additional)
+	require.Len(t, preserved, 3)
+	assert.True(t, egressRuleInList(postgresRule, preserved))
+	assert.False(t, egressRuleInList(additionalRule, preserved))
+
+	preserved = composePreservedMaaSAPIEgressRules(live, baseline, nil)
+	require.Len(t, preserved, 3)
+	assert.True(t, egressRuleInList(postgresRule, preserved))
+	assert.False(t, egressRuleInList(additionalRule, preserved))
+}
+
 func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 	const appNs = "maas-system"
 	configUID := types.UID("cfg-uid")
 	controller := true
+	rendered := sampleRenderedMaaSAPIEgressResources()
 
 	t.Run("no-op when explicit networkPolicyEgressRules set", func(t *testing.T) {
 		tcp := corev1.ProtocolTCP
@@ -272,7 +345,7 @@ func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 		params := PlatformParams{}
 		applyMaaSAPIEgressConfig(&params, mcfg)
 		cl := fake.NewClientBuilder().Build()
-		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs))
+		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs, rendered))
 		assert.False(t, params.MaaSAPIPreserveEgressOnUpgrade)
 	})
 
@@ -289,6 +362,7 @@ func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 			UID:        configUID,
 			Controller: &controller,
 		}})
+		_ = unstructured.SetNestedStringSlice(live.Object, []string{"Egress"}, "spec", "policyTypes")
 		_ = unstructured.SetNestedSlice(live.Object, []any{
 			map[string]any{"ports": []any{map[string]any{"port": int64(443), "protocol": "TCP"}}},
 			map[string]any{
@@ -300,10 +374,28 @@ func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 		params := PlatformParams{}
 		applyMaaSAPIEgressConfig(&params, mcfg)
 		cl := fake.NewClientBuilder().WithObjects(live).Build()
-		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs))
+		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs, rendered))
 		assert.True(t, params.MaaSAPIPreserveEgressOnUpgrade)
-		require.Len(t, params.MaaSAPIPreservedEgressRules, 2)
+		require.GreaterOrEqual(t, len(params.MaaSAPIPreservedEgressRules), 2)
 		assert.False(t, hasAllowAllEgressRule(params.MaaSAPIPreservedEgressRules))
+	})
+
+	t.Run("preserves empty deny-all egress list", func(t *testing.T) {
+		mcfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: configUID},
+		}
+		live := sampleMaaSAPIEgressRestrictNetworkPolicy()
+		live.SetNamespace(appNs)
+		setConfigControllerOwnerRef(live, configUID)
+		_ = unstructured.SetNestedStringSlice(live.Object, []string{"Egress"}, "spec", "policyTypes")
+		_ = unstructured.SetNestedSlice(live.Object, []any{}, "spec", "egress")
+
+		params := PlatformParams{}
+		applyMaaSAPIEgressConfig(&params, mcfg)
+		cl := fake.NewClientBuilder().WithObjects(live).Build()
+		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs, rendered))
+		assert.True(t, params.MaaSAPIPreserveEgressOnUpgrade)
+		require.Empty(t, params.MaaSAPIPreservedEgressRules)
 	})
 
 	t.Run("skips when live policy already has allow-all", func(t *testing.T) {
@@ -313,6 +405,7 @@ func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 		live := sampleMaaSAPIEgressRestrictNetworkPolicy()
 		live.SetNamespace(appNs)
 		setConfigControllerOwnerRef(live, configUID)
+		_ = unstructured.SetNestedStringSlice(live.Object, []string{"Egress"}, "spec", "policyTypes")
 		_ = unstructured.SetNestedSlice(live.Object, []any{
 			map[string]any{"ports": []any{map[string]any{"port": int64(443), "protocol": "TCP"}}},
 			map[string]any{},
@@ -321,7 +414,7 @@ func TestApplyMaaSAPIPreserveEgressConfig(t *testing.T) {
 		params := PlatformParams{}
 		applyMaaSAPIEgressConfig(&params, mcfg)
 		cl := fake.NewClientBuilder().WithObjects(live).Build()
-		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs))
+		require.NoError(t, applyMaaSAPIPreserveEgressConfig(context.Background(), cl, &params, mcfg, appNs, rendered))
 		assert.False(t, params.MaaSAPIPreserveEgressOnUpgrade)
 	})
 }
