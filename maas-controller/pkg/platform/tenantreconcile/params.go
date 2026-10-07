@@ -616,8 +616,13 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 
 	egress = removeAllowAllEgressRules(egress)
 
+	restrictiveBase := len(params.MaaSAPIEgressRules) > 0
+
 	switch {
-	case len(params.MaaSAPIEgressRules) > 0:
+	case restrictiveBase:
+		if err := validateRestrictedEgressRules(params.MaaSAPIEgressRules); err != nil {
+			return fmt.Errorf("validate custom maas-api egress rules: %w", err)
+		}
 		egress, err = networkPolicyEgressRulesToUnstructured(params.MaaSAPIEgressRules)
 		if err != nil {
 			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
@@ -627,6 +632,11 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 	}
 
 	if len(params.MaaSAPIAdditionalEgressRules) > 0 {
+		if restrictiveBase {
+			if err := validateRestrictedEgressRules(params.MaaSAPIAdditionalEgressRules); err != nil {
+				return fmt.Errorf("validate additional maas-api egress rules: %w", err)
+			}
+		}
 		additional, err := networkPolicyEgressRulesToUnstructured(params.MaaSAPIAdditionalEgressRules)
 		if err != nil {
 			return fmt.Errorf("convert additional maas-api egress rules: %w", err)
@@ -651,6 +661,51 @@ func removeAllowAllEgressRules(egress []any) []any {
 		filtered = append(filtered, ruleRaw)
 	}
 	return filtered
+}
+
+// validateRestrictedEgressRules enforces ODH-ADR-Operator-0016 restricted egress:
+// each rule must specify both destinations and ports, except the documented
+// Kubernetes API port-only rule (TCP 443 and 6443 with no to peers).
+func validateRestrictedEgressRules(rules []netwv1.NetworkPolicyEgressRule) error {
+	for i, rule := range rules {
+		if isKubernetesAPIPortOnlyEgressRule(rule) {
+			continue
+		}
+		if len(rule.To) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one destination (to)", i)
+		}
+		if len(rule.Ports) == 0 {
+			return fmt.Errorf("egress rule %d: restricted rules require at least one port", i)
+		}
+	}
+	return nil
+}
+
+func isKubernetesAPIPortOnlyEgressRule(rule netwv1.NetworkPolicyEgressRule) bool {
+	if len(rule.To) > 0 {
+		return false
+	}
+	if len(rule.Ports) != 2 {
+		return false
+	}
+	has443, has6443 := false, false
+	for _, p := range rule.Ports {
+		if p.Protocol == nil || *p.Protocol != corev1.ProtocolTCP {
+			return false
+		}
+		if p.Port == nil {
+			return false
+		}
+		switch p.Port.IntValue() {
+		case 443:
+			has443 = true
+		case 6443:
+			has6443 = true
+		default:
+			return false
+		}
+	}
+	return has443 && has6443
 }
 
 func networkPolicyEgressRulesToUnstructured(rules []netwv1.NetworkPolicyEgressRule) ([]any, error) {

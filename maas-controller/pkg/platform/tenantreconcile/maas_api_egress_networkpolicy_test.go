@@ -124,6 +124,92 @@ func TestPatchMaaSAPIEgressRestrict_customRulesWithAdditional(t *testing.T) {
 			{
 				Ports: []netwv1.NetworkPolicyPort{
 					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 443}},
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 6443}},
+				},
+			},
+		},
+		MaaSAPIAdditionalEgressRules: []netwv1.NetworkPolicyEgressRule{
+			{
+				Ports: []netwv1.NetworkPolicyPort{
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 5432}},
+				},
+				To: []netwv1.NetworkPolicyPeer{
+					{
+						PodSelector: &metav1.LabelSelector{
+							MatchLabels: map[string]string{"app": "postgres"},
+						},
+					},
+				},
+			},
+		},
+	}
+	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	require.NoError(t, err)
+	require.True(t, found)
+	require.Len(t, egress, 2)
+}
+
+func TestValidateRestrictedEgressRules(t *testing.T) {
+	tcp := corev1.ProtocolTCP
+	apiRule := netwv1.NetworkPolicyEgressRule{
+		Ports: []netwv1.NetworkPolicyPort{
+			{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 443}},
+			{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 6443}},
+		},
+	}
+	completeRule := netwv1.NetworkPolicyEgressRule{
+		Ports: []netwv1.NetworkPolicyPort{
+			{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 5432}},
+		},
+		To: []netwv1.NetworkPolicyPeer{
+			{PodSelector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "postgres"}}},
+		},
+	}
+
+	assert.True(t, isKubernetesAPIPortOnlyEgressRule(apiRule))
+	require.NoError(t, validateRestrictedEgressRules([]netwv1.NetworkPolicyEgressRule{apiRule, completeRule}))
+
+	err := validateRestrictedEgressRules([]netwv1.NetworkPolicyEgressRule{
+		{Ports: []netwv1.NetworkPolicyPort{{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 22}}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "destination")
+
+	err = validateRestrictedEgressRules([]netwv1.NetworkPolicyEgressRule{
+		{To: []netwv1.NetworkPolicyPeer{{PodSelector: &metav1.LabelSelector{}}}},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "port")
+}
+
+func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteCustomRules(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	tcp := corev1.ProtocolTCP
+	params := PlatformParams{
+		MaaSAPIEgressRules: []netwv1.NetworkPolicyEgressRule{
+			{
+				Ports: []netwv1.NetworkPolicyPort{
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 5432}},
+				},
+			},
+		},
+	}
+	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validate custom maas-api egress rules")
+}
+
+func TestPatchMaaSAPIEgressRestrict_rejectsIncompleteAdditionalWhenRestrictive(t *testing.T) {
+	np := sampleMaaSAPIEgressRestrictNetworkPolicy()
+	tcp := corev1.ProtocolTCP
+	params := PlatformParams{
+		MaaSAPIEgressRules: []netwv1.NetworkPolicyEgressRule{
+			{
+				Ports: []netwv1.NetworkPolicyPort{
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 443}},
+					{Protocol: &tcp, Port: &intstr.IntOrString{IntVal: 6443}},
 				},
 			},
 		},
@@ -135,12 +221,9 @@ func TestPatchMaaSAPIEgressRestrict_customRulesWithAdditional(t *testing.T) {
 			},
 		},
 	}
-	require.NoError(t, patchMaaSAPIEgressRestrictNetworkPolicy(np, params))
-
-	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
-	require.NoError(t, err)
-	require.True(t, found)
-	require.Len(t, egress, 2)
+	err := patchMaaSAPIEgressRestrictNetworkPolicy(np, params)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "validate additional maas-api egress rules")
 }
 
 func TestRemoveAllowAllEgressRules(t *testing.T) {
