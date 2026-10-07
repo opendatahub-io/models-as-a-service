@@ -109,7 +109,7 @@ How you remove resources depends on how they were applied. `./scripts/observabil
 
 | Deployment mode | How applied | Ownership | Cleanup |
 |-----------------|-------------|-----------|---------|
-| **Operator** (recommended) | `LifecycleReconciler.ensureUsageDashboard` (metrics Usage dashboard). Usage-log dashboards via `usageLogging` on `Config`. | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Do not delete the CR by hand — the operator recreates it. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
+| **Operator** (recommended) | Metrics Usage dashboard via `usageMetricsDashboard` on `Config`. Usage-log dashboards via `usageLogging` on `Config`. | Controller `ownerReference` on `Config` (`configs.maas.opendatahub.io/default`); field manager `maas-controller`. | Disable the matching Config flag; do not delete the CR by hand while the flag is true — the operator recreates it. See [Operator-managed dashboards](#operator-managed-dashboards) below. |
 | **Kustomize** (development) | `kustomize build` of `deployment/components/observability/observability/dashboards/` (and optionally `usage-logs/`). | Label `app.kubernetes.io/managed-by: maas-observability` on the metrics Usage dashboard. No `Config` controller reference. | Delete `dashboard-3-maas-usage-admin` by name. For usage-logs, set `usageLogging=false` when Config exists, wait until **every** overlay object with a Config controller owner is gone, then `kubectl delete -k`. |
 | **`install-observability.sh`** | TelemetryPolicy, Istio Telemetry, and the conditional monitors/rules in the table above. | `app.kubernetes.io/managed-by: maas-observability` on the kustomize base and gateway Service/ServiceMonitor. Limitador monitor and PrometheusRules do not all carry that label. | Delete the applied objects by name (see [Telemetry and ServiceMonitors](#telemetry-and-servicemonitors)). Dashboards are unaffected. |
 
@@ -130,9 +130,9 @@ Requires a running **maas-controller** (`LifecycleReconciler`), a `Config` insta
 kubectl patch configs.maas.opendatahub.io default --type=merge \
   -p '{"spec":{"usageLogging":false}}'
 
-# Metrics Usage dashboard (dashboard-3): owned by Config.
-# Disabling Tenant telemetry does not remove it.
-# It is garbage-collected when Config is deleted (operator uninstall / teardown).
+# Metrics Usage dashboard (dashboard-3): operator deletes the CR it owns
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"usageMetricsDashboard":false}}'
 ```
 
 #### Kustomize dashboards
