@@ -44,6 +44,31 @@ def worker_tenant_context():
         teardown_worker_tenant(case)
 
 
+@pytest.fixture
+def single_subscription_tenant(monkeypatch):
+    """Provide an empty test-owned tenant for single-subscription auto-selection."""
+    import test_helper
+    from worker_tenant_fixtures import (
+        activate_worker_tenant,
+        bootstrap_worker_tenant,
+        build_worker_tenant_case,
+        teardown_worker_tenant,
+        xdist_worker_suffix,
+    )
+
+    # Keep maas-api-key-cleanup-<tenant> within the 52-character CronJob limit.
+    context = build_worker_tenant_case(f"single-{xdist_worker_suffix()}")
+    try:
+        context = bootstrap_worker_tenant(context, baseline=False)
+        monkeypatch.setattr(
+            test_helper, "GATEWAY_AUTH_POLICY_NAME", context.gateway_authpolicy_name,
+        )
+        with activate_worker_tenant(context):
+            yield context
+    finally:
+        teardown_worker_tenant(context)
+
+
 @pytest.fixture(autouse=True)
 def _activate_marked_worker_tenant(request):
     """Provision isolation only when the test explicitly opts in by marker."""

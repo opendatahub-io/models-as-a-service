@@ -53,6 +53,7 @@ import uuid
 import pytest
 import requests
 import test_helper
+from worker_tenant_fixtures import wait_for_only_accessible_subscription
 
 from test_helper import (
     MODEL_NAME,
@@ -2009,56 +2010,59 @@ class TestE2ESubscriptionFlow:
             _wait_for_cr_absent("maassubscription", subscription_name)
 
     @pytest.mark.serial
-    def test_e2e_single_subscription_auto_selects(self):
+    def test_e2e_single_subscription_auto_selects(self, single_subscription_tenant):
         """
         Test: User with single subscription auto-selects without header (PR #427).
         Uses existing model (facebook-opt-125m-simulated) for faster execution.
 
-        Note: Temporarily removes simulator-subscription to ensure the test user
-        has exactly ONE subscription (not two, which would require a header).
+        Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
         """
-        ns = _ns()
+        context = single_subscription_tenant
+
+        ns = context.tenant_namespace
         auth_policy_name = "e2e-test-auth-single-sub"
         subscription_name = "e2e-test-subscription-single-sub"
         sa_name = "e2e-sa-single-sub"
-
-        # Snapshot existing subscription to restore later
-        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
 
         try:
             oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
-            # Delete simulator-subscription so user has exactly ONE subscription
-            # (otherwise they'd have 2: ours + simulator-subscription via system:authenticated)
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
             # Create auth policy and subscription for test user
-            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _create_test_auth_policy(
+                auth_policy_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _create_test_subscription(
+                subscription_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=context.tenant_namespace, require_enforced=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
-                MODEL_REF,
-                model_namespace=MODEL_NAMESPACE,
+                context.model_ref,
+                model_namespace=context.model_namespace,
+                namespace=context.tenant_namespace,
                 timeout=180,
             )
 
             # Exactly one subscription for this user → mint can auto-bind it without explicit name
+            wait_for_only_accessible_subscription(oc_token, subscription_name)
+
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
 
             log.info("Testing: Single subscription auto-select at mint")
-            r = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
+            r = _poll_status(
+                api_key, 200, path=f"/{context.model_namespace}/{context.model_ref}",
+                model_name=f"e2e/{context.model_ref}", timeout=90,
+            )
             log.info("✅ Single subscription auto-select → %s", r.status_code)
 
         finally:
-            # Restore simulator-subscription first
-            if original_sim:
-                _apply_cr(original_sim)
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
-            _wait_for_cr_absent("maassubscription", subscription_name)
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     def test_e2e_multiple_subscriptions_separate_keys_gets_200(self):
         """
