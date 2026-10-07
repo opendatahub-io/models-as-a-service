@@ -104,6 +104,12 @@ type PlatformParams struct {
 	// MaaSAPIEgressNetworkPolicyDisabled omits maas-api-egress-restrict from the
 	// rendered set and deletes any Config-owned instance on reconcile.
 	MaaSAPIEgressNetworkPolicyDisabled bool
+	// MaaSAPIPreserveEgressOnUpgrade keeps the live restrictive egress block when
+	// networkPolicyEgressRules is unset and the operand policy has no allow-all rule.
+	MaaSAPIPreserveEgressOnUpgrade bool
+	// MaaSAPIPreservedEgressRules is the live egress slice (allow-all stripped) used
+	// when MaaSAPIPreserveEgressOnUpgrade is true.
+	MaaSAPIPreservedEgressRules []any
 }
 
 // BuildPlatformParams resolves all runtime parameters from the tenant config object,
@@ -614,8 +620,6 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		return errors.New("maas-api egress NP missing egress rules")
 	}
 
-	egress = removeAllowAllEgressRules(egress)
-
 	restrictiveBase := len(params.MaaSAPIEgressRules) > 0
 
 	switch {
@@ -627,7 +631,10 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 		if err != nil {
 			return fmt.Errorf("convert custom maas-api egress rules: %w", err)
 		}
+	case params.MaaSAPIPreserveEgressOnUpgrade && len(params.MaaSAPIPreservedEgressRules) > 0:
+		egress = params.MaaSAPIPreservedEgressRules
 	default:
+		egress = removeAllowAllEgressRules(egress)
 		egress = append(egress, map[string]any{})
 	}
 
@@ -645,6 +652,16 @@ func patchMaaSAPIEgressRestrictNetworkPolicy(r *unstructured.Unstructured, param
 	}
 
 	return unstructured.SetNestedSlice(r.Object, egress, "spec", "egress")
+}
+
+func hasAllowAllEgressRule(egress []any) bool {
+	for _, ruleRaw := range egress {
+		rule, ok := ruleRaw.(map[string]any)
+		if ok && len(rule) == 0 {
+			return true
+		}
+	}
+	return false
 }
 
 func removeAllowAllEgressRules(egress []any) []any {

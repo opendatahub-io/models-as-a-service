@@ -86,6 +86,9 @@ func RunPlatform(
 		return nil, fmt.Errorf("build params: %w", err)
 	}
 	applyMaaSAPIEgressConfig(&params, mcfg)
+	if err := applyMaaSAPIPreserveEgressConfig(ctx, c, &params, mcfg, appNs); err != nil {
+		return nil, fmt.Errorf("resolve maas-api egress preserve-on-upgrade: %w", err)
+	}
 
 	if !params.SkipIPP {
 		wasmPresent, warning, err := gatewayHasKuadrantWasmAuth(ctx, c, platformContext.GatewayRef.Namespace, platformContext.GatewayRef.Name)
@@ -801,6 +804,46 @@ func applyMaaSAPIEgressConfig(params *PlatformParams, mcfg *maasv1alpha1.Config)
 	}
 	params.MaaSAPIEgressRules = mcfg.Spec.NetworkPolicyEgressRules
 	params.MaaSAPIAdditionalEgressRules = mcfg.Spec.NetworkPolicyAdditionalEgressRules
+}
+
+// applyMaaSAPIPreserveEgressConfig copies the live restrictive egress block when
+// networkPolicyEgressRules is unset so upgrades do not silently add allow-all.
+func applyMaaSAPIPreserveEgressConfig(ctx context.Context, c client.Client, params *PlatformParams, mcfg *maasv1alpha1.Config, appNs string) error {
+	if params == nil || mcfg == nil {
+		return nil
+	}
+	if params.MaaSAPIEgressNetworkPolicyDisabled || len(params.MaaSAPIEgressRules) > 0 {
+		return nil
+	}
+
+	np := &unstructured.Unstructured{}
+	np.SetGroupVersionKind(GVKNetworkPolicy)
+	key := types.NamespacedName{Namespace: appNs, Name: baseMaaSAPIEgressRestrictNetworkPolicyName}
+	if err := c.Get(ctx, key, np); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("get NetworkPolicy %s/%s: %w", appNs, baseMaaSAPIEgressRestrictNetworkPolicyName, err)
+	}
+	if !isMaaSManagedMaaSAPIEgressNetworkPolicy(np, mcfg.UID) {
+		return nil
+	}
+
+	egress, found, err := unstructured.NestedSlice(np.Object, "spec", "egress")
+	if err != nil {
+		return fmt.Errorf("read live maas-api egress rules: %w", err)
+	}
+	if !found || hasAllowAllEgressRule(egress) {
+		return nil
+	}
+
+	preserved := removeAllowAllEgressRules(egress)
+	if len(preserved) == 0 {
+		return nil
+	}
+	params.MaaSAPIPreserveEgressOnUpgrade = true
+	params.MaaSAPIPreservedEgressRules = preserved
+	return nil
 }
 
 // isMaaSManagedMaaSAPIEgressNetworkPolicy reports whether maas-controller may delete
