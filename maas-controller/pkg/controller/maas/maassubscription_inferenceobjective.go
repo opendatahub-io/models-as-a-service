@@ -278,10 +278,13 @@ type modelFlowControl struct {
 	Objective types.NamespacedName
 }
 
+// flowControlMessageMaxLen is the schema maxLength of ModelFlowControlStatus.Message.
+const flowControlMessageMaxLen = 1024
+
 // setReason sets the model's reason and message, and derives Ready from the reason.
 func (m *modelFlowControl) setReason(reason maasv1alpha1.FlowControlReason, message string) {
 	m.Status.Reason = reason
-	m.Status.Message = message
+	m.Status.Message = truncateMessage(message, flowControlMessageMaxLen)
 	m.Status.Ready = flowControlReasonReady(reason)
 }
 
@@ -302,23 +305,19 @@ func flowControlReasonReady(reason maasv1alpha1.FlowControlReason) bool {
 type flowControlResolution struct {
 	// Models has one entry per distinct model ref, sorted by namespace and name.
 	Models []*modelFlowControl
-	// Desired are the InferenceObjectives the subscription needs, keyed by name and
-	// namespace. It is empty when spec.inferencePriority is unset.
+	// Desired are the needed InferenceObjectives; empty when spec.inferencePriority is unset.
 	Desired map[types.NamespacedName]*desiredObjective
-	// Complete is false when a lookup failed, so Desired may be missing objectives that
-	// should exist; the caller must then not delete anything.
+	// Complete is false when a lookup failed; nothing is deleted then.
 	Complete bool
 }
 
-// resolveFlowControl resolves, for each referenced model, the InferencePool and the
-// InferenceObjective name, and the objectives the subscription needs. Names are resolved
-// even when spec.inferencePriority is unset, so maas-api can publish them as headers. A
-// failure for one model does not stop the others; failures are returned for retry.
+// resolveFlowControl resolves each model's InferencePool and InferenceObjective name, and
+// the objectives the subscription needs. Names are resolved even when
+// spec.inferencePriority is unset. Failures are returned for retry.
 func (r *MaaSSubscriptionReconciler) resolveFlowControl(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) (flowControlResolution, error) {
 	res := flowControlResolution{Desired: make(map[types.NamespacedName]*desiredObjective), Complete: true}
 	prioritySet := sub.Spec.InferencePriority != nil
-	// warnf only records events when request priority is requested; without it, a model
-	// that cannot get an objective is expected and not worth a Warning.
+	// warnf records events only when request priority is set.
 	warnf := func(reason, messageFmt string, args ...any) {
 		if prioritySet {
 			r.warnf(sub, reason, messageFmt, args...)
@@ -342,8 +341,7 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControl(ctx context.Context, sub
 		m.setReason(maasv1alpha1.FlowControlReasonReconcileFailed, err.Error())
 	}
 
-	// Resolved lazily, once: only models with an observed pool need them. A failure is
-	// reported on every model that needs the value, and returned once.
+	// Resolved once, on first use. A failure is set on every model that needs it.
 	var (
 		gatewayRef      maasv1alpha1.TenantGatewayRef
 		gatewayErr      error
@@ -447,6 +445,10 @@ func (r *MaaSSubscriptionReconciler) resolveFlowControl(ctx context.Context, sub
 			continue
 		}
 		res.Desired[m.Objective] = &desiredObjective{Pool: *pool.Pool, TenantName: tenantName, Priority: *sub.Spec.InferencePriority, Models: []string{key}}
+	}
+	if !prioritySet {
+		// Nothing is desired, so cleanup is safe despite lookup errors.
+		res.Complete = true
 	}
 	return res, errors.Join(errs...)
 }
@@ -575,18 +577,16 @@ func (r *MaaSSubscriptionReconciler) applyInferenceObjective(
 type inferenceObjectivesResult struct {
 	// Statuses has one entry per distinct model ref, sorted by namespace and name.
 	Statuses []maasv1alpha1.ModelFlowControlStatus
-	// Conflict is true when a foreign object holds a name we need, so the caller can
-	// recheck later; the InferenceObjective watch does not see foreign objects.
+	// Conflict is true when a foreign object holds a needed name.
 	Conflict bool
 	// APIUnavailable is true when the InferenceObjective API is not served.
 	APIUnavailable bool
 }
 
 // reconcileInferenceObjectives creates, updates, and deletes the subscription's
-// InferenceObjectives and reports each model's request-priority status. A model is only
-// reported as reconciled once its objective is observed with the desired spec. Obsolete
-// objectives are deleted only when the desired set is complete, so a transient lookup
-// failure never removes a working objective. Errors are returned for retry.
+// InferenceObjectives and returns each model's status. A model is reconciled once its
+// objective is observed with the desired spec. Obsolete objectives are deleted only when
+// the desired set is complete. Errors are returned for retry.
 func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Context, log logr.Logger, sub *maasv1alpha1.MaaSSubscription) (result inferenceObjectivesResult, _ error) {
 	res, err := r.resolveFlowControl(ctx, sub)
 	var errs []error
@@ -643,9 +643,7 @@ func (r *MaaSSubscriptionReconciler) reconcileInferenceObjectives(ctx context.Co
 				fmt.Sprintf("InferenceObjective %s is held by an object not managed for this subscription", key))
 		case applyErr != nil:
 			errs = append(errs, applyErr)
-			// AlreadyExists and Conflict mean the cache is behind our own last write; the
-			// retry resolves them, so the objective is pending rather than failed and they
-			// are not worth a Warning event.
+			// AlreadyExists and Conflict mean a stale cache: pending, retried without a Warning.
 			if apierrors.IsAlreadyExists(applyErr) || apierrors.IsConflict(applyErr) {
 				setObjectiveReason(key, maasv1alpha1.FlowControlReasonObjectivePending, "InferenceObjective is not reconciled yet")
 				continue
@@ -694,10 +692,8 @@ var flowControlConditionReasons = []maasv1alpha1.FlowControlReason{
 	maasv1alpha1.FlowControlReasonPoolPending,
 }
 
-// flowControlDegrades reports whether a reason caps the subscription phase at Degraded:
-// request priority is set but cannot be applied until something is fixed or retried.
-// Pending states are progress, and a missing InferenceObjective API means the feature is
-// unavailable on the cluster, so neither degrades the subscription.
+// flowControlDegrades reports whether a reason caps the subscription phase at Degraded.
+// Pending states and a missing InferenceObjective API do not.
 func flowControlDegrades(reason maasv1alpha1.FlowControlReason) bool {
 	switch reason {
 	case maasv1alpha1.FlowControlReasonReconcileFailed,
@@ -710,10 +706,9 @@ func flowControlDegrades(reason maasv1alpha1.FlowControlReason) bool {
 	}
 }
 
-// inferenceObjectivesCondition summarizes the model statuses into the InferenceObjectivesReady
-// condition, and reports whether they cap the subscription phase at Degraded. ok is false
-// when spec.inferencePriority is unset: no objective is required, so there is no condition.
-// Failed is never derived from request priority, so access is never cut off by it.
+// inferenceObjectivesCondition builds the InferenceObjectivesReady condition from the model
+// statuses and reports whether they cap the phase at Degraded. ok is false when
+// spec.inferencePriority is unset.
 func inferenceObjectivesCondition(sub *maasv1alpha1.MaaSSubscription, statuses []maasv1alpha1.ModelFlowControlStatus) (cond metav1.Condition, degraded, ok bool) {
 	if sub.Spec.InferencePriority == nil {
 		return metav1.Condition{}, false, false
@@ -745,8 +740,8 @@ func inferenceObjectivesCondition(sub *maasv1alpha1.MaaSSubscription, statuses [
 	if worst < len(flowControlConditionReasons) {
 		cond.Reason = string(flowControlConditionReasons[worst])
 	}
-	cond.Message = fmt.Sprintf("request priority is not reconciled for %d of %d models: %s",
-		len(notReady), len(statuses), strings.Join(notReady, ", "))
+	cond.Message = truncateConditionMessage(fmt.Sprintf("request priority is not reconciled for %d of %d models: %s",
+		len(notReady), len(statuses), strings.Join(notReady, ", ")))
 	return cond, degraded, true
 }
 
@@ -771,10 +766,8 @@ func observedObjectiveReason(obj *llmdv1alpha2.InferenceObjective, d *desiredObj
 }
 
 // listOwnedInferenceObjectives lists the subscription's InferenceObjectives by ownership
-// labels and annotations, so it works without tenant or gateway lookups. It reads from the
-// API server: the cache may not have seen an objective created moments ago, and missing it
-// would report it as pending or, during finalizer cleanup, orphan it. It returns no
-// objectives when the API is not served.
+// labels and annotation. It reads from the API server, since the cache can miss objectives
+// created moments ago. It returns none when the API is not served.
 func (r *MaaSSubscriptionReconciler) listOwnedInferenceObjectives(ctx context.Context, sub *maasv1alpha1.MaaSSubscription) ([]*llmdv1alpha2.InferenceObjective, error) {
 	list := &llmdv1alpha2.InferenceObjectiveList{}
 	selector := client.MatchingLabels(inferenceObjectiveOwnerLabels())

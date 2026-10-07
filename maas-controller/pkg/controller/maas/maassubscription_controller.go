@@ -476,10 +476,8 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 	modelStatuses := r.validateModelRefs(ctx, subscription)
 	subscription.Status.ModelRefStatuses = modelStatuses
 
-	// Reconcile InferenceObjectives for spec.inferencePriority before TokenRateLimitPolicies,
-	// so a TokenRateLimitPolicy failure does not block request priority. Their status is set
-	// here so every status write below includes it. Request priority can cap the phase at
-	// Degraded but never fails the subscription, so it never cuts off access.
+	// Reconcile InferenceObjectives before TokenRateLimitPolicies, so a TokenRateLimitPolicy
+	// failure does not block them, and set their status for every status write below.
 	io, ioErr := r.reconcileInferenceObjectives(ctx, log, subscription)
 	if ioErr != nil {
 		log.Error(ioErr, "failed to reconcile InferenceObjectives, will retry")
@@ -553,6 +551,7 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 
 	// Derive final phase based on model and TRLP health
 	phase, message := deriveFinalPhase(modelStatuses, trlpStatuses)
+	// Request priority can degrade an Active subscription but never fail it.
 	if phase == maasv1alpha1.PhaseActive && ioDegraded {
 		phase, message = maasv1alpha1.PhaseDegraded, ioCondition.Message
 	}

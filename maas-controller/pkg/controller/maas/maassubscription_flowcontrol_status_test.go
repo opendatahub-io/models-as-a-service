@@ -21,6 +21,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	kservev1alpha2 "github.com/kserve/kserve/pkg/apis/serving/v1alpha2"
 	llmdv1alpha2 "github.com/llm-d/llm-d-router/apix/v1alpha2"
@@ -489,5 +490,50 @@ func TestInferenceObjectivesCondition(t *testing.T) {
 
 	if _, _, ok := inferenceObjectivesCondition(newPrioritySubscription(nil), nil); ok {
 		t.Error("condition reported while inferencePriority is unset")
+	}
+}
+
+// TestModelFlowControlSetReason_TruncatesMessage verifies messages fit the schema limit.
+func TestModelFlowControlSetReason_TruncatesMessage(t *testing.T) {
+	m := &modelFlowControl{}
+	m.setReason(maasv1alpha1.FlowControlReasonReconcileFailed, strings.Repeat("é", flowControlMessageMaxLen))
+	if n := len(m.Status.Message); n > flowControlMessageMaxLen {
+		t.Errorf("message is %d bytes, want at most %d", n, flowControlMessageMaxLen)
+	}
+	if !utf8.ValidString(m.Status.Message) || !strings.HasSuffix(m.Status.Message, "…") {
+		t.Errorf("message %q is not a valid truncated string", m.Status.Message)
+	}
+
+	m.setReason(maasv1alpha1.FlowControlReasonPoolPending, "short")
+	if m.Status.Message != "short" {
+		t.Errorf("short message changed to %q", m.Status.Message)
+	}
+}
+
+// TestReconcileInferenceObjectives_ClearedPriorityCleansUpDespiteLookupError verifies a
+// cleared priority deletes the objective even when a lookup fails.
+func TestReconcileInferenceObjectives_ClearedPriorityCleansUpDespiteLookupError(t *testing.T) {
+	sub := newPrioritySubscription(nil, "llama")
+	broken := &maasv1alpha1.MaasTenantConfig{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      maasv1alpha1.MaasTenantConfigInstanceName,
+			Namespace: ioNS,
+			Labels:    map[string]string{tenantreconcile.LabelManagedByAITenant: "true"},
+		},
+	}
+	env := newIOEnv(t, nil, append(poolModel("llama", "llama-pool"), sub, broken, ownedObjective(sub, defaultObjectiveKey("llama-pool"), "llama-pool", 1))...)
+
+	res, err := env.reconcileIO(t)
+	if err == nil {
+		t.Error("expected the tenant lookup error to be returned so the objective name is retried")
+	}
+	if objs := env.objectives(t); len(objs) != 0 {
+		t.Errorf("objectives = %v, want the stale objective deleted", objs)
+	}
+	if s := onlyStatus(t, res.Statuses); s.Reason != maasv1alpha1.FlowControlReasonReconcileFailed {
+		t.Errorf("reason = %q, want %q", s.Reason, maasv1alpha1.FlowControlReasonReconcileFailed)
+	}
+	if events := env.events(); len(events) != 0 {
+		t.Errorf("unexpected events %v while inferencePriority is unset", events)
 	}
 }
