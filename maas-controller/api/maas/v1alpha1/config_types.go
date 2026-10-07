@@ -135,5 +135,5 @@ type ConfigList struct {
 }
 
 func init() {
-	SchemeBuilder.Register(&Config{}, &ConfigList{})
+	register(&Config{}, &ConfigList{})
 }

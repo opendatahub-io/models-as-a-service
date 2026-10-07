@@ -22,7 +22,6 @@ import (
 	"fmt"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
@@ -40,19 +39,13 @@ type MaaSModelRefValidator struct {
 
 // SetupWebhookWithManager registers the webhook with the manager.
 func (v *MaaSModelRefValidator) SetupWebhookWithManager(mgr ctrl.Manager) error {
-	return ctrl.NewWebhookManagedBy(mgr).
-		For(&maasv1alpha1.MaaSModelRef{}).
+	return ctrl.NewWebhookManagedBy(mgr, &maasv1alpha1.MaaSModelRef{}).
 		WithValidator(v).
 		Complete()
 }
 
 // ValidateCreate validates MaaSModelRef on creation.
-func (v *MaaSModelRefValidator) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
-	model, ok := obj.(*maasv1alpha1.MaaSModelRef)
-	if !ok {
-		return nil, fmt.Errorf("expected MaaSModelRef object, got %T", obj)
-	}
-
+func (v *MaaSModelRefValidator) ValidateCreate(ctx context.Context, model *maasv1alpha1.MaaSModelRef) (admission.Warnings, error) {
 	if err := v.validateTenantRef(ctx, model); err != nil {
 		return nil, err
 	}
@@ -61,12 +54,7 @@ func (v *MaaSModelRefValidator) ValidateCreate(ctx context.Context, obj runtime.
 }
 
 // ValidateUpdate validates MaaSModelRef on update.
-func (v *MaaSModelRefValidator) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
-	model, ok := newObj.(*maasv1alpha1.MaaSModelRef)
-	if !ok {
-		return nil, fmt.Errorf("expected MaaSModelRef object, got %T", newObj)
-	}
-
+func (v *MaaSModelRefValidator) ValidateUpdate(ctx context.Context, oldObj, model *maasv1alpha1.MaaSModelRef) (admission.Warnings, error) {
 	if err := v.validateTenantRef(ctx, model); err != nil {
 		return nil, err
 	}
@@ -76,7 +64,7 @@ func (v *MaaSModelRefValidator) ValidateUpdate(ctx context.Context, oldObj, newO
 
 // ValidateDelete validates MaaSModelRef on deletion.
 // No validation needed for deletion.
-func (v *MaaSModelRefValidator) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
+func (v *MaaSModelRefValidator) ValidateDelete(ctx context.Context, obj *maasv1alpha1.MaaSModelRef) (admission.Warnings, error) {
 	return nil, nil
 }
 

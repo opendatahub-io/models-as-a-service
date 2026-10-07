@@ -22,6 +22,7 @@ from multitenancy_helpers import (
     GATEWAY_NAMESPACE,
     INFRA_NAMESPACE,
     _oc_run,
+    extproc_deployment_uses_praxis,
     get_json_or_none,
     list_json,
 )
@@ -114,6 +115,11 @@ class TestPayloadProcessingNetworkPolicyExists:
 
     def test_egress_allows_otlp_to_monitoring_namespace(self):
         """payload-processing must egress OTLP traces to the platform collector."""
+        if extproc_deployment_uses_praxis("payload-processing"):
+            pytest.skip(
+                "AIGC praxis NetworkPolicy does not include OTLP 4317 egress "
+                "(MaaS Go IPP bundle only)"
+            )
         np = get_json_or_none("networkpolicy", NETWORKPOLICY_NAME, GATEWAY_NAMESPACE)
         assert np is not None
 

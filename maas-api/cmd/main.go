@@ -320,11 +320,15 @@ func registerHandlers(
 		auth.TenantAuthMiddleware(log, cluster.ClientSet), //nolint:contextcheck // gin middleware uses c.Request.Context()
 		tenantHandler.GetTenantInfo)
 
-	// Internal routes (no auth required - called by Authorino / CronJob)
+	// Internal routes used by Authorino remain unauthenticated because they are
+	// callbacks from the gateway. Cleanup routes require the dedicated cleanup
+	// ServiceAccount token and are additionally restricted by NetworkPolicy.
 	internalRoutes := router.Group("/internal/v1")
 	internalRoutes.POST("/api-keys/validate", apiKeyHandler.ValidateAPIKeyHandler)
-	internalRoutes.POST("/api-keys/cleanup", apiKeyHandler.CleanupExpiredEphemeralKeys)
-	internalRoutes.DELETE("/tenants/:tenant/api-keys", apiKeyHandler.RevokeTenantAPIKeys)
+	cleanupAuth := auth.CleanupAuthMiddleware(log, cluster.ClientSet, "maas-api-cleanup", cfg.Namespace) //nolint:contextcheck // gin middleware uses c.Request.Context()
+	internalRoutes.POST("/api-keys/cleanup", cleanupAuth, apiKeyHandler.CleanupExpiredEphemeralKeys)
+	internalRoutes.DELETE("/tenants/:tenant/api-keys", cleanupAuth, apiKeyHandler.RevokeTenantAPIKeys)
+	internalRoutes.DELETE("/tenants/:tenant/subscriptions/:subscription/api-keys", cleanupAuth, apiKeyHandler.RevokeSubscriptionAPIKeys)
 	internalRoutes.POST("/subscriptions/select", subscriptionHandler.SelectSubscription)
 
 	return nil

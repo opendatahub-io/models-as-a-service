@@ -58,7 +58,10 @@ from test_helper import (
     chat,
 )
 
-pytestmark = pytest.mark.xdist_group("readonly")
+pytestmark = [
+    pytest.mark.legacy_ipp,
+    pytest.mark.xdist_group("readonly"),
+]
 
 ENVOY_FILTER_NAME = "payload-processing"
 IPP_PRE = "envoy.filters.http.ext_proc.ipp-pre"
@@ -178,6 +181,24 @@ def _assert_chain(pod: str, listener: str, filters: list[dict]):
     assert epp.get("typed_config") == ISTIO_EPP_TYPED_CONFIG, (
         f"{pod} {listener}: {EPP} config differs from the copy of Istio's static InferencePool filter"
     )
+
+
+def _assert_praxis_chain(pod: str, listener: str, filters: list[dict]):
+    """Default MaaS path has no InferencePool; EPP is optional when present."""
+    names = [f.get("name") for f in filters]
+    for name in (IPP_PRE, IPP, ROUTER):
+        assert names.count(name) == 1, f"{pod} {listener}: {name} x{names.count(name)} in {names}"
+    order = [names.index(IPP_PRE), names.index(IPP), names.index(ROUTER)]
+    auth = _auth_index(names)
+    if auth >= 0:
+        order.insert(1, auth)
+    assert order == sorted(order), (
+        f"{pod} {listener}: expected ipp-pre -> auth -> ipp -> router, got {names}"
+    )
+    if names.count(EPP) == 1:
+        assert names.index(IPP) < names.index(EPP) < names.index(ROUTER), (
+            f"{pod} {listener}: {EPP} must sit after ipp and before router, got {names}"
+        )
 
 
 @dataclass(frozen=True)
