@@ -51,7 +51,11 @@ spec:
           metadata:
             type: object
           spec:
-            description: ConfigSpec defines the desired state of Config.
+            description: |-
+              ConfigSpec defines the desired state of Config.
+              Admission CEL keeps a low-cost shape check; strict restricted-egress validation
+              (both to and ports, except the Kubernetes API port-only rule) runs at reconcile
+              time in tenantreconcile.validateRestrictedEgressRules.
             properties:
               limitadorScrapeInterval:
                 default: 30s
@@ -473,14 +477,11 @@ spec:
                 type: boolean
             type: object
             x-kubernetes-validations:
-            - message: each networkPolicyEgressRules entry must specify both destinations
-                and ports, except the Kubernetes API port-only rule (TCP 443 and 6443)
+            - message: each networkPolicyEgressRules entry must specify at least one
+                port or one destination
               rule: '!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r,
-                ((has(r.to) && size(r.to) > 0) && (has(r.ports) && size(r.ports) >
-                0)) || ((!has(r.to) || size(r.to) == 0) && has(r.ports) && size(r.ports)
-                == 2 && r.ports.exists(p, p.port == 443 && p.protocol == ''TCP'')
-                && r.ports.exists(p, p.port == 6443 && p.protocol == ''TCP'') && r.ports.all(p,
-                (p.port == 443 || p.port == 6443) && p.protocol == ''TCP'')))'
+                (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) >
+                0))'
             - message: each networkPolicyAdditionalEgressRules entry must specify
                 at least one port or one destination
               rule: '!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r,

@@ -66,7 +66,10 @@ type Config struct {
 }
 
 // ConfigSpec defines the desired state of Config.
-// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, ((has(r.to) && size(r.to) > 0) && (has(r.ports) && size(r.ports) > 0)) || ((!has(r.to) || size(r.to) == 0) && has(r.ports) && size(r.ports) == 2 && r.ports.exists(p, p.port == 443 && p.protocol == 'TCP') && r.ports.exists(p, p.port == 6443 && p.protocol == 'TCP') && r.ports.all(p, (p.port == 443 || p.port == 6443) && p.protocol == 'TCP')))",message="each networkPolicyEgressRules entry must specify both destinations and ports, except the Kubernetes API port-only rule (TCP 443 and 6443)"
+// Admission CEL keeps a low-cost shape check; strict restricted-egress validation
+// (both to and ports, except the Kubernetes API port-only rule) runs at reconcile
+// time in tenantreconcile.validateRestrictedEgressRules.
+// +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyEgressRules) || self.networkPolicyEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.networkPolicyAdditionalEgressRules) || self.networkPolicyAdditionalEgressRules.all(r, (has(r.ports) && size(r.ports) > 0) || (has(r.to) && size(r.to) > 0))",message="each networkPolicyAdditionalEgressRules entry must specify at least one port or one destination"
 // +kubebuilder:validation:XValidation:rule="!has(self.maasApiEgressNetworkPolicy) || self.maasApiEgressNetworkPolicy != 'Disabled' || ((!has(self.networkPolicyEgressRules) || size(self.networkPolicyEgressRules) == 0) && (!has(self.networkPolicyAdditionalEgressRules) || size(self.networkPolicyAdditionalEgressRules) == 0))",message="networkPolicyEgressRules and networkPolicyAdditionalEgressRules must be unset when maasApiEgressNetworkPolicy is Disabled"
 type ConfigSpec struct {
