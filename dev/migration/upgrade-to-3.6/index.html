@@ -794,6 +794,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#legacy-metrics-usage-dashboard-is-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy metrics usage dashboard is opt-in
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3278,6 +3289,17 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#legacy-metrics-usage-dashboard-is-opt-in" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Legacy metrics usage dashboard is opt-in
+      
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -3315,6 +3337,12 @@
 <li>Rate limiting matches <code>auth.identity.selected_subscription_id</code> (see <a href="../../architecture-internals/authentication-internals/">Authentication Internals</a>).</li>
 <li>Response header <code>X-MaaS-Subscription-Rate-Limit-Id</code> may be injected when select returns <code>rateLimitId</code>. Gateway AuthPolicy rejects inbound client values for that header; also ensure Praxis / identity-header strip configs treat <code>x-maas-*</code> (prefix or explicit list) so it cannot be spoofed upstream.</li>
 </ul>
+<h2 id="legacy-metrics-usage-dashboard-is-opt-in">Legacy metrics usage dashboard is opt-in</h2>
+<p><code>Config.spec.usageMetricsDashboard</code> defaults to <code>false</code>. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (<code>dashboard-3-maas-usage-admin</code>). To keep it:</p>
+<div class="highlight"><pre><span></span><code><a id="__codelineno-0-1" name="__codelineno-0-1" href="#__codelineno-0-1"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-0-2" name="__codelineno-0-2" href="#__codelineno-0-2"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageMetricsDashboard&quot;:true}}&#39;</span>
+</code></pre></div>
+<p>Prefer the logs-based usage dashboards gated by <code>usageLogging</code>. See <a href="../../observability/setup/">Setup</a>.</p>
 
 
 
@@ -3337,7 +3365,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 1, 2026 20:17:12 UTC">October 1, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2026 12:04:35 UTC">October 8, 2026</span>
   </span>
 
     

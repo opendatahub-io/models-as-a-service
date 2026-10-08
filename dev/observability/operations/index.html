@@ -3815,9 +3815,9 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 <tbody>
 <tr>
 <td><strong>Operator</strong> (recommended)</td>
-<td><code>LifecycleReconciler.ensureUsageDashboard</code> (metrics Usage dashboard). Usage-log dashboards via <code>usageLogging</code> on <code>Config</code>.</td>
+<td>Metrics Usage dashboard via <code>usageMetricsDashboard</code> on <code>Config</code>. Usage-log dashboards via <code>usageLogging</code> on <code>Config</code>.</td>
 <td>Controller <code>ownerReference</code> on <code>Config</code> (<code>configs.maas.opendatahub.io/default</code>); field manager <code>maas-controller</code>.</td>
-<td>Do not delete the CR by hand — the operator recreates it. See <a href="#operator-managed-dashboards">Operator-managed dashboards</a> below.</td>
+<td>Disable the matching Config flag; do not delete the CR by hand while the flag is true — the operator recreates it. See <a href="#operator-managed-dashboards">Operator-managed dashboards</a> below.</td>
 </tr>
 <tr>
 <td><strong>Kustomize</strong> (development)</td>
@@ -3844,9 +3844,9 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
 <a id="__codelineno-3-2" name="__codelineno-3-2" href="#__codelineno-3-2"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
 <a id="__codelineno-3-3" name="__codelineno-3-3" href="#__codelineno-3-3"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageLogging&quot;:false}}&#39;</span>
 <a id="__codelineno-3-4" name="__codelineno-3-4" href="#__codelineno-3-4"></a>
-<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Metrics Usage dashboard (dashboard-3): owned by Config.</span>
-<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a><span class="c1"># Disabling Tenant telemetry does not remove it.</span>
-<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="c1"># It is garbage-collected when Config is deleted (operator uninstall / teardown).</span>
+<a id="__codelineno-3-5" name="__codelineno-3-5" href="#__codelineno-3-5"></a><span class="c1"># Metrics Usage dashboard (dashboard-3): operator deletes the CR it owns</span>
+<a id="__codelineno-3-6" name="__codelineno-3-6" href="#__codelineno-3-6"></a>kubectl<span class="w"> </span>patch<span class="w"> </span>configs.maas.opendatahub.io<span class="w"> </span>default<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span><span class="se">\</span>
+<a id="__codelineno-3-7" name="__codelineno-3-7" href="#__codelineno-3-7"></a><span class="w">  </span>-p<span class="w"> </span><span class="s1">&#39;{&quot;spec&quot;:{&quot;usageMetricsDashboard&quot;:false}}&#39;</span>
 </code></pre></div>
 <h4 id="kustomize-dashboards">Kustomize dashboards</h4>
 <p>Delete only the Kustomize-applied metrics Usage dashboard, by name and namespace; if <code>Config</code> is the controller owner, do not delete the CR by hand — see <a href="#operator-managed-dashboards">Operator-managed dashboards</a>.</p>
@@ -4141,7 +4141,7 @@ OpenTelemetryCollector in the DSCI monitoring namespace.</p>
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="September 10, 2026 15:20:01 UTC">September 10, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2026 12:04:35 UTC">October 8, 2026</span>
   </span>
 
     
