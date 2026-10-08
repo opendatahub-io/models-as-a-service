@@ -25,6 +25,7 @@ import pytest
 import requests
 
 import test_helper
+from worker_tenant_fixtures import wait_for_only_accessible_subscription
 from multitenancy_helpers import wait_for_llmisvc_backend_ready
 from test_helper import (
     DISTINCT_MODEL_2_ID,
@@ -43,7 +44,6 @@ from test_helper import (
     TLS_VERIFY,
     UNCONFIGURED_MODEL_PATH,  # noqa: F401 - accessed through globals() by worker fixture
     UNCONFIGURED_MODEL_REF,
-    _apply_cr,
     _create_api_key,
     _create_llmis,
     _create_maas_model_ref,
@@ -54,7 +54,6 @@ from test_helper import (
     _delete_governance_and_wait,
     _delete_sa,
     _get_auth_policies_for_model,
-    _get_cluster_token,
     _get_cr,
     _get_subscriptions_for_model,
     _inference,
@@ -62,12 +61,10 @@ from test_helper import (
     _ns,
     _request_with_gateway_retry,
     _sa_to_user,
-    _snapshot_cr,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_subscription_discovery_ready,
-    _wait_for_subscription_inference_ready,
     _wait_for_subscription_trlp_status,
     _wait_for_model_ready,
     _wait_for_token_rate_limit_policy,
@@ -171,7 +168,7 @@ def _worker_models_context(request):
     globals()["_create_test_subscription"] = create_subscription
     globals()["_get_auth_policies_for_model"] = get_auth_policies
     globals()["_get_subscriptions_for_model"] = get_subscriptions
-    # Gateway auth re-checks (Enforced waits, retry after a proxy 500) must target
+    # Gateway auth re-checks (Enforced waits, retry after a proxy 500/503) must target
     # the worker tenant's gateway AuthPolicy, not the default one.
     test_helper.GATEWAY_AUTH_POLICY_NAME = context.gateway_authpolicy_name
 
@@ -400,52 +397,52 @@ class TestModelsEndpoint:
         log.info("=" * 60)
 
     @pytest.mark.serial
-    def test_single_subscription_auto_select(self):
+    def test_single_subscription_auto_select(self, single_subscription_tenant):
         """
         Test: User with exactly one accessible subscription can list models without
         providing x-maas-subscription header (auto-selection).
 
         Expected: HTTP 200 with models from that subscription.
 
-        Note: Temporarily deletes simulator-subscription to ensure test user has exactly
-        ONE subscription (not two, which would require a header).
+        Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
         """
+        context = single_subscription_tenant
+
         sa_name = "e2e-models-single-sub-sa"
-        sa_ns = "default"
-        maas_ns = _ns()
+        sa_ns = context.tenant_namespace
+        maas_ns = context.tenant_namespace
         auth_policy_name = "e2e-single-sub-auth"
         subscription_name = "e2e-single-sub-subscription"
 
-        # Snapshot existing subscription to restore later
-        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
-        api_key = None
         try:
             # Create service account
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
-            # Delete simulator-subscription so user has exactly ONE subscription
-            # (otherwise they'd have 2: ours + simulator-subscription via system:authenticated)
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
-            # Create auth policy and subscription for test user using DISTINCT_MODEL_REF
-            # (avoids conflicts with existing simulator-access auth policy)
-            log.info(f"Creating auth policy and subscription for {sa_user} with {DISTINCT_MODEL_REF}")
-            _create_test_auth_policy(auth_policy_name, DISTINCT_MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, DISTINCT_MODEL_REF, users=[sa_user])
+            # Grant access only to this test service account.
+            log.info(f"Creating auth policy and subscription for {sa_user} with {context.model_ref}")
+            _create_test_auth_policy(
+                auth_policy_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _create_test_subscription(
+                subscription_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
 
             # Wait for subscription to reconcile before creating API key
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             # Wait for model to become Ready after governance pairing is created
             log.info("Waiting for model to reconcile and become Ready...")
-            _wait_for_model_ready(DISTINCT_MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(context.model_ref, namespace=context.model_namespace)
 
             # Create API key for inference
+            wait_for_only_accessible_subscription(sa_token, subscription_name)
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=context.tenant_namespace, require_enforced=False)
 
             # Query /v1/models
             log.info("Testing: GET /v1/models with single subscription (no header, auto-select)")
@@ -484,11 +481,6 @@ class TestModelsEndpoint:
                 log.info(f"✅ Single subscription auto-select → {r.status_code} with {len(models)} model(s)")
 
         finally:
-            # Restore simulator-subscription first (critical for other tests)
-            if original_sim:
-                _apply_cr(original_sim)
-
-            # Clean up test resources
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
@@ -763,6 +755,8 @@ class TestModelsEndpoint:
                 text=True,
                 check=True,
             )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
+            _wait_for_gateway_auth_enforced()
 
             # Create subscription with the SAME model ref TWICE (guaranteed duplicates)
             log.info(f"Creating subscription with {MODEL_REF} listed twice (to test deduplication)")
@@ -799,12 +793,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            _wait_for_subscription_inference_ready(
-                subscription_name,
-                MODEL_REF,
-                namespace=maas_ns,
-                model_namespace=MODEL_NAMESPACE,
-            )
+            # /v1/models only needs model discovery. Requiring direct and
+            # mirrored TRLP enforcement here makes this catalog test depend on
+            # an unrelated rate-limit condition while the gateway is rebuilding
+            # policies for the duplicate model refs.
+            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-dedup-test-key", subscription=subscription_name)
@@ -1594,7 +1587,8 @@ class TestModelsEndpoint:
         but that subscription is later deleted. The gateway injects X-MaaS-Subscription
         from the key, but the subscription no longer exists.
 
-        Expected: HTTP 403 with error type: permission_error
+        Expected: HTTP 403. The gateway may reject the revoked key before the
+        request reaches maas-api, in which case the response body is empty.
         """
         ns = _ns()
         auth_policy_name = "e2e-api-key-deleted-sub-auth"
@@ -1638,13 +1632,7 @@ class TestModelsEndpoint:
             assert r.status_code == 403, \
                 f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
 
-            data = r.json()
-            assert "error" in data, "Response missing 'error' field"
-            error = data["error"]
-            assert error.get("type") == "permission_error", \
-                f"Expected error type 'permission_error', got {error.get('type')}"
-
-            log.info(f"✅ API key with deleted subscription → {r.status_code} (permission_error)")
+            log.info(f"✅ API key with deleted subscription → {r.status_code}")
 
         finally:
             # subscription_name already deleted

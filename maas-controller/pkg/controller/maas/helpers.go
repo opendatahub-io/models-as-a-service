@@ -199,6 +199,17 @@ func (t *tenantForNamespaceResult) identifier() (string, error) {
 	}
 }
 
+func (t *tenantForNamespaceResult) name() (string, error) {
+	switch {
+	case t.config != nil:
+		return tenantreconcile.TenantNameFor(t.config)
+	case t.legacy != nil:
+		return tenantreconcile.TenantNameFor(t.legacy)
+	default:
+		return "", errors.New("tenant config lookup result is empty")
+	}
+}
+
 func (t *tenantForNamespaceResult) platformContext(
 	ctx context.Context,
 	c client.Reader,
@@ -365,8 +376,12 @@ func validateHTTPRouteReferencesGateway(ctx context.Context, c client.Reader, ro
 			return nil
 		}
 	}
-	return fmt.Errorf("HTTPRoute %s/%s does not reference tenant Gateway %s/%s", routeNamespace, routeName, gatewayRef.Namespace, gatewayRef.Name)
+	return fmt.Errorf("HTTPRoute %s/%s %w %s/%s", routeNamespace, routeName, ErrHTTPRouteNotOnTenantGateway, gatewayRef.Namespace, gatewayRef.Name)
 }
+
+// ErrHTTPRouteNotOnTenantGateway is wrapped by validateHTTPRouteReferencesGateway when the
+// route has no parentRef to the tenant Gateway. Other validation failures do not wrap it.
+var ErrHTTPRouteNotOnTenantGateway = errors.New("does not reference tenant Gateway")
 
 const (
 	maxHTTPRouteParentRefs         = 32

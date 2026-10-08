@@ -83,7 +83,9 @@ If you read older notes about a “string trick” solely for TRLP group matchin
 
 - Controller-generated AuthPolicies generally **do not** inject most identity headers (`X-MaaS-Username`, `X-MaaS-Group`, `X-MaaS-Key-Id`) upstream to model pods, to reduce leakage via logs or misconfigured proxies.
 
-**`X-MaaS-Subscription`** may be injected where gateway telemetry needs a stable subscription label. Any client-supplied **`X-MaaS-Subscription`** header is **discarded and replaced** with the server-resolved value from Authorino's **AuthPolicy response phase** (Authorino/Kuadrant AuthPolicy is authoritative—the upstream workload sees only what enforcement injected).
+For **API keys**, AuthPolicy injects **`X-MaaS-Subscription`** only when validation returns a nonempty bound subscription. For **user tokens**, AuthPolicy preserves a client-supplied subscription header and uses it for subscription selection; it does not inject another copy. A user-token request without that header does not gain one during authentication, so telemetry that reads the header may have an empty subscription label.
+
+AuthPolicy sets the llm-d flow-control headers **`x-llm-d-inference-objective`**, **`x-gateway-inference-objective`**, **`x-llm-d-inference-fairness-id`**, and **`x-gateway-inference-fairness-id`** to empty values, replacing any client-supplied values. Clients therefore cannot select an InferenceObjective or fairness ID; the inference scheduler applies priority `0` and its default fairness ID.
 
 **MaaS API routes** use a separate static AuthPolicy that may inject headers required by maas-api middleware (trusted internal service).
 

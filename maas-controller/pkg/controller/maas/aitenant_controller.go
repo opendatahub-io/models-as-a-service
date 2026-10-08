@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"slices"
 	"strings"
@@ -41,7 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -78,10 +79,12 @@ const (
 
 	gatewayLabelsAnnotation = "maas.opendatahub.io/gateway-selector-labels"
 
-	aitenantAPIKeyCleanupServiceAccountName = "maas-api-cleanup"
-	aitenantAPIKeyCleanupCABundleName       = "openshift-service-ca.crt"         //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
-	aitenantAPIKeyCleanupCABundlePath       = "/etc/pki/maas-api/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
-	aitenantAPIKeyCleanupTTLSeconds         = int32(300)
+	aitenantAPIKeyCleanupServiceAccountName    = "maas-api-cleanup"
+	aitenantAPIKeyCleanupOpenShiftCABundleName = "openshift-service-ca.crt"                   //nolint:gosec // ConfigMap name for a public CA bundle, not a credential.
+	aitenantAPIKeyCleanupOpenShiftCAPath       = "/etc/pki/maas-api/openshift/service-ca.crt" //nolint:gosec // Public CA bundle mount path, not a credential.
+	aitenantAPIKeyCleanupXKSCABundleName       = "opendatahub-ca"                             //nolint:gosec // Secret name for a public CA bundle, not a credential.
+	aitenantAPIKeyCleanupXKSCAPath             = "/etc/pki/maas-api/xks/service-ca.crt"       //nolint:gosec // Public CA bundle mount path, not a credential.
+	aitenantAPIKeyCleanupTTLSeconds            = int32(300)
 )
 
 var errTenantAPIKeyRevocationJobFailed = errors.New("API key revocation Job failed")
@@ -109,7 +112,7 @@ type AITenantReconciler struct {
 	// before force-removing the finalizer. Zero disables the timeout.
 	DeletionTimeout time.Duration
 	// Recorder emits Kubernetes events for deletion timeout warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 }
 
 // +kubebuilder:rbac:groups=maas.opendatahub.io,resources=aitenants,verbs=get;list;watch;create;update;patch;delete
@@ -281,7 +284,7 @@ func (r *AITenantReconciler) Reconcile(ctx context.Context, req ctrl.Request) (c
 // SetupWithManager registers the AITenant controller.
 func (r *AITenantReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-aitenant-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-aitenant-controller")
 	}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&maasv1alpha1.AITenant{}, builder.WithPredicates(
@@ -1001,7 +1004,9 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 		return ctrl.Result{}, nil
 	}
 
-	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout {
+	// Never bypass the security cleanup gate. The timeout may only accelerate
+	// best-effort cleanup after API-key invalidation has completed.
+	if r.DeletionTimeout > 0 && time.Since(aitenant.DeletionTimestamp.Time) >= r.DeletionTimeout && tenantAPIKeysRevoked(aitenant) {
 		return r.forceRemoveAITenantFinalizer(ctx, aitenant)
 	}
 
@@ -1017,6 +1022,10 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 	if err != nil {
 		statusSnapshot = aitenant.Status.DeepCopy()
 		setAITenantPhase(aitenant, "Terminating", "DeletionBlocked", err.Error())
+		if r.Recorder != nil {
+			r.Recorder.Eventf(aitenant, nil, corev1.EventTypeWarning, "APIKeyCleanupFailed", "InvalidateAPIKeys",
+				"failed to invalidate API keys for tenant %s: %v", aitenant.Name, err)
+		}
 		if err2 := r.updateAITenantStatus(ctx, aitenant, statusSnapshot); err2 != nil {
 			return ctrl.Result{}, err2
 		}
@@ -1083,8 +1092,11 @@ func (r *AITenantReconciler) reconcileAITenantDelete(ctx context.Context, aitena
 }
 
 func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, aitenant *maasv1alpha1.AITenant) (ctrl.Result, error) {
+	if !tenantAPIKeysRevoked(aitenant) {
+		return ctrl.Result{RequeueAfter: 30 * time.Second}, nil
+	}
 	log := oteljson.FromContext(ctx)
-	msg := fmt.Sprintf("Deletion timeout (%s) reached; cleanup finalizer removed without successful cleanup — API keys may still exist", r.DeletionTimeout)
+	msg := fmt.Sprintf("Deletion timeout (%s) reached after API-key invalidation; remaining cleanup is best effort", r.DeletionTimeout)
 	log.Info("AITenant deletion timeout reached, forcing finalizer removal",
 		"deletionTimestamp", aitenant.DeletionTimestamp.Time,
 		"timeout", r.DeletionTimeout)
@@ -1096,8 +1108,8 @@ func (r *AITenantReconciler) forceRemoveAITenantFinalizer(ctx context.Context, a
 	}
 
 	if r.Recorder != nil {
-		r.Recorder.Eventf(aitenant, corev1.EventTypeWarning, "AITenantCleanupForced",
-			"Deletion timeout (%s) reached for AITenant %s/%s; cleanup finalizer removed without successful cleanup — API keys may still exist",
+		r.Recorder.Eventf(aitenant, nil, corev1.EventTypeWarning, "AITenantCleanupForced", "Cleanup",
+			"Deletion timeout (%s) reached for AITenant %s/%s after API-key invalidation; remaining cleanup is best effort",
 			r.DeletionTimeout, aitenant.Namespace, aitenant.Name)
 	}
 
@@ -1332,7 +1344,11 @@ func tenantAPIKeysRevoked(aitenant *maasv1alpha1.AITenant) bool {
 }
 
 func tenantAPIKeyRevocationJobMatchesAITenant(job *batcv1.Job, aitenant *maasv1alpha1.AITenant) bool {
-	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == string(aitenant.UID)
+	return apiKeyRevocationJobMatchesUID(job, string(aitenant.UID))
+}
+
+func apiKeyRevocationJobMatchesUID(job *batcv1.Job, uid string) bool {
+	return job.Annotations != nil && job.Annotations[aitenantUIDAnnotation] == uid
 }
 
 func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string) *batcv1.Job {
@@ -1340,8 +1356,15 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	if tenantID == tenantreconcile.DefaultAITenantName {
 		tenantID = ""
 	}
+	return apiKeyRevocationJob(
+		aitenantAPIKeyRevocationJobName(aitenant.Name),
+		aitenant.Name, aitenant.Namespace, string(aitenant.UID),
+		aitenant.Name, "", tenantID, namespace,
+	)
+}
+
+func apiKeyRevocationJob(jobName, ownerName, ownerNamespace, ownerUID, tenantName, subscription, tenantID, namespace string) *batcv1.Job {
 	serviceName := tenantreconcile.MaaSAPIServiceName(tenantID)
-	tenantName := aitenant.Name
 	image := tenantreconcile.DefaultMaaSAPIKeyCleanupImage
 	if related := os.Getenv("RELATED_IMAGE_UBI_MINIMAL_IMAGE"); related != "" {
 		image = related
@@ -1351,7 +1374,17 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 	ttlSecondsAfterFinished := aitenantAPIKeyCleanupTTLSeconds
 	serviceHost := fmt.Sprintf("%s.%s.svc", serviceName, namespace)
 	endpoint := fmt.Sprintf("https://%s/internal/v1/tenants/%s/api-keys", net.JoinHostPort(serviceHost, "8443"), tenantName)
-	jobName := aitenantAPIKeyRevocationJobName(aitenant.Name)
+	if subscription != "" {
+		endpoint = fmt.Sprintf("https://%s/internal/v1/tenants/%s/subscriptions/%s/api-keys",
+			net.JoinHostPort(serviceHost, "8443"), tenantName, url.PathEscape(subscription))
+	}
+	cleanupCommand := fmt.Sprintf(
+		"if [ -s %s ]; then CA_BUNDLE=%s; elif [ -s %s ]; then CA_BUNDLE=%s; else echo 'no MaaS API CA bundle found' >&2; exit 1; fi "+
+			"&& TOKEN=\"$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)\" "+
+			"&& exec curl --fail --silent --show-error --max-time 30 "+
+			"--cacert \"${CA_BUNDLE}\" -H \"Authorization: Bearer ${TOKEN}\" -X DELETE %s",
+		aitenantAPIKeyCleanupOpenShiftCAPath, aitenantAPIKeyCleanupOpenShiftCAPath,
+		aitenantAPIKeyCleanupXKSCAPath, aitenantAPIKeyCleanupXKSCAPath, endpoint)
 
 	return &batcv1.Job{
 		ObjectMeta: metav1.ObjectMeta{
@@ -1363,12 +1396,18 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 				"app.kubernetes.io/managed-by":  "maas-controller",
 				"app.kubernetes.io/name":        "maas-api",
 				"app.kubernetes.io/part-of":     "models-as-a-service",
-				tenantreconcile.LabelTenantName: aitenant.Name,
+				tenantreconcile.LabelTenantName: tenantName,
 			},
 			Annotations: map[string]string{
-				aitenantNameAnnotation:      aitenant.Name,
-				aitenantNamespaceAnnotation: aitenant.Namespace,
-				aitenantUIDAnnotation:       string(aitenant.UID),
+				aitenantNameAnnotation:      ownerName,
+				aitenantNamespaceAnnotation: ownerNamespace,
+				aitenantUIDAnnotation:       ownerUID,
+				"maas.opendatahub.io/cleanup-scope": func() string {
+					if subscription == "" {
+						return "tenant"
+					}
+					return "subscription"
+				}(),
 			},
 		},
 		Spec: batcv1.JobSpec{
@@ -1386,7 +1425,7 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 				},
 				Spec: corev1.PodSpec{
 					ServiceAccountName:           aitenantAPIKeyCleanupServiceAccountName,
-					AutomountServiceAccountToken: boolPtr(false),
+					AutomountServiceAccountToken: boolPtr(true),
 					RestartPolicy:                corev1.RestartPolicyOnFailure,
 					SecurityContext: &corev1.PodSecurityContext{
 						RunAsNonRoot: boolPtr(true),
@@ -1396,14 +1435,27 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 					},
 					Volumes: []corev1.Volume{
 						{
-							Name: "maas-api-service-ca",
+							Name: "maas-api-openshift-ca",
 							VolumeSource: corev1.VolumeSource{
 								ConfigMap: &corev1.ConfigMapVolumeSource{
 									LocalObjectReference: corev1.LocalObjectReference{
-										Name: aitenantAPIKeyCleanupCABundleName,
+										Name: aitenantAPIKeyCleanupOpenShiftCABundleName,
 									},
+									Optional: boolPtr(true),
 									Items: []corev1.KeyToPath{
 										{Key: "service-ca.crt", Path: "service-ca.crt"},
+									},
+								},
+							},
+						},
+						{
+							Name: "maas-api-xks-ca",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{
+									SecretName: aitenantAPIKeyCleanupXKSCABundleName,
+									Optional:   boolPtr(true),
+									Items: []corev1.KeyToPath{
+										{Key: "tls.crt", Path: "service-ca.crt"},
 									},
 								},
 							},
@@ -1413,23 +1465,19 @@ func tenantAPIKeyRevocationJob(aitenant *maasv1alpha1.AITenant, namespace string
 						{
 							Name:    "revoke-keys",
 							Image:   image,
-							Command: []string{"curl"},
+							Command: []string{"/bin/sh", "-c"},
 							Args: []string{
-								"--fail",
-								"--silent",
-								"--show-error",
-								"--max-time",
-								"30",
-								"--cacert",
-								aitenantAPIKeyCleanupCABundlePath,
-								"-X",
-								"DELETE",
-								endpoint,
+								cleanupCommand,
 							},
 							VolumeMounts: []corev1.VolumeMount{
 								{
-									Name:      "maas-api-service-ca",
-									MountPath: "/etc/pki/maas-api",
+									Name:      "maas-api-openshift-ca",
+									MountPath: "/etc/pki/maas-api/openshift",
+									ReadOnly:  true,
+								},
+								{
+									Name:      "maas-api-xks-ca",
+									MountPath: "/etc/pki/maas-api/xks",
 									ReadOnly:  true,
 								},
 							},

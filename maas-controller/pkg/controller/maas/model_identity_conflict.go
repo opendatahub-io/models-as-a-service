@@ -117,7 +117,7 @@ func (r *MaaSModelRefReconciler) checkModelIdentityConflict(ctx context.Context,
 	shouldEmitConflictEvent := curr.Status == metav1.ConditionFalse &&
 		(prev == nil || prev.Status != curr.Status || prev.Message != curr.Message)
 	if shouldEmitConflictEvent {
-		r.Recorder.Eventf(model, "Warning", "ModelNameConflict",
+		r.Recorder.Eventf(model, nil, "Warning", "ModelNameConflict", "ValidateModelIdentity",
 			"Model identity %q is shared with %d other MaaSModelRef%s in this namespace: %s",
 			model.Status.ResolvedModelAlias, len(conflicts), pluralS(len(conflicts)), strings.Join(conflicts, ", "))
 	}
@@ -125,7 +125,7 @@ func (r *MaaSModelRefReconciler) checkModelIdentityConflict(ctx context.Context,
 	shouldEmitResolvedEvent := curr.Status == metav1.ConditionTrue &&
 		prev != nil && prev.Status == metav1.ConditionFalse
 	if shouldEmitResolvedEvent {
-		r.Recorder.Event(model, "Normal", "ModelNameConflictResolved",
+		r.Recorder.Eventf(model, nil, "Normal", "ModelNameConflictResolved", "ValidateModelIdentity",
 			"Model identity is no longer shared with any other MaaSModelRef in this namespace")
 	}
 }

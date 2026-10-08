@@ -74,7 +74,7 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
     Requires OpenShift Service Mesh 2.4+, Kuadrant/RHCL, and deployed Gateway.
 
 !!! warning "AuthPolicy Dependency"
-    Istio Telemetry reads `X-MaaS-Subscription` header injected by AuthPolicy. Without header injection, `subscription` label will be empty.
+    Istio Telemetry reads `X-MaaS-Subscription`. If the header is absent, the `subscription` label is empty. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for its behavior with API keys and user tokens.
 
 Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) with a controller ownerReference on `Config`. It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
 
