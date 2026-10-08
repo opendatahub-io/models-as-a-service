@@ -102,12 +102,13 @@ func TestDetectConflictingAuthPolicies_NoConflicts(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionFalse {
-		t.Errorf("expected ConflictingAuthPolicy=False, got %v", cond.Status)
-	}
-	if cond.Reason != "NoConflict" {
-		t.Errorf("expected reason NoConflict, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionFalse {
+			t.Errorf("expected ConflictingAuthPolicy=False, got %v", cond.Status)
+		}
+		if cond.Reason != "NoConflict" {
+			t.Errorf("expected reason NoConflict, got %q", cond.Reason)
+		}
 	}
 }
 
@@ -149,15 +150,16 @@ func TestDetectConflictingAuthPolicies_RogueDetected(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected ConflictingAuthPolicy=True, got %v", cond.Status)
-	}
-	if cond.Reason != "ConflictDetected" {
-		t.Errorf("expected reason ConflictDetected, got %q", cond.Reason)
-	}
-	if !strings.Contains(cond.Message, rogueName) {
-		t.Errorf("expected message to contain rogue policy name %q, got %q", rogueName, cond.Message)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected ConflictingAuthPolicy=True, got %v", cond.Status)
+		}
+		if cond.Reason != "ConflictDetected" {
+			t.Errorf("expected reason ConflictDetected, got %q", cond.Reason)
+		}
+		if !strings.Contains(cond.Message, rogueName) {
+			t.Errorf("expected message to contain rogue policy name %q, got %q", rogueName, cond.Message)
+		}
 	}
 }
 
@@ -199,18 +201,19 @@ func TestDetectConflictingAuthPolicies_MultipleRogues(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected ConflictingAuthPolicy=True, got %v", cond.Status)
-	}
-	if !strings.Contains(cond.Message, "2 non-MaaS AuthPolicies") {
-		t.Errorf("expected message to mention 2 policies, got %q", cond.Message)
-	}
-	if !strings.Contains(cond.Message, "kserve-route-authn") {
-		t.Errorf("expected message to contain 'kserve-route-authn', got %q", cond.Message)
-	}
-	if !strings.Contains(cond.Message, "custom-auth-policy") {
-		t.Errorf("expected message to contain 'custom-auth-policy', got %q", cond.Message)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected ConflictingAuthPolicy=True, got %v", cond.Status)
+		}
+		if !strings.Contains(cond.Message, "2 non-MaaS AuthPolicies") {
+			t.Errorf("expected message to mention 2 policies, got %q", cond.Message)
+		}
+		if !strings.Contains(cond.Message, "kserve-route-authn") {
+			t.Errorf("expected message to contain 'kserve-route-authn', got %q", cond.Message)
+		}
+		if !strings.Contains(cond.Message, "custom-auth-policy") {
+			t.Errorf("expected message to contain 'custom-auth-policy', got %q", cond.Message)
+		}
 	}
 }
 
@@ -251,8 +254,7 @@ func TestDetectConflictingAuthPolicies_DifferentRoute(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionFalse {
+	} else if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False (different route), got %v", cond.Status)
 	}
 }
@@ -296,8 +298,7 @@ func TestDetectConflictingAuthPolicies_CrossNamespaceIsolation(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionFalse {
+	} else if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False (rogue in different namespace), got %v", cond.Status)
 	}
 }
@@ -360,8 +361,7 @@ func TestDetectConflictingAuthPolicies_ConflictResolved(t *testing.T) {
 	cond = apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found after resolution")
-	}
-	if cond.Status != metav1.ConditionFalse {
+	} else if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False after conflict resolution, got %v", cond.Status)
 	}
 }
@@ -399,8 +399,7 @@ func TestDetectConflictingAuthPolicies_MissingModel(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionFalse {
+	} else if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False (model not found, no route to check), got %v", cond.Status)
 	}
 }
@@ -455,8 +454,7 @@ func TestDetectConflictingAuthPolicies_GatewayTarget(t *testing.T) {
 	cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 	if cond == nil {
 		t.Fatal("ConflictingAuthPolicy condition not found")
-	}
-	if cond.Status != metav1.ConditionFalse {
+	} else if cond.Status != metav1.ConditionFalse {
 		t.Errorf("expected ConflictingAuthPolicy=False (Gateway target, not HTTPRoute), got %v", cond.Status)
 	}
 }
@@ -547,15 +545,16 @@ func TestSetConflictingAuthPolicyCondition_Unit(t *testing.T) {
 			cond := apimeta.FindStatusCondition(policy.Status.Conditions, ConditionConflictingAuthPolicy)
 			if cond == nil {
 				t.Fatal("condition not set")
-			}
-			if cond.Status != tc.wantStatus {
-				t.Errorf("status = %v, want %v", cond.Status, tc.wantStatus)
-			}
-			if cond.Reason != tc.wantReason {
-				t.Errorf("reason = %q, want %q", cond.Reason, tc.wantReason)
-			}
-			if cond.ObservedGeneration != 1 {
-				t.Errorf("observedGeneration = %d, want 1", cond.ObservedGeneration)
+			} else {
+				if cond.Status != tc.wantStatus {
+					t.Errorf("status = %v, want %v", cond.Status, tc.wantStatus)
+				}
+				if cond.Reason != tc.wantReason {
+					t.Errorf("reason = %q, want %q", cond.Reason, tc.wantReason)
+				}
+				if cond.ObservedGeneration != 1 {
+					t.Errorf("observedGeneration = %d, want 1", cond.ObservedGeneration)
+				}
 			}
 		})
 	}

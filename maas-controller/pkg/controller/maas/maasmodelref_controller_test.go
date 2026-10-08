@@ -1619,8 +1619,7 @@ func TestExternalModel_Reconcile_RuntimeReadyFromGatewayStatus(t *testing.T) {
 			cond := findCondition(got.Status.Conditions, maasv1alpha1.ConditionRuntimeReady)
 			if cond == nil {
 				t.Fatal("RuntimeReady condition not found")
-			}
-			if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
+			} else if cond.Status != tt.wantStatus || cond.Reason != string(tt.wantReason) || cond.Message != tt.wantMessage {
 				t.Errorf("RuntimeReady = %s/%s %q, want %s/%s %q",
 					cond.Status, cond.Reason, cond.Message, tt.wantStatus, tt.wantReason, tt.wantMessage)
 			}
@@ -2008,15 +2007,16 @@ func TestCheckModelIdentityConflict_AliasNotResolved(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionUnknown {
-		t.Errorf("expected Unknown, got %v", cond.Status)
-	}
-	if cond.Reason != "AliasNotResolved" {
-		t.Errorf("expected reason AliasNotResolved, got %q", cond.Reason)
-	}
-	if cond.ObservedGeneration != 1 {
-		t.Errorf("expected observedGeneration 1, got %d", cond.ObservedGeneration)
+	} else {
+		if cond.Status != metav1.ConditionUnknown {
+			t.Errorf("expected Unknown, got %v", cond.Status)
+		}
+		if cond.Reason != "AliasNotResolved" {
+			t.Errorf("expected reason AliasNotResolved, got %q", cond.Reason)
+		}
+		if cond.ObservedGeneration != 1 {
+			t.Errorf("expected observedGeneration 1, got %d", cond.ObservedGeneration)
+		}
 	}
 }
 
@@ -2040,12 +2040,13 @@ func TestCheckModelIdentityConflict_NoConflicts(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected True, got %v", cond.Status)
-	}
-	if cond.Reason != "UniqueIdentity" {
-		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected True, got %v", cond.Status)
+		}
+		if cond.Reason != "UniqueIdentity" {
+			t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+		}
 	}
 }
 
@@ -2077,12 +2078,13 @@ func TestCheckModelIdentityConflict_ConflictDetected(t *testing.T) {
 	cond := findCondition(modelA.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionFalse {
-		t.Errorf("expected False, got %v", cond.Status)
-	}
-	if cond.Reason != "ModelNameConflict" {
-		t.Errorf("expected reason ModelNameConflict, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionFalse {
+			t.Errorf("expected False, got %v", cond.Status)
+		}
+		if cond.Reason != "ModelNameConflict" {
+			t.Errorf("expected reason ModelNameConflict, got %q", cond.Reason)
+		}
 	}
 
 	assertRecordedEvent(t, recorder, "Warning ModelNameConflict")
@@ -2104,12 +2106,13 @@ func TestCheckModelIdentityConflict_ConflictResolved(t *testing.T) {
 	cond := findCondition(model.Status.Conditions, ConditionModelIdentityUnique)
 	if cond == nil {
 		t.Fatal("ModelIdentityUnique condition not set")
-	}
-	if cond.Status != metav1.ConditionTrue {
-		t.Errorf("expected True, got %v", cond.Status)
-	}
-	if cond.Reason != "UniqueIdentity" {
-		t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+	} else {
+		if cond.Status != metav1.ConditionTrue {
+			t.Errorf("expected True, got %v", cond.Status)
+		}
+		if cond.Reason != "UniqueIdentity" {
+			t.Errorf("expected reason UniqueIdentity, got %q", cond.Reason)
+		}
 	}
 
 	assertRecordedEvent(t, recorder, "Normal ModelNameConflictResolved")
@@ -2261,13 +2264,14 @@ func TestMaaSModelRef_AliasChangeConvergesSiblingConditions(t *testing.T) {
 		condition := findCondition(sibling.Status.Conditions, ConditionModelIdentityUnique)
 		if condition == nil {
 			t.Fatalf("missing collision condition for %s", sibling.Name)
-		}
-		want := metav1.ConditionTrue
-		if sibling.Name == newSibling.Name {
-			want = metav1.ConditionFalse
-		}
-		if condition.Status != want {
-			t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+		} else {
+			want := metav1.ConditionTrue
+			if sibling.Name == newSibling.Name {
+				want = metav1.ConditionFalse
+			}
+			if condition.Status != want {
+				t.Errorf("%s collision = %s, want %s", sibling.Name, condition.Status, want)
+			}
 		}
 	}
 }

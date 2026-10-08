@@ -294,8 +294,7 @@ func TestEnsureDefaultAITenantBootstrapCreatesAITenantFromExistingTenant(t *test
 	ref := configOwnerReference(aitenant.OwnerReferences, types.UID("cfg-default"))
 	if ref == nil {
 		t.Fatalf("default AITenant ownerReferences = %#v, want Config/default", aitenant.OwnerReferences)
-	}
-	if ref.Controller != nil {
+	} else if ref.Controller != nil {
 		t.Fatalf("default AITenant Config owner reference is controller ref, want non-controller")
 	}
 	if aitenant.Spec.OIDC == nil {
