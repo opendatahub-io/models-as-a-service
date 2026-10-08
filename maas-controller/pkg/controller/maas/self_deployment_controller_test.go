@@ -57,6 +57,15 @@ func lifecycleUsageLogsPath(t *testing.T) string {
 	return filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/usage-logs")
 }
 
+func lifecycleObservabilityDashboardsPath(t *testing.T) string {
+	t.Helper()
+	_, testFile, _, ok := goruntime.Caller(0)
+	if !ok {
+		t.Fatal("resolve lifecycle test file path")
+	}
+	return filepath.Join(filepath.Dir(testFile), "../../../../deployment/components/observability/observability/dashboards")
+}
+
 func lifecycleTestUnstructured(gvk schema.GroupVersionKind, namespace, name string, finalizers ...string) *unstructured.Unstructured {
 	obj := &unstructured.Unstructured{}
 	obj.SetGroupVersionKind(gvk)
@@ -911,6 +920,156 @@ func TestEnsureUsageLogs(t *testing.T) {
 		g.Expect(cl.Get(context.Background(), client.ObjectKey{
 			Name: usageLogsTenancyProxyDeploymentName, Namespace: monitoringNS,
 		}, dep)).To(Succeed(), "tenancy proxy Deployment should exist when usageLogging is enabled")
+	})
+}
+
+func TestEnsureUsageDashboard(t *testing.T) {
+	const (
+		monitoringNS  = "redhat-ods-monitoring"
+		dashboardName = "dashboard-3-maas-usage-admin"
+	)
+
+	gvkPersesDashboard := schema.GroupVersionKind{
+		Group: "perses.dev", Version: "v1alpha1", Kind: "PersesDashboard",
+	}
+	dashboardsPath := lifecycleObservabilityDashboardsPath(t)
+
+	t.Run("disabled deletes controller-owned dashboard", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageMetricsDashboard: ptr.To(false)},
+		}
+
+		dashboard := &unstructured.Unstructured{}
+		dashboard.SetGroupVersionKind(gvkPersesDashboard)
+		dashboard.SetName(dashboardName)
+		dashboard.SetNamespace(monitoringNS)
+		dashboard.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "maas.opendatahub.io/v1alpha1",
+			Kind:       "Config",
+			Name:       maasv1alpha1.ConfigInstanceName,
+			UID:        cfg.UID,
+			Controller: ptr.To(true),
+		}})
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, dashboard).Build()
+		r := &LifecycleReconciler{
+			Client:                     cl,
+			Scheme:                     s,
+			MonitoringNamespace:        monitoringNS,
+			ObservabilityManifestsPath: dashboardsPath,
+		}
+
+		err := r.ensureUsageDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-owned PersesDashboard should be deleted")
+	})
+
+	t.Run("omitted defaults to disabled and deletes controller-owned dashboard", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+		}
+
+		dashboard := &unstructured.Unstructured{}
+		dashboard.SetGroupVersionKind(gvkPersesDashboard)
+		dashboard.SetName(dashboardName)
+		dashboard.SetNamespace(monitoringNS)
+		dashboard.SetOwnerReferences([]metav1.OwnerReference{{
+			APIVersion: "maas.opendatahub.io/v1alpha1",
+			Kind:       "Config",
+			Name:       maasv1alpha1.ConfigInstanceName,
+			UID:        cfg.UID,
+			Controller: ptr.To(true),
+		}})
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, dashboard).Build()
+		r := &LifecycleReconciler{
+			Client:                     cl,
+			Scheme:                     s,
+			MonitoringNamespace:        monitoringNS,
+			ObservabilityManifestsPath: dashboardsPath,
+		}
+
+		err := r.ensureUsageDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got)
+		g.Expect(apierrors.IsNotFound(err)).To(BeTrue(), "controller-owned PersesDashboard should be deleted when usageMetricsDashboard is omitted")
+	})
+
+	t.Run("disabled preserves unowned dashboard", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageMetricsDashboard: ptr.To(false)},
+		}
+
+		foreignDashboard := &unstructured.Unstructured{}
+		foreignDashboard.SetGroupVersionKind(gvkPersesDashboard)
+		foreignDashboard.SetName(dashboardName)
+		foreignDashboard.SetNamespace(monitoringNS)
+		foreignDashboard.SetLabels(map[string]string{
+			"app.kubernetes.io/managed-by": "maas-observability",
+		})
+
+		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg, foreignDashboard).Build()
+		r := &LifecycleReconciler{
+			Client:                     cl,
+			Scheme:                     s,
+			MonitoringNamespace:        monitoringNS,
+			ObservabilityManifestsPath: dashboardsPath,
+		}
+
+		err := r.ensureUsageDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		err = cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got)
+		g.Expect(err).NotTo(HaveOccurred(), "kustomize-applied PersesDashboard should be preserved (CWE-284)")
+		g.Expect(got.GetOwnerReferences()).To(BeEmpty(),
+			"foreign resource should not have OwnerReferences")
+	})
+
+	t.Run("enabled applies dashboard with monitoring namespace", func(t *testing.T) {
+		g := NewWithT(t)
+		s := lifecycleTestScheme(t)
+
+		cfg := &maasv1alpha1.Config{
+			ObjectMeta: metav1.ObjectMeta{Name: maasv1alpha1.ConfigInstanceName, UID: types.UID("cfg-uid")},
+			Spec:       maasv1alpha1.ConfigSpec{UsageMetricsDashboard: ptr.To(true)},
+		}
+
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		r := &LifecycleReconciler{
+			Client:                     cl,
+			Scheme:                     s,
+			MonitoringNamespace:        monitoringNS,
+			ObservabilityManifestsPath: dashboardsPath,
+		}
+
+		err := r.ensureUsageDashboard(context.Background(), ctrl.Log)
+		g.Expect(err).NotTo(HaveOccurred())
+
+		got := &unstructured.Unstructured{}
+		got.SetGroupVersionKind(gvkPersesDashboard)
+		g.Expect(cl.Get(context.Background(), client.ObjectKey{Name: dashboardName, Namespace: monitoringNS}, got)).
+			To(Succeed(), "PersesDashboard should exist when usageMetricsDashboard is enabled")
+		g.Expect(got.GetNamespace()).To(Equal(monitoringNS))
 	})
 }
 

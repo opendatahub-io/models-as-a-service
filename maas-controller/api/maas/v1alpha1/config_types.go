@@ -70,6 +70,14 @@ type ConfigSpec struct {
 	// +kubebuilder:default=false
 	// +kubebuilder:validation:Optional
 	UsageLogging *bool `json:"usageLogging,omitempty"`
+
+	// UsageMetricsDashboard deploys the legacy Prometheus-based Perses usage dashboard
+	// (dashboard-3-maas-usage-admin). When disabled (the default), the controller
+	// removes any controller-owned copy of that dashboard.
+	// Prefer the logs-based usage dashboards gated by usageLogging.
+	// +kubebuilder:default=false
+	// +kubebuilder:validation:Optional
+	UsageMetricsDashboard *bool `json:"usageMetricsDashboard,omitempty"`
 }
 
 // ConfigStatus defines the observed state of Config.
