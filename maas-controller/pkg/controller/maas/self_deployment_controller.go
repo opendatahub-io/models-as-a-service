@@ -496,7 +496,8 @@ func (r *LifecycleReconciler) ensureLimitadorServiceMonitor(ctx context.Context)
 	return nil
 }
 
-// ensureUsageDashboard creates the usage dashboard in the monitoring namespace.
+// ensureUsageDashboard deploys or removes the legacy metrics-based usage dashboard
+// based on the Config's usageMetricsDashboard feature gate.
 // Uses the existing kustomize infrastructure to render manifests from ObservabilityManifestsPath.
 // If ObservabilityManifestsPath is not set or Perses CRDs are not installed, gracefully skips.
 func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr.Logger) error {
@@ -519,6 +520,10 @@ func (r *LifecycleReconciler) ensureUsageDashboard(ctx context.Context, log logr
 	resources, err := tenantreconcile.RenderKustomize(r.ObservabilityManifestsPath, r.MonitoringNamespace)
 	if err != nil {
 		return fmt.Errorf("render observability dashboards: %w", err)
+	}
+
+	if !ptr.Deref(cfg.Spec.UsageMetricsDashboard, false) {
+		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageMetricsDashboard")
 	}
 
 	// Apply each resource with Config as controller owner
@@ -568,88 +573,109 @@ func (r *LifecycleReconciler) ensureUsageLogs(ctx context.Context, log logr.Logg
 	}
 
 	if !ptr.Deref(cfg.Spec.UsageLogging, false) {
-		for _, resource := range resources {
-			res := resource.DeepCopy()
-			key := client.ObjectKeyFromObject(res)
-			existing := &unstructured.Unstructured{}
-			existing.SetGroupVersionKind(res.GroupVersionKind())
+		return r.deleteOwnedRenderedResources(ctx, log, cfg, resources, "usageLogging")
+	}
 
-			if err := r.Get(ctx, key, existing); err != nil {
-				if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
-					continue
+	// Track if the collector is skipped due to missing CRD (CWE-863).
+	// If the OpenTelemetryCollector CRD is unavailable, we must skip the entire
+	// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
+	// permissions to a ServiceAccount (usage-logs-collector) that anyone could then create and exploit.
+	collectorSkipped := false
+
+	for _, resource := range resources {
+		if collectorSkipped {
+			continue
+		}
+		res := resource // avoid loop variable aliasing
+		if err := patchTenancyProxyImage(&res); err != nil {
+			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+		if err := patchPersesDatasourceURL(&res); err != nil {
+			return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+		if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
+			return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
+		}
+
+		if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+			if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
+				log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
+					"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
+					"name", res.GetName(), "namespace", res.GetNamespace())
+				if res.GetKind() == "OpenTelemetryCollector" {
+					collectorSkipped = true
 				}
-				return fmt.Errorf("get %s %s/%s before delete: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
-			}
-
-			if !isOwnedByConfigOrController(existing, cfg.UID) {
-				log.V(1).Info("skipping deletion of unowned usage-logs resource",
-					"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
 				continue
 			}
-
-			if err := r.Delete(ctx, existing); err != nil {
-				if apierrors.IsNotFound(err) {
-					continue
-				}
-				return fmt.Errorf("delete %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
-			}
-			log.V(1).Info("deleted usage-logs resource (usageLogging disabled)",
-				"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
-		}
-	} else {
-		// Track if the collector is skipped due to missing CRD (CWE-863).
-		// If the OpenTelemetryCollector CRD is unavailable, we must skip the entire
-		// bundle to prevent orphaned ClusterRoleBinding from granting cluster-logging-application-write
-		// permissions to a ServiceAccount (usage-logs-collector) that anyone could then create and exploit.
-		collectorSkipped := false
-
-		for _, resource := range resources {
-			res := resource // avoid loop variable aliasing
-			if err := patchTenancyProxyImage(&res); err != nil {
-				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
-			}
-			if err := patchPersesDatasourceURL(&res); err != nil {
-				return fmt.Errorf("patch %s %s: %w", res.GetKind(), res.GetName(), err)
-			}
-			if err := controllerutil.SetControllerReference(&cfg, &res, r.Scheme); err != nil {
-				return fmt.Errorf("set controller reference on %s %s: %w", res.GetKind(), res.GetName(), err)
-			}
-
-			if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(&res), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
-				if isOptionalAPIGroup(res.GroupVersionKind().Group) && (apimeta.IsNoMatchError(err) || apierrors.IsNotFound(err)) {
-					log.Info("skipping usage-logs resource: optional CRD not yet registered, will apply once installed",
-						"group", res.GroupVersionKind().Group, "kind", res.GetKind(),
-						"name", res.GetName(), "namespace", res.GetNamespace())
-					if res.GetKind() == "OpenTelemetryCollector" {
-						collectorSkipped = true
-					}
-					continue
-				}
-				return fmt.Errorf("apply %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
-			}
-		}
-
-		// If the collector was skipped, delete any orphaned RBAC resources that may have
-		// been created in a prior reconcile when the CRD was available (CWE-863).
-		if collectorSkipped {
-			gvkClusterRoleBinding := schema.GroupVersionKind{
-				Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding",
-			}
-			crb := &unstructured.Unstructured{}
-			crb.SetGroupVersionKind(gvkClusterRoleBinding)
-			crb.SetName("usage-collector-application-logs-write")
-
-			if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err == nil {
-				if isOwnedByConfigOrController(crb, cfg.UID) {
-					if err := r.Delete(ctx, crb); err != nil && !apierrors.IsNotFound(err) {
-						return fmt.Errorf("delete orphaned ClusterRoleBinding after collector skip: %w", err)
-					}
-					log.Info("deleted orphaned usage-logs ClusterRoleBinding (collector CRD unavailable)")
-				}
-			}
+			return fmt.Errorf("apply %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
 		}
 	}
 
+	// If the collector was skipped, delete any orphaned RBAC resources that may have
+	// been created in a prior reconcile when the CRD was available (CWE-863).
+	if collectorSkipped {
+		gvkClusterRoleBinding := schema.GroupVersionKind{
+			Group: "rbac.authorization.k8s.io", Version: "v1", Kind: "ClusterRoleBinding",
+		}
+		crb := &unstructured.Unstructured{}
+		crb.SetGroupVersionKind(gvkClusterRoleBinding)
+		crb.SetName("usage-collector-application-logs-write")
+
+		if err := r.Get(ctx, client.ObjectKeyFromObject(crb), crb); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return fmt.Errorf("get orphaned ClusterRoleBinding after collector skip: %w", err)
+			}
+		} else if isOwnedByConfigOrController(crb, cfg.UID) {
+			if err := r.Delete(ctx, crb); err != nil && !apierrors.IsNotFound(err) {
+				return fmt.Errorf("delete orphaned ClusterRoleBinding after collector skip: %w", err)
+			}
+			log.Info("deleted orphaned usage-logs ClusterRoleBinding (collector CRD unavailable)")
+		}
+	}
+
+	return nil
+}
+
+// deleteOwnedRenderedResources deletes resources from a rendered kustomize bundle
+// that are owned by Config or labeled as managed by maas-controller. Unowned
+// resources with the same names are left untouched (CWE-284).
+func (r *LifecycleReconciler) deleteOwnedRenderedResources(
+	ctx context.Context,
+	log logr.Logger,
+	cfg maasv1alpha1.Config,
+	resources []unstructured.Unstructured,
+	disabledFeature string,
+) error {
+	for _, resource := range resources {
+		res := resource.DeepCopy()
+		key := client.ObjectKeyFromObject(res)
+		existing := &unstructured.Unstructured{}
+		existing.SetGroupVersionKind(res.GroupVersionKind())
+
+		if err := r.Get(ctx, key, existing); err != nil {
+			if apierrors.IsNotFound(err) || apimeta.IsNoMatchError(err) {
+				continue
+			}
+			return fmt.Errorf("get %s %s/%s before delete: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
+
+		if !isOwnedByConfigOrController(existing, cfg.UID) {
+			log.V(1).Info("skipping deletion of unowned resource",
+				"feature", disabledFeature,
+				"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+			continue
+		}
+
+		if err := r.Delete(ctx, existing); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return fmt.Errorf("delete %s %s/%s: %w", res.GetKind(), res.GetNamespace(), res.GetName(), err)
+		}
+		log.V(1).Info("deleted resource because feature is disabled",
+			"feature", disabledFeature,
+			"kind", res.GetKind(), "name", res.GetName(), "namespace", res.GetNamespace())
+	}
 	return nil
 }
 
