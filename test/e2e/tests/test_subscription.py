@@ -53,6 +53,7 @@ import uuid
 import pytest
 import requests
 import test_helper
+from worker_tenant_fixtures import wait_for_only_accessible_subscription
 
 from test_helper import (
     MODEL_NAME,
@@ -73,6 +74,7 @@ from test_helper import (
     UNCONFIGURED_MODEL_REF,
     _apply_cr,
     _create_api_key,
+    _create_api_key_raw,
     _create_sa_token,
     _create_test_auth_policy,
     _create_test_subscription,
@@ -1379,22 +1381,82 @@ class TestCascadeDeletion:
 
     @pytest.mark.serial
     def test_delete_last_subscription_denies_access(self):
-        """Delete all subscriptions for a model -> access denied with 403 Forbidden.
+        """Delete and recreate a subscription without reviving its old API key.
 
         When the last subscription is deleted, AuthPolicy's subscription validation
         fails (no subscriptions found for user) and returns 403 Forbidden before
         the request reaches TokenRateLimitPolicy.
         """
-        api_key = _get_default_api_key()
+        oc_token = _get_cluster_token()
         original = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
         assert original, f"Pre-existing {SIMULATOR_SUBSCRIPTION} not found"
+
+        # Mint a dedicated key and prove it works before deletion, rather than
+        # relying on the process-cached _get_default_api_key(). An earlier test
+        # in TestCascadeDeletion also deletes SIMULATOR_SUBSCRIPTION, which can
+        # invalidate that cached key before this test starts -- making the 403
+        # checks below pass even if this test's own deletion does nothing.
+        key_response = _create_api_key_raw(
+            oc_token,
+            name=f"e2e-cascade-delete-{uuid.uuid4().hex[:8]}",
+            subscription=SIMULATOR_SUBSCRIPTION,
+        )
+        assert key_response.status_code in (200, 201), (
+            f"failed to create dedicated API key: {key_response.status_code} "
+            f"{key_response.text[:300]}"
+        )
+        key_data = key_response.json()
+        key_id = key_data["id"]
+        api_key = key_data["key"]
+        r = _poll_status(api_key, 200, timeout=30)
+        assert r.status_code == 200, (
+            f"dedicated API key must work before subscription deletion, got {r.status_code}"
+        )
+
+        replacement_key_id = None
         try:
             _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
+            _wait_for_cr_absent("maassubscription", SIMULATOR_SUBSCRIPTION)
             # With no subscription, expect 403 from AuthPolicy subscription validation
             r = _poll_status(api_key, 403, timeout=30)
             log.info(f"No subscriptions -> {r.status_code} (access denied as expected)")
-        finally:
+
+            # The subscription name may be reused, but the key that was bound to
+            # the deleted subscription must remain invalidated.
             _apply_cr(original)
+            _wait_for_subscription_inference_ready(
+                SIMULATOR_SUBSCRIPTION,
+                MODEL_REF,
+                model_namespace=MODEL_NAMESPACE,
+                timeout=180,
+            )
+            new_key_response = _create_api_key_raw(
+                oc_token,
+                name=f"e2e-subscription-recreated-{uuid.uuid4().hex[:8]}",
+                subscription=SIMULATOR_SUBSCRIPTION,
+            )
+            assert new_key_response.status_code in (200, 201), (
+                f"failed to create API key for recreated subscription: {new_key_response.status_code} "
+                f"{new_key_response.text[:300]}"
+            )
+            new_key_data = new_key_response.json()
+            replacement_key_id = new_key_data["id"]
+            new_api_key = new_key_data["key"]
+            _poll_status(new_api_key, 200, timeout=90)
+            r = _poll_status(api_key, 403, timeout=30)
+            assert r.status_code == 403, (
+                "API key bound to a deleted subscription became usable after the "
+                f"subscription was recreated: {r.status_code}"
+            )
+        finally:
+            _revoke_api_key(oc_token, key_id)
+            if replacement_key_id:
+                _revoke_api_key(oc_token, replacement_key_id)
+            if not _get_cr("maassubscription", SIMULATOR_SUBSCRIPTION):
+                _apply_cr(original)
+            # _wait_for_subscription_inference_ready also re-enforces the TRLP, confirming
+            # the controller has fully reconciled the restored subscription and the maas-api
+            # subscription cache has caught up, preventing flaky failures in subsequent tests.
             _wait_for_subscription_inference_ready(
                 SIMULATOR_SUBSCRIPTION,
                 MODEL_REF,
@@ -1948,56 +2010,59 @@ class TestE2ESubscriptionFlow:
             _wait_for_cr_absent("maassubscription", subscription_name)
 
     @pytest.mark.serial
-    def test_e2e_single_subscription_auto_selects(self):
+    def test_e2e_single_subscription_auto_selects(self, single_subscription_tenant):
         """
         Test: User with single subscription auto-selects without header (PR #427).
         Uses existing model (facebook-opt-125m-simulated) for faster execution.
 
-        Note: Temporarily removes simulator-subscription to ensure the test user
-        has exactly ONE subscription (not two, which would require a header).
+        Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
         """
-        ns = _ns()
+        context = single_subscription_tenant
+
+        ns = context.tenant_namespace
         auth_policy_name = "e2e-test-auth-single-sub"
         subscription_name = "e2e-test-subscription-single-sub"
         sa_name = "e2e-sa-single-sub"
-
-        # Snapshot existing subscription to restore later
-        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
 
         try:
             oc_token = _create_sa_token(sa_name, namespace=ns)
             sa_user = _sa_to_user(sa_name, namespace=ns)
 
-            # Delete simulator-subscription so user has exactly ONE subscription
-            # (otherwise they'd have 2: ours + simulator-subscription via system:authenticated)
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
             # Create auth policy and subscription for test user
-            _create_test_auth_policy(auth_policy_name, MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, MODEL_REF, users=[sa_user])
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _create_test_auth_policy(
+                auth_policy_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _create_test_subscription(
+                subscription_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=context.tenant_namespace, require_enforced=False)
             _wait_for_subscription_inference_ready(
                 subscription_name,
-                MODEL_REF,
-                model_namespace=MODEL_NAMESPACE,
+                context.model_ref,
+                model_namespace=context.model_namespace,
+                namespace=context.tenant_namespace,
                 timeout=180,
             )
 
             # Exactly one subscription for this user → mint can auto-bind it without explicit name
+            wait_for_only_accessible_subscription(oc_token, subscription_name)
+
             api_key = _create_api_key(oc_token, name=f"{sa_name}-key")
 
             log.info("Testing: Single subscription auto-select at mint")
-            r = _poll_status(api_key, 200, path=MODEL_PATH, timeout=90)
+            r = _poll_status(
+                api_key, 200, path=f"/{context.model_namespace}/{context.model_ref}",
+                model_name=f"e2e/{context.model_ref}", timeout=90,
+            )
             log.info("✅ Single subscription auto-select → %s", r.status_code)
 
         finally:
-            # Restore simulator-subscription first
-            if original_sim:
-                _apply_cr(original_sim)
             _delete_cr("maassubscription", subscription_name, namespace=ns)
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=ns)
             _delete_sa(sa_name, namespace=ns)
-            _wait_for_cr_absent("maassubscription", subscription_name)
+            _wait_for_cr_absent("maassubscription", subscription_name, namespace=ns)
 
     def test_e2e_multiple_subscriptions_separate_keys_gets_200(self):
         """
@@ -2834,6 +2899,7 @@ class TestDegradedSubscriptionFiltering:
             _delete_sa(sa_name, namespace=MODEL_NAMESPACE)
             _wait_for_cr_absent("maassubscription", subscription_name)
 
+    @pytest.mark.serial
     def test_failed_subscription_blocks_inference(self):
         """
         Test: Failed subscription blocks inference via OPA rule.
@@ -2864,6 +2930,17 @@ class TestDegradedSubscriptionFiltering:
 
             cr = _wait_for_maas_subscription_phase(subscription_name, "Active", timeout=60)
 
+            # This test overrides controller-owned status to exercise the gateway
+            # rejection path. Let initial TRLP/discovery reconciliation settle first,
+            # and run serially so a queued reconcile from parallel test activity does
+            # not overwrite the injected Failed phase before the inference request.
+            _wait_for_subscription_inference_ready(
+                subscription_name,
+                MODEL_REF,
+                namespace=ns,
+                model_namespace=MODEL_NAMESPACE,
+            )
+
             # Verify it starts as Active
             phase = cr.get("status", {}).get("phase")
             log.info(f"Initial phase: {phase}")
@@ -2886,7 +2963,6 @@ class TestDegradedSubscriptionFiltering:
             import subprocess
             import json
             from datetime import datetime
-
             log.info("Manually patching subscription to Failed phase...")
             patch_data = {
                 "status": {
@@ -2917,14 +2993,15 @@ class TestDegradedSubscriptionFiltering:
                 "-n", ns,
                 "--type=merge",
                 "--subresource=status",
-                "-p", json.dumps(patch_data)
+                "-p", json.dumps(patch_data),
+                "-o", "json",
             ]
             result = subprocess.run(cmd, capture_output=True, text=True)
             assert result.returncode == 0, f"Failed to patch to Failed phase: {result.stderr}"
-
-            # Verify phase is Failed
-            cr = _get_cr("maassubscription", subscription_name, namespace=ns)
-            phase = cr.get("status", {}).get("phase")
+            # Read the object returned by the patch itself; a second API request
+            # leaves extra time for any queued controller reconciliation to win.
+            patched_cr = json.loads(result.stdout)
+            phase = patched_cr.get("status", {}).get("phase")
             assert phase == "Failed", f"Expected Failed phase after patch, got {phase}"
             log.info("✅ Subscription patched to Failed phase")
 

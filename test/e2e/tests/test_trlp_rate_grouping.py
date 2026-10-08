@@ -65,6 +65,7 @@ from test_helper import (
     _delete_sa,
     _get_cr,
     _inference,
+    _is_transient_gateway_response,
     _ns,
     _poll_status,
     _revoke_api_key,
@@ -330,6 +331,30 @@ def _warm_up(api_key):
     _poll_status(api_key, 200, path=MODEL_PATH, timeout=120, inference_fn=_inference_min)
 
 
+POST_EXHAUST_RETRY_TIMEOUT = 60
+
+
+def _inference_after_exhaust(api_key):
+    """One completion after a sibling key has been 429'd.
+
+    Empty/proxy 500s are Envoy catching up after the exhaust burst, not a
+    shared budget. 429 is the real regression and is returned immediately.
+    """
+    deadline = time.time() + POST_EXHAUST_RETRY_TIMEOUT
+    last = None
+    while time.time() < deadline:
+        last = _inference_min(api_key, path=MODEL_PATH)
+        if last.status_code == 429 or not _is_transient_gateway_response(last):
+            return last
+        log.info(
+            "Post-exhaust inference got transient %d, retrying (%.0fs left)",
+            last.status_code,
+            deadline - time.time(),
+        )
+        time.sleep(2)
+    return last
+
+
 def _exhaust(api_key, max_requests=EXHAUST_MAX_REQUESTS):
     """Send minimal completions until 429. Returns (successes, rate_limited).
 
@@ -535,7 +560,7 @@ class TestRateGrouping:
         successes, limited = _exhaust(key_a)
         assert limited, f"{sub_a}: no 429 after {successes} successful requests at {_rate_key(rate)}"
 
-        r = _inference_min(key_b, path=MODEL_PATH)
+        r = _inference_after_exhaust(key_b)
         assert r.status_code == 200, (
             f"{sub_b} shares limit {name} with exhausted {sub_a} but must keep its own budget; "
             f"got {r.status_code}: {r.text[:200]}"
@@ -561,7 +586,7 @@ class TestRateGrouping:
         successes, limited = _exhaust(key_1)
         assert limited, f"user 1: no 429 after {successes} successful requests"
 
-        r = _inference_min(key_2, path=MODEL_PATH)
+        r = _inference_after_exhaust(key_2)
         assert r.status_code == 200, (
             f"user 2 on {sub} must not be limited by user 1's usage; got {r.status_code}: {r.text[:200]}"
         )

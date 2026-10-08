@@ -44,7 +44,7 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
-  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500 (default: 6)
+  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
@@ -88,7 +88,7 @@ MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODE
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
-# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500 while Envoy catches up.
+# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500/503 while Envoy catches up.
 GATEWAY_PROPAGATION_RETRIES = int(os.environ.get("E2E_GATEWAY_PROPAGATION_RETRIES", "6"))
 GATEWAY_PROPAGATION_DELAY = int(os.environ.get("E2E_GATEWAY_PROPAGATION_DELAY", "5"))
 # Wait for maas-gateway-auth Accepted+Enforced before minting keys / calling maas-api.
@@ -524,20 +524,28 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500 ("Internal Server Error"): Envoy/router
-      failure while upstream or auth filters are mid-reload. Distinct from
-      maas-api JSON errors like {"error":"Failed to create API key"}.
+    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
+      "Service Unavailable"): Envoy/router failure while upstream or auth
+      filters are mid-reload. Distinct from maas-api JSON errors like
+      {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
         return True
-    if response.status_code != 500:
+    if response.status_code not in (500, 503):
         return False
     if "AUTH_FAILURE" in body:
         return True
-    if not body or body in ("Internal Server Error", "Internal Server Error."):
+    if not body or body in (
+        "Internal Server Error",
+        "Internal Server Error.",
+        "Service Unavailable",
+        "Service Unavailable.",
+    ):
         return True
-    if body.startswith("<") and "Internal Server Error" in body:
+    if body.startswith("<") and (
+        "Internal Server Error" in body or "Service Unavailable" in body
+    ):
         return True
     return False
 
@@ -593,9 +601,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
                 (r.text or "").strip(),
                 delay,
             )
-            # After the first proxy-style 500, re-check AuthPolicy Enforced so
-            # remaining attempts are less likely to hit a mid-reload window.
-            if r.status_code == 500 and attempt == 1:
+            # After the first proxy-style 500/503, re-check AuthPolicy Enforced
+            # so remaining attempts are less likely to hit a mid-reload window.
+            if r.status_code in (500, 503) and attempt == 1:
                 try:
                     _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
                 except TimeoutError:
@@ -609,7 +617,7 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
 
-    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500s so
+    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500/503s so
     callers see the real API response after gateway AuthPolicy propagation,
     not a transient reject.
 
@@ -1138,7 +1146,7 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
                 return r
             last = r
             # Parallel workers can churn maas-gateway-auth; empty 401/403,
-            # AUTH_FAILURE, or proxy-style 500 usually means propagation.
+            # AUTH_FAILURE, or proxy-style 500/503 usually means propagation.
             if _is_transient_gateway_response(r) and time.time() - last_auth_recheck >= 10:
                 remaining = max(0, int(deadline - time.time()))
                 if remaining > 0:
@@ -1901,7 +1909,7 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "maas-controller",
          f"--replicas={replicas}", "-n", namespace],
         check=True,
@@ -1968,7 +1976,7 @@ def _scale_kuadrant_controller(replicas, namespace="kuadrant-system", timeout=60
     log.info(f"Scaling kuadrant-operator to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "kuadrant-operator-controller-manager",
          f"--replicas={replicas}", "-n", namespace],
         check=True,

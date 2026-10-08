@@ -169,7 +169,7 @@ func (r *TenantReconciler) applyUsageLogsEnvoyFilter(
 	ef.SetNamespace(r.GatewayNamespace)
 	applyUsageLogsEnvoyFilterMetadata(ef, tenant)
 
-	if err := r.Patch(ctx, ef, client.Apply, client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
+	if err := r.Apply(ctx, client.ApplyConfigurationFromUnstructured(ef), client.ForceOwnership, client.FieldOwner("maas-controller")); err != nil {
 		if apimeta.IsNoMatchError(err) {
 			log.Info("EnvoyFilter CRD not available, skipping usage-logs EnvoyFilter")
 			return false, nil
