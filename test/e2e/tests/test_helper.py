@@ -44,7 +44,7 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
-  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500 (default: 6)
+  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
@@ -88,7 +88,7 @@ MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODE
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
-# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500 while Envoy catches up.
+# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500/503 while Envoy catches up.
 GATEWAY_PROPAGATION_RETRIES = int(os.environ.get("E2E_GATEWAY_PROPAGATION_RETRIES", "6"))
 GATEWAY_PROPAGATION_DELAY = int(os.environ.get("E2E_GATEWAY_PROPAGATION_DELAY", "5"))
 # Wait for maas-gateway-auth Accepted+Enforced before minting keys / calling maas-api.
@@ -524,20 +524,28 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500 ("Internal Server Error"): Envoy/router
-      failure while upstream or auth filters are mid-reload. Distinct from
-      maas-api JSON errors like {"error":"Failed to create API key"}.
+    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
+      "Service Unavailable"): Envoy/router failure while upstream or auth
+      filters are mid-reload. Distinct from maas-api JSON errors like
+      {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
         return True
-    if response.status_code != 500:
+    if response.status_code not in (500, 503):
         return False
     if "AUTH_FAILURE" in body:
         return True
-    if not body or body in ("Internal Server Error", "Internal Server Error."):
+    if not body or body in (
+        "Internal Server Error",
+        "Internal Server Error.",
+        "Service Unavailable",
+        "Service Unavailable.",
+    ):
         return True
-    if body.startswith("<") and "Internal Server Error" in body:
+    if body.startswith("<") and (
+        "Internal Server Error" in body or "Service Unavailable" in body
+    ):
         return True
     return False
 
@@ -593,9 +601,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
                 (r.text or "").strip(),
                 delay,
             )
-            # After the first proxy-style 500, re-check AuthPolicy Enforced so
-            # remaining attempts are less likely to hit a mid-reload window.
-            if r.status_code == 500 and attempt == 1:
+            # After the first proxy-style 500/503, re-check AuthPolicy Enforced
+            # so remaining attempts are less likely to hit a mid-reload window.
+            if r.status_code in (500, 503) and attempt == 1:
                 try:
                     _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
                 except TimeoutError:
@@ -609,7 +617,7 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
 
-    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500s so
+    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500/503s so
     callers see the real API response after gateway AuthPolicy propagation,
     not a transient reject.
 
@@ -1138,7 +1146,7 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
                 return r
             last = r
             # Parallel workers can churn maas-gateway-auth; empty 401/403,
-            # AUTH_FAILURE, or proxy-style 500 usually means propagation.
+            # AUTH_FAILURE, or proxy-style 500/503 usually means propagation.
             if _is_transient_gateway_response(r) and time.time() - last_auth_recheck >= 10:
                 remaining = max(0, int(deadline - time.time()))
                 if remaining > 0:
@@ -1374,18 +1382,29 @@ def _wait_for_gateway_auth_enforced(
     )
 
 
-def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE, timeout=60):
-    """Wait for TokenRateLimitPolicy to be created and enforced for a model.
+def _wait_for_token_rate_limit_policy(
+    model_ref, model_namespace=MODEL_NAMESPACE, timeout=60, *, subscription_name=None, subscription_namespace=None
+):
+    """Wait for the current TokenRateLimitPolicy generation to be enforced.
+
+    If a subscription is supplied, wait until the policy includes it. This
+    prevents accepting the old policy before the controller updates its spec.
 
     Args:
         model_ref: Name of the model (e.g., "e2e-distinct-simulated")
         model_namespace: Namespace where the TRLP should be created (default: MODEL_NAMESPACE)
         timeout: Maximum wait time in seconds (default: 60)
+        subscription_name: Subscription that the policy must include, if supplied
+        subscription_namespace: Subscription namespace (defaults to _ns())
 
     Raises:
         TimeoutError: If TRLP isn't created and enforced within timeout
     """
     trlp_name = f"maas-trlp-{model_ref}"
+    expected_subscription = (
+        f"{subscription_namespace or _ns()}/{subscription_name}" if subscription_name else None
+    )
+    last_snapshot = "not found"
     deadline = time.time() + timeout
     log.info(f"Waiting for TokenRateLimitPolicy {trlp_name} in {model_namespace} (timeout: {timeout}s)...")
 
@@ -1399,12 +1418,31 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
         if result.returncode == 0:
             try:
                 trlp = json.loads(result.stdout)
-                conditions = trlp.get("status", {}).get("conditions", [])
+                metadata = trlp.get("metadata", {})
+                status = trlp.get("status", {})
+                generation = metadata.get("generation")
+                observed = status.get("observedGeneration")
+                conditions = status.get("conditions", [])
                 enforced = next((c for c in conditions if c.get("type") == "Enforced"), None)
-                if enforced and enforced.get("status") == "True":
-                    log.info(f"TokenRateLimitPolicy {trlp_name} is enforced")
+                subscriptions = {
+                    name.strip()
+                    for name in metadata.get("annotations", {}).get(
+                        "maas.opendatahub.io/subscriptions", ""
+                    ).split(",")
+                }
+                includes_subscription = expected_subscription is None or expected_subscription in subscriptions
+                last_snapshot = (
+                    f"generation={generation}, observedGeneration={observed}, "
+                    f"Enforced={enforced}, includes_subscription={includes_subscription}"
+                )
+                if (
+                    enforced and enforced.get("status") == "True"
+                    and generation is not None and observed == generation
+                    and includes_subscription
+                ):
+                    log.info(f"TokenRateLimitPolicy {trlp_name} generation {generation} is enforced")
                     return
-                log.debug(f"TokenRateLimitPolicy {trlp_name} exists but not enforced yet")
+                log.debug(f"TokenRateLimitPolicy {trlp_name} is not ready: {last_snapshot}")
             except (json.JSONDecodeError, KeyError) as e:
                 log.debug(f"Failed to parse TRLP status: {e}")
         elif _is_not_found_error(result.stderr):
@@ -1421,7 +1459,7 @@ def _wait_for_token_rate_limit_policy(model_ref, model_namespace=MODEL_NAMESPACE
         time.sleep(3)
 
     raise TimeoutError(
-        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s"
+        f"TokenRateLimitPolicy {trlp_name} was not created and enforced in {model_namespace} within {timeout}s: {last_snapshot}"
     )
 
 
@@ -1667,6 +1705,8 @@ def _wait_for_subscription_inference_ready(
         model_name,
         model_namespace=model_namespace,
         timeout=timeout,
+        subscription_name=subscription_name,
+        subscription_namespace=namespace,
     )
     return _wait_for_subscription_trlp_status(
         subscription_name,
@@ -1901,7 +1941,7 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "maas-controller",
          f"--replicas={replicas}", "-n", namespace],
         check=True,
@@ -1968,7 +2008,7 @@ def _scale_kuadrant_controller(replicas, namespace="kuadrant-system", timeout=60
     log.info(f"Scaling kuadrant-operator to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "kuadrant-operator-controller-manager",
          f"--replicas={replicas}", "-n", namespace],
         check=True,

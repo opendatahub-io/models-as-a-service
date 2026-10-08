@@ -1122,6 +1122,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// Clear client-supplied llm-d flow-control headers, canonical and legacy, so
+					// clients cannot pick an InferenceObjective or fairness ID. Keys are lowercase
+					// so they replace every client copy.
+					"x-llm-d-inference-objective":     clearedRequestHeader(),
+					"x-gateway-inference-objective":   clearedRequestHeader(),
+					"x-llm-d-inference-fairness-id":   clearedRequestHeader(),
+					"x-gateway-inference-fairness-id": clearedRequestHeader(),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1188,18 +1195,30 @@ allow {
 				"message": map[string]any{
 					"value": "Authentication required",
 				},
+				"body": map[string]any{
+					"value": `{"error":{"message":"Authentication required","type":"authentication_error","code":401}}`,
+				},
+				"headers": map[string]any{
+					"content-type": map[string]any{
+						"value": "application/json",
+					},
+				},
 			},
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+						` ? auth.metadata["subscription-info"].message` +
+						`.replace('\\', '\\\\').replace('"', '\\"')` +
+						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
+						` : "Access denied") + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
 						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"content-type": map[string]any{
-						"value": "text/plain",
+						"value": "application/json",
 					},
 				},
 			},
@@ -1225,6 +1244,16 @@ allow {
 			},
 			"rules": defaultsRules,
 		},
+	}
+}
+
+// clearedRequestHeader is a success response header that sets the request header to an
+// empty value, replacing any client-supplied value.
+func clearedRequestHeader() map[string]any {
+	return map[string]any{
+		"plain":    map[string]any{"value": ""},
+		"metrics":  false,
+		"priority": int64(0),
 	}
 }
 

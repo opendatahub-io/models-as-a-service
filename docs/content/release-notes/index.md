@@ -34,6 +34,7 @@ See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 - **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
 - **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
 - **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
+- **Legacy metrics usage dashboard is opt-in** (`Config.spec.usageMetricsDashboard`, default `false`). The operator no longer deploys `dashboard-3-maas-usage-admin` unless this is set to `true`; existing operator-owned copies are removed on reconcile. See [Upgrade to 3.6](../migration/upgrade-to-3.6.md).
 
 ### Key Fixes
 
@@ -146,6 +147,7 @@ See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 - Scope Secret informer cache to infrastructure namespace.
 - Parse Authorino bracket-wrapped groups header format.
 - Return empty list (not error) from management endpoints when no auth context present.
+- **Gateway auth 401/403 responses now return OpenAI-compatible JSON error bodies (RHOAIENG-94567):** Previously, the gateway `AuthPolicy` returned empty or plain-text bodies for authentication and authorization failures. Responses now include structured `{"error":{"message":"...","type":"...","code":...}}` JSON bodies with `Content-Type: application/json`, matching the OpenAI error format expected by standard SDKs and clients.
 
 ### Known Limitations
 

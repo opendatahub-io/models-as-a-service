@@ -60,7 +60,7 @@ spec:
             datasource:
               kind: LokiDatasource
               name: usage-logs-multi-tenancy
-            expr: 'count by (model) (count_over_time({service_name="models-as-a-service", model!="-"} [$__range]))'
+            expr: 'count by (model) (count_over_time({service_name="models-as-a-service", model!="-", response_type!="error"} [$__range]))'
             labelName: model
     - kind: ListVariable
       spec:
@@ -156,7 +156,7 @@ spec:
                     name: usage-logs-multi-tenancy
                   query: >-
                     sum(count_over_time({service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model"}
+                    subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
                     | __ak_keep="true" [$__range]))
@@ -219,7 +219,7 @@ spec:
                     (
                       (
                         sum(count_over_time({service_name="models-as-a-service",
-                        subscription=~"$subscription", model=~"$model", response_type="hit"}
+                        subscription=~"$subscription", subscription!="-", model=~"$model", response_type="hit"}
                         | label_format __ak_sel="${api_key:regexliteral}"
                         | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
                         | __ak_keep="true" [$__range]))
@@ -227,7 +227,7 @@ spec:
                       )
                       /
                       sum(count_over_time({service_name="models-as-a-service",
-                      subscription=~"$subscription", model=~"$model"}
+                      subscription=~"$subscription", subscription!="-", model=~"$model"}
                       | label_format __ak_sel="${api_key:regexliteral}"
                       | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
                       | __ak_keep="true" [$__range]))
@@ -332,6 +332,13 @@ spec:
                 format:
                   unit: decimal
                   decimalPlaces: 0
+              - name: "value #4"
+                header: "Failed requests"
+                align: "right"
+                enableSorting: true
+                format:
+                  unit: decimal
+                  decimalPlaces: 0
         queries:
           - kind: TimeSeriesQuery
             spec:
@@ -344,11 +351,12 @@ spec:
                   query: >-
                     sum by (model, subscription, key_name) (sum_over_time(
                     {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
                     | __ak_keep="true"
-                    | unwrap tokens_total [$__range]))
+                    | label_format target_tokens=`{{ if eq .response_type "hit" }}{{ .tokens_total }}{{ else }}0{{ end }}`
+                    | unwrap target_tokens [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -358,12 +366,13 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-multi-tenancy
                   query: >-
-                    sum by (model, subscription, key_name) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
-                    | __ak_keep="true" [$__range]))
+                    | __ak_keep="true"
+                    | label_format is_hit=`{{ if eq .response_type "hit" }}1{{ else }}0{{ end }}`
+                    | unwrap is_hit [$__range]))
           - kind: TimeSeriesQuery
             spec:
               plugin:
@@ -373,20 +382,29 @@ spec:
                     kind: LokiDatasource
                     name: usage-logs-multi-tenancy
                   query: >-
-                    sum by (model, subscription, key_name) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="rate_limit"}
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
-                    | __ak_keep="true" [$__range]))
-                    or
-                    (sum by (model, subscription, key_name) (count_over_time(
-                    {service_name="models-as-a-service",
-                    subscription=~"$subscription", model=~"$model", response_type="hit"}
+                    | __ak_keep="true"
+                    | label_format is_rate_limit=`{{ if eq .response_type "rate_limit" }}1{{ else }}0{{ end }}`
+                    | unwrap is_rate_limit [$__range]))
+          - kind: TimeSeriesQuery
+            spec:
+              plugin:
+                kind: LokiTimeSeriesQuery
+                spec:
+                  datasource:
+                    kind: LokiDatasource
+                    name: usage-logs-multi-tenancy
+                  query: >-
+                    sum by (model, subscription, key_name) (sum_over_time(
+                    {service_name="models-as-a-service", subscription=~"$subscription", subscription!="-", model=~"$model"}
                     | label_format __ak_sel="${api_key:regexliteral}"
                     | label_format __ak_keep="{{if eq .__ak_sel \"(\\\\.\\\\*)\"}}true{{else if (count (printf \"^%s$\" .__ak_sel) .key_name)}}true{{else}}false{{end}}"
-                    | __ak_keep="true" [$__range])) * 0)
-
+                    | __ak_keep="true"
+                    | label_format is_error=`{{ if eq .response_type "error" }}1{{ else }}0{{ end }}`
+                    | unwrap is_error [$__range]))
   layouts:
     - kind: Grid
       spec:
