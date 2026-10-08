@@ -48,7 +48,7 @@ When a `MaaSSubscription` is deleted, its finalizer waits for a subscription-sco
 | namespace | string | Namespace of the MaaSModelRef. The InferencePool and InferenceObjective live in this namespace, alongside the LLMInferenceService. |
 | inferencePool | LocalObjectReference | InferencePool (`group`, `kind`, `name`) observed in the LLMInferenceService's `status.router.scheduler.inferencePool` |
 | objectiveName | string | InferenceObjective name for this subscription and pool, in the pool's namespace. Set whenever the pool is known, including when `inferencePriority` is unset. It does not change when `inferencePriority` changes. |
-| ready | bool | `true` when nothing is left to reconcile for this model (see reasons below) |
+| ready | bool | `true` when no request-priority reconciliation is left for this model (see reasons below). It does not report whether the model's backend is ready; see `modelRefStatuses`. |
 | reason | string | Machine-readable reason for `ready` (see below). New reasons may be added. |
 | message | string | Human-readable detail for the reason |
 
@@ -56,7 +56,7 @@ When a `MaaSSubscription` is deleted, its finalizer waits for a subscription-sco
 |--------|-------|---------|
 | `ObjectiveReconciled` | `true` | The InferenceObjective is observed with the priority from `inferencePriority` |
 | `PriorityUnset` | `true` | `inferencePriority` is unset: no InferenceObjective is created and the scheduler applies priority `0` |
-| `NotApplicable` | `true` | The model is not served through an inference scheduler (for example, an ExternalModel) |
+| `NotApplicable` | `true` | The model is not served through an inference scheduler, so no InferenceObjective is required. ExternalModels always report this; their readiness is in the ExternalModel's `status.phase` and conditions. |
 | `Unmanaged` | `true` | The InferenceObjective has `opendatahub.io/managed: "false"`; its priority is owned by the user |
 | `PoolPending` | `false` | The model's InferencePool or HTTPRoute has not been observed yet |
 | `ObjectivePending` | `false` | The InferenceObjective is not observed with the desired priority yet |

@@ -226,9 +226,10 @@ type ModelFlowControlStatus struct {
 	// +kubebuilder:validation:MaxLength=63
 	// +optional
 	ObjectiveName string `json:"objectiveName,omitempty"`
-	// Ready is true when nothing is left to reconcile for this model: its InferenceObjective matches
-	// spec.inferencePriority, spec.inferencePriority is unset, request priority does not apply, or
-	// the InferenceObjective opted out of management
+	// Ready is true when no request-priority reconciliation is left for this model: its
+	// InferenceObjective matches spec.inferencePriority, spec.inferencePriority is unset, request
+	// priority does not apply, or the InferenceObjective opted out of management. It does not
+	// report backend readiness; see ModelRefStatuses.
 	Ready bool `json:"ready"`
 	// Reason is a machine-readable reason for Ready
 	// +optional
