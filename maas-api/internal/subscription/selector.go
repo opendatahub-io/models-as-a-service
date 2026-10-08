@@ -115,6 +115,7 @@ type subscription struct {
 	Ready                  bool                   // computed from status.conditions Ready condition
 	DeletionTimestamp      *string                // metadata.deletionTimestamp (set when being deleted)
 	TokenRateLimitStatuses []TokenRateLimitStatus // per-model TRLP status from status.tokenRateLimitStatuses
+	UseShortRateLimitID    bool                   // annotation maas.opendatahub.io/rate-limit-identity=short
 }
 
 // GetAllAccessible returns all subscriptions the user has access to.
@@ -400,10 +401,11 @@ func parseSubscription(obj *unstructured.Unstructured) (subscription, error) {
 		Namespace: obj.GetNamespace(),
 	}
 
-	// Parse annotations for display metadata
+	// Parse annotations for display metadata and rate-limit identity.
 	if annotations := obj.GetAnnotations(); annotations != nil {
 		sub.DisplayName = annotations[constant.AnnotationDisplayName]
 		sub.Description = annotations[constant.AnnotationDescription]
+		sub.UseShortRateLimitID = UsesShortRateLimitID(annotations)
 	}
 
 	// Parse owner
@@ -895,7 +897,7 @@ func toResponse(sub *subscription) *SelectResponse {
 func toResponseWithResolvedModel(sub *subscription, resolvedModel string) *SelectResponse {
 	resp := toResponse(sub)
 	resp.ResolvedModel = resolvedModel
-	if sub != nil {
+	if sub != nil && sub.UseShortRateLimitID {
 		resp.RateLimitID = RateLimitIDFor(sub.Namespace, sub.Name, resolvedModel)
 	}
 	return resp

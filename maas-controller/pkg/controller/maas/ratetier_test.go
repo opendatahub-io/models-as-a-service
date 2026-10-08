@@ -180,6 +180,67 @@ func TestMaaSSubscriptionReconciler_GroupByIdenticalRate(t *testing.T) {
 	}
 }
 
+func TestMaaSSubscriptionReconciler_ExistingSubKeepsKeyIdentity(t *testing.T) {
+	const (
+		modelName     = "llm"
+		namespace     = "default"
+		httpRouteName = "maas-" + modelName
+		trlpName      = "maas-trlp-" + modelName
+	)
+
+	model := newMaaSModelRef(modelName, namespace, "ExternalModel", modelName)
+	route := newHTTPRoute(httpRouteName, namespace)
+	oldSub := newMaaSSubscription("old-sub", namespace, "team-a", modelName, 500)
+	oldSub.Status.Phase = maasv1alpha1.PhaseActive
+	newSub := newMaaSSubscription("new-sub", namespace, "team-b", modelName, 500)
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithRESTMapper(testRESTMapper()).
+		WithObjects(model, route, oldSub, newSub).
+		WithStatusSubresource(&maasv1alpha1.MaaSSubscription{}).
+		WithIndex(&maasv1alpha1.MaaSSubscription{}, "spec.modelRef", subscriptionModelRefIndexer).
+		Build()
+
+	r := &MaaSSubscriptionReconciler{Client: c, Scheme: scheme}
+	for _, name := range []string{"old-sub", "new-sub"} {
+		req := ctrl.Request{NamespacedName: types.NamespacedName{Name: name, Namespace: namespace}}
+		if _, err := r.Reconcile(t.Context(), req); err != nil {
+			t.Fatalf("Reconcile %s: %v", name, err)
+		}
+	}
+
+	var gotOld, gotNew maasv1alpha1.MaaSSubscription
+	if err := c.Get(t.Context(), types.NamespacedName{Name: "old-sub", Namespace: namespace}, &gotOld); err != nil {
+		t.Fatalf("Get old-sub: %v", err)
+	}
+	if err := c.Get(t.Context(), types.NamespacedName{Name: "new-sub", Namespace: namespace}, &gotNew); err != nil {
+		t.Fatalf("Get new-sub: %v", err)
+	}
+	if gotOld.Annotations[AnnotationRateLimitIdentity] != RateLimitIdentityLegacy {
+		t.Errorf("old-sub annotation = %q, want %q", gotOld.Annotations[AnnotationRateLimitIdentity], RateLimitIdentityLegacy)
+	}
+	if gotNew.Annotations[AnnotationRateLimitIdentity] != RateLimitIdentityShort {
+		t.Errorf("new-sub annotation = %q, want %q", gotNew.Annotations[AnnotationRateLimitIdentity], RateLimitIdentityShort)
+	}
+
+	trlp := &unstructured.Unstructured{}
+	trlp.SetGroupVersionKind(schema.GroupVersionKind{Group: "kuadrant.io", Version: "v1alpha1", Kind: "TokenRateLimitPolicy"})
+	if err := c.Get(t.Context(), types.NamespacedName{Name: trlpName, Namespace: namespace}, trlp); err != nil {
+		t.Fatalf("Get TokenRateLimitPolicy: %v", err)
+	}
+	limitsMap, found, err := unstructured.NestedMap(trlp.Object, "spec", "limits")
+	if err != nil || !found {
+		t.Fatalf("spec.limits not found: found=%v err=%v", found, err)
+	}
+	if _, ok := limitsMap["tokens-500-per-1m"]; !ok {
+		t.Errorf("missing legacy limit tokens-500-per-1m, keys: %v", getKeys(limitsMap))
+	}
+	if _, ok := limitsMap["tokens-500-per-1m-id"]; !ok {
+		t.Errorf("missing short-ID limit tokens-500-per-1m-id, keys: %v", getKeys(limitsMap))
+	}
+}
+
 // TestMaaSSubscriptionReconciler_RateEditMovesGroup verifies that changing a
 // subscription's rate moves it into a different limit's predicate rather than
 // leaving a stale clause behind, and that a second reconcile with no changes
@@ -465,6 +526,89 @@ func TestBuildGroupedLimits_UnlimitedNextToGroups(t *testing.T) {
 			t.Errorf("annotation names = %v, want %v", names, wantNames)
 			break
 		}
+	}
+}
+
+func TestBuildGroupedLimits_LegacyKeepsKeyCounters(t *testing.T) {
+	rated := []any{map[string]any{"limit": int64(500), "window": "1m"}}
+	legacyA := subInfo{
+		subNamespace: "ns", subName: "old-a", rates: rated, groupKey: rateGroupKey(rated),
+		modelScoped: "ns/old-a@models/llm", legacy: true,
+	}
+	legacyB := subInfo{
+		subNamespace: "ns", subName: "old-b", rates: rated, groupKey: rateGroupKey(rated),
+		modelScoped: "ns/old-b@models/llm", legacy: true,
+	}
+
+	limits, _ := buildGroupedLimits([]subInfo{legacyA, legacyB})
+	if got := getKeys(limits); len(got) != 1 {
+		t.Fatalf("legacy-only group must stay one limit, got %v", got)
+	}
+	grouped, ok := limits["tokens-500-per-1m"].(map[string]any)
+	if !ok {
+		t.Fatalf("legacy group %q missing, got %v", "tokens-500-per-1m", getKeys(limits))
+	}
+
+	keys := []string{legacyA.modelScoped, legacyB.modelScoped}
+	sort.Strings(keys)
+	wantPred := `(auth.identity.selected_subscription_key == "` + keys[0] + `" || ` +
+		`auth.identity.selected_subscription_key == "` + keys[1] + `") && !request.path.endsWith("/v1/models")`
+	when, _, _ := unstructured.NestedSlice(grouped, "when")
+	if got := predicateOf(t, when); got != wantPred {
+		t.Errorf("legacy predicate = %q, want %q", got, wantPred)
+	}
+	counters, _, _ := unstructured.NestedSlice(grouped, "counters")
+	assertCounterExpressions(t, counters, "auth.identity.selected_subscription_key", "auth.identity.userid")
+}
+
+func TestBuildGroupedLimits_MixedRateGroupSplitsLimits(t *testing.T) {
+	rated := []any{map[string]any{"limit": int64(500), "window": "1m"}}
+	legacy := subInfo{
+		subNamespace: "ns", subName: "old", rates: rated, groupKey: rateGroupKey(rated),
+		modelScoped: "ns/old@models/llm", legacy: true,
+	}
+	fresh := subInfo{
+		subNamespace: "ns", subName: "new", rates: rated, groupKey: rateGroupKey(rated),
+		modelScoped: "ns/new@models/llm",
+	}
+
+	limits, _ := buildGroupedLimits([]subInfo{legacy, fresh})
+	if got := getKeys(limits); len(got) != 2 {
+		t.Fatalf("mixed group must split into two limits, got %v", got)
+	}
+
+	legacyLimit, ok := limits["tokens-500-per-1m"].(map[string]any)
+	if !ok {
+		t.Fatalf("legacy limit %q missing, got %v", "tokens-500-per-1m", getKeys(limits))
+	}
+	legacyWhen, _, _ := unstructured.NestedSlice(legacyLimit, "when")
+	if got := predicateOf(t, legacyWhen); got != trlpRateLimitKeyPredicate("ns", "old", "models", "llm") {
+		t.Errorf("legacy predicate = %q", got)
+	}
+	legacyCounters, _, _ := unstructured.NestedSlice(legacyLimit, "counters")
+	assertCounterExpressions(t, legacyCounters, "auth.identity.selected_subscription_key", "auth.identity.userid")
+
+	shortLimit, ok := limits["tokens-500-per-1m-id"].(map[string]any)
+	if !ok {
+		t.Fatalf("short-ID limit %q missing, got %v", "tokens-500-per-1m-id", getKeys(limits))
+	}
+	shortWhen, _, _ := unstructured.NestedSlice(shortLimit, "when")
+	if got := predicateOf(t, shortWhen); got != trlpRateLimitPredicate("ns", "new", "models", "llm") {
+		t.Errorf("short predicate = %q", got)
+	}
+	shortCounters, _, _ := unstructured.NestedSlice(shortLimit, "counters")
+	assertCounterExpressions(t, shortCounters, "auth.identity.selected_subscription_id", "auth.identity.userid")
+}
+
+func assertCounterExpressions(t *testing.T, counters []any, want0, want1 string) {
+	t.Helper()
+	if len(counters) != 2 {
+		t.Fatalf("expected 2 counters, got %d: %v", len(counters), counters)
+	}
+	c0, ok0 := counters[0].(map[string]any)
+	c1, ok1 := counters[1].(map[string]any)
+	if !ok0 || !ok1 || c0["expression"] != want0 || c1["expression"] != want1 {
+		t.Errorf("counters = %v, want [%s, %s]", counters, want0, want1)
 	}
 }
 

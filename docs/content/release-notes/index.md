@@ -8,7 +8,7 @@ This table maps each supported Red Hat OpenShift AI (RHOAI) release to the corre
 
 | RHOAI Version | MaaS Version | RHOAI Image Tag | Status | Notes |
 |---------------|--------------|-----------------|--------|-------|
-| 3.6           | TBD          | `v3.6`          | Planned | Short subscription rate-limit IDs in TRLP; see [Upgrade Guide](../migration/upgrade-to-3.6.md) |
+| 3.6           | TBD          | `v3.6`          | Planned | Short rate-limit IDs for **new** subscriptions; existing CRs keep `selected_subscription_key`; see [Upgrade Guide](../migration/upgrade-to-3.6.md) |
 | 3.5           | v0.2.1       | `v3.5`          | GA     | Multi-tenancy; body-based routing; xKS support; see [Upgrade Guide](../migration/upgrade-to-3.5.md) |
 | 3.4           | v0.1.1       | `v3.4`          | GA     | Subscription-based access; `Tenant` CR; see [Upgrade Guide](../migration/upgrade-to-3.4.md) |
 | 3.3           | v0.0.2       | `v3.3`          | Tech Preview | `ModelsAsService` CR added to DSC; operator-managed deployment |
@@ -31,13 +31,14 @@ For dependency version requirements (OCP, Kuadrant/RHCL, Gateway API), see [Vers
 
 See [Upgrade to 3.6](../migration/upgrade-to-3.6.md) for full guidance. Summary:
 
-- **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs (avoids a brief rate-limit fail-open window).
-- **Token rate-limit counters reset** on upgrade (limit keys become rate-grouped `tokens-*`, counters use `selected_subscription_id`). Limitador enforcement budgets start fresh for the current window.
+- **Recommended short downtime** when upgrading from 3.5 → 3.6 while AuthPolicy / TRLP / maas-api adopt short subscription rate-limit IDs for **new** subscriptions (avoids a brief rate-limit fail-open window for those CRs).
+- **Existing subscriptions keep live Limitador quotas** — they stay on `selected_subscription_key` matching and counters. Short IDs apply only to subscriptions created after upgrade (or explicitly annotated `maas.opendatahub.io/rate-limit-identity=short`).
+- **Trade-off:** EnvoyFilter / WasmPlugin size savings from short IDs accrue only as old subscriptions are replaced. A mixed rate group splits into two TRLP limits until the legacy members are gone. Recreating an old subscription opts it into short IDs and resets **that** subscription’s in-window quota.
 - **Prometheus and Loki usage history are unaffected** — telemetry still labels by subscription name (`selected_subscription` / `X-MaaS-Subscription`), not the rate-limit ID.
 
 ### Key Fixes
 
-- **Short subscription rate-limit IDs in TokenRateLimitPolicy:** TRLP `when` predicates and counters use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id`) so Kuadrant WASM / EnvoyFilter size no longer embeds long subscription strings. Limit map keys stay rate-grouped (`tokens-<limit>-per-<window>`). Human-readable `selected_subscription_key` remains for telemetry.
+- **Short subscription rate-limit IDs in TokenRateLimitPolicy (new subscriptions only):** TRLP `when` predicates and counters for subscriptions created after upgrade use a stable 16-hex SHA-256 of `namespace/name@modelNs/model` (`selected_subscription_id`) so Kuadrant WASM / EnvoyFilter size no longer embeds long strings for those CRs. Pre-upgrade subscriptions keep `selected_subscription_key`. Limit map keys stay rate-grouped (`tokens-<limit>-per-<window>`). Human-readable `selected_subscription_key` remains for telemetry.
 
 ---
 

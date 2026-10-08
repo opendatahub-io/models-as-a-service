@@ -197,7 +197,8 @@ func modelRefTokenRates(mRef maasv1alpha1.ModelSubscriptionRef) (rates []any, un
 const unlimitedLimitName = "tokens-unlimited"
 
 // unlimitedTokenLimit returns the TRLP limit matching the given
-// selected_subscription_id values of unlimited subscriptions.
+// subscriptions' rate-limit identities (short selected_subscription_id for
+// new CRs, selected_subscription_key for legacy ones).
 //
 // Without rates, Limitador enforces nothing and keeps no counters, but the
 // wasm-shim still sends check and report calls for matching requests, and
@@ -208,14 +209,17 @@ const unlimitedLimitName = "tokens-unlimited"
 // on the model is unlimited: Kuadrant rejects a TRLP without limits, and a
 // route without one falls back to gateway-default-deny.
 //
+// Mixed legacy/short members share this limit: there are no counters to
+// preserve, so splitting would only grow the wasm config.
+//
 // rates and counters stay unset: a nil slice is written as null, which the API
 // server drops, so the no-op update check would never match.
-func unlimitedTokenLimit(rateLimitIDs []string) map[string]any {
-	sort.Strings(rateLimitIDs)
-	matches := make([]string, 0, len(rateLimitIDs))
-	for _, id := range rateLimitIDs {
-		matches = append(matches, fmt.Sprintf(`auth.identity.selected_subscription_id == "%s"`, id))
+func unlimitedTokenLimit(members []subInfo) map[string]any {
+	matches := make([]string, 0, len(members))
+	for _, si := range members {
+		matches = append(matches, subscriptionSelectClause(si))
 	}
+	sort.Strings(matches)
 	return map[string]any{
 		"when": []any{
 			map[string]any{
@@ -462,9 +466,17 @@ func (r *MaaSSubscriptionReconciler) Reconcile(ctx context.Context, req ctrl.Req
 		return ctrl.Result{}, r.updateStatus(ctx, subscription, maasv1alpha1.PhaseInvalid, "spec is required", statusSnapshot)
 	}
 
-	// Add finalizer if not present
+	// Add finalizer if not present; stamp sticky rate-limit identity so new
+	// CRs get short IDs and upgraded CRs keep selected_subscription_key.
+	needsUpdate := false
 	if !controllerutil.ContainsFinalizer(subscription, maasSubscriptionFinalizer) {
 		controllerutil.AddFinalizer(subscription, maasSubscriptionFinalizer)
+		needsUpdate = true
+	}
+	if stampRateLimitIdentityAnnotation(subscription) {
+		needsUpdate = true
+	}
+	if needsUpdate {
 		if err := r.Update(ctx, subscription); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -662,6 +674,7 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 				unlimited:    unlimited,
 				modelScoped:  fmt.Sprintf("%s/%s@%s/%s", sub.Namespace, sub.Name, mRef.Namespace, mRef.Name),
 				groupKey:     rateGroupKey(rates),
+				legacy:       classifiedRateLimitIdentity(&sub) == RateLimitIdentityLegacy,
 			})
 			break
 		}
@@ -675,18 +688,18 @@ func (r *MaaSSubscriptionReconciler) reconcileTRLPForModel(ctx context.Context, 
 		return r.deleteModelTRLP(ctx, log, modelNamespace, modelName)
 	}
 
-	// Trust auth.identity.selected_subscription_id from AuthPolicy (16-hex SHA-256 of
-	// {subNS}/{subName}@{modelNS}/{modelName}). The long selected_subscription_key
-	// stays on the identity for telemetry; TRLP matches the short ID so the Kuadrant
-	// WASM shim stays compact.
+	// New subscriptions match auth.identity.selected_subscription_id (16-hex
+	// SHA-256 of {subNS}/{subName}@{modelNS}/{modelName}). Subscriptions that
+	// already existed at upgrade keep selected_subscription_key matching and
+	// counters so Limitador quotas are not reset. The long key stays on the
+	// identity for telemetry either way.
 	//
 	// Subscriptions sharing identical rates share one limit instead of one each, so the TRLP
 	// (and the EnvoyFilter/WasmPlugin Kuadrant renders from it, which repeats every limit per
 	// route match) grows with the number of distinct rate sets, not with the number of
-	// subscriptions behind them (RHOAIENG-95277). The predicate lists every subscription in
-	// the group by short ID; counters key on selected_subscription_id as well as userid so
-	// subscriptions sharing a limit still get independent budgets. Unlimited subscriptions
-	// share the rate-less unlimitedLimitName limit the same way. See buildGroupedLimits.
+	// subscriptions behind them (RHOAIENG-95277) — except a mixed legacy/short group of the
+	// same rate splits into two limits because the counter expressions differ. See
+	// buildGroupedLimits.
 	limitsMap, subNames := buildGroupedLimits(subs)
 
 	// Build the aggregated TokenRateLimitPolicy (one per model, covering all subscriptions)

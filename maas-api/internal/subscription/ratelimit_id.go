@@ -20,6 +20,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+
+	"github.com/opendatahub-io/models-as-a-service/maas-api/internal/constant"
 )
 
 // ModelScopedKey builds {subNamespace}/{subName}@{modelNamespace}/{modelName}.
@@ -45,4 +47,11 @@ func RateLimitIDFor(subNamespace, subName, resolvedModel string) string {
 		return ""
 	}
 	return RateLimitID(fmt.Sprintf("%s/%s@%s", subNamespace, subName, resolvedModel))
+}
+
+// UsesShortRateLimitID reports whether select should return rateLimitId.
+// Only an explicit "short" annotation opts in; missing or "legacy" keeps
+// pre-upgrade selected_subscription_key matching so live quotas are not reset.
+func UsesShortRateLimitID(annotations map[string]string) bool {
+	return annotations[constant.AnnotationRateLimitIdentity] == constant.RateLimitIdentityShort
 }
