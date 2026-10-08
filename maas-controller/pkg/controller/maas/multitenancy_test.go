@@ -458,19 +458,19 @@ func TestFetchOIDCConfig_PerTenantNamespace(t *testing.T) {
 	cfgA := r.fetchOIDCConfig(context.Background(), ctrl.Log, "tenant-a")
 	if cfgA == nil {
 		t.Fatal("expected OIDC config from tenant-a")
-	}
-	if cfgA.IssuerURL != "https://idp-a.example.com" {
-		t.Errorf("tenant-a issuerURL = %q, want https://idp-a.example.com", cfgA.IssuerURL)
-	}
-	if cfgA.ClientID != "client-a" {
-		t.Errorf("tenant-a clientID = %q, want client-a", cfgA.ClientID)
+	} else {
+		if cfgA.IssuerURL != "https://idp-a.example.com" {
+			t.Errorf("tenant-a issuerURL = %q, want https://idp-a.example.com", cfgA.IssuerURL)
+		}
+		if cfgA.ClientID != "client-a" {
+			t.Errorf("tenant-a clientID = %q, want client-a", cfgA.ClientID)
+		}
 	}
 
 	cfgB := r.fetchOIDCConfig(context.Background(), ctrl.Log, "tenant-b")
 	if cfgB == nil {
 		t.Fatal("expected OIDC config from tenant-b")
-	}
-	if cfgB.IssuerURL != "https://idp-b.example.com" {
+	} else if cfgB.IssuerURL != "https://idp-b.example.com" {
 		t.Errorf("tenant-b issuerURL = %q, want https://idp-b.example.com", cfgB.IssuerURL)
 	}
 }
@@ -653,8 +653,7 @@ func TestFetchTenantForNamespace(t *testing.T) {
 	legacy := got.legacy
 	if legacy == nil {
 		t.Fatalf("fetchTenantForNamespace legacy fallback returned config=%T, want Tenant", got.config)
-	}
-	if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
+	} else if legacy.Spec.GatewayRef.Name != "legacy-gateway" {
 		t.Errorf("legacy GatewayRef.Name = %q, want legacy-gateway", legacy.Spec.GatewayRef.Name)
 	}
 
