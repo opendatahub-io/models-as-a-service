@@ -1122,6 +1122,13 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// Clear client-supplied llm-d flow-control headers, canonical and legacy, so
+					// clients cannot pick an InferenceObjective or fairness ID. Keys are lowercase
+					// so they replace every client copy.
+					"x-llm-d-inference-objective":     clearedRequestHeader(),
+					"x-gateway-inference-objective":   clearedRequestHeader(),
+					"x-llm-d-inference-fairness-id":   clearedRequestHeader(),
+					"x-gateway-inference-fairness-id": clearedRequestHeader(),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
@@ -1237,6 +1244,16 @@ allow {
 			},
 			"rules": defaultsRules,
 		},
+	}
+}
+
+// clearedRequestHeader is a success response header that sets the request header to an
+// empty value, replacing any client-supplied value.
+func clearedRequestHeader() map[string]any {
+	return map[string]any{
+		"plain":    map[string]any{"value": ""},
+		"metrics":  false,
+		"priority": int64(0),
 	}
 }
 
