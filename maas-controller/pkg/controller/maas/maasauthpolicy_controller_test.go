@@ -2299,8 +2299,7 @@ func TestFetchOIDCConfig_TTLExtraction(t *testing.T) {
 			}
 			if got == nil {
 				t.Fatal("expected non-nil oidcConfig, got nil")
-			}
-			if got.TTL != tc.wantTTL {
+			} else if got.TTL != tc.wantTTL {
 				t.Errorf("TTL = %d, want %d", got.TTL, tc.wantTTL)
 			}
 		})
@@ -2385,8 +2384,7 @@ func TestMaaSAuthPolicyReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
+	} else if readyCond.Status != metav1.ConditionFalse {
 		t.Errorf("expected Ready=False, got %v", readyCond.Status)
 	}
 }
@@ -2445,12 +2443,13 @@ func TestMaaSAuthPolicyReconciler_PartialModelRefs_DegradedPhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
-		t.Errorf("expected Ready=False, got %v", readyCond.Status)
-	}
-	if readyCond.Reason != "PartialFailure" {
-		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	} else {
+		if readyCond.Status != metav1.ConditionFalse {
+			t.Errorf("expected Ready=False, got %v", readyCond.Status)
+		}
+		if readyCond.Reason != "PartialFailure" {
+			t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+		}
 	}
 }
 
@@ -2527,8 +2526,7 @@ func TestMaaSAuthPolicyReconciler_AllValidModelRefs_ActivePhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(policy.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionTrue {
+	} else if readyCond.Status != metav1.ConditionTrue {
 		t.Errorf("expected Ready=True, got %v", readyCond.Status)
 	}
 
@@ -2576,15 +2574,16 @@ func TestMaaSAuthPolicyReconciler_NoSpec(t *testing.T) {
 	ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
 	if ready == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if ready.Status != metav1.ConditionFalse {
-		t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
-	}
-	if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
-		t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
-	}
-	if !strings.Contains(ready.Message, "spec is required") {
-		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	} else {
+		if ready.Status != metav1.ConditionFalse {
+			t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
+		}
+		if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
+			t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
+		}
+		if !strings.Contains(ready.Message, "spec is required") {
+			t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+		}
 	}
 }
 

@@ -243,6 +243,7 @@ func objectivePoolRef(t *testing.T, obj *llmdv1alpha2.InferenceObjective) map[st
 	t.Helper()
 	if obj == nil {
 		t.Fatal("objective missing")
+		return nil
 	}
 	ref := obj.Spec.PoolRef
 	return map[string]string{"group": string(ref.Group), "kind": string(ref.Kind), "name": string(ref.Name)}
