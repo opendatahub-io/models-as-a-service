@@ -3567,6 +3567,7 @@
 <li>Controller-generated AuthPolicies generally <strong>do not</strong> inject most identity headers (<code>X-MaaS-Username</code>, <code>X-MaaS-Group</code>, <code>X-MaaS-Key-Id</code>) upstream to model pods, to reduce leakage via logs or misconfigured proxies.</li>
 </ul>
 <p>For <strong>API keys</strong>, AuthPolicy injects <strong><code>X-MaaS-Subscription</code></strong> only when validation returns a nonempty bound subscription. For <strong>user tokens</strong>, AuthPolicy preserves a client-supplied subscription header and uses it for subscription selection; it does not inject another copy. A user-token request without that header does not gain one during authentication, so telemetry that reads the header may have an empty subscription label.</p>
+<p>AuthPolicy sets the llm-d flow-control headers <strong><code>x-llm-d-inference-objective</code></strong>, <strong><code>x-gateway-inference-objective</code></strong>, <strong><code>x-llm-d-inference-fairness-id</code></strong>, and <strong><code>x-gateway-inference-fairness-id</code></strong> to empty values, replacing any client-supplied values. Clients therefore cannot select an InferenceObjective or fairness ID; the inference scheduler applies priority <code>0</code> and its default fairness ID.</p>
 <p><strong>MaaS API routes</strong> use a separate static AuthPolicy that may inject headers required by maas-api middleware (trusted internal service).</p>
 <hr />
 <h2 id="token-validation-short">Token validation (short)</h2>
@@ -3607,7 +3608,7 @@
     <span class="md-icon" title="Last update">
       <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M21 13.1c-.1 0-.3.1-.4.2l-1 1 2.1 2.1 1-1c.2-.2.2-.6 0-.8l-1.3-1.3c-.1-.1-.2-.2-.4-.2m-1.9 1.8-6.1 6V23h2.1l6.1-6.1zM12.5 7v5.2l4 2.4-1 1L11 13V7zM11 21.9c-5.1-.5-9-4.8-9-9.9C2 6.5 6.5 2 12 2c5.3 0 9.6 4.1 10 9.3-.3-.1-.6-.2-1-.2s-.7.1-1 .2C19.6 7.2 16.2 4 12 4c-4.4 0-8 3.6-8 8 0 4.1 3.1 7.5 7.1 7.9l-.1.2z"/></svg>
     </span>
-    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 6, 2026 11:48:27 UTC">October 6, 2026</span>
+    <span class="git-revision-date-localized-plugin git-revision-date-localized-plugin-date" title="October 8, 2026 03:15:01 UTC">October 8, 2026</span>
   </span>
 
     
