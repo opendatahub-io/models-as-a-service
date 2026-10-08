@@ -501,8 +501,7 @@ func TestMaaSSubscriptionReconciler_SpecPriorityDuplicateConditionAllowsSamePrio
 			cond := apimeta.FindStatusCondition(got.Status.Conditions, ConditionSpecPriorityDuplicate)
 			if cond == nil {
 				t.Fatalf("expected SpecPriorityDuplicate condition on %s/%s", tt.namespace, tt.name)
-			}
-			if cond.Status != metav1.ConditionFalse {
+			} else if cond.Status != metav1.ConditionFalse {
 				t.Fatalf("%s/%s: SpecPriorityDuplicate.Status = %s, want False; message=%q", tt.namespace, tt.name, cond.Status, cond.Message)
 			}
 		})
@@ -1212,8 +1211,7 @@ func TestMaaSSubscriptionReconciler_MissingModelRef_FailedPhase(t *testing.T) {
 	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
+	} else if readyCond.Status != metav1.ConditionFalse {
 		t.Errorf("expected Ready=False, got %v", readyCond.Status)
 	}
 
@@ -1347,12 +1345,13 @@ func TestMaaSSubscriptionReconciler_PartialModelRefs_DegradedPhase(t *testing.T)
 	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionFalse {
-		t.Errorf("expected Ready=False, got %v", readyCond.Status)
-	}
-	if readyCond.Reason != "PartialFailure" {
-		t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+	} else {
+		if readyCond.Status != metav1.ConditionFalse {
+			t.Errorf("expected Ready=False, got %v", readyCond.Status)
+		}
+		if readyCond.Reason != "PartialFailure" {
+			t.Errorf("expected reason PartialFailure, got %q", readyCond.Reason)
+		}
 	}
 
 	// Verify modelRefStatuses contains both models with correct status
@@ -1446,8 +1445,7 @@ func TestMaaSSubscriptionReconciler_AllValidModelRefs_ActivePhase(t *testing.T) 
 	readyCond := apimeta.FindStatusCondition(sub.Status.Conditions, "Ready")
 	if readyCond == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if readyCond.Status != metav1.ConditionTrue {
+	} else if readyCond.Status != metav1.ConditionTrue {
 		t.Errorf("expected Ready=True, got %v", readyCond.Status)
 	}
 
@@ -1625,15 +1623,16 @@ func TestMaaSSubscriptionReconciler_NoSpec(t *testing.T) {
 	ready := apimeta.FindStatusCondition(got.Status.Conditions, "Ready")
 	if ready == nil {
 		t.Fatal("Ready condition not found")
-	}
-	if ready.Status != metav1.ConditionFalse {
-		t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
-	}
-	if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
-		t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
-	}
-	if !strings.Contains(ready.Message, "spec is required") {
-		t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+	} else {
+		if ready.Status != metav1.ConditionFalse {
+			t.Errorf("Ready.Status = %q, want %q", ready.Status, metav1.ConditionFalse)
+		}
+		if ready.Reason != string(maasv1alpha1.ReasonInvalidSpec) {
+			t.Errorf("Ready.Reason = %q, want %q", ready.Reason, maasv1alpha1.ReasonInvalidSpec)
+		}
+		if !strings.Contains(ready.Message, "spec is required") {
+			t.Errorf("Ready.Message = %q, expected it to contain %q", ready.Message, "spec is required")
+		}
 	}
 }
 
