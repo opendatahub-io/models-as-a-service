@@ -36,7 +36,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
-	"k8s.io/client-go/tools/record"
+	"k8s.io/client-go/tools/events"
 	"k8s.io/client-go/util/retry"
 	"k8s.io/client-go/util/workqueue"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -89,7 +89,7 @@ type MaaSAuthPolicyReconciler struct {
 	AuthzCacheTTL int64
 
 	// Recorder emits Kubernetes events for conflict detection warnings.
-	Recorder record.EventRecorder
+	Recorder events.EventRecorder
 	// MaxConcurrentReconciles is the maximum number of concurrent Reconciles which can be run.
 	// Defaults to 1 if not set.
 	MaxConcurrentReconciles int
@@ -635,7 +635,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		for _, c := range conflicts {
 			names = append(names, c.String())
 		}
-		r.Recorder.Eventf(policy, "Warning", "ConflictingAuthPolicy",
+		r.Recorder.Eventf(policy, nil, "Warning", "ConflictingAuthPolicy", "DetectConflictingAuthPolicies",
 			"Detected %d non-MaaS AuthPolic%s on MaaS auth surfaces: %s",
 			len(conflicts), pluralY(len(conflicts)), strings.Join(names, "; "))
 	}
@@ -644,7 +644,7 @@ func (r *MaaSAuthPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reque
 		prevConflict != nil &&
 		prevConflict.Status == metav1.ConditionTrue
 	if shouldEmitResolvedEvent && r.Recorder != nil {
-		r.Recorder.Event(policy, "Normal", "ConflictingAuthPolicyResolved",
+		r.Recorder.Eventf(policy, nil, "Normal", "ConflictingAuthPolicyResolved", "DetectConflictingAuthPolicies",
 			"All conflicting AuthPolicies on MaaS auth surfaces have been resolved")
 	}
 
@@ -851,6 +851,9 @@ func (r *MaaSAuthPolicyReconciler) buildGatewayAuthPolicySpec(oidc *oidcConfig, 
 					},
 					map[string]any{
 						"predicate": `!("x-maas-keyname" in request.headers)`,
+					},
+					map[string]any{
+						"predicate": `!("x-maas-subscription-rate-limit-id" in request.headers)`,
 					},
 				},
 			},
@@ -1077,19 +1080,31 @@ allow {
 						"metrics":  false,
 						"priority": int64(1),
 					},
-					// Only inject X-MaaS-Subscription when there is a real value to inject.
-					// An empty string injected for K8s tokens without a subscription header
-					// causes maas-api to filter by an empty subscription name and return 0 models.
-					// The old maas-api-auth-policy never injected this header for K8s tokens —
-					// only for API keys with a non-empty subscription field.
+					// Inject only for API keys with a subscription. Token requests keep the
+					// client header, which subscription-info uses to select a subscription.
+					// Re-injecting that header produces duplicate values in usage logs.
 					"X-MaaS-Subscription": map[string]any{
 						"when": []any{
 							map[string]any{
-								"predicate": `(has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != "") || "x-maas-subscription" in request.headers`,
+								"predicate": `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`,
 							},
 						},
 						"plain": map[string]any{
 							"expression": celSubscription,
+						},
+						"metrics":  false,
+						"priority": int64(0),
+					},
+					// Short rate-limit identity for TokenRateLimitPolicy (does not replace
+					// X-MaaS-Subscription). Populated from maas-api subscription select.
+					"X-MaaS-Subscription-Rate-Limit-Id": map[string]any{
+						"when": []any{
+							map[string]any{
+								"predicate": `has(auth.metadata["subscription-info"].rateLimitId) && auth.metadata["subscription-info"].rateLimitId != ""`,
+							},
+						},
+						"plain": map[string]any{
+							"expression": `auth.metadata["subscription-info"].rateLimitId`,
 						},
 						"metrics":  false,
 						"priority": int64(0),
@@ -1107,9 +1122,24 @@ allow {
 						"metrics":  false,
 						"priority": int64(0),
 					},
+					// Clear client-supplied llm-d flow-control headers, canonical and legacy, so
+					// clients cannot pick an InferenceObjective or fairness ID. Keys are lowercase
+					// so they replace every client copy.
+					"x-llm-d-inference-objective":     clearedRequestHeader(),
+					"x-gateway-inference-objective":   clearedRequestHeader(),
+					"x-llm-d-inference-fairness-id":   clearedRequestHeader(),
+					"x-gateway-inference-fairness-id": clearedRequestHeader(),
 				},
 				"filters": map[string]any{
 					"identity": map[string]any{
+						// Same guard as subscription-info. Without it the filter fails on
+						// /maas-api requests, and Authorino cancels the other priority-0
+						// response configs, dropping X-MaaS-* headers at random.
+						"when": []any{
+							map[string]any{
+								"predicate": celModelIdentityAvailable,
+							},
+						},
 						"json": map[string]any{
 							"properties": map[string]any{
 								"groups":     map[string]any{"expression": celGroups},
@@ -1128,8 +1158,8 @@ allow {
 								},
 								// Model-scoped subscription key: namespace/name@modelIdentity
 								// Prefer resolvedModel from subscription-info (MaaSModelRef
-								// namespace/name after BBR alias resolution) so TRLP when
-								// predicates match for both path and body-based routing.
+								// namespace/name after BBR alias resolution). Kept for telemetry
+								// and debugging; TRLP when-predicates match selected_subscription_id.
 								"selected_subscription_key": map[string]any{
 									"expression": fmt.Sprintf(
 										`(has(auth.metadata["subscription-info"].namespace) && `+
@@ -1138,6 +1168,12 @@ allow {
 											`+ auth.metadata["subscription-info"].name + "@" + %s : ""`,
 										celResolvedModelIdentity,
 									),
+								},
+								// Short hash of selected_subscription_key from maas-api
+								// (subscription-info.rateLimitId). TokenRateLimitPolicy when
+								// predicates match this field to keep the WASM shim compact.
+								"selected_subscription_id": map[string]any{
+									"expression": `has(auth.metadata["subscription-info"].rateLimitId) ? auth.metadata["subscription-info"].rateLimitId : ""`,
 								},
 								"subscription_info": map[string]any{
 									"expression": `has(auth.metadata["subscription-info"].name) ? auth.metadata["subscription-info"] : {}`,
@@ -1159,18 +1195,30 @@ allow {
 				"message": map[string]any{
 					"value": "Authentication required",
 				},
+				"body": map[string]any{
+					"value": `{"error":{"message":"Authentication required","type":"authentication_error","code":401}}`,
+				},
+				"headers": map[string]any{
+					"content-type": map[string]any{
+						"value": "application/json",
+					},
+				},
 			},
 			"unauthorized": map[string]any{
 				"code": int64(403),
 				"body": map[string]any{
-					"expression": `has(auth.metadata["subscription-info"].message) ? auth.metadata["subscription-info"].message : "Access denied"`,
+					"expression": `'{"error":{"message":"' + (has(auth.metadata["subscription-info"].message)` +
+						` ? auth.metadata["subscription-info"].message` +
+						`.replace('\\', '\\\\').replace('"', '\\"')` +
+						`.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')` +
+						` : "Access denied") + '","type":"authorization_error","code":403}}'`,
 				},
 				"headers": map[string]any{
 					"x-ext-auth-reason": map[string]any{
 						"expression": `has(auth.metadata["subscription-info"].error) ? auth.metadata["subscription-info"].error : "unauthorized"`,
 					},
 					"content-type": map[string]any{
-						"value": "text/plain",
+						"value": "application/json",
 					},
 				},
 			},
@@ -1196,6 +1244,16 @@ allow {
 			},
 			"rules": defaultsRules,
 		},
+	}
+}
+
+// clearedRequestHeader is a success response header that sets the request header to an
+// empty value, replacing any client-supplied value.
+func clearedRequestHeader() map[string]any {
+	return map[string]any{
+		"plain":    map[string]any{"value": ""},
+		"metrics":  false,
+		"priority": int64(0),
 	}
 }
 
@@ -1967,7 +2025,7 @@ func (r *MaaSAuthPolicyReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	log := ctrl.Log.WithName("maas-authpolicy-controller")
 
 	if r.Recorder == nil {
-		r.Recorder = mgr.GetEventRecorderFor("maas-authpolicy-controller")
+		r.Recorder = mgr.GetEventRecorder("maas-authpolicy-controller")
 	}
 
 	// Reject negative TTL values

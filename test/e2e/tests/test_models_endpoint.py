@@ -24,6 +24,8 @@ import uuid
 import pytest
 import requests
 
+import test_helper
+from worker_tenant_fixtures import wait_for_only_accessible_subscription
 from multitenancy_helpers import wait_for_llmisvc_backend_ready
 from test_helper import (
     DISTINCT_MODEL_2_ID,
@@ -42,7 +44,6 @@ from test_helper import (
     TLS_VERIFY,
     UNCONFIGURED_MODEL_PATH,  # noqa: F401 - accessed through globals() by worker fixture
     UNCONFIGURED_MODEL_REF,
-    _apply_cr,
     _create_api_key,
     _create_llmis,
     _create_maas_model_ref,
@@ -53,19 +54,17 @@ from test_helper import (
     _delete_governance_and_wait,
     _delete_sa,
     _get_auth_policies_for_model,
-    _get_cluster_token,
     _get_cr,
     _get_subscriptions_for_model,
     _inference,
     _maas_api_url,
     _ns,
+    _request_with_gateway_retry,
     _sa_to_user,
-    _snapshot_cr,
     _wait_for_gateway_auth_enforced,
     _wait_for_maas_auth_policy_phase,
     _wait_for_maas_subscription_phase,
     _wait_for_subscription_discovery_ready,
-    _wait_for_subscription_inference_ready,
     _wait_for_subscription_trlp_status,
     _wait_for_model_ready,
     _wait_for_token_rate_limit_policy,
@@ -120,6 +119,7 @@ def _worker_models_context(request):
     original_subscription_helper = globals()["_create_test_subscription"]
     original_get_auth = globals()["_get_auth_policies_for_model"]
     original_get_subscriptions = globals()["_get_subscriptions_for_model"]
+    original_gateway_auth_policy = test_helper.GATEWAY_AUTH_POLICY_NAME
 
     globals().update(
         {
@@ -168,6 +168,9 @@ def _worker_models_context(request):
     globals()["_create_test_subscription"] = create_subscription
     globals()["_get_auth_policies_for_model"] = get_auth_policies
     globals()["_get_subscriptions_for_model"] = get_subscriptions
+    # Gateway auth re-checks (Enforced waits, retry after a proxy 500/503) must target
+    # the worker tenant's gateway AuthPolicy, not the default one.
+    test_helper.GATEWAY_AUTH_POLICY_NAME = context.gateway_authpolicy_name
 
     try:
         with activate_worker_tenant(context):
@@ -178,35 +181,10 @@ def _worker_models_context(request):
         globals()["_create_test_subscription"] = original_subscription_helper
         globals()["_get_auth_policies_for_model"] = original_get_auth
         globals()["_get_subscriptions_for_model"] = original_get_subscriptions
-
-# Kuadrant gateway propagation can lag behind MaaS CR readiness.
-# MaaSAuthPolicy "Active" means the controller created the Kuadrant AuthPolicy,
-# but Envoy may not have loaded it yet.  Retry on empty 403 (gateway rejection).
-GATEWAY_PROPAGATION_RETRIES = 6
-GATEWAY_PROPAGATION_DELAY = 5  # seconds
+        test_helper.GATEWAY_AUTH_POLICY_NAME = original_gateway_auth_policy
 
 
-def _request_with_gateway_retry(method, url, retries=GATEWAY_PROPAGATION_RETRIES, **kwargs):
-    """Make an HTTP request, retrying on transient gateway propagation errors.
-
-    Delegates retry classification to ``_is_transient_gateway_response`` so
-    empty 401/403, AUTH_FAILURE, and proxy-style 500s stay in sync with
-    ``test_helper``.
-    """
-    from test_helper import _is_transient_gateway_response
-
-    for attempt in range(1, retries + 1):
-        r = method(url, timeout=TIMEOUT, verify=TLS_VERIFY, **kwargs)
-        if _is_transient_gateway_response(r) and attempt < retries:
-            log.info(f"Gateway not ready (HTTP {r.status_code}, attempt {attempt}/{retries}), "
-                     f"retrying in {GATEWAY_PROPAGATION_DELAY}s...")
-            time.sleep(GATEWAY_PROPAGATION_DELAY)
-            continue
-        return r
-    return r  # last attempt's response — assertion will catch the failure
-
-
-def _get_models_with_gateway_retry(headers, retries=GATEWAY_PROPAGATION_RETRIES):
+def _get_models_with_gateway_retry(headers, retries=None):
     return _request_with_gateway_retry(
         requests.get,
         f"{_maas_api_url()}/v1/models",
@@ -235,10 +213,13 @@ def _wait_for_central_models_in_subscription(
     poll_interval=5,
     extra_headers=None,
 ):
-    """Poll central /v1/models until at least one model is tied to subscription_name."""
-    headers = {"Authorization": f"Bearer {api_key}"}
-    if extra_headers:
-        headers.update(extra_headers)
+    """Poll central /v1/models until at least one model is tied to subscription_name.
+
+    ``api_key`` is sent as a bearer token, so an OpenShift token works too.
+    maas-api lists only Ready MaaSModelRefs, read from an informer cache, so a
+    model can be missing from the first listing after its governance is created.
+    """
+    headers = {"Authorization": f"Bearer {api_key}", **(extra_headers or {})}
     deadline = time.time() + timeout
     last_status = None
     last_model_ids = []
@@ -416,52 +397,52 @@ class TestModelsEndpoint:
         log.info("=" * 60)
 
     @pytest.mark.serial
-    def test_single_subscription_auto_select(self):
+    def test_single_subscription_auto_select(self, single_subscription_tenant):
         """
         Test: User with exactly one accessible subscription can list models without
         providing x-maas-subscription header (auto-selection).
 
         Expected: HTTP 200 with models from that subscription.
 
-        Note: Temporarily deletes simulator-subscription to ensure test user has exactly
-        ONE subscription (not two, which would require a header).
+        Note: Makes use of an isolated tenant to ensure that there is only one accessible subscription.
         """
+        context = single_subscription_tenant
+
         sa_name = "e2e-models-single-sub-sa"
-        sa_ns = "default"
-        maas_ns = _ns()
+        sa_ns = context.tenant_namespace
+        maas_ns = context.tenant_namespace
         auth_policy_name = "e2e-single-sub-auth"
         subscription_name = "e2e-single-sub-subscription"
 
-        # Snapshot existing subscription to restore later
-        original_sim = _snapshot_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
-        api_key = None
         try:
             # Create service account
             sa_token = _create_sa_token(sa_name, namespace=sa_ns)
             sa_user = _sa_to_user(sa_name, namespace=sa_ns)
 
-            # Delete simulator-subscription so user has exactly ONE subscription
-            # (otherwise they'd have 2: ours + simulator-subscription via system:authenticated)
-            _delete_cr("maassubscription", SIMULATOR_SUBSCRIPTION)
-
-            # Create auth policy and subscription for test user using DISTINCT_MODEL_REF
-            # (avoids conflicts with existing simulator-access auth policy)
-            log.info(f"Creating auth policy and subscription for {sa_user} with {DISTINCT_MODEL_REF}")
-            _create_test_auth_policy(auth_policy_name, DISTINCT_MODEL_REF, users=[sa_user])
-            _create_test_subscription(subscription_name, DISTINCT_MODEL_REF, users=[sa_user])
+            # Grant access only to this test service account.
+            log.info(f"Creating auth policy and subscription for {sa_user} with {context.model_ref}")
+            _create_test_auth_policy(
+                auth_policy_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
+            _create_test_subscription(
+                subscription_name, context.model_ref, users=[sa_user],
+                namespace=context.tenant_namespace, model_namespace=context.model_namespace,
+            )
 
             # Wait for subscription to reconcile before creating API key
             _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             # Wait for model to become Ready after governance pairing is created
             log.info("Waiting for model to reconcile and become Ready...")
-            _wait_for_model_ready(DISTINCT_MODEL_REF, namespace=MODEL_NAMESPACE)
+            _wait_for_model_ready(context.model_ref, namespace=context.model_namespace)
 
             # Create API key for inference
+            wait_for_only_accessible_subscription(sa_token, subscription_name)
+
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
 
-            _wait_for_maas_auth_policy_phase(auth_policy_name, require_enforced=False)
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=context.tenant_namespace, require_enforced=False)
 
             # Query /v1/models
             log.info("Testing: GET /v1/models with single subscription (no header, auto-select)")
@@ -500,11 +481,6 @@ class TestModelsEndpoint:
                 log.info(f"✅ Single subscription auto-select → {r.status_code} with {len(models)} model(s)")
 
         finally:
-            # Restore simulator-subscription first (critical for other tests)
-            if original_sim:
-                _apply_cr(original_sim)
-
-            # Clean up test resources
             _delete_cr("maasauthpolicy", auth_policy_name, namespace=maas_ns)
             _delete_cr("maassubscription", subscription_name, namespace=maas_ns)
             _delete_sa(sa_name, namespace=sa_ns)
@@ -779,6 +755,8 @@ class TestModelsEndpoint:
                 text=True,
                 check=True,
             )
+            _wait_for_maas_auth_policy_phase(auth_policy_name, namespace=maas_ns)
+            _wait_for_gateway_auth_enforced()
 
             # Create subscription with the SAME model ref TWICE (guaranteed duplicates)
             log.info(f"Creating subscription with {MODEL_REF} listed twice (to test deduplication)")
@@ -815,12 +793,11 @@ class TestModelsEndpoint:
                 check=True,
             )
 
-            _wait_for_subscription_inference_ready(
-                subscription_name,
-                MODEL_REF,
-                namespace=maas_ns,
-                model_namespace=MODEL_NAMESPACE,
-            )
+            # /v1/models only needs model discovery. Requiring direct and
+            # mirrored TRLP enforcement here makes this catalog test depend on
+            # an unrelated rate-limit condition while the gateway is rebuilding
+            # policies for the duplicate model refs.
+            _wait_for_subscription_discovery_ready(subscription_name, namespace=maas_ns)
 
             # Create API key bound to our test subscription
             api_key = _create_api_key(sa_token, name="e2e-dedup-test-key", subscription=subscription_name)
@@ -1610,7 +1587,8 @@ class TestModelsEndpoint:
         but that subscription is later deleted. The gateway injects X-MaaS-Subscription
         from the key, but the subscription no longer exists.
 
-        Expected: HTTP 403 with error type: permission_error
+        Expected: HTTP 403. The gateway may reject the revoked key before the
+        request reaches maas-api, in which case the response body is empty.
         """
         ns = _ns()
         auth_policy_name = "e2e-api-key-deleted-sub-auth"
@@ -1654,13 +1632,7 @@ class TestModelsEndpoint:
             assert r.status_code == 403, \
                 f"Expected 403 for API key with deleted subscription, got {r.status_code}: {r.text}"
 
-            data = r.json()
-            assert "error" in data, "Response missing 'error' field"
-            error = data["error"]
-            assert error.get("type") == "permission_error", \
-                f"Expected error type 'permission_error', got {error.get('type')}"
-
-            log.info(f"✅ API key with deleted subscription → {r.status_code} (permission_error)")
+            log.info(f"✅ API key with deleted subscription → {r.status_code}")
 
         finally:
             # subscription_name already deleted
@@ -1906,7 +1878,19 @@ class TestModelsEndpoint:
             # Create API key - will be bound to highest priority subscription (sub1)
             log.info(f"Creating API key (will bind to {sub1_name} - highest priority)")
             api_key = _create_api_key(sa_token, name=f"{sa_name}-key")
-            time.sleep(8)  # API key propagation — no K8s resource to poll
+
+            # sub2's model missing from the key's listing only proves something once
+            # it is listable: show it through the SA token, then sub1's through the key.
+            _wait_for_central_models_in_subscription(
+                sa_token,
+                sub2_name,
+                extra_headers={"x-maas-subscription": sub2_name},
+            )
+            _wait_for_central_models_in_subscription(
+                api_key,
+                sub1_name,
+                extra_headers={"x-maas-subscription": sub2_name},
+            )
 
             # Test: Send request with header pointing to sub2, but key is bound to sub1
             log.info(f"Querying /v1/models with API key bound to {sub1_name} but header={sub2_name}")
@@ -2010,6 +1994,11 @@ class TestModelsEndpoint:
             _wait_for_maas_auth_policy_phase(auth1_name, require_enforced=False)
             _wait_for_maas_auth_policy_phase(auth2_name, require_enforced=False)
 
+            # Both models must be listable before either key's listing can show
+            # it leaves out the other subscription's model.
+            _wait_for_central_models_in_subscription(api_key1, sub1_name)
+            _wait_for_central_models_in_subscription(api_key2, sub2_name)
+
             # Test key1 - should return models from sub1 only
             log.info(f"Testing API key 1 (bound to {sub1_name})")
             r1 = _get_models_with_gateway_retry(
@@ -2084,14 +2073,9 @@ class TestModelsEndpoint:
 
             # Query with K8s token (no header)
             log.info("Querying /v1/models with K8s token (no header) - should return models from both subscriptions")
-            r = _request_with_gateway_retry(
-                requests.get,
-                f"{_maas_api_url()}/v1/models",
-                headers={"Authorization": f"Bearer {sa_token}"},
-            )
-
-            assert r.status_code == 200, f"Expected 200, got {r.status_code}: {r.text}"
-            data = r.json()
+            # Wait for sub1's model to be listed, then assert on a listing that also has sub2's.
+            _wait_for_central_models_in_subscription(sa_token, sub1_name)
+            data, _ = _wait_for_central_models_in_subscription(sa_token, sub2_name)
             models = data.get("data") or []
             model_ids = {m["id"] for m in models}
 
@@ -2146,6 +2130,15 @@ class TestModelsEndpoint:
             _wait_for_maas_auth_policy_phase(auth2_name)
             _wait_for_subscription_discovery_ready(sub1_name)
             _wait_for_subscription_discovery_ready(sub2_name)
+
+            # Both models must be listable before either filtered listing can show
+            # it leaves out the other subscription's model.
+            for sub_name in (sub1_name, sub2_name):
+                _wait_for_central_models_in_subscription(
+                    sa_token,
+                    sub_name,
+                    extra_headers={"x-maas-subscription": sub_name},
+                )
 
             # Query with K8s token and header specifying sub1
             log.info(f"Querying /v1/models with K8s token and header: {sub1_name}")

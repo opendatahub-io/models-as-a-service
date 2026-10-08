@@ -74,7 +74,7 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
     Requires OpenShift Service Mesh 2.4+, Kuadrant/RHCL, and deployed Gateway.
 
 !!! warning "AuthPolicy Dependency"
-    Istio Telemetry reads `X-MaaS-Subscription` header injected by AuthPolicy. Without header injection, `subscription` label will be empty.
+    Istio Telemetry reads `X-MaaS-Subscription`. If the header is absent, the `subscription` label is empty. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for its behavior with API keys and user tokens.
 
 Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) with a controller ownerReference on `Config`. It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
 
@@ -86,8 +86,9 @@ Additionally, a Perses dashboard for metrics-based usage is applied by the opera
 We have introduced usage dashboards that are based on structured access logs rather than on metrics for both administrators and non-admin users as a tech-preview feature. The data presented in these dashboards is more accurate and consistent, and a bit more enriched, compared to the data in the metrics-based dashboard.
 
 !!! warning "Privacy"
-    `usageLogging` records request identity attributes in access logs.
-    Review GDPR/privacy requirements, retention, and dashboard access before enabling it.
+    `usageLogging` records request attributes in access logs.
+    User identity (`user_id`) is included only when `MaasTenantConfig.spec.telemetry.logs.captureUser` is `true`.
+    Review GDPR/privacy requirements, retention, and dashboard access before enabling either setting.
 
 To enable this feature, you need to turn on `usageLogging` in the `Config`:
 
@@ -102,6 +103,13 @@ This creates:
 - **Tenancy Proxy** (`usage-logs-tenancy-proxy`) - filters user-scoped usage data for non-admin users
 - **Perses Dashboard** (`dashboard-4-maas-usage-logs-admin`) - usage dashboard for administrators (shows information on all users)
 - **Perses Dashboard** (`dashboard-5-maas-usage-logs`) - user-scoped usage dashboard
+
+To include user identity (`user_id`) in those logs:
+
+```bash
+kubectl patch maastenantconfig default-tenant -n models-as-a-service --type=merge \
+  -p '{"spec":{"telemetry":{"logs":{"captureUser":true}}}}'
+```
 
 ### Option 2: Kustomize (Development)
 

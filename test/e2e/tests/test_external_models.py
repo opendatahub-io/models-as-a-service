@@ -126,6 +126,7 @@ def _check_external_endpoint_reachable():
 
 
 pytestmark = [
+    pytest.mark.legacy_ipp,
     pytest.mark.skipif(
         not _check_external_endpoint_reachable(),
         reason=f"External endpoint {EXTERNAL_ENDPOINT} is not reachable (disconnected environment?)",

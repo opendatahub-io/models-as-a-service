@@ -44,12 +44,14 @@ Environment variables (all optional unless noted):
   - E2E_TRLP_TEST_MODEL_PATH: Path to TRLP test model (default: /llm/e2e-trlp-test-simulated)
   - E2E_TRLP_TEST_MODEL_ID: Model ID for TRLP test model (default: test/e2e-trlp-test-model)
   - E2E_GATEWAY_AUTH_POLICY_NAME: Gateway Kuadrant AuthPolicy name (default: maas-gateway-auth)
-  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500 (default: 6)
+  - E2E_GATEWAY_PROPAGATION_RETRIES: Retries for empty 401/403 / AUTH_FAILURE / proxy 500/503 (default: 6)
   - E2E_GATEWAY_PROPAGATION_DELAY: Delay between gateway retries in seconds (default: 5)
   - E2E_GATEWAY_ENFORCED_TIMEOUT: Wait for AuthPolicy Accepted+Enforced (default: 180)
   - E2E_GATEWAY_ENFORCED_MISSING_GRACE: Fail early if AuthPolicy CR absent this long (default: 30)
   - E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT: Discovery + direct/mirrored TRLP wait (default: 300)
   - E2E_SUBSCRIPTION_TRLP_TIMEOUT: MaaSSubscription mirrored TRLP ready wait (default: 180)
+  - E2E_OC_TIMEOUT: Per-attempt `oc` process timeout in seconds (default: 60)
+  - E2E_OC_RETRY_BUDGET: Wall-clock budget for retrying transient `oc` failures in seconds (default: 180)
 """
 
 import base64
@@ -65,6 +67,7 @@ import uuid
 from typing import Optional
 
 import requests
+from urllib3.exceptions import NewConnectionError
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +88,7 @@ MODEL_CANONICAL_ID = os.environ.get("E2E_MODEL_CANONICAL_ID", f"publishers/{MODE
 DEPLOYMENT_NAMESPACE = os.environ.get("DEPLOYMENT_NAMESPACE", "opendatahub")
 # Kuadrant gateway AuthPolicy that Authorino enforces for maas-api + model routes.
 GATEWAY_AUTH_POLICY_NAME = os.environ.get("E2E_GATEWAY_AUTH_POLICY_NAME", "maas-gateway-auth")
-# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500 while Envoy catches up.
+# Empty 401/403 / Authorino AUTH_FAILURE / proxy-style 500/503 while Envoy catches up.
 GATEWAY_PROPAGATION_RETRIES = int(os.environ.get("E2E_GATEWAY_PROPAGATION_RETRIES", "6"))
 GATEWAY_PROPAGATION_DELAY = int(os.environ.get("E2E_GATEWAY_PROPAGATION_DELAY", "5"))
 # Wait for maas-gateway-auth Accepted+Enforced before minting keys / calling maas-api.
@@ -102,6 +105,10 @@ SUBSCRIPTION_INFERENCE_READY_TIMEOUT = int(
     os.environ.get("E2E_SUBSCRIPTION_INFERENCE_READY_TIMEOUT", "300")
 )
 SUBSCRIPTION_TRLP_STATUS_TIMEOUT = int(os.environ.get("E2E_SUBSCRIPTION_TRLP_TIMEOUT", "180"))
+OC_TIMEOUT = int(os.environ.get("E2E_OC_TIMEOUT", "60"))
+# An API server blip (TLS handshake timeout, admission webhook unreachable while
+# maas-controller restarts) must not fail a test or skip a teardown delete.
+OC_RETRY_BUDGET = int(os.environ.get("E2E_OC_RETRY_BUDGET", "180"))
 
 
 def _derive_infra_namespace(controller_namespace: str) -> str:
@@ -395,11 +402,15 @@ def kubectl_curl(
         log.error("kubectl curl failed: %s", e)
         return 0, str(e)
     finally:
+        # Best-effort: a slow API server here must not replace the probe result.
         delete_cmd = [
             "kubectl", "delete", "pod", pod_name, "-n", namespace,
             "--grace-period=0", "--force", "--wait=false",
         ]
-        subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
+        try:
+            subprocess.run(delete_cmd, capture_output=True, text=True, timeout=15)
+        except subprocess.TimeoutExpired:
+            log.warning("Timed out deleting curl pod %s/%s; leaving it behind", namespace, pod_name)
 
 
 def _maas_api_url():
@@ -513,28 +524,51 @@ def _is_transient_gateway_response(response) -> bool:
     - Empty 401/403: Envoy has not loaded the AuthPolicy yet (common after
       MaaSAuthPolicy churn; some gateways return 401 instead of 403).
     - 500 with AUTH_FAILURE: Authorino race while AuthConfig is updating.
-    - Empty or plain-text proxy 500 ("Internal Server Error"): Envoy/router
-      failure while upstream or auth filters are mid-reload. Distinct from
-      maas-api JSON errors like {"error":"Failed to create API key"}.
+    - Empty or plain-text proxy 500/503 ("Internal Server Error" /
+      "Service Unavailable"): Envoy/router failure while upstream or auth
+      filters are mid-reload. Distinct from maas-api JSON errors like
+      {"error":"Failed to create API key"}.
     """
     body = (response.text or "").strip()
     if response.status_code in (401, 403) and not body:
         return True
-    if response.status_code != 500:
+    if response.status_code not in (500, 503):
         return False
     if "AUTH_FAILURE" in body:
         return True
-    if not body or body in ("Internal Server Error", "Internal Server Error."):
+    if not body or body in (
+        "Internal Server Error",
+        "Internal Server Error.",
+        "Service Unavailable",
+        "Service Unavailable.",
+    ):
         return True
-    if body.startswith("<") and "Internal Server Error" in body:
+    if body.startswith("<") and (
+        "Internal Server Error" in body or "Service Unavailable" in body
+    ):
         return True
     return False
+
+
+def _is_connect_failure(exc: requests.exceptions.ConnectionError) -> bool:
+    """True when DNS resolution or the TCP connect failed, so no request was sent.
+
+    urllib3's NameResolutionError subclasses NewConnectionError. Read timeouts
+    and connection resets are excluded: the gateway may already have acted on
+    the request, so retrying a POST could repeat it.
+    """
+    reason = exc.args[0] if exc.args else None
+    # requests wraps urllib3's MaxRetryError, which carries the connect error.
+    reason = getattr(reason, "reason", reason)
+    return isinstance(reason, NewConnectionError)
 
 
 def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs):
     """Make an HTTP request, retrying transient gateway/auth propagation errors.
 
     See ``_is_transient_gateway_response`` for retryable status/body patterns.
+    Connection errors are retried only when the request was never sent
+    (``_is_connect_failure``), which is safe for POST.
 
     Returns the last response — callers' assertions surface a permanent failure.
     """
@@ -544,7 +578,20 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
     verify = kwargs.pop("verify", TLS_VERIFY)
     r = None
     for attempt in range(1, retries + 1):
-        r = method(url, timeout=timeout, verify=verify, **kwargs)
+        try:
+            r = method(url, timeout=timeout, verify=verify, **kwargs)
+        except requests.exceptions.ConnectionError as exc:
+            if attempt >= retries or not _is_connect_failure(exc):
+                raise
+            log.info(
+                "Gateway connection failed before sending (attempt %d/%d: %s), retrying in %ds...",
+                attempt,
+                retries,
+                exc,
+                delay,
+            )
+            time.sleep(delay)
+            continue
         if _is_transient_gateway_response(r) and attempt < retries:
             log.info(
                 "Gateway returned %d (attempt %d/%d, body=%.80r), retrying in %ds...",
@@ -554,9 +601,9 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
                 (r.text or "").strip(),
                 delay,
             )
-            # After the first proxy-style 500, re-check AuthPolicy Enforced so
-            # remaining attempts are less likely to hit a mid-reload window.
-            if r.status_code == 500 and attempt == 1:
+            # After the first proxy-style 500/503, re-check AuthPolicy Enforced
+            # so remaining attempts are less likely to hit a mid-reload window.
+            if r.status_code in (500, 503) and attempt == 1:
                 try:
                     _wait_for_gateway_auth_enforced(timeout=min(60, GATEWAY_ENFORCED_TIMEOUT))
                 except TimeoutError:
@@ -570,7 +617,7 @@ def _request_with_gateway_retry(method, url, retries=None, delay=None, **kwargs)
 def _create_api_key_raw(oc_token: str, name: str = None, subscription: str = None):
     """Create an API key and return the raw response (for testing error cases).
 
-    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500s so
+    Retries empty 401/403, Authorino AUTH_FAILURE, and proxy-style 500/503s so
     callers see the real API response after gateway AuthPolicy propagation,
     not a transient reject.
 
@@ -651,15 +698,23 @@ def _revoke_api_key(oc_token: str, key_id: str):
 # ---------------------------------------------------------------------------
 
 def _apply_cr(cr_dict):
-    subprocess.run(["oc", "apply", "-f", "-"], input=json.dumps(cr_dict), capture_output=True, text=True, check=True)
+    result = _run_oc(["oc", "apply", "-f", "-"], input_text=json.dumps(cr_dict))
+    if result.returncode != 0:
+        meta = cr_dict.get("metadata", {})
+        raise RuntimeError(
+            f"`oc apply` failed for {cr_dict.get('kind')} "
+            f"{meta.get('namespace', '<cluster>')}/{meta.get('name')}: "
+            f"{result.stderr.strip() or result.stdout.strip()}"
+        )
 
 
 def _delete_cr(kind, name, namespace=None):
     namespace = namespace or _ns()
-    result = subprocess.run(
-        ["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"],
-        capture_output=True, text=True,
-    )
+    try:
+        result = _run_oc(["oc", "delete", kind, name, "-n", namespace, "--ignore-not-found", "--timeout=30s"])
+    except subprocess.TimeoutExpired:
+        log.warning("Timed out deleting %s/%s in %s", kind, name, namespace)
+        return
     if result.returncode != 0:
         log.warning("Failed to delete %s/%s in %s: %s", kind, name, namespace, result.stderr.strip())
 
@@ -675,6 +730,9 @@ def _is_transient_kubectl_error(stderr):
         "EOF",
         "temporary failure",
         "network is unreachable",
+        "Unable to connect to the server",
+        # Admission webhook backend unreachable, not a webhook denial.
+        "failed calling webhook",
     ]
     stderr_lower = stderr.lower()
     return any(pattern.lower() in stderr_lower for pattern in transient_patterns)
@@ -686,6 +744,45 @@ def _is_not_found_error(stderr):
     return "notfound" in stderr_lower or "not found" in stderr_lower
 
 
+def _run_oc(cmd, *, input_text=None, timeout=None):
+    """Run an oc/kubectl command, retrying transient API server and network errors.
+
+    Retries while stderr matches ``_is_transient_kubectl_error`` or the process
+    exceeds ``timeout`` (default OC_TIMEOUT), until OC_RETRY_BUDGET is spent.
+    Any other outcome, NotFound included, is returned on the first attempt so
+    callers keep interpreting ``returncode``/``stderr`` themselves. Once the
+    budget is spent, the last result is returned or TimeoutExpired re-raised.
+    """
+    timeout = OC_TIMEOUT if timeout is None else timeout
+    deadline = time.monotonic() + OC_RETRY_BUDGET
+    what = " ".join([os.path.basename(cmd[0]), *cmd[1:3]])
+    attempt = 0
+    while True:
+        attempt += 1
+        delay = min(2 * attempt, 10)
+        try:
+            result = subprocess.run(cmd, input=input_text, capture_output=True, text=True, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            if time.monotonic() + delay >= deadline:
+                raise
+            log.warning("`%s` timed out after %ss (attempt %d), retrying in %ds", what, timeout, attempt, delay)
+        else:
+            if (
+                result.returncode == 0
+                or not _is_transient_kubectl_error(result.stderr or "")
+                or time.monotonic() + delay >= deadline
+            ):
+                return result
+            log.warning(
+                "`%s` hit a transient error (attempt %d), retrying in %ds: %s",
+                what,
+                attempt,
+                delay,
+                result.stderr.strip(),
+            )
+        time.sleep(delay)
+
+
 def _get_cr(kind, name, namespace=None):
     """Get a CR as dict, or None if not found. Retries on transient errors.
 
@@ -695,33 +792,18 @@ def _get_cr(kind, name, namespace=None):
     from true absence.
     """
     namespace = namespace or _ns()
-    max_retries = 3
-    retry_delay = 2
+    result = _run_oc(["oc", "get", kind, name, "-n", namespace, "-o", "json"])
 
-    for attempt in range(max_retries):
-        result = subprocess.run(["oc", "get", kind, name, "-n", namespace, "-o", "json"], capture_output=True, text=True)
+    if result.returncode == 0:
+        return json.loads(result.stdout)
 
-        if result.returncode == 0:
-            return json.loads(result.stdout)
+    if _is_not_found_error(result.stderr):
+        return None
 
-        if attempt < max_retries - 1 and _is_transient_kubectl_error(result.stderr):
-            log.warning(
-                f"Transient kubectl error getting {kind}/{name} (attempt {attempt + 1}/{max_retries}): {result.stderr.strip()}"
-            )
-            time.sleep(retry_delay * (attempt + 1))
-            continue
-
-        # Terminal failure — distinguish not-found from other errors
-        if _is_not_found_error(result.stderr):
-            return None
-
-        log.error(
-            f"Failed to get {kind}/{name} in namespace '{namespace}' after {attempt + 1} attempts. "
-            f"Last error: {result.stderr.strip()}"
-        )
-        raise RuntimeError(
-            f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
-        )
+    log.error(f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}")
+    raise RuntimeError(
+        f"Failed to get {kind}/{name} in namespace '{namespace}': {result.stderr.strip()}"
+    )
 
 
 def _snapshot_cr(kind, name, namespace=None):
@@ -1064,7 +1146,7 @@ def _poll_status(api_key, expected, path=None, extra_headers=None, model_name=No
                 return r
             last = r
             # Parallel workers can churn maas-gateway-auth; empty 401/403,
-            # AUTH_FAILURE, or proxy-style 500 usually means propagation.
+            # AUTH_FAILURE, or proxy-style 500/503 usually means propagation.
             if _is_transient_gateway_response(r) and time.time() - last_auth_recheck >= 10:
                 remaining = max(0, int(deadline - time.time()))
                 if remaining > 0:
@@ -1628,13 +1710,18 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
     namespace = namespace or _ns()
     deadline = time.time() + timeout
     log.info(f"Waiting for MaaSAuthPolicy {name} to reach phase '{expected_phase}' (timeout: {timeout}s)...")
+    last_snapshot = "not found"
 
     while time.time() < deadline:
         cr = _get_cr("maasauthpolicy", name, namespace)
-        if cr:
+        if cr is None:
+            last_snapshot = "not found"
+        else:
             status = cr.get("status", {})
             phase = status.get("phase")
             auth_policies = status.get("authPolicies", [])
+            ready_count = sum(1 for ap in auth_policies if ap.get("ready") is True)
+            last_snapshot = f"phase={phase}, authPolicies={len(auth_policies)} (ready={ready_count})"
 
             if phase == expected_phase:
                 # No per-model auth policies required — phase match is sufficient for the CR,
@@ -1664,15 +1751,14 @@ def _wait_for_maas_auth_policy_phase(name, expected_phase="Active", namespace=No
                         log.info(f"MaaSAuthPolicy {name} reached phase '{expected_phase}' with {len(auth_policies)} auth policy status(es)")
                         return cr
 
-            log.debug(f"MaaSAuthPolicy {name}: phase={phase}, authPolicies={len(auth_policies)}")
+            log.debug(f"MaaSAuthPolicy {name}: {last_snapshot}")
         time.sleep(2)
 
-    # Timeout - return current state for debugging
-    cr = _get_cr("maasauthpolicy", name, namespace)
-    status = cr.get("status", {}) if cr else {}
+    # Report what the loop last saw: a re-read after the deadline can show a
+    # state the loop never evaluated.
     raise TimeoutError(
         f"MaaSAuthPolicy {name} did not reach phase '{expected_phase}' within {timeout}s "
-        f"(current: phase={status.get('phase')}, authPolicies={len(status.get('authPolicies', []))})"
+        f"(last seen: {last_snapshot})"
     )
 
 
@@ -1823,7 +1909,7 @@ def _scale_controller(replicas, namespace=None, timeout=60):
     log.info(f"Scaling maas-controller to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "maas-controller",
          f"--replicas={replicas}", "-n", namespace],
         check=True,
@@ -1890,7 +1976,7 @@ def _scale_kuadrant_controller(replicas, namespace="kuadrant-system", timeout=60
     log.info(f"Scaling kuadrant-operator to {replicas} replicas in namespace {namespace}...")
 
     # Scale the deployment
-    result = subprocess.run(
+    subprocess.run(
         ["oc", "scale", "deployment", "kuadrant-operator-controller-manager",
          f"--replicas={replicas}", "-n", namespace],
         check=True,

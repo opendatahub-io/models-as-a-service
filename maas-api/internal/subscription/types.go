@@ -29,8 +29,13 @@ type SelectResponse struct {
 	Labels         map[string]string `json:"labels,omitempty"`         // Additional tracking labels
 	// ResolvedModel is the MaaSModelRef identity (namespace/name) after resolving
 	// body-based aliases such as publishers/{ns}/models/{served-id}. Used by the
-	// gateway AuthPolicy to build selected_subscription_key for TokenRateLimitPolicy.
+	// gateway AuthPolicy to build selected_subscription_key (telemetry/debug) and,
+	// with namespace/name, to derive RateLimitID for TokenRateLimitPolicy matching.
 	ResolvedModel string `json:"resolvedModel,omitempty"`
+	// RateLimitID is a short stable hash of namespace/name@resolvedModel. AuthPolicy
+	// copies it to auth.identity.selected_subscription_id for TokenRateLimitPolicy
+	// when-predicates so the WASM shim does not embed long subscription keys.
+	RateLimitID string `json:"rateLimitId,omitempty"`
 
 	// Access control (populated from MaaSAuthPolicy check)
 	AccessAllowed bool `json:"accessAllowed"` // no omitempty — false is a meaningful denial signal

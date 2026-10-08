@@ -31,6 +31,12 @@ const (
 	// Deprecated: prefer spec.payloadProcessing.replicas on MaasTenantConfig/Tenant.
 	AnnotationPayloadProcessingReplicas = "maas.opendatahub.io/payload-processing-replicas"
 
+	// AnnotationPayloadPreProcessingReplicas overrides the payload-pre-processing Deployment replica count for a tenant.
+	// When autoscaling is enabled via spec.payloadPreProcessing.autoscaling, this value sets HPA minReplicas instead.
+	//
+	// Deprecated: prefer spec.payloadPreProcessing.replicas on MaasTenantConfig/Tenant.
+	AnnotationPayloadPreProcessingReplicas = "maas.opendatahub.io/payload-pre-processing-replicas"
+
 	// AnnotationPayloadProcessingStatus coordinates the payload-processing backend
 	// swap handshake between maas-controller (legacy IPP) and ai-gateway-controller
 	// (praxis). It lives only on MaasTenantConfig — never mirrored to/from AITenant.
@@ -94,10 +100,11 @@ const (
 	// Production deployments use this default. ROSA deployments must override to "" (empty) to disable separation.
 	DefaultInfraNamespace = "AUTO"
 
-	DefaultMaaSAPIImage            = "quay.io/opendatahub/maas-api:latest"
-	DefaultPayloadProcessingImage  = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
-	DefaultMaaSAPIKeyCleanupImage  = "registry.redhat.io/ubi9/ubi-minimal:9.7"
-	DefaultAPIKeyMaxExpirationDays = "90"
+	DefaultMaaSAPIImage                = "quay.io/opendatahub/maas-api:latest"
+	DefaultPayloadProcessingImage      = "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable"
+	DefaultMaaSAPIKeyCleanupImage      = "registry.redhat.io/ubi9/ubi-minimal:9.7"
+	DefaultAPIKeyMaxExpirationDays     = "90"
+	DefaultAPIKeyDeletionRetentionDays = "90"
 
 	// DefaultOTLPCollectorService is the platform DSCI OpenTelemetry collector Service name.
 	DefaultOTLPCollectorService = "data-science-collector-collector"
@@ -277,6 +284,10 @@ func PayloadProcessingNetworkPolicyName(tenantID string) string {
 
 func PayloadProcessingHPAName(tenantID string) string {
 	return resourceNameForTenant(PayloadProcessingName, tenantID)
+}
+
+func PayloadPreProcessingHPAName(tenantID string) string {
+	return resourceNameForTenant(PayloadPreProcessingName, tenantID)
 }
 
 func MaaSAPIServingCertName(tenantID string) string {

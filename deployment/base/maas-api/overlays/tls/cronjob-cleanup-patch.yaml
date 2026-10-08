@@ -8,10 +8,19 @@ spec:
     spec:
       template:
         spec:
+          volumes:
+          - name: maas-api-service-ca
+            configMap:
+              name: openshift-service-ca.crt
           containers:
           - name: cleanup
+            volumeMounts:
+            - name: maas-api-service-ca
+              mountPath: /etc/pki/maas-api
+              readOnly: true
             command:
             - /bin/sh
             - -c
             - |
-              curl -sf -k -X POST https://maas-api:8443/internal/v1/api-keys/cleanup
+              TOKEN="$(cat /var/run/secrets/kubernetes.io/serviceaccount/token)" && \
+              curl -sf --cacert /etc/pki/maas-api/service-ca.crt -X POST -H "Authorization: Bearer ${TOKEN}" https://maas-api:8443/internal/v1/api-keys/cleanup

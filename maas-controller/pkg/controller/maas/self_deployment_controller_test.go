@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/apimachinery/pkg/util/managedfields"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/utils/ptr"
@@ -37,6 +38,14 @@ func lifecycleTestScheme(t *testing.T) *runtime.Scheme {
 	utilruntime.Must(clientgoscheme.AddToScheme(s))
 	utilruntime.Must(maasv1alpha1.AddToScheme(s))
 	return s
+}
+
+// newSSAFakeClientBuilder returns a fake client builder that can server-side apply NetworkPolicies.
+// controller-runtime's fake client (v0.23+) lists NetworkPolicy as having a status
+// subresource, which the built-in apply schema does not have, so applying one fails with
+// "expected objects with types from the same schema". The deduced type converter avoids it.
+func newSSAFakeClientBuilder(scheme *runtime.Scheme) *fake.ClientBuilder {
+	return fake.NewClientBuilder().WithScheme(scheme).WithTypeConverters(managedfields.NewDeducedTypeConverter())
 }
 
 func lifecycleUsageLogsPath(t *testing.T) string {
@@ -869,7 +878,7 @@ func TestEnsureUsageLogs(t *testing.T) {
 			Spec:       maasv1alpha1.ConfigSpec{UsageLogging: ptr.To(true)},
 		}
 
-		cl := fake.NewClientBuilder().WithScheme(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
+		cl := newSSAFakeClientBuilder(s).WithStatusSubresource(&maasv1alpha1.Config{}).WithObjects(cfg).Build()
 		r := &LifecycleReconciler{
 			Client:                cl,
 			Scheme:                s,

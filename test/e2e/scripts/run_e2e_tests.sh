@@ -6,8 +6,8 @@
 # Owns pytest invocation for MaaS E2E tests. Separated from
 # prow_run_smoke_test.sh so that test-only changes don't touch deploy/validate
 # logic. Implements the two-phase model:
-#   Pass 1: parallel with pytest-xdist (-m "not serial", --dist=loadgroup)
-#   Pass 2: serial cluster mutators (-m serial, single worker)
+#   Pass 1: parallel with pytest-xdist (-m "not serial and not legacy_ipp", --dist=loadgroup)
+#   Pass 2: serial cluster mutators (-m "serial and not legacy_ipp", single worker)
 #
 # Called by:
 #   - prow_run_smoke_test.sh (CI: deploy → validate → THIS)
@@ -85,10 +85,17 @@ if [[ "$E2E_PARALLEL_WORKERS" -gt 1 ]]; then
 fi
 
 # ── Venv ─────────────────────────────────────────────────────────────────
-if [[ ! -d "$TEST_DIR/.venv" ]]; then
-    echo "Creating Python venv for e2e tests..."
-    python3 -m venv "$TEST_DIR/.venv" --upgrade-deps
+# shellcheck source=ensure_e2e_python.sh
+source "$SCRIPT_DIR/ensure_e2e_python.sh"
+if [[ -d "$TEST_DIR/.venv" ]] && ! "$TEST_DIR/.venv/bin/python" -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    echo "Recreating e2e venv (existing interpreter is older than Python 3.10)..."
+    rm -rf "$TEST_DIR/.venv"
 fi
+if [[ ! -d "$TEST_DIR/.venv" ]]; then
+    echo "Creating Python venv for e2e tests ($E2E_PYTHON)..."
+    "$E2E_PYTHON" -m venv "$TEST_DIR/.venv" --upgrade-deps
+fi
+# shellcheck disable=SC1091
 source "$TEST_DIR/.venv/bin/activate"
 python -m pip install --upgrade pip --quiet
 python -m pip install -r "$TEST_DIR/requirements.txt" --quiet
@@ -201,14 +208,14 @@ snapshot_parallel_pass_pods() (
 )
 
 run_serial_pass() {
-    echo "Running E2E pass 2/2: serial cluster mutators (-m serial, single worker)"
+    echo "Running E2E pass 2/2: serial cluster mutators (-m 'serial and not legacy_ipp', single worker)"
     if ! run_pytest_pass "pass 2 (serial)" \
         env E2E_PYTEST_PASS=serial PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml_serial" \
         --html="${html%.html}-serial.html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m serial; then
+        -m "serial and not legacy_ipp"; then
         serial_rc=1
     fi
 }
@@ -222,25 +229,25 @@ maybe_run_serial_pass() {
 }
 
 if [[ "$serial_only" == "true" ]]; then
-    echo "Running E2E tests (serial pass only, -m serial)"
+    echo "Running E2E tests (serial pass only, -m 'serial and not legacy_ipp')"
     run_serial_pass
 elif [[ "$E2E_PARALLEL_WORKERS" -le 1 ]]; then
     # Single worker: still split by marker so module-scoped worker fixtures never
     # see both serial and parallel tests from the same file in one session.
-    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial')"
+    echo "Running E2E pass 1/2: non-serial (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, -m 'not serial and not legacy_ipp')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial"; then
+        -m "not serial and not legacy_ipp"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"
     maybe_run_serial_pass
 else
-    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial')"
+    echo "Running E2E pass 1/2: parallel (E2E_PARALLEL_WORKERS=${E2E_PARALLEL_WORKERS}, --dist=loadgroup, -m 'not serial and not legacy_ipp')"
     if ! run_pytest_pass "pass 1 (non-serial)" \
         env E2E_PYTEST_PASS=parallel PYTHONPATH="$TEST_DIR:${PYTHONPATH:-}" pytest \
         --maxfail=5 \
@@ -248,7 +255,7 @@ else
         --junitxml="$xml" \
         --html="$html" --self-contained-html \
         "${pytest_common_args[@]}" \
-        -m "not serial"; then
+        -m "not serial and not legacy_ipp"; then
         parallel_rc=1
     fi
     snapshot_parallel_pass_pods || echo "WARNING: failed to snapshot pods after the parallel pass"

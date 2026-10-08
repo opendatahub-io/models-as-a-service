@@ -109,3 +109,47 @@ patches:
       - op: replace
         path: /spec/template/spec/volumes/2/secret/optional
         value: true
+
+  # The cleanup image (ubi-minimal) runs as root. OpenShift's restricted SCC assigns a
+  # non-root UID, but xKS has none, so runAsNonRoot alone makes the kubelet refuse the
+  # container (CreateContainerConfigError). Run as the same UID as the maas images.
+  - target:
+      kind: CronJob
+      name: maas-api-key-cleanup
+    patch: |
+      - op: add
+        path: /spec/jobTemplate/spec/template/spec/securityContext/runAsUser
+        value: 1001
+
+  # The maas-api ClusterRoles carry an OpenShift-only rule for the cluster TLS security
+  # profile (config.openshift.io/apiservers). That API group does not exist on xKS, so
+  # the maas-controller SA can never hold the permission and the RBAC escalation guard
+  # denies the server-side apply of the ClusterRole, failing every tenant platform
+  # reconcile with "attempting to grant RBAC permissions not currently held". Strip the
+  # rule on xKS — maas-api never reads the cluster TLS profile there. The OpenShift
+  # overlay keeps it. The test ops fail the build if the base rules are reordered,
+  # instead of silently removing a different rule.
+  - target:
+      kind: ClusterRole
+      name: maas-api
+    patch: |
+      - op: test
+        path: /rules/8/apiGroups
+        value: ["config.openshift.io"]
+      - op: test
+        path: /rules/8/resources
+        value: ["apiservers"]
+      - op: remove
+        path: /rules/8
+  - target:
+      kind: ClusterRole
+      name: maas-api-supplemental
+    patch: |
+      - op: test
+        path: /rules/3/apiGroups
+        value: ["config.openshift.io"]
+      - op: test
+        path: /rules/3/resources
+        value: ["apiservers"]
+      - op: remove
+        path: /rules/3

@@ -1603,6 +1603,32 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 	})
 
+	t.Run("client flow-control headers cleared", func(t *testing.T) {
+		headers, _, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
+		if err != nil {
+			t.Fatalf("Error checking headers: %v", err)
+		}
+		for _, header := range []string{
+			"x-llm-d-inference-objective", "x-gateway-inference-objective",
+			"x-llm-d-inference-fairness-id", "x-gateway-inference-fairness-id",
+		} {
+			cfg, ok := headers[header].(map[string]any)
+			if !ok {
+				t.Errorf("header %q missing from response.success.headers", header)
+				continue
+			}
+			if _, hasKey := cfg["key"]; hasKey {
+				t.Errorf("header %q must not override its lowercase name with key %v", header, cfg["key"])
+			}
+			if _, hasWhen := cfg["when"]; hasWhen {
+				t.Errorf("header %q must apply to every authorized request, got when %v", header, cfg["when"])
+			}
+			if value, found, _ := unstructured.NestedFieldNoCopy(cfg, "plain", "value"); !found || value != "" {
+				t.Errorf("header %q plain.value = %v (found %t), want empty string", header, value, found)
+			}
+		}
+	})
+
 	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
 	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
 		identity, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "filters", "identity", "json", "properties")
@@ -1614,6 +1640,7 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 			"userid",
 			"groups",
 			"selected_subscription_key",
+			"selected_subscription_id",
 			"selected_subscription",
 			"subscription_info",
 		}
@@ -1664,6 +1691,22 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 		if !contains(keyExpr, `resolvedModel`) {
 			t.Errorf("selected_subscription_key must prefer subscription-info.resolvedModel for BBR TRLP matching, got: %s", keyExpr)
+		}
+
+		idField, exists := identity["selected_subscription_id"]
+		if !exists {
+			t.Fatal("selected_subscription_id missing")
+		}
+		idMap, ok := idField.(map[string]any)
+		if !ok {
+			t.Fatalf("selected_subscription_id should be a map, got %T", idField)
+		}
+		idExpr, ok := idMap["expression"].(string)
+		if !ok {
+			t.Fatalf("selected_subscription_id expression missing")
+		}
+		if !contains(idExpr, `rateLimitId`) {
+			t.Errorf("selected_subscription_id must read subscription-info.rateLimitId for TRLP matching, got: %s", idExpr)
 		}
 	})
 
@@ -1754,6 +1797,85 @@ func TestBuildGatewayAuthPolicySpec_K8sAuth(t *testing.T) {
 	}
 }
 
+func TestBuildGatewayAuthPolicySpec_ErrorResponses(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	t.Run("unauthenticated returns JSON body with 401", func(t *testing.T) {
+		unauthn := nestedMapRequired(t, obj, "spec", "defaults", "rules", "response", "unauthenticated")
+
+		code, ok := unauthn["code"].(int64)
+		if !ok || code != 401 {
+			t.Fatalf("unauthenticated code = %v, want 401", unauthn["code"])
+		}
+
+		bodyMap, ok := unauthn["body"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthenticated must have a body map for JSON error response")
+		}
+		bodyVal, ok := bodyMap["value"].(string)
+		if !ok || bodyVal == "" {
+			t.Fatal("unauthenticated body.value must be a non-empty JSON string")
+		}
+		if !strings.Contains(bodyVal, `"authentication_error"`) {
+			t.Errorf("unauthenticated body should contain authentication_error type, got: %s", bodyVal)
+		}
+		if !strings.Contains(bodyVal, `"code":401`) {
+			t.Errorf("unauthenticated body should contain code 401, got: %s", bodyVal)
+		}
+
+		headers, ok := unauthn["headers"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthenticated must have headers with content-type")
+		}
+		ct, ok := headers["content-type"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthenticated headers must include content-type")
+		}
+		if ct["value"] != "application/json" {
+			t.Errorf("unauthenticated content-type = %v, want application/json", ct["value"])
+		}
+	})
+
+	t.Run("unauthorized returns JSON body with 403", func(t *testing.T) {
+		unauthz := nestedMapRequired(t, obj, "spec", "defaults", "rules", "response", "unauthorized")
+
+		code, ok := unauthz["code"].(int64)
+		if !ok || code != 403 {
+			t.Fatalf("unauthorized code = %v, want 403", unauthz["code"])
+		}
+
+		bodyMap, ok := unauthz["body"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthorized must have a body map for JSON error response")
+		}
+		bodyExpr, ok := bodyMap["expression"].(string)
+		if !ok || bodyExpr == "" {
+			t.Fatal("unauthorized body.expression must be a non-empty CEL expression")
+		}
+		if !strings.Contains(bodyExpr, `"authorization_error"`) {
+			t.Errorf("unauthorized body should contain authorization_error type, got: %s", bodyExpr)
+		}
+		if !strings.Contains(bodyExpr, `"code":403`) {
+			t.Errorf("unauthorized body should contain code 403, got: %s", bodyExpr)
+		}
+		if !strings.Contains(bodyExpr, `.replace(`) {
+			t.Errorf("unauthorized body expression should JSON-escape the message with .replace(), got: %s", bodyExpr)
+		}
+
+		headers, ok := unauthz["headers"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthorized must have headers")
+		}
+		ct, ok := headers["content-type"].(map[string]any)
+		if !ok {
+			t.Fatal("unauthorized headers must include content-type")
+		}
+		if ct["value"] != "application/json" {
+			t.Errorf("unauthorized content-type = %v, want application/json", ct["value"])
+		}
+	})
+}
+
 func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 	obj := gatewayAuthPolicySpecTestObject(t, nil)
 
@@ -1761,7 +1883,7 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		obj.Object,
 		"spec", "defaults", "rules", "authorization", "deny-client-identity-headers", "patternMatching", "patterns",
 	)
-	if err != nil || !found || len(patterns) != 3 {
+	if err != nil || !found || len(patterns) != 4 {
 		t.Fatalf("deny-client-identity-headers patterns missing: found=%v len=%d err=%v", found, len(patterns), err)
 	}
 
@@ -1782,9 +1904,43 @@ func TestBuildGatewayAuthPolicySpec_DenyClientIdentityHeaders(t *testing.T) {
 		`!("x-maas-username" in request.headers)`,
 		`!("x-maas-group" in request.headers)`,
 		`!("x-maas-keyname" in request.headers)`,
+		`!("x-maas-subscription-rate-limit-id" in request.headers)`,
 	}
-	if got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+	if len(got) != len(want) {
 		t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("deny-client-identity-headers predicates = %#v, want %#v", got, want)
+		}
+	}
+}
+
+func TestBuildGatewayAuthPolicySpec_SubscriptionHeaderInjection(t *testing.T) {
+	obj := gatewayAuthPolicySpecTestObject(t, nil)
+
+	predicate := nestedWhenPredicateRequired(t, obj,
+		"spec", "defaults", "rules", "response", "success", "headers", "X-MaaS-Subscription", "when")
+	wantPredicate := `has(auth.metadata) && has(auth.metadata.apiKeyValidation) && auth.metadata.apiKeyValidation.subscription != ""`
+	if predicate != wantPredicate {
+		t.Errorf("subscription header must be injected only for API keys with a subscription: got %q, want %q", predicate, wantPredicate)
+	}
+
+	// User tokens still use the client header for subscription selection, without
+	// adding another copy of that header to the upstream request.
+	wantSelection := `(has(auth.metadata) && has(auth.metadata.apiKeyValidation)) ` +
+		`? auth.metadata.apiKeyValidation.subscription : ` +
+		`("x-maas-subscription" in request.headers ? request.headers["x-maas-subscription"] : "")`
+	body := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "http", "body", "expression")
+	if !strings.Contains(body, `"requestedSubscription": `+wantSelection) {
+		t.Errorf("subscription-info must select the client header for user tokens, got body %q", body)
+	}
+
+	cacheKey := nestedStringRequired(t, obj,
+		"spec", "defaults", "rules", "metadata", "subscription-info", "cache", "key", "selector")
+	if !strings.Contains(cacheKey, wantSelection) {
+		t.Errorf("subscription-info cache key must include the client header selection, got %q", cacheKey)
 	}
 }
 
