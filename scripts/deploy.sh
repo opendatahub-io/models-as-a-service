@@ -27,12 +27,18 @@
 #   --operator-catalog <image>    Custom operator catalog image
 #   --operator-image <image>      Custom operator image (patches CSV)
 #   --maas-api-image <image>      Custom MaaS API container image
+#   --maas-discovery-image <image> Custom MaaS discovery service image
+#   --enable-discovery            Enable the MaaS discovery service
+#   --maas-discovery-replicas <n> Discovery service replica count (default: 2)
 #   --ai-gateway-operator-image <image> Custom ai-gateway-operator image (operator mode only)
 #   --channel <channel>           Operator channel override
 #
 # ENVIRONMENT VARIABLES:
 #   MAAS_API_IMAGE            Custom MaaS API image (passed to Tenant reconciler via RELATED_IMAGE)
 #   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+#   MAAS_DISCOVERY_IMAGE      Custom MaaS discovery service image
+#   MAAS_DISCOVERY_ENABLED    Enable discovery service (true/false, default: false)
+#   MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 2)
 #   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only; patches ODH CSV
 #                             RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE and enables the AIGateway
 #                             DSC component)
@@ -153,6 +159,9 @@ MAAS_API_IMAGE="${MAAS_API_IMAGE:-}"
 MAAS_CONTROLLER_IMAGE="${MAAS_CONTROLLER_IMAGE:-}"
 AI_GATEWAY_OPERATOR_IMAGE="${AI_GATEWAY_OPERATOR_IMAGE:-}"
 PAYLOAD_PROCESSING_IMAGE="${PAYLOAD_PROCESSING_IMAGE:-}"
+MAAS_DISCOVERY_IMAGE="${MAAS_DISCOVERY_IMAGE:-}"
+MAAS_DISCOVERY_ENABLED="${MAAS_DISCOVERY_ENABLED:-}"
+MAAS_DISCOVERY_REPLICAS="${MAAS_DISCOVERY_REPLICAS:-}"
 FORCE_OVERWRITE="${FORCE_OVERWRITE:-false}"
 EXTERNAL_OIDC="${EXTERNAL_OIDC:-false}"
 POSTGRES_CONNECTION="${POSTGRES_CONNECTION:-}"
@@ -237,6 +246,17 @@ ADVANCED OPTIONS (PR Testing):
       Custom MaaS controller container image (PR testing)
       Example: quay.io/opendatahub/maas-controller:pr-406
 
+  --maas-discovery-image <image>
+      Custom MaaS discovery service container image (PR testing)
+      Example: quay.io/opendatahub/odh-maas-discovery:pr-789
+
+  --enable-discovery
+      Enable the MaaS discovery service (disabled by default)
+      Sets maas-discovery-enabled=true in the maas-parameters ConfigMap
+
+  --maas-discovery-replicas <n>
+      Number of discovery service replicas (default: 2)
+
   --ai-gateway-operator-image <image>
       Custom ai-gateway-operator image (PR/stable testing, operator mode only)
       Patches RELATED_IMAGE_ODH_AI_GATEWAY_OPERATOR_IMAGE on the ODH operator CSV
@@ -254,6 +274,9 @@ ADVANCED OPTIONS (PR Testing):
 ENVIRONMENT VARIABLES:
   MAAS_API_IMAGE            Custom MaaS API container image
   MAAS_CONTROLLER_IMAGE     Custom MaaS controller container image
+  MAAS_DISCOVERY_IMAGE      Custom MaaS discovery service image
+  MAAS_DISCOVERY_ENABLED    Enable discovery service (true/false, default: false)
+  MAAS_DISCOVERY_REPLICAS   Discovery service replica count (default: 2)
   AI_GATEWAY_OPERATOR_IMAGE Custom ai-gateway-operator image (operator mode only)
   OPERATOR_CATALOG          Custom operator catalog
   OPERATOR_IMAGE            Custom operator image
@@ -393,6 +416,20 @@ parse_arguments() {
       --maas-controller-image)
         require_flag_value "$1" "${2:-}"
         MAAS_CONTROLLER_IMAGE="$2"
+        shift 2
+        ;;
+      --maas-discovery-image)
+        require_flag_value "$1" "${2:-}"
+        MAAS_DISCOVERY_IMAGE="$2"
+        shift 2
+        ;;
+      --enable-discovery)
+        MAAS_DISCOVERY_ENABLED="true"
+        shift
+        ;;
+      --maas-discovery-replicas)
+        require_flag_value "$1" "${2:-}"
+        MAAS_DISCOVERY_REPLICAS="$2"
         shift 2
         ;;
       --ai-gateway-operator-image)
@@ -578,6 +615,12 @@ main() {
   if [[ -n "${MAAS_CONTROLLER_IMAGE:-}" ]]; then
     log_info "  MaaS controller image: $MAAS_CONTROLLER_IMAGE"
   fi
+  if [[ -n "${MAAS_DISCOVERY_IMAGE:-}" ]]; then
+    log_info "  MaaS discovery image: $MAAS_DISCOVERY_IMAGE"
+  fi
+  if [[ "${MAAS_DISCOVERY_ENABLED:-}" == "true" ]]; then
+    log_info "  MaaS discovery: enabled"
+  fi
   if [[ -n "${AI_GATEWAY_OPERATOR_IMAGE:-}" ]]; then
     log_info "  ai-gateway-operator image: $AI_GATEWAY_OPERATOR_IMAGE"
   fi
@@ -647,6 +690,8 @@ main() {
     fi
   fi
 
+  local controller_restart_required=false
+
   if [[ "$maas_controller_exists" == "true" && "$FORCE_OVERWRITE" != "true" ]]; then
     log_info "  maas-controller already exists in $NAMESPACE (e.g. operator-managed), skipping manifest apply"
   else
@@ -665,6 +710,9 @@ main() {
     local cm_payload_processing_image="${PAYLOAD_PROCESSING_IMAGE:-$(get_odh_overlay_param payload-processing-image 2>/dev/null || echo "quay.io/opendatahub/odh-ai-gateway-payload-processing:odh-stable")}"
     local cm_cleanup_image="registry.redhat.io/ubi9/ubi-minimal:9.7"
     local cm_monitoring_namespace="${MONITORING_NAMESPACE:-opendatahub}"
+    local cm_discovery_image="${MAAS_DISCOVERY_IMAGE:-}"
+    local cm_discovery_enabled="${MAAS_DISCOVERY_ENABLED:-}"
+    local cm_discovery_replicas="${MAAS_DISCOVERY_REPLICAS:-}"
 
     log_info "  Phase 1: Applying MaaS CRDs and waiting until Established (controller creates Config after CRD is ready)..."
     if ! install_maas_controller_crds_and_wait "${project_root}/deployment/base/maas-controller/crd"; then
@@ -698,6 +746,9 @@ configMapGenerator:
       - maas-api-key-cleanup-image=${cm_cleanup_image}
       - monitoring-namespace=${cm_monitoring_namespace}
       - namespace=${NAMESPACE}
+$([ -n "$cm_discovery_image" ] && echo "      - maas-discovery-image=${cm_discovery_image}")
+$([ -n "$cm_discovery_enabled" ] && echo "      - maas-discovery-enabled=${cm_discovery_enabled}")
+$([ -n "$cm_discovery_replicas" ] && echo "      - maas-discovery-replicas=${cm_discovery_replicas}")
 generatorOptions:
   disableNameSuffixHash: true
 # Re-run the serverName replacement at the parent level so it picks up the
@@ -728,13 +779,10 @@ EOF
     }
     rm -rf "${controller_overlay_dir}"
 
-    # Force pod recreation so imagePullPolicy=Always can pick up newly published
-    # image content even when the maas-controller image tag itself is unchanged.
-    log_info "  Restarting maas-controller to pick up manifest and ConfigMap changes"
-    kubectl rollout restart deployment/maas-controller -n "$NAMESPACE" || {
-      log_error "Failed to restart maas-controller deployment"
-      return 1
-    }
+    # Queue a single restart after all controller/dependency patches are complete.
+    # This still guarantees pod recreation so imagePullPolicy=Always can pick up
+    # newly published image content even when the image tag is unchanged.
+    controller_restart_required=true
   fi
 
   # Patch INFRA_NAMESPACE if set via environment variable
@@ -750,11 +798,76 @@ EOF
       jq '.spec.template.spec.containers[0].env | map(.name) | index("INFRA_NAMESPACE")')
 
     if [ "$env_index" != "null" ]; then
-      kubectl patch deployment maas-controller -n "$NAMESPACE" --type=json -p="[
+      if kubectl patch deployment maas-controller -n "$NAMESPACE" --type=json -p="[
         {\"op\": \"replace\", \"path\": \"/spec/template/spec/containers/0/env/${env_index}\",
          \"value\": {\"name\": \"INFRA_NAMESPACE\", \"value\": \"${infra_ns_value}\"}}
-      ]" || log_warn "Failed to patch INFRA_NAMESPACE (non-fatal)"
+      ]"; then
+        controller_restart_required=true
+      else
+        log_warn "Failed to patch INFRA_NAMESPACE (non-fatal)"
+      fi
     fi
+  fi
+
+  # Patch maas-parameters ConfigMap with discovery overrides when set via CLI/env.
+  # The controller reads these at startup via configMapKeyRef env vars.
+  local discovery_patched=false
+  local discovery_patch_changed=false
+  if [[ -n "${MAAS_DISCOVERY_ENABLED:-}" || -n "${MAAS_DISCOVERY_IMAGE:-}" || -n "${MAAS_DISCOVERY_REPLICAS:-}" ]]; then
+    log_info "  Patching maas-parameters ConfigMap with discovery settings..."
+    local patch_json="{\"data\":{"
+    local first=true
+    if [[ -n "${MAAS_DISCOVERY_ENABLED:-}" ]]; then
+      patch_json+="\"maas-discovery-enabled\":\"${MAAS_DISCOVERY_ENABLED}\""
+      first=false
+    fi
+    if [[ -n "${MAAS_DISCOVERY_IMAGE:-}" ]]; then
+      [[ "$first" == "false" ]] && patch_json+=","
+      patch_json+="\"maas-discovery-image\":\"${MAAS_DISCOVERY_IMAGE}\""
+      first=false
+    fi
+    if [[ -n "${MAAS_DISCOVERY_REPLICAS:-}" ]]; then
+      [[ "$first" == "false" ]] && patch_json+=","
+      patch_json+="\"maas-discovery-replicas\":\"${MAAS_DISCOVERY_REPLICAS}\""
+    fi
+    patch_json+="}}"
+    local patch_attempt
+    local max_patch_attempts=5
+    local patch_output
+    for patch_attempt in $(seq 1 "$max_patch_attempts"); do
+      if patch_output=$(kubectl patch configmap maas-parameters -n "$NAMESPACE" --type=merge -p "$patch_json" 2>&1); then
+        printf '%s\n' "$patch_output"
+        discovery_patched=true
+        if [[ "$patch_output" != *"(no change)"* ]]; then
+          discovery_patch_changed=true
+        fi
+        break
+      fi
+
+      if [[ "$patch_attempt" -lt "$max_patch_attempts" ]]; then
+        log_warn "Failed to patch maas-parameters (attempt ${patch_attempt}/${max_patch_attempts}); retrying in 2s..."
+        printf '%s\n' "$patch_output"
+        sleep 2
+      fi
+    done
+
+    if [[ "$discovery_patched" != "true" ]]; then
+      log_error "Failed to patch maas-parameters after ${max_patch_attempts} attempts"
+      return 1
+    fi
+  fi
+  if [[ "$discovery_patched" == "true" && "$discovery_patch_changed" == "true" ]]; then
+    controller_restart_required=true
+  elif [[ "$discovery_patched" == "true" ]]; then
+    log_info "  Discovery settings already applied (no ConfigMap change); skipping extra restart"
+  fi
+
+  if [[ "$controller_restart_required" == "true" ]]; then
+    log_info "  Restarting maas-controller to pick up configuration changes..."
+    kubectl rollout restart deployment/maas-controller -n "$NAMESPACE" || {
+      log_error "Failed to restart maas-controller after applying configuration changes"
+      return 1
+    }
   fi
 
   log_info "  Waiting for maas-controller to be ready..."

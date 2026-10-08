@@ -89,6 +89,11 @@ type LifecycleReconciler struct {
 	ObservabilityManifestsPath  string
 	MonitoringNamespace         string
 	UsageLogsManifestPath       string
+	DiscoveryEnabled            bool
+	DiscoveryManifestPath       string
+	DiscoveryImage              string
+	DiscoveryNamespace          string
+	DiscoveryReplicas           *int32
 }
 
 //+kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;update;patch
@@ -145,6 +150,9 @@ func (r *LifecycleReconciler) Reconcile(ctx context.Context, req ctrl.Request) (
 			return *res, nil
 		}
 		if err := r.ensureObservability(ctx, log); err != nil {
+			return ctrl.Result{}, err
+		}
+		if err := r.ensureDiscoveryService(ctx, log); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.stripLegacyCleanupFinalizer(ctx, log, req.NamespacedName); err != nil {
@@ -790,11 +798,16 @@ const (
 const conditionMessageMaxLen = 32768
 
 func truncateConditionMessage(msg string) string {
-	if len(msg) <= conditionMessageMaxLen {
+	return truncateMessage(msg, conditionMessageMaxLen)
+}
+
+// truncateMessage truncates msg to at most maxLen bytes on a UTF-8 boundary, suffixed with "…".
+func truncateMessage(msg string, maxLen int) string {
+	if len(msg) <= maxLen {
 		return msg
 	}
 	const suffix = "…"
-	limit := conditionMessageMaxLen - len(suffix)
+	limit := maxLen - len(suffix)
 	truncated := msg[:limit]
 	// Walk back until the prefix is valid UTF-8. This handles both continuation
 	// bytes and incomplete leading bytes (e.g. 0xE2 without its two following
@@ -1080,6 +1093,23 @@ func (r *LifecycleReconciler) SetupWithManager(mgr ctrl.Manager) error {
 			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
 				return o.GetNamespace() == r.MonitoringNamespace &&
 					o.GetLabels()["app.kubernetes.io/managed-by"] == "maas-controller"
+			})),
+		).
+		// Watch maas-discovery Deployment for reconvergence on external changes
+		Watches(
+			&appsv1.Deployment{},
+			handler.EnqueueRequestsFromMapFunc(func(_ context.Context, _ client.Object) []reconcile.Request {
+				return []reconcile.Request{{NamespacedName: types.NamespacedName{
+					Namespace: r.DeploymentNS,
+					Name:      r.DeploymentName,
+				}}}
+			}),
+			builder.WithPredicates(predicate.NewPredicateFuncs(func(o client.Object) bool {
+				discoveryNS := r.DiscoveryNamespace
+				if discoveryNS == "" {
+					discoveryNS = r.DeploymentNS
+				}
+				return o.GetName() == discoveryDeploymentName && o.GetNamespace() == discoveryNS
 			})),
 		).
 		Complete(r)

@@ -244,7 +244,9 @@ func TestContract_PartialGateway(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "missing-gw", gw["name"])
 	assert.Equal(t, "openshift-ingress", gw["namespace"])
-	assert.Empty(t, gw["protocol"], "zero-value fields must be present, not omitted")
+	require.Contains(t, gw, "protocol", "zero-value fields must be present, not omitted")
+	assert.Empty(t, gw["protocol"])
+	require.Contains(t, gw, "externalUrl", "zero-value fields must be present, not omitted")
 	assert.Empty(t, gw["externalUrl"])
 	assert.InDelta(t, float64(0), gw["port"], 0)
 }

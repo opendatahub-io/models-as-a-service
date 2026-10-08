@@ -24,6 +24,8 @@ Defines an external AI/ML model hosted outside the cluster (e.g., OpenAI, Anthro
 | phase | string | One of: `Pending`, `Ready`, `Failed` |
 | conditions | []Condition | Latest observations of the external model's state |
 
+Request priority (`inferencePriority`) does not apply to ExternalModels: MaaSSubscription reports them as `NotApplicable` in [`flowControlStatuses`](maas-subscription.md#status-flowcontrolstatuses).
+
 ## Annotations
 
 Optional metadata annotations that control networking behavior for the external model.
