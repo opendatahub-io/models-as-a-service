@@ -641,6 +641,8 @@ func TestRunPlatform_DisabledOmitsAndDeletesMaaSAPIEgressNetworkPolicy(t *testin
 	gateway := &gwapiv1.Gateway{
 		ObjectMeta: metav1.ObjectMeta{Name: gwName, Namespace: gwNS},
 	}
+	priority := PayloadProcessingEnvoyFilterPriority
+	ef := payloadProcessingEnvoyFilter(gwNS, PayloadProcessingEnvoyFilterName(tenantName), gwName, &priority)
 	existingNP := sampleMaaSAPIEgressRestrictNetworkPolicy()
 	existingNP.SetNamespace(appNs)
 	existingNP.SetUID("np-uid")
@@ -655,7 +657,7 @@ func TestRunPlatform_DisabledOmitsAndDeletesMaaSAPIEgressNetworkPolicy(t *testin
 
 	var applied []appliedResource
 	cl := runPlatformTestClient(t, scheme, []client.Object{
-		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), existingNP,
+		mcfg, gateway, tenant, readyMaaSAPIDeployment(appNs, tenantName), ef, existingNP,
 	}, &applied)
 
 	result, err := RunPlatform(
