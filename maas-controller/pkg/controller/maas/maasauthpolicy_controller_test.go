@@ -1603,6 +1603,32 @@ func TestMaaSAuthPolicyReconciler_IdentityHeadersUpstream(t *testing.T) {
 		}
 	})
 
+	t.Run("client flow-control headers cleared", func(t *testing.T) {
+		headers, _, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "headers")
+		if err != nil {
+			t.Fatalf("Error checking headers: %v", err)
+		}
+		for _, header := range []string{
+			"x-llm-d-inference-objective", "x-gateway-inference-objective",
+			"x-llm-d-inference-fairness-id", "x-gateway-inference-fairness-id",
+		} {
+			cfg, ok := headers[header].(map[string]any)
+			if !ok {
+				t.Errorf("header %q missing from response.success.headers", header)
+				continue
+			}
+			if _, hasKey := cfg["key"]; hasKey {
+				t.Errorf("header %q must not override its lowercase name with key %v", header, cfg["key"])
+			}
+			if _, hasWhen := cfg["when"]; hasWhen {
+				t.Errorf("header %q must apply to every authorized request, got when %v", header, cfg["when"])
+			}
+			if value, found, _ := unstructured.NestedFieldNoCopy(cfg, "plain", "value"); !found || value != "" {
+				t.Errorf("header %q plain.value = %v (found %t), want empty string", header, value, found)
+			}
+		}
+	})
+
 	// Test 2: Verify filters.identity exists and contains all necessary data for TRLP and telemetry
 	t.Run("identity data available for TRLP and telemetry", func(t *testing.T) {
 		identity, found, err := unstructured.NestedMap(gwPolicy.Object, "spec", "defaults", "rules", "response", "success", "filters", "identity", "json", "properties")
