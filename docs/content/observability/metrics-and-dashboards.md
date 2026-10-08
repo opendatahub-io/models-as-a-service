@@ -167,11 +167,11 @@ histogram_quantile(0.5, sum by (subscription, le)
 
 ## Perses Dashboards
 
-Usage dashboards appear in the ODH/RHOAI observability console. Enable them with operator-managed telemetry (and optionally `usageLogging`) — see [Setup](setup.md). Operator vs Kustomize ownership and cleanup: [Operations](operations.md#cleanup).
+Usage dashboards appear in the ODH/RHOAI observability console. Enable them with operator-managed telemetry (and optionally `usageLogging` / `usageMetricsDashboard`) — see [Setup](setup.md). Operator vs Kustomize ownership and cleanup: [Operations](operations.md#cleanup).
 
 | Dashboard | When | Contents |
 |-----------|------|----------|
-| **Usage (legacy)** (`dashboard-3-maas-usage-admin`) | Operator (`ensureUsageDashboard`) or Kustomize dashboards overlay | Token consumption overview and per-user usage (Prometheus) |
+| **Usage (legacy)** (`dashboard-3-maas-usage-admin`) | `usageMetricsDashboard: true` | Token consumption overview and per-user usage (Prometheus) |
 | **Usage** (`dashboard-4-maas-usage-logs-admin`) | `usageLogging: true` | Admin usage from structured access logs (Loki) |
 | **My Usage** (`dashboard-5-maas-usage-logs`) | `usageLogging: true` | User-scoped usage from structured access logs |
 

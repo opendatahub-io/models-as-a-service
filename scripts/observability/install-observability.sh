@@ -6,7 +6,8 @@
 # This script is idempotent - safe to run multiple times
 #
 # Usage: ./install-observability.sh
-# Does not apply PersesDashboard manifests. Operator: LifecycleReconciler.ensureUsageDashboard.
+# Does not apply PersesDashboard manifests. Operator: LifecycleReconciler.ensureUsageDashboard
+# when Config.spec.usageMetricsDashboard is true.
 # Kustomize: deployment/components/observability/observability/dashboards/. See docs/content/observability/setup.md.
 
 set -euo pipefail
@@ -147,7 +148,7 @@ echo "   MaaSAuthorinoAuthenticationHighLatency - gateway authentication P95 lat
 echo ""
 
 echo "💡 This script does not apply Perses dashboards."
-echo "   Operator-managed: LifecycleReconciler.ensureUsageDashboard (requires maas-controller + Config)."
+echo "   Operator-managed: LifecycleReconciler.ensureUsageDashboard when Config.spec.usageMetricsDashboard is true."
 echo "   Kustomize: deployment/components/observability/observability/dashboards/"
 echo "   See docs/content/observability/setup.md and docs/content/observability/operations.md"
 echo ""

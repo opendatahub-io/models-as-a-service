@@ -76,7 +76,13 @@ kubectl get telemetry -n openshift-ingress latency-per-subscription
 !!! warning "AuthPolicy Dependency"
     Istio Telemetry reads `X-MaaS-Subscription`. If the header is absent, the `subscription` label is empty. See [Identity headers](../architecture-internals/authentication-internals.md#identity-headers-and-defense-in-depth) for its behavior with API keys and user tokens.
 
-Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) with a controller ownerReference on `Config`. It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
+Additionally, a Perses dashboard for metrics-based usage is applied by the operator (`LifecycleReconciler.ensureUsageDashboard`) when `usageMetricsDashboard` is `true` on `Config` (defaults to `false`). It is **not** created by `install-observability.sh`. The dashboard shows data when `captureUser` and `captureModelUsage` are turned on.
+
+To enable the legacy metrics-based usage dashboard:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge -p '{"spec":{"usageMetricsDashboard":true}}'
+```
 
 !!! note "Operator prerequisite"
     Operator-managed `PersesDashboard` CRs require a running maas-controller, a `Config` instance, a monitoring namespace, and Perses CRDs (`PersesAvailable` above). Ownership and cleanup differ from Kustomize-applied dashboards — see [Operations: Cleanup](operations.md#cleanup).
@@ -151,4 +157,4 @@ kustomize build deployment/components/observability/observability/dashboards | k
 | Istio Telemetry | `base/observability/` | Yes (Tenant reconciler) |
 | Limitador ServiceMonitor | Conditional | Kuadrant PodMonitor when `observability.enable: true` |
 | Authorino /server-metrics | `authorino-server-metrics-servicemonitor.yaml` | No (Kuadrant only scrapes `/metrics`) |
-| Perses usage dashboards | `deployment/components/observability/observability/dashboards/` (`managed-by: maas-observability`) | Yes (`ensureUsageDashboard`; `Config` controller owner). Not applied by `install-observability.sh`. |
+| Perses usage dashboards | `deployment/components/observability/observability/dashboards/` (`managed-by: maas-observability`) | Yes (`ensureUsageDashboard` when `usageMetricsDashboard: true`; `Config` controller owner). Not applied by `install-observability.sh`. |

@@ -22,3 +22,14 @@ This does **not** rewrite or invalidate historical **Prometheus** or **Loki** us
 - `auth.identity.selected_subscription_key` remains for telemetry and debugging.
 - Rate limiting matches `auth.identity.selected_subscription_id` (see [Authentication Internals](../architecture-internals/authentication-internals.md)).
 - Response header `X-MaaS-Subscription-Rate-Limit-Id` may be injected when select returns `rateLimitId`. Gateway AuthPolicy rejects inbound client values for that header; also ensure Praxis / identity-header strip configs treat `x-maas-*` (prefix or explicit list) so it cannot be spoofed upstream.
+
+## Legacy metrics usage dashboard is opt-in
+
+`Config.spec.usageMetricsDashboard` defaults to `false`. After upgrade, the operator removes any controller-owned copy of the Prometheus-based Perses dashboard (`dashboard-3-maas-usage-admin`). To keep it:
+
+```bash
+kubectl patch configs.maas.opendatahub.io default --type=merge \
+  -p '{"spec":{"usageMetricsDashboard":true}}'
+```
+
+Prefer the logs-based usage dashboards gated by `usageLogging`. See [Setup](../observability/setup.md).
